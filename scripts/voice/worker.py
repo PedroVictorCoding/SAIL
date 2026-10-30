@@ -4,6 +4,7 @@ os.environ.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1', HF_HUB_DISABLE_T
 import base64
 import contextlib
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -18,6 +19,10 @@ def respond(value):
 def main():
     import numpy as np
     mode = sys.argv[1]
+    logging.basicConfig(level=logging.INFO,format=f"[{mode}] %(levelname)s %(message)s",stream=sys.stderr)
+    logger=logging.getLogger("sail.voice")
+    loading=time.perf_counter()
+    logger.info("Loading offline %s model from %s",mode,ROOT)
     model = None
     threads = 4
     states = {}
@@ -41,6 +46,7 @@ def main():
         model = make_tts(threads)
     else:
         raise ValueError('Unknown worker')
+    logger.info("Model ready after %.3fs; inference threads=%s",time.perf_counter()-loading,1 if mode=="vad" else threads)
     for line in sys.stdin:
         try:
             req = json.loads(line)
@@ -48,6 +54,7 @@ def main():
             if requested_threads not in (2, 4, 8):
                 raise ValueError('Invalid hardware tier thread count')
             if requested_threads != threads and mode != 'vad':
+                logger.info('Reloading model for thread budget %s -> %s',threads,requested_threads)
                 if mode == 'stt':
                     model = WhisperModel(str(ROOT / 'whisper-base'), device='cpu', compute_type='int8', cpu_threads=requested_threads, local_files_only=True)
                 else:
@@ -87,6 +94,7 @@ def main():
                 result = {'pcm': base64.b64encode(pcm.tobytes()).decode(), 'sample_rate': sr}
             respond({'ok': True, 'result': result})
         except Exception as exc:
+            logger.exception("Model worker request failed")
             respond({'ok': False, 'error': str(exc)})
 
 if __name__ == '__main__':
