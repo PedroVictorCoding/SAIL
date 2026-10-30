@@ -73,6 +73,42 @@ pub async fn run_dialogue_server_with_services(
             }),
         )
         .route(
+            "/app.css",
+            get(|| async {
+                (
+                    [("content-type", "text/css; charset=utf-8")],
+                    include_str!("../web/app.css"),
+                )
+            }),
+        )
+        .route(
+            "/tokens.css",
+            get(|| async {
+                (
+                    [("content-type", "text/css; charset=utf-8")],
+                    include_str!("../web/tokens.css"),
+                )
+            }),
+        )
+        .route(
+            "/ui.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/ui.js"),
+                )
+            }),
+        )
+        .route(
+            "/icons.svg",
+            get(|| async {
+                (
+                    [("content-type", "image/svg+xml; charset=utf-8")],
+                    include_str!("../../../assets/source/icons/sail-icons.svg"),
+                )
+            }),
+        )
+        .route(
             "/capture.js",
             get(|| async {
                 (

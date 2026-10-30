@@ -91,9 +91,11 @@ SAIL_TLS_CERT=.local/tls/voice-cert.pem \
 SAIL_TLS_KEY=.local/tls/voice-key.pem cargo run -p sail-core
 ```
 
-Open `https://192.168.1.101:8088` after trusting the certificate. Plain HTTP on a LAN IP cannot provide browser microphone access. The UI explains this instead of calling an unavailable `getUserMedia` method.
+Open `https://192.168.1.101:8088` after trusting the certificate. Plain HTTP on a LAN IP cannot provide browser microphone or camera access. The Home screen shows when local services are disconnected and the browser explains denied device permissions.
 
 Choose a Portuguese or English voice in the Orb controls. Start/stop, mute, end-turn, interrupt, tier selection, text input and image upload work independently. Tiers change STT/TTS CPU threads (2/4/8) and partial-transcription cadence; PCM remains 16kHz in every tier. Kernel tools are restricted to `os:status`, `proc:list`, `fs:query` (workspace scope), and `vision:frame` (validated pixels). Set `SAIL_TOOL_ROOT` to choose the permitted filesystem root.
+
+The responsive Home/Dialogue interface keeps microphone and camera use visible, opens subsystem navigation from **Spaces**, and shows tool results as summaries with details available on demand. UI tokens and first-party assets are documented in [the Minimal Ambient UI guide](Docs/ARCHITECTURE/Minimal_Ambient_UI.md); run `cargo xtask assets verify` to check local asset provenance and hashes.
 
 ```bash
 cargo test --workspace

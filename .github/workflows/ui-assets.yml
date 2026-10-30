@@ -1,0 +1,21 @@
+name: UI asset integrity
+on:
+  push:
+    paths:
+      - 'assets/**'
+      - 'tools/xtask/**'
+      - '.cargo/config.toml'
+      - '.github/workflows/ui-assets.yml'
+  pull_request:
+    paths:
+      - 'assets/**'
+      - 'tools/xtask/**'
+      - '.cargo/config.toml'
+      - '.github/workflows/ui-assets.yml'
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: CARGO_NET_OFFLINE=true cargo xtask assets verify

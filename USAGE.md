@@ -2,7 +2,7 @@
 
 ## Recommended experience: talk to SAIL on your own computer
 
-Run SAIL on the same computer as your browser and open **http://localhost:8088**. Start with the **Balanced** tier, select your preferred speech voice, and keep one browser tab open for the conversation. This is the simplest everyday setup: no TLS configuration, cloud account, or external inference API is needed.
+Run SAIL on the same computer as your browser and open **http://localhost:8088**. Open **Settings** to choose a local voice and compute tier. Keep one browser tab open for the conversation. This is the simplest everyday setup: no TLS configuration, cloud account, or external inference API is needed.
 
 Speak naturally, pause to finish a turn, and listen to the reply while following the transcript and Canvas. Use text when you want precise wording, attach an image when you want visual reasoning, and interrupt whenever you want to change direction.
 
@@ -19,7 +19,7 @@ Keep the terminal open while using SAIL. If an older SAIL process is already run
 
 1. Open **http://localhost:8088** on this computer.
 2. Wait for the page to show that it is connected.
-3. Click **Check local models**. The first check loads the speech workers and may take longer than subsequent checks.
+3. Open **Settings** and choose **Check local model status**. The first check loads the speech workers and may take longer than subsequent checks.
 4. Confirm that the speech models and local LLM report `ready: true`. Image reasoning also requires the LLM's `vision` modality to be enabled.
 5. Choose a voice: **English · Heart**, **Português · Dora**, **Português · Alex**, or **Español · Dora**.
 6. Click **Start Microphone** and allow microphone access in the browser.
@@ -35,13 +35,14 @@ The voice selector changes synthesized speech; ask for your preferred response l
 
 | Control | When to use it | What happens |
 |---|---|---|
-| **Start / Stop Microphone** | Begin or finish hands-free input | Starts capture or releases the microphone. Stopping capture does not cancel an existing reply. |
-| **Mute: ON / OFF** | Temporarily stop sending your voice | Gates microphone input while leaving assistant playback available. Use **Stop Microphone** to release the device. |
-| **Interrupt** | Stop a reply or change direction | Cancels the current assistant turn and stops active and queued playback. |
-| **End turn** | You have finished speaking but SAIL is still listening | Finalizes an active speech turn without waiting for the silence timeout. |
-| **Tier: Balanced** | Adjust the CPU budget | Cycles through Balanced, HighPerformance and LowPower. |
-| **New conversation** | Start a different topic without earlier context | Cancels the current reply and clears this session's conversation, Canvas and voice memory. |
-| **Check local models** | Confirm readiness or investigate a model error | Shows speech worker readiness and LLM capabilities in the companion panel. |
+| **Microphone button** | Begin or finish hands-free input | Starts browser capture or releases the microphone. An on-screen indicator shows when the microphone is active. |
+| **Mute button** | Temporarily stop sending your voice | Appears while microphone capture is active. Playback continues; use the microphone button to release the device. |
+| **Interrupt button** | Stop a reply or change direction | Appears during a response and cancels generation and queued playback. |
+| **Finish turn button** | You have finished speaking and want to send now | Finalizes an active speech turn without waiting for the silence timeout. |
+| **Settings → Compute profile** | Adjust the CPU budget | Cycles through Balanced, HighPerformance and LowPower. |
+| **Settings → Start a new conversation** | Start a different topic without earlier context | Cancels the current reply and clears this session's conversation and Canvas. |
+| **Spaces** | Open a subsystem | Dialogue, Canvas and Vision actions are connected; other spaces show Not connected until their runtime route is available. |
+| **Settings → Check local model status** | Confirm readiness or investigate a model error | Checks speech worker readiness and local LLM capabilities. |
 
 Speaking while SAIL is replying also triggers automatic interruption once speech is detected. For immediate, predictable cancellation, use **Interrupt**.
 
@@ -79,7 +80,7 @@ Ask SAIL to use a real local tool rather than estimate an observation:
 >
 > Use fs_query to list the repository's top-level folders.
 
-The **Kernel: os:status**, **Kernel: proc:list** and **Kernel: fs:query** buttons run those inspections directly and display their results. A direct tool button does not request a spoken explanation; ask in the conversation if you want SAIL to interpret the result.
+The assistant presents local tool results as a short summary. Open **Show details** on a result card to inspect the raw payload.
 
 Voice tools currently provide read-only inspection. They do not execute arbitrary shell commands, edit files, or install software. Filesystem inspection is limited to the configured workspace root.
 
@@ -93,13 +94,13 @@ SAIL streams its response into the conversation. Fenced Mermaid diagrams and JSO
 
 ### Discuss an image
 
-1. Choose a **PNG or JPEG up to 4 MB** using the file input.
+1. Choose **＋** in the composer and select a **PNG or JPEG up to 4 MB**, or open **Spaces → Vision** and allow the browser camera permission for a local live preview.
 2. Type a specific question, such as “Describe the main elements of this diagram.”
-3. Click **Send**.
+3. Send your question, or choose **Capture frame** in the camera preview.
 
-The image is shown in the panel and sent to the local Gemma vision service with your question. An image attachment is cleared after sending; attach it again for a follow-up that requires examining its pixels.
+The image is shown in Canvas and sent to the local Gemma vision service with your question. Camera access begins only after choosing Vision, shows an active indicator and preview, and can be stopped from that preview. An image attachment is cleared after sending; attach it again for a follow-up that requires examining its pixels.
 
-For measured image statistics, select an image and click **Kernel: vision:frame**. This reports dimensions, luminance and edge density. Use a conversational image question for semantic reasoning.
+For measured image statistics, select an image and ask SAIL to inspect the frame. This reports dimensions, luminance and edge density. Use a conversational image question for semantic reasoning.
 
 ### Use text without the microphone
 

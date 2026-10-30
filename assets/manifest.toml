@@ -1,0 +1,25 @@
+version = 1
+
+[[asset]]
+id = "sail.icons"
+type = "svg"
+source = "assets/source/icons/sail-icons.svg"
+outputs = ["assets/generated/sail-icons.svg"]
+provenance = "Original SAIL interface icon set authored in this repository."
+license = "MIT OR Apache-2.0"
+dark = true
+light = true
+fallback = "Visible subsystem labels remain available without icon rendering"
+max_bytes = 12000
+
+[[asset]]
+id = "sail.orb"
+type = "procedural"
+source = "crates/sail-dialogue/web/voice.js"
+outputs = ["runtime:canvas2d"]
+provenance = "Procedural Canvas2D rendering code authored in this repository."
+license = "MIT OR Apache-2.0"
+dark = true
+light = false
+fallback = "Reduced-motion static orb in the same Canvas2D renderer"
+max_bytes = 50000
