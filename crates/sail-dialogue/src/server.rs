@@ -724,10 +724,34 @@ async fn reason_turn(
                     if let Some(delta)=delta{
                         let safe=gate.push(&delta);round_text.push_str(&safe);
                         publish_spoken_text(&safe,&mut reply,&mut chunker,tx,current,speech_tx,"model").await;
-                    }else{deltas_open=false;}
+                    }else{
+                        deltas_open=false;
+                        let tail = gate.finish();
+                        if !tail.is_empty() {
+                            round_text.push_str(&tail);
+                            publish_spoken_text(
+                                &tail,
+                                &mut reply,
+                                &mut chunker,
+                                tx,
+                                current,
+                                speech_tx,
+                                "model",
+                            )
+                            .await;
+                        }
+                        queue_speech(chunker.finish(), speech_tx).await;
+                    }
                 },
                 result=&mut completion=>{
-                    let assistant=result?;
+                    let assistant = match result {
+                        Ok(a) => a,
+                        Err(e) if !allow_tools => {
+                            warn!(round, error = %e, "Model failed in final answer pass; falling back to grounded observation summary");
+                            json!({"role":"assistant","content":""})
+                        }
+                        Err(e) => return Err(e),
+                    };
                     while let Ok(delta)=delta_rx.try_recv(){
                         let safe=gate.push(&delta);round_text.push_str(&safe);
                         publish_spoken_text(&safe,&mut reply,&mut chunker,tx,current,speech_tx,"model").await;
@@ -737,17 +761,19 @@ async fn reason_turn(
             }
         };
         let tail = gate.finish();
-        round_text.push_str(&tail);
-        publish_spoken_text(
-            &tail,
-            &mut reply,
-            &mut chunker,
-            tx,
-            current,
-            speech_tx,
-            "model",
-        )
-        .await;
+        if !tail.is_empty() {
+            round_text.push_str(&tail);
+            publish_spoken_text(
+                &tail,
+                &mut reply,
+                &mut chunker,
+                tx,
+                current,
+                speech_tx,
+                "model",
+            )
+            .await;
+        }
         let raw = assistant["content"].as_str().unwrap_or_default();
         let invalid = gate.blocked()
             || contains_tool_protocol(raw)
@@ -941,6 +967,10 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let app = Router::new()
+            .route("/health", axum::routing::get(|| async { axum::Json(json!({"status":"ok"})) }))
+            .route("/props", axum::routing::get(|| async { axum::Json(json!({"modalities":{"vision":true,"tools":true},"default_generation_settings":{"n_ctx":4096}})) }))
+            .route("/apply-template", axum::routing::post(|axum::Json(_): axum::Json<Value>| async { axum::Json(json!({"prompt":"A rendered local chat template"})) }))
+            .route("/tokenize", axum::routing::post(|axum::Json(_): axum::Json<Value>| async { axum::Json(json!({"tokens":[1,2,3,4,5,6,7,8]})) }))
             .route("/v1/chat/completions", axum::routing::post(model_reply))
             .with_state(state.clone());
         let server = AbortTask(tokio::spawn(async move {
@@ -981,7 +1011,12 @@ mod tests {
             let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let signal = spoken.clone();
             let model_done = completed.clone();
-            let app=Router::new().route("/v1/chat/completions",axum::routing::post(move|Json(_request):Json<Value>|{
+            let app=Router::new()
+                .route("/health", axum::routing::get(|| async { axum::Json(json!({"status":"ok"})) }))
+                .route("/props", axum::routing::get(|| async { axum::Json(json!({"modalities":{"vision":true,"tools":true},"default_generation_settings":{"n_ctx":4096}})) }))
+                .route("/apply-template", axum::routing::post(|axum::Json(_): axum::Json<Value>| async { axum::Json(json!({"prompt":"A rendered local chat template"})) }))
+                .route("/tokenize", axum::routing::post(|axum::Json(_): axum::Json<Value>| async { axum::Json(json!({"tokens":[1,2,3,4,5,6,7,8]})) }))
+                .route("/v1/chat/completions",axum::routing::post(move|Json(_request):Json<Value>|{
                 let signal=signal.clone();let model_done=model_done.clone();
                 async move{
                     let (parts,rx)=mpsc::channel::<std::result::Result<bytes::Bytes,std::convert::Infallible>>(4);

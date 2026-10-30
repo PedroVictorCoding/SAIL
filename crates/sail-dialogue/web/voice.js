@@ -155,7 +155,7 @@ function queueAudio(data) {
     const buffer = await context.decodeAudioData(bytes.buffer);
     if (generation !== playbackGeneration) return;
     const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination);
-    const when = Math.max(context.currentTime + 0.025, nextAudioTime); nextAudioTime = when + buffer.duration;
+    const when = Math.max(context.currentTime + 0.015, nextAudioTime); nextAudioTime = when + buffer.duration;
     playingSources.add(source); pendingAudio--;
     // Drive the Orb from audio that is actually playing, instead of packets received early.
     const timer = setTimeout(() => {
