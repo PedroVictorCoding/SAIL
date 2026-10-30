@@ -165,6 +165,7 @@ impl VoiceModelServices {
             .request(json!({"op":"health","threads":threads}))
             .await?;
         Ok(())
+    }
     pub fn with_inference(mut self, service: crate::MindService) -> Self {
         self.inference = Some(service);
         self
