@@ -65,7 +65,25 @@ function renderSpaces(filter = '') {
 }
 renderSpaces();
 document.getElementById('spacesOpen').addEventListener('click', () => { location.hash = '#spaces'; openSheet(spacesSheet); });
+document.getElementById('spacesTop').addEventListener('click', () => { location.hash = '#spaces'; openSheet(spacesSheet); });
 document.getElementById('settingsOpen').addEventListener('click', () => openSheet(contextSheet));
+document.getElementById('settingsRail').addEventListener('click', () => openSheet(contextSheet));
+document.getElementById('homeNav').addEventListener('click', () => document.getElementById('workspace').scrollTo({ top:0, behavior:'smooth' }));
+document.getElementById('canvasNav').addEventListener('click', () => document.getElementById('canvasCard').scrollIntoView({ behavior:'smooth', block:'center' }));
+document.querySelectorAll('.unavailable-nav').forEach(button => button.addEventListener('click', () => showError(`${button.dataset.space} is not connected in this build.`)));
+document.getElementById('checkSystemBtn').addEventListener('click', () => runKernelTool('os:status'));
+document.getElementById('modelsRefreshBtn').addEventListener('click', () => checkModels());
+document.getElementById('canvasClearBtn').addEventListener('click', () => {
+  const panel = document.getElementById('canvasPanel'); panel.replaceChildren();
+  const empty = document.createElement('p'); empty.id = 'canvasEmptyState'; empty.className = 'canvas-empty';
+  empty.textContent = 'Diagrams, images and structured results from this conversation appear here.'; panel.append(empty);
+});
+function updateLocalClock() {
+  const now = new Date(); const hour = now.getHours();
+  document.getElementById('welcomeGreeting').textContent = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  document.getElementById('localDateTime').textContent = new Intl.DateTimeFormat(undefined, { weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }).format(now);
+}
+updateLocalClock(); setInterval(updateLocalClock, 60_000);
 document.querySelectorAll('.close-sheet').forEach(button => button.addEventListener('click', closeSheet));
 scrim.addEventListener('click', closeSheet);
 document.getElementById('spaceSearch').addEventListener('input', event => renderSpaces(event.target.value));

@@ -3,50 +3,94 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#090b10">
+<meta name="theme-color" content="#0b0d14">
 <title>SAIL — Local assistant</title>
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<main class="app-shell" id="appShell">
-  <header class="topbar">
-    <h1 class="sr-only">SAIL Home</h1>
+<main class="app-shell" id="appShell" data-state="idle">
+  <header class="dashboard-header">
     <a class="brand" href="#home" aria-label="SAIL Home"><span class="brand-orb" aria-hidden="true"></span><span><strong>SAIL</strong><small>LOCAL ASSISTANT</small></span></a>
-    <div class="top-actions"><span class="privacy-indicator" id="micLiveIndicator" hidden><i></i><span>Mic on</span></span><span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span><button class="icon-button" id="settingsOpen" aria-label="Open settings" title="Settings">⚙</button></div>
+    <div class="top-actions">
+      <span class="privacy-indicator" id="micLiveIndicator" hidden><i></i><span>Mic on</span></span>
+      <span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span>
+      <button class="icon-button mobile-spaces" id="spacesTop" type="button" aria-label="Open Spaces">⠿</button>
+      <button class="icon-button" id="settingsOpen" aria-label="Open settings" title="Settings">⚙</button>
+    </div>
   </header>
 
-  <section class="home-view" id="homeView" aria-label="Home">
-    <div class="hero" id="hero">
-      <div class="orb-wrap" id="orbWrap"><canvas id="orbCanvas" width="360" height="360" role="img" aria-label="SAIL assistant orb"></canvas></div>
-      <div class="state-label" id="statusBadge" role="status" aria-live="polite">Ready</div>
-      <p class="context-line" id="transcript">Ready when you are.</p>
-    </div>
-    <div class="live-transcript" id="liveTranscript" aria-live="polite"></div>
-    <section class="camera-panel" id="cameraPanel" aria-label="Camera preview" hidden>
-      <div class="camera-heading"><span><i class="camera-live-dot"></i>Camera on · preview stays on this device</span><button class="quiet-button" id="cameraStopBtn" type="button">Stop camera</button></div>
-      <video id="cameraPreview" autoplay muted playsinline aria-label="Live camera preview"></video>
-      <button class="camera-capture" id="cameraCaptureBtn" type="button">Capture frame</button>
+  <div class="dashboard-layout">
+    <nav class="side-rail" aria-label="Main navigation">
+      <button class="nav-item selected" id="homeNav" type="button" aria-current="page"><span class="nav-icon" aria-hidden="true">⌂</span><span>Home</span></button>
+      <button class="nav-item" id="spacesOpen" type="button"><span class="nav-icon" aria-hidden="true">⠿</span><span>Spaces</span></button>
+      <button class="nav-item" id="canvasNav" type="button"><span class="nav-icon" aria-hidden="true">▧</span><span>Canvas</span></button>
+      <button class="nav-item unavailable-nav" data-space="Flow" type="button"><span class="nav-icon" aria-hidden="true">⌘</span><span>Flow</span></button>
+      <button class="nav-item unavailable-nav" data-space="Agents" type="button"><span class="nav-icon" aria-hidden="true">⟡</span><span>Agents</span></button>
+      <button class="nav-item nav-settings" id="settingsRail" type="button"><span class="nav-icon" aria-hidden="true">⚙</span><span>Settings</span></button>
+    </nav>
+
+    <section class="workspace" id="workspace" aria-label="Home workspace">
+      <article class="welcome-card" aria-labelledby="welcomeGreeting">
+        <div class="welcome-copy"><p class="eyebrow">YOUR SAIL SPACE</p><h1 id="welcomeGreeting">Good day</h1><time id="localDateTime">Local time</time></div>
+        <div class="welcome-art" aria-hidden="true"><svg viewBox="0 0 640 160" preserveAspectRatio="none"><defs><linearGradient id="horizonLine" x1="0" x2="1"><stop stop-color="#8174d4" stop-opacity="0"/><stop offset=".48" stop-color="#d080ac" stop-opacity=".32"/><stop offset=".72" stop-color="#e7a290" stop-opacity=".42"/><stop offset="1" stop-color="#6488ce" stop-opacity="0"/></linearGradient><radialGradient id="horizonSun"><stop stop-color="#f2b39d" stop-opacity=".75"/><stop offset="1" stop-color="#e58b9c" stop-opacity="0"/></radialGradient></defs><path d="M0 127 C70 130 90 101 148 114 S226 144 288 116 374 95 423 119 511 149 558 119 614 105 640 112" fill="none" stroke="url(#horizonLine)" stroke-width="2"/><path d="M0 145 C90 140 125 120 190 132 S280 155 350 130 450 118 503 135 585 147 640 131" fill="none" stroke="url(#horizonLine)" stroke-width="1"/><circle cx="476" cy="112" r="58" fill="url(#horizonSun)"/></svg></div>
+      </article>
+
+      <div class="workspace-heading"><div><p class="eyebrow">LIVE WORKSPACE</p><h2>Overview</h2></div><span class="local-tag"><i></i>On this device</span></div>
+      <section class="workspace-grid" aria-label="Live system and session cards">
+        <article class="workspace-card system-card" id="systemCard">
+          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">⌁</span><div><h3>System</h3><p>Local device status</p></div></div><button class="card-action" id="checkSystemBtn" type="button" aria-label="Check local system status">↻</button></header>
+          <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">Not checked</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">Not checked</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">Not checked</strong></div></div>
+          <p class="card-footnote" id="systemNote">System details are queried only when you ask.</p>
+        </article>
+
+        <article class="workspace-card session-card" id="sessionCard">
+          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">◌</span><div><h3>Voice session</h3><p>Live browser session</p></div></div><span class="mini-state" id="sessionState">Ready</span></header>
+          <div class="session-lines"><div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div><div><span>Microphone</span><strong id="sessionMic">Off</strong></div><div><span>VAD confidence</span><strong id="sessionConfidence">—</strong></div><div><span>Input level</span><strong id="sessionRms">—</strong></div></div>
+          <div class="session-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        </article>
+
+        <article class="workspace-card models-card" id="modelsCard">
+          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">✳</span><div><h3>Local models</h3><p>Speech and language services</p></div></div><button class="card-action" id="modelsRefreshBtn" type="button" aria-label="Check local model status">↻</button></header>
+          <div class="model-summary" id="modelStatus" role="status">Not checked yet</div>
+          <div class="model-lines"><div><span>Language model</span><strong id="llmStatus">Not checked</strong></div><div><span>Voice workers</span><strong id="speechStatus">Not checked</strong></div><div><span>Capabilities</span><strong id="modelCapabilities">—</strong></div></div>
+        </article>
+
+        <article class="workspace-card canvas-card" id="canvasCard">
+          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">▧</span><div><h3>Canvas</h3><p>Visuals from this conversation</p></div></div><button class="card-action" id="canvasClearBtn" type="button" aria-label="Clear Canvas" title="Clear Canvas">×</button></header>
+          <div class="canvas-panel" id="canvasPanel" aria-label="Canvas output"><p class="canvas-empty" id="canvasEmptyState">Diagrams, images and structured results from this conversation appear here.</p></div>
+        </article>
+      </section>
     </section>
-    <div class="conversation" id="conversation" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions"></div>
-    <div class="sr-only" id="assistantAnnounce" aria-live="polite" aria-atomic="true"></div>
-    <div class="canvas-panel" id="canvasPanel" aria-label="Visual responses"></div>
-    <div class="error-toast" id="error" role="alert" hidden></div>
-  </section>
 
-  <form class="composer" id="textForm">
-    <button class="composer-action" type="button" id="attachBtn" aria-label="Attach an image" title="Choose an image to analyze">＋</button>
-    <input id="imageInput" type="file" accept="image/png,image/jpeg" aria-label="Choose image (PNG or JPEG, up to 4 MB)" hidden>
-    <input id="textInput" type="text" aria-label="Message SAIL" placeholder="Ask SAIL anything…" maxlength="16000" autocomplete="off" required>
-    <button class="composer-action dock-mute" id="muteDockBtn" type="button" aria-label="Mute microphone" aria-pressed="false" hidden><span aria-hidden="true">⊘</span></button>
-    <button class="composer-action end-turn-action" id="endTurnBtn" type="button" aria-label="Finish speaking turn" title="Finish speaking turn" hidden><span aria-hidden="true">✓</span></button>
-    <button class="composer-action mic-action" id="micBtn" type="button" aria-label="Start microphone" title="Start microphone"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg></button>
-    <button class="composer-action stop-action" id="interruptBtn" type="button" aria-label="Interrupt current response" title="Interrupt" hidden><span aria-hidden="true">■</span></button>
-    <button class="composer-action send-action" id="sendBtn" type="submit" aria-label="Send message" title="Send"><span aria-hidden="true">↑</span></button>
-  </form>
-
-  <button class="spaces-trigger" id="spacesOpen" aria-label="Open Spaces" title="Spaces"><span aria-hidden="true">⌘</span><span>Spaces</span></button>
-  <div class="activity-pill" id="activityPill" hidden><span class="activity-dot"></span><span id="activityText">Working</span></div>
+    <aside class="assistant-panel" id="homeView" aria-label="SAIL assistant">
+      <div class="assistant-topline"><span class="assistant-name">SAIL <small>ASSISTANT</small></span><span class="assistant-presence" id="activityPill" hidden><i class="activity-dot"></i><span id="activityText">Working</span></span></div>
+      <div class="assistant-identity">
+        <div class="orb-wrap" id="orbWrap"><canvas id="orbCanvas" width="360" height="360" role="img" aria-label="SAIL assistant orb"></canvas></div>
+        <div class="state-label" id="statusBadge" role="status" aria-live="polite">Ready</div>
+        <p class="context-line" id="transcript">Ready when you are.</p>
+      </div>
+      <div class="live-transcript" id="liveTranscript" aria-live="polite"></div>
+      <section class="camera-panel" id="cameraPanel" aria-label="Camera preview" hidden>
+        <div class="camera-heading"><span><i class="camera-live-dot"></i>Camera on · preview stays on this device</span><button class="quiet-button" id="cameraStopBtn" type="button">Stop</button></div>
+        <video id="cameraPreview" autoplay muted playsinline aria-label="Live camera preview"></video>
+        <button class="camera-capture" id="cameraCaptureBtn" type="button">Capture frame</button>
+      </section>
+      <div class="conversation" id="conversation" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions"></div>
+      <div class="sr-only" id="assistantAnnounce" aria-live="polite" aria-atomic="true"></div>
+      <div class="error-toast" id="error" role="alert" hidden></div>
+      <form class="composer" id="textForm">
+        <button class="composer-action" type="button" id="attachBtn" aria-label="Attach an image" title="Choose an image to analyze">＋</button>
+        <input id="imageInput" type="file" accept="image/png,image/jpeg" aria-label="Choose image (PNG or JPEG, up to 4 MB)" hidden>
+        <input id="textInput" type="text" aria-label="Message SAIL" placeholder="Ask SAIL anything…" maxlength="16000" autocomplete="off" required>
+        <button class="composer-action dock-mute" id="muteDockBtn" type="button" aria-label="Mute microphone" aria-pressed="false" hidden><span aria-hidden="true">⊘</span></button>
+        <button class="composer-action end-turn-action" id="endTurnBtn" type="button" aria-label="Finish speaking turn" title="Finish speaking turn" hidden><span aria-hidden="true">✓</span></button>
+        <button class="composer-action mic-action" id="micBtn" type="button" aria-label="Start microphone" title="Start microphone"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg></button>
+        <button class="composer-action stop-action" id="interruptBtn" type="button" aria-label="Interrupt current response" title="Interrupt" hidden><span aria-hidden="true">■</span></button>
+        <button class="composer-action send-action" id="sendBtn" type="submit" aria-label="Send message" title="Send"><span aria-hidden="true">↑</span></button>
+      </form>
+    </aside>
+  </div>
 </main>
 
 <div class="scrim" id="scrim" hidden></div>
@@ -62,12 +106,11 @@
   <div class="setting-row"><div><strong>Compute profile</strong><small>Set the local hardware tier</small></div><button class="quiet-button" id="tierBtn">Balanced</button></div>
   <div class="setting-row"><div><strong>Microphone</strong><small id="micStatus">Off</small></div><button class="quiet-button" id="muteBtn" aria-pressed="false">Mute</button></div>
   <button class="sheet-link" id="checkModelsBtn">Check local model status <span>›</span></button>
-  <p class="sheet-note" id="modelStatus">Model status is checked with the local SAIL server.</p>
+  <p class="sheet-note" id="modelStatusSettings">Model status is checked with the local SAIL server.</p>
   <button class="sheet-link" id="newConversationBtn">Start a new conversation <span>›</span></button>
   <details class="inspector"><summary>Developer details</summary><div class="telemetry-row"><span id="telVad">VAD —</span><span id="telConf">Confidence —</span><span id="telRms">RMS —</span></div></details>
 </aside>
 
-<section class="approval-sheet" id="approvalSheet" hidden aria-live="assertive"></section>
 <script src="/mermaid.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/ui.js" defer></script>
