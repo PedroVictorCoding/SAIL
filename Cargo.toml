@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    "crates/sail-common",
+    "crates/sail-mind",
+    "crates/sail-arena",
+    "crates/sail-bridge",
+    "crates/sail-agents",
+    "crates/sail-dialogue",
+    "crates/sail-canvas",
+    "crates/sail-discovery",
+    "crates/sail-flow",
+    "crates/sail-core",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["SAIL Contributors"]
+
+[workspace.dependencies]
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+futures-util = "0.3"
+base64 = "0.22"
+bytes = "1.7"
+
+# Internal workspace crate dependencies
+sail-common = { path = "crates/sail-common" }
+sail-mind = { path = "crates/sail-mind" }
+sail-arena = { path = "crates/sail-arena" }
+sail-bridge = { path = "crates/sail-bridge" }
+sail-agents = { path = "crates/sail-agents" }
+sail-dialogue = { path = "crates/sail-dialogue" }
+sail-canvas = { path = "crates/sail-canvas" }
+sail-discovery = { path = "crates/sail-discovery" }
+sail-flow = { path = "crates/sail-flow" }

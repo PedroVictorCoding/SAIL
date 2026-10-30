@@ -1,0 +1,71 @@
+
+flowchart TB
+    subgraph CLIENTS["SAIL Clients"]
+        direction LR
+        DESKTOP["Desktop / Orb UI"]
+        CLI["CLI / Web"]
+        MOBILE["Mobile / Remote"]
+    end
+
+    subgraph SERVER["ASUS — Ubuntu 26.04 LTS · SAIL Server"]
+        direction TB
+        API["SAIL API Gateway<br/>Authentication · HTTP · Streaming"]
+        BUS["Event Bus & Task Coordinator"]
+        API --> BUS
+
+        subgraph CORE["SAIL Core — Rust"]
+            direction LR
+            CONTEXT["Context Engine"]
+            AGENTS["Agent Orchestrator"]
+            MEMORY["Memory & Knowledge Graph"]
+            DISCOVERY["Proactive Discovery"]
+            SCHED["Task / Resource Scheduler"]
+            TOOLS["Permissioned Tool Broker"]
+        end
+
+        BUS --> CONTEXT
+        CONTEXT <--> MEMORY
+        CONTEXT --> AGENTS
+        SCHED --> DISCOVERY
+        DISCOVERY --> AGENTS
+        AGENTS --> TOOLS
+
+        subgraph INTELLIGENCE["Inference Layer"]
+            ROUTER["Model Router"]
+            GEMMA["Gemma 4 12B Agentic<br/>GGUF · llama.cpp"]
+            NATIVE["SAIL Native Models<br/>Mamba / Attention / MoE"]
+            SPECIAL["ASR · TTS · Embeddings · Vision"]
+            ROUTER --> GEMMA
+            ROUTER --> NATIVE
+            ROUTER --> SPECIAL
+        end
+
+        AGENTS <--> ROUTER
+        DISCOVERY <--> MEMORY
+
+        subgraph STORAGE["Persistent Storage"]
+            SSD["Kingston 240 GB SSD<br/>Models · Databases · Runtime"]
+            HDD["Seagate 8 TB HDD<br/>Research · Datasets · Archives"]
+        end
+
+        MEMORY <--> SSD
+        DISCOVERY <--> HDD
+    end
+
+    CLIENTS <-->|"Encrypted API"| API
+    TOOLS --> EXTERNAL["Approved APIs · Web · Files · Client Tools"]
+
+    subgraph COMPUTE["Optional Compute Workers"]
+        WORKER["GPU Workstation / Other Nodes"]
+    end
+
+    ROUTER <-.->|"Offloaded inference"| WORKER
+
+    classDef blue fill:#1F587A,color:#fff,stroke:#4085AC
+    classDef green fill:#2C6853,color:#fff,stroke:#428B70
+    classDef purple fill:#4D457B,color:#fff,stroke:#746AA9
+    classDef neutral fill:#353E4B,color:#fff,stroke:#576477
+    class API,BUS blue
+    class CONTEXT,AGENTS,MEMORY,DISCOVERY,SCHED,TOOLS green
+    class ROUTER,GEMMA,NATIVE,SPECIAL purple
+    class SSD,HDD,DESKTOP,CLI,MOBILE,EXTERNAL,WORKER neutral

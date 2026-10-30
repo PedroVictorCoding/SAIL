@@ -1,0 +1,34 @@
+[package]
+name = "sail-dialogue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+sail-common.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+reqwest.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+futures-util.workspace = true
+base64.workspace = true
+bytes.workspace = true
+sail-mind.workspace = true
+sail-arena.workspace = true
+sail-agents.workspace = true
+sail-flow.workspace = true
+sail-canvas.workspace = true
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustfft = "6.4"
+
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.24"

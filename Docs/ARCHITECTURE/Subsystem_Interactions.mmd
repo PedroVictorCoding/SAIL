@@ -1,0 +1,50 @@
+flowchart TB
+    USER["User / Mobile / Desktop"]
+
+    subgraph CORE["SAIL Core"]
+        direction TB
+
+        subgraph TOP_LAYER[" "]
+            direction LR
+            DISCOVERY["SAIL Discovery"]
+            FLOW["SAIL Flow"]
+            DIALOGUE["SAIL Dialogue"]
+        end
+
+        AGENTS["SAIL Agents"]
+
+        subgraph BOTTOM_LAYER[" "]
+            direction LR
+            ARENA["SAIL Arena"]
+            MIND["SAIL Mind"]
+            BRIDGE["SAIL Bridge"]
+            CANVAS["SAIL Canvas"]
+        end
+    end
+
+    %% External Connections
+    USER <-->|"Speech / Audio / Text"| DIALOGUE
+    CANVAS -->|"Visual artifacts / UI / Boards"| USER
+
+    %% Top Layer to Middle Layer
+    DISCOVERY -->|"Triggers / Learning workflows"| FLOW
+    FLOW <-->|"Tasks & Execution events"| AGENTS
+    FLOW -->|"Direct visual triggers"| CANVAS
+    DIALOGUE <-->|"Intent & Streamed responses"| AGENTS
+
+    %% Middle Layer to Bottom Layer
+    AGENTS -->|"Store episodes & facts"| ARENA
+    ARENA -->|"Knowledge graph & gaps"| DISCOVERY
+    AGENTS <-->|"Inference & Routing"| MIND
+    AGENTS <-->|"OS & Tool execution"| BRIDGE
+    AGENTS -->|"Render documents & visual state"| CANVAS
+
+    classDef client fill:#1F587A,color:#fff,stroke:#4085AC
+    classDef agent fill:#2C6853,color:#fff,stroke:#428B70
+    classDef subsystem fill:#353E4B,color:#fff,stroke:#576477
+    classDef intelligence fill:#4D457B,color:#fff,stroke:#746AA9
+
+    class USER client
+    class AGENTS agent
+    class MIND intelligence
+    class DISCOVERY,FLOW,DIALOGUE,ARENA,BRIDGE,CANVAS subsystem

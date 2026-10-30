@@ -1,0 +1,157 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubsystemId {
+    Core,
+    Dialogue,
+    Arena,
+    Canvas,
+    Flow,
+    Discovery,
+    Agents,
+    Mind,
+    Bridge,
+}
+
+impl std::fmt::Display for SubsystemId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                SubsystemId::Core => "sail-core",
+                SubsystemId::Dialogue => "sail-dialogue",
+                SubsystemId::Arena => "sail-arena",
+                SubsystemId::Canvas => "sail-canvas",
+                SubsystemId::Flow => "sail-flow",
+                SubsystemId::Discovery => "sail-discovery",
+                SubsystemId::Agents => "sail-agents",
+                SubsystemId::Mind => "sail-mind",
+                SubsystemId::Bridge => "sail-bridge",
+            }
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SailEvent {
+    pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub source: SubsystemId,
+    pub target: Option<SubsystemId>,
+    pub correlation_id: Option<Uuid>,
+    pub payload: EventPayload,
+}
+
+impl SailEvent {
+    pub fn new(source: SubsystemId, payload: EventPayload) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            source,
+            target: None,
+            correlation_id: None,
+            payload,
+        }
+    }
+
+    pub fn with_target(mut self, target: SubsystemId) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    pub fn with_correlation_id(mut self, correlation_id: Uuid) -> Self {
+        self.correlation_id = Some(correlation_id);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum EventPayload {
+    // System Lifecycle
+    SystemReady {
+        subsystem: SubsystemId,
+    },
+    SystemShutdown {
+        reason: String,
+    },
+
+    // Dialogue Events (User <-> Dialogue <-> Agents)
+    DialogueInput {
+        session_id: String,
+        speaker: String,
+        content: String,
+        is_final: bool,
+    },
+    DialogueInterruption {
+        session_id: String,
+    },
+    DialogueResponseDelta {
+        session_id: String,
+        delta: String,
+        is_finished: bool,
+    },
+
+    // Discovery Events (Arena -> Discovery -> Flow)
+    KnowledgeGapDetected {
+        topic: String,
+        priority: f32,
+        hypothesis: String,
+    },
+    ResearchTriggerDispatched {
+        workflow_id: String,
+        query: String,
+    },
+
+    // Flow Events (Flow <-> Agents, Flow -> Canvas)
+    WorkflowStarted {
+        workflow_id: String,
+        name: String,
+    },
+    TaskDispatched {
+        task_id: String,
+        workflow_id: Option<String>,
+        goal: String,
+    },
+    TaskCompleted {
+        task_id: String,
+        success: bool,
+        output: String,
+    },
+
+    // Agent Events (Agents -> Arena, Mind, Bridge, Canvas)
+    InferenceRequested {
+        request_id: String,
+        prompt: String,
+        model_preference: Option<String>,
+    },
+    InferenceCompleted {
+        request_id: String,
+        content: String,
+        tokens_used: usize,
+    },
+    ToolExecute {
+        execution_id: String,
+        tool: String,
+        args: serde_json::Value,
+    },
+    ToolResult {
+        execution_id: String,
+        success: bool,
+        output: String,
+    },
+    MemoryRecordStored {
+        record_id: String,
+        collection: String,
+        summary: String,
+    },
+    CanvasRender {
+        canvas_id: String,
+        artifact_type: String, // "mermaid", "markdown", "ui_card"
+        content: String,
+    },
+}

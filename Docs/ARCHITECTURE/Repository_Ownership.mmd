@@ -1,0 +1,28 @@
+
+flowchart TB
+    PROJECT["SAIL Ecosystem"]
+
+    PROJECT --> CORE["sail-core<br/>Primary Product"]
+    PROJECT --> FRAME["sail-framework<br/>Neural ML Research"]
+    PROJECT --> OS["sailOS<br/>Experimental Operating System"]
+
+    CORE --> RUNTIME["Runtime · API · Agents"]
+    CORE --> DISC["Discovery · Memory · Scheduling"]
+    CORE --> CLIENT["Client SDKs · Desktop · CLI"]
+
+    FRAME --> MODEL["SSM · Attention · MoE"]
+    FRAME --> ENGINE["Training · Native Inference"]
+    FRAME --> ARTIFACT[".sea Artifacts"]
+
+    OS --> REDOX["Redox Schemes"]
+    OS --> ORB["Orbital Desktop"]
+
+    CORE -.->|"Native model adapter"| FRAME
+    OS -.->|"Shared protocols"| CORE
+
+    classDef primary fill:#24637F,color:#fff
+    classDef research fill:#4D457B,color:#fff
+    classDef future fill:#4D5966,color:#fff
+    class CORE,RUNTIME,DISC,CLIENT primary
+    class FRAME,MODEL,ENGINE,ARTIFACT research
+    class OS,REDOX,ORB future

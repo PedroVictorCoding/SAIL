@@ -1,0 +1,27 @@
+
+flowchart TD
+    A["Interest Profile + Knowledge Graph"]
+    B["Knowledge Gap & Opportunity Detection"]
+    C["Priority / Novelty / Cost Scoring"]
+    D["Idle Task Scheduler"]
+    E["Source Discovery & Retrieval"]
+    F["Document Parsing + Deduplication"]
+    G["Evidence-Based Synthesis"]
+    H["Citation & Quality Verification"]
+    I["Learning Resource Generation"]
+    J["Persistent Knowledge Library"]
+    K["User Briefing / Suggestions"]
+    L["User Feedback"]
+
+    A --> B --> C --> D
+    D --> E --> F --> G --> H
+    H --> I --> J --> K --> L
+    L --> A
+    J --> A
+
+    classDef research fill:#265D78,color:#fff
+    classDef storage fill:#2E6856,color:#fff
+    classDef decision fill:#584F80,color:#fff
+    class A,J storage
+    class B,C,D,H decision
+    class E,F,G,I,K,L research

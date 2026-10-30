@@ -1,0 +1,40 @@
+
+flowchart TD
+    A["Microphone / Text / Screen / Scheduled Trigger"]
+    B["Input Processing<br/>VAD · ASR · OCR · Events"]
+    C["Intent & Context Assembly"]
+    D["Retrieve Memory + User Interests"]
+    E{"Task complexity?"}
+    F["Deterministic Tools / Small Model"]
+    G["Gemma 4 12B Agentic"]
+    H["Specialized or Remote Model"]
+    I["Agent Planner"]
+    J["Structured Tool Proposal"]
+    K{"Authorized?"}
+    L["Execute Tool"]
+    M["Verify Result"]
+    N{"Task complete?"}
+    O["Update Task State & Memory"]
+    P["Response / TTS / Learning Resource"]
+
+    A --> B --> C
+    D --> C
+    C --> E
+    E -->|"Simple"| F
+    E -->|"Standard"| G
+    E -->|"Complex"| H
+    F --> I
+    G --> I
+    H --> I
+    I --> J --> K
+    K -->|"Yes"| L --> M --> N
+    K -->|"No"| P
+    N -->|"No"| I
+    N -->|"Yes"| O --> P
+
+    classDef intelligence fill:#4D457B,color:#fff
+    classDef process fill:#245F7E,color:#fff
+    classDef outcome fill:#2C6853,color:#fff
+    class F,G,H,I intelligence
+    class B,C,D,J,L,M,O process
+    class P outcome
