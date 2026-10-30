@@ -1,7 +1,7 @@
 {
   "version": 1,
   "assets": [
-    {"id":"sail.icons","type":"svg","source":"assets/source/icons/sail-icons.svg","outputs":[{"target":"assets/generated/sail-icons.svg","sha256":"51b23c57f8c5e0353e828866cfe7c528127b14c6f17cbf182b3608743d626241"}],"provenance":"Original SAIL interface icon set authored in this repository.","dark":true,"light":true,"license":"MIT OR Apache-2.0","fallback":"Visible subsystem labels remain available without icon rendering","bytes":2425,"sha256":"51b23c57f8c5e0353e828866cfe7c528127b14c6f17cbf182b3608743d626241"},
-    {"id":"sail.orb","type":"procedural","source":"crates/sail-dialogue/web/voice.js","outputs":[{"target":"runtime:canvas2d","sha256":null}],"provenance":"Procedural Canvas2D rendering code authored in this repository.","dark":true,"light":false,"license":"MIT OR Apache-2.0","fallback":"Reduced-motion static orb in the same Canvas2D renderer","bytes":27321,"sha256":"5402796995ba8d0499bb2d04d61e7ce0b826bee90cd93bae520eba9c5b374a66"}
+    {"id":"sail.icons","type":"svg","source":"assets/source/icons/sail-icons.svg","outputs":[{"target":"assets/generated/sail-icons.svg","sha256":"c4a71dc0f66a60adecbf6bb406c14a68a10fa1a037a20cf4c17ca0cc47578064"}],"provenance":"Original SAIL interface icon set authored in this repository.","dark":true,"light":true,"license":"MIT OR Apache-2.0","fallback":"Visible subsystem labels remain available without icon rendering","bytes":3140,"sha256":"c4a71dc0f66a60adecbf6bb406c14a68a10fa1a037a20cf4c17ca0cc47578064"},
+    {"id":"sail.orb","type":"procedural","source":"crates/sail-dialogue/web/voice.js","outputs":[{"target":"runtime:canvas2d","sha256":null}],"provenance":"Procedural Canvas2D rendering code authored in this repository.","dark":true,"light":false,"license":"MIT OR Apache-2.0","fallback":"Reduced-motion static orb in the same Canvas2D renderer","bytes":30685,"sha256":"a0b62add916af039c0690798890cafb8b49c2bc9238d325ee76b105c1afc2472"}
   ]
 }

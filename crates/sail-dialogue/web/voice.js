@@ -4,16 +4,62 @@ let workletLoaded=false;
 const playbackTimers=new Set();
 let isRecording = false, isMuted = false, orbState = 'idle';
 let currentAmplitude = 0, wavePhase = 0, spectrum8 = Array(8).fill(0), orbFrozen = false;
+const activeTools = new Map();
 const tiers = ['Balanced', 'HighPerformance', 'LowPower']; let tierIdx = 0;
+const ambientPalettes = {
+  idle:{ primary:'#9180E8', secondary:'#D080AC', tertiary:'#E7A290', glow:'rgba(208,128,172,.30)' },
+  listening:{ primary:'#28B7AC', secondary:'#58BFD1', tertiary:'#6488CE', glow:'rgba(40,183,172,.34)' },
+  understanding:{ primary:'#5167C9', secondary:'#8268CC', tertiary:'#A172B3', glow:'rgba(81,103,201,.34)' },
+  thinking:{ primary:'#5167C9', secondary:'#8268CC', tertiary:'#A172B3', glow:'rgba(81,103,201,.38)' },
+  tool_execution:{ primary:'#557FD1', secondary:'#66B4C9', tertiary:'#BA9672', glow:'rgba(85,127,209,.36)' },
+  searching:{ primary:'#37AAB5', secondary:'#549CCB', tertiary:'#478FA2', glow:'rgba(55,170,181,.34)' },
+  speaking:{ primary:'#E58B9C', secondary:'#E3A17C', tertiary:'#BC74B5', glow:'rgba(229,139,156,.42)' },
+  creating:{ primary:'#916BD4', secondary:'#CA80BA', tertiary:'#D6A073', glow:'rgba(145,107,212,.38)' },
+  success:{ primary:'#4FAF9C', secondary:'#83B999', tertiary:'#74AAB4', glow:'rgba(79,175,156,.34)' },
+  approval:{ primary:'#C59C62', secondary:'#AA82AC', tertiary:'#8875BA', glow:'rgba(197,156,98,.34)' },
+  error:{ primary:'#B45A69', secondary:'#834C72', tertiary:'#6A486F', glow:'rgba(180,90,105,.34)' },
+  offline:{ primary:'#566078', secondary:'#424C63', tertiary:'#4B4C60', glow:'rgba(86,96,120,.24)' },
+};
+const statePalette = state => ambientPalettes[state] || ambientPalettes.idle;
+const paletteState = state => ({ transcribing:'understanding', seeing:'searching', watching:'searching', disconnected:'offline', approval_required:'approval', interrupted:'idle', working:'tool_execution' })[state] || state;
 const orbCanvas = document.getElementById('orbCanvas'), ctx = orbCanvas.getContext('2d');
 const statusBadge = document.getElementById('statusBadge'), transcriptBox = document.getElementById('transcript');
 const micBtn = document.getElementById('micBtn'), muteBtn = document.getElementById('muteBtn'), tierBtn = document.getElementById('tierBtn');
 const errorBox = document.getElementById('error');
 let playbackGeneration = 0, nextAudioTime = 0, playbackQueue = Promise.resolve(), pendingAudio = 0;
 let responseNode, responseText = '', turnFinished = false, turnInProgress = false, artifactSerial = 0;
+let visionSelectionPending = false;
 const playingSources = new Set();
-let errorTimer;
-function showError(error) { errorBox.textContent = String(error); errorBox.hidden = false; clearTimeout(errorTimer); errorTimer = setTimeout(() => { errorBox.hidden = true; }, 8000); }
+let errorTimer, errorStateTimer;
+function showError(error) {
+  errorBox.textContent = String(error); errorBox.hidden = false; clearTimeout(errorTimer); errorTimer = setTimeout(() => { errorBox.hidden = true; }, 8000);
+  const priorState = orbState; updateState('error'); clearTimeout(errorStateTimer);
+  errorStateTimer = setTimeout(() => { if (orbState === 'error') updateState(priorState === 'error' ? 'idle' : priorState); }, 1700);
+}
+function normalizeToolName(name) { return String(name || '').replaceAll('_', ':'); }
+function toolCard(tool) {
+  const name = normalizeToolName(tool);
+  if (name.startsWith('vision:')) return document.getElementById('canvasCard');
+  if (name === 'os:status') return document.getElementById('systemCard');
+  if (name.startsWith('proc:') || name.startsWith('fs:')) return document.getElementById('toolsCard');
+  return null;
+}
+function updateToolActivity(tool, active) {
+  const name = normalizeToolName(tool); const card = toolCard(name);
+  if (active) activeTools.set(name, true); else activeTools.delete(name);
+  if (card) {
+    if ([...activeTools.keys()].some(item => toolCard(item) === card)) card.setAttribute('data-state', 'active');
+    else card.removeAttribute('data-state');
+  }
+  syncActivityPill();
+}
+function syncActivityPill() {
+  const activity = document.getElementById('activityPill');
+  const stateLabels = { thinking:'Thinking', working:'Working', transcribing:'Transcribing' };
+  activity.hidden = activeTools.size === 0 && !stateLabels[orbState];
+  const labels = { 'os:status':'Checking system', 'proc:list':'Checking processes', 'fs:query':'Looking in workspace', 'vision:frame':'Analyzing image' };
+  document.getElementById('activityText').textContent = activeTools.size ? labels[[...activeTools.keys()].at(-1)] || 'Using a local tool' : stateLabels[orbState] || '';
+}
 function sendAction(action, fields = {}) {
   if (!ws || ws.readyState !== WebSocket.OPEN) { showError('Connection unavailable. Wait for reconnection.'); return false; }
   ws.send(JSON.stringify({ action, ...fields })); return true;
@@ -24,7 +70,7 @@ function connectWs() {
   ws.onopen = () => { setConnection('Connected · local session', true); micBtn.disabled = false; if (orbState === 'disconnected') updateState('idle'); };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
-    turnInProgress = false; stopMic(); stopPlayback(); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
+    turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
   };
   ws.onmessage = (event) => {
@@ -63,7 +109,8 @@ function connectWs() {
         break;
       case 'interruption': turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
       case 'control': applyControl(data.control); break;
-      case 'tool_result': renderToolResult(data.result); break;
+      case 'tool_started': updateToolActivity(data.tool, true); break;
+      case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); break;
       case 'canvas': renderArtifact(data.artifact); break;
       case 'error': showError(data.message); break;
     }
@@ -181,21 +228,15 @@ function queueAudio(data) {
 }
 function finishPlayback() { updateState(isRecording ? 'listening' : 'idle'); currentAmplitude = 0; spectrum8 = Array(8).fill(0); sendAction('playback_finished'); }
 function updateState(state) {
+  const changed = orbState !== state;
   orbState = state;
-  const labels = { idle:'Ready', listening:'Listening', transcribing:'Transcribing', thinking:'Thinking', speaking:'Speaking', working:'Working', seeing:'Seeing', watching:'Watching', interrupted:'Interrupted', disconnected:'Disconnected', approval_required:'Approval needed' };
+  const labels = { idle:'Ready', listening:'Listening', transcribing:'Understanding', thinking:'Thinking', speaking:'Speaking', working:'Working', seeing:'Seeing', watching:'Watching', interrupted:'Interrupted', disconnected:'Offline', approval_required:'Approval needed', error:'Attention' };
   statusBadge.textContent = labels[state] || 'Ready'; document.getElementById('appShell').dataset.state = state;
-  const ambient = {
-    idle:['#8d74d3','#c975a5','#ef9a86'], listening:['#55c8b5','#508dc3','#b884df'],
-    transcribing:['#70c5d0','#847edb','#bd79c4'], thinking:['#9b7be0','#b66fc4','#e48aab'],
-    working:['#6ca5df','#8e78dc','#c77fbd'], speaking:['#e97884','#b84dc0','#6486e9'],
-    seeing:['#5cc5cb','#557fcb','#a578de'], watching:['#5cc5cb','#557fcb','#a578de'],
-    approval_required:['#e5be79','#d68d75','#aa7296'], disconnected:['#6d7183','#6d7183','#6d7183'],
-    interrupted:['#e5be79','#d68d75','#aa7296'],
-  }[state] || ['#8d74d3','#c975a5','#ef9a86'];
-  ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, ambient[index]));
+  const palette = statePalette(paletteState(state));
+  ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, [palette.primary,palette.secondary,palette.tertiary][index]));
   document.getElementById('sessionState').textContent = labels[state] || 'Ready';
-  const activity = document.getElementById('activityPill'); activity.hidden = !['thinking','working','transcribing'].includes(state);
-  document.getElementById('activityText').textContent = labels[state] || 'Working';
+  if (changed && reduceMotion.matches && !document.hidden) renderVisuals();
+  syncActivityPill();
   document.getElementById('interruptBtn').hidden = !['thinking','speaking','working','transcribing'].includes(state);
 }
 function setConnection(message, connected) {
@@ -251,10 +292,11 @@ async function runVisionFrame() {
     sendAction('kernel_tool', { tool: 'vision:frame', params: { width: canvas.width, height: canvas.height, format: 'rgba', data: Array.from(pixels) } });
   } catch (error) { showError(error.message); }
 }
-function runKernelTool(tool) { sendAction('kernel_tool', { tool, params: {} }); }
+function runKernelTool(tool, params = {}) { if (sendAction('kernel_tool', { tool, params })) updateToolActivity(tool, true); }
 function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('assistantAnnounce').textContent = ''; document.getElementById('canvasClearBtn').click(); }
 async function checkModels() {
   const summary = document.getElementById('modelStatus'); summary.textContent = 'Checking local model status…'; summary.className = 'model-summary';
+  const modelsCard = document.getElementById('modelsCard'); modelsCard.setAttribute('data-state', 'active');
   document.getElementById('modelStatusSettings').textContent = 'Querying local model workers…';
   try {
     const response = await fetch('/api/health'); if (!response.ok) throw new Error(response.statusText);
@@ -270,7 +312,20 @@ async function checkModels() {
       : 'Local inference';
     document.getElementById('modelStatusSettings').textContent = ready ? 'Local language and speech services are ready.' : 'Some local services are unavailable. See the runner logs for details.';
   } catch (error) { summary.textContent = 'Local model status could not be reached.'; summary.classList.add('unavailable'); document.getElementById('modelStatusSettings').textContent = 'Local model status could not be reached.'; showError(error.message); }
+  finally { modelsCard.removeAttribute('data-state'); }
 }
+document.querySelectorAll('.tool-action[data-tool]').forEach(button => button.addEventListener('click', () => {
+  const tool = button.dataset.tool;
+  runKernelTool(tool, tool === 'fs:query' ? { path:'.' } : {});
+}));
+document.getElementById('chooseVisionBtn').addEventListener('click', () => {
+  visionSelectionPending = true; document.getElementById('imageInput').click();
+});
+document.getElementById('imageInput').addEventListener('change', () => {
+  if (visionSelectionPending && document.getElementById('imageInput').files?.length) {
+    visionSelectionPending = false; runVisionFrame();
+  }
+});
 document.getElementById('textForm').addEventListener('submit', async event => {
   event.preventDefault(); errorBox.textContent = ''; errorBox.hidden = true;
   const input = document.getElementById('textInput'), file = document.getElementById('imageInput').files[0];
@@ -289,9 +344,11 @@ window.addEventListener('pagehide', () => { stopMic(); stopPlayback(); ws?.close
 if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
 // Render loop for 3D Glowing Orb & 8-Band Equalizer
 let time = 0;
+let animationFrame = 0;
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 function renderVisuals() {
-  requestAnimationFrame(renderVisuals);
+  animationFrame = 0;
+  if (document.hidden) return;
   if (!orbFrozen && !reduceMotion.matches) time += 0.035;
 
   // 1. Draw Voice Orb
@@ -301,20 +358,13 @@ function renderVisuals() {
   const cy = h / 2;
   ctx.clearRect(0, 0, w, h);
 
-  const colors = {
-    idle: { in: '#ffbd9d', mid: '#ec6e99', out: '#5750bd', glow: 'rgba(240, 138, 137, 0.38)' },
-    listening: { in: '#a7eee1', mid: '#54bcb2', out: '#405eaf', glow: 'rgba(136, 200, 196, 0.46)' },
-    thinking: { in: '#e4c4ff', mid: '#a99ae3', out: '#674bb5', glow: 'rgba(169, 154, 227, 0.46)' },
-    speaking: { in: '#ffe0b0', mid: '#f08a89', out: '#a9489f', glow: 'rgba(240, 138, 137, 0.55)' },
-    interrupted: { in: '#f7d591', mid: '#e5be79', out: '#a96c61', glow: 'rgba(229, 190, 121, 0.45)' },
-    working: { in: '#e3c5ff', mid: '#9b80dc', out: '#564b96', glow: 'rgba(169, 154, 227, 0.42)' },
-    seeing: { in: '#cff1ff', mid: '#83b9e5', out: '#6654ac', glow: 'rgba(131, 185, 229, 0.42)' },
-    watching: { in: '#cff1ff', mid: '#83b9e5', out: '#6654ac', glow: 'rgba(131, 185, 229, 0.42)' },
-    approval_required: { in: '#fff0c4', mid: '#e5be79', out: '#9b6653', glow: 'rgba(229, 190, 121, 0.42)' }
-  }[orbState] || { in: '#ffbd9d', mid: '#ec6e99', out: '#5750bd', glow: 'rgba(240, 138, 137, 0.38)' };
+  const palette = statePalette(paletteState(orbState));
+  const colors = { in:palette.primary, mid:palette.secondary, out:palette.tertiary, glow:palette.glow };
 
-  const amp = orbState === 'speaking' || orbState === 'listening' ? Math.max(currentAmplitude, ...spectrum8) : 0.06;
+  const amp = !reduceMotion.matches && (orbState === 'speaking' || orbState === 'listening') ? Math.max(currentAmplitude, ...spectrum8) : 0.02;
   const baseRadius = 79 + Math.min(amp, 1) * 23;
+  const visualTime = reduceMotion.matches ? 0 : time;
+  const visualPhase = reduceMotion.matches ? 0 : wavePhase;
 
   // Ambient outer glow
   const g = ctx.createRadialGradient(cx, cy, baseRadius * 0.2, cx, cy, baseRadius * 1.55);
@@ -330,8 +380,8 @@ function renderVisuals() {
   ctx.beginPath();
   for (let i = 0; i <= 64; i++) {
     const angle = (i / 64) * Math.PI * 2;
-    const wave = Math.sin(angle * 3 + time * 0.55 + wavePhase) * (2 + amp * 12) +
-                 Math.cos(angle * 2 - time * 0.38) * (2 + amp * 7);
+    const wave = Math.sin(angle * 3 + visualTime * 0.55 + visualPhase) * (2 + amp * 12) +
+                 Math.cos(angle * 2 - visualTime * 0.38) * (2 + amp * 7);
     const r = baseRadius + wave;
     const x = cx + Math.cos(angle) * r;
     const y = cy + Math.sin(angle) * r;
@@ -349,11 +399,16 @@ function renderVisuals() {
   ctx.shadowBlur = 34 + amp * 26;
   ctx.fill();
   ctx.shadowBlur = 0;
+  if (!reduceMotion.matches) animationFrame = requestAnimationFrame(renderVisuals);
 }
 
 
 connectWs();
 renderVisuals();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { if (animationFrame) cancelAnimationFrame(animationFrame); animationFrame = 0; }
+  else if (!animationFrame) renderVisuals();
+});
 const mockableStates = new Set(['idle','listening','transcribing','thinking','speaking','working','seeing','watching','interrupted','disconnected','approval_required']);
 window.addEventListener('sail:orb-telemetry', event => {
   const data = event.detail || {};
