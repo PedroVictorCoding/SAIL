@@ -100,7 +100,7 @@ Open `https://192.168.1.101:8088` after trusting the certificate. Plain HTTP on 
 
 Choose a Portuguese or English voice in the Orb controls. Start/stop, mute, end-turn, interrupt, tier selection, text input and image upload work independently. Tiers change STT/TTS CPU threads (2/4/8) and partial-transcription cadence; PCM remains 16kHz in every tier. Kernel tools are restricted to `os:status`, `proc:list`, `fs:query` (workspace scope), and `vision:frame` (validated pixels). Set `SAIL_TOOL_ROOT` to choose the permitted filesystem root.
 
-The responsive Home/Dialogue interface keeps microphone and camera use visible, opens subsystem navigation from **Spaces**, and shows tool results as summaries with details available on demand. UI tokens and first-party assets are documented in [the Minimal Ambient UI guide](Docs/ARCHITECTURE/Minimal_Ambient_UI.md); run `cargo xtask assets verify` to check local asset provenance and hashes.
+The responsive Home/Dialogue interface follows a three-region ambient dashboard: navigation, local workspace status, and the persistent assistant conversation. System metrics and local model health are fetched only when requested; Canvas shows real artifacts from the current conversation. Unsupported areas such as Flow and Agents remain clearly marked unavailable. UI tokens and first-party assets are documented in [the Minimal Ambient UI guide](Docs/ARCHITECTURE/Minimal_Ambient_UI.md); run `cargo xtask assets verify` to check local asset provenance and hashes.
 
 ```bash
 cargo test --workspace

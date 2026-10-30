@@ -35,6 +35,8 @@ function connectWs() {
         document.getElementById('conversation').replaceChildren(); responseNode = null;
         applyControl(data.control); break;
       case 'telemetry':
+        document.getElementById('sessionConfidence').textContent = `${(data.confidence * 100).toFixed(0)}%`;
+        document.getElementById('sessionRms').textContent = Number(data.rms).toFixed(3);
         if (!playingSources.size) {
           currentAmplitude = data.rms; wavePhase = data.phase; spectrum8 = data.spectrum;
           if (!turnInProgress && pendingAudio === 0 && !playingSources.size) updateState(data.state);
@@ -72,6 +74,7 @@ function applyControl(control) {
   muteBtn.textContent = isMuted ? 'Unmute' : 'Mute'; muteBtn.setAttribute('aria-pressed', String(isMuted)); muteBtn.className = isMuted ? 'quiet-button muted' : 'quiet-button';
   const micIndicator = document.getElementById('micLiveIndicator');
   micIndicator.hidden = !isRecording; micIndicator.querySelector('span').textContent = isMuted ? 'Mic muted' : 'Mic on';
+  document.getElementById('sessionMic').textContent = !isRecording ? 'Off' : isMuted ? 'Muted' : 'On';
   const dockMute = document.getElementById('muteDockBtn'); dockMute.hidden = !isRecording;
   dockMute.setAttribute('aria-label', isMuted ? 'Unmute microphone' : 'Mute microphone'); dockMute.setAttribute('aria-pressed', String(isMuted));
   dockMute.classList.toggle('muted', isMuted);
@@ -120,6 +123,7 @@ async function renderArtifact(artifact) {
 function renderToolResult(result) {
   const container = document.createElement('article'); container.className = 'artifact-card';
   const output = result?.output ?? {}; const succeeded = Boolean(result?.success);
+  if (result?.tool === 'os:status' && succeeded && output) updateSystemCard(output);
   const heading = document.createElement('div'); heading.className = 'artifact-heading';
   const title = document.createElement('span'); title.textContent = String(result?.tool || 'Local action').replaceAll(':', ' · ');
   const badge = document.createElement('span'); badge.className = succeeded ? 'result-success' : 'result-failure'; badge.textContent = succeeded ? '● Done' : '● Could not complete'; heading.append(title, badge);
@@ -135,6 +139,12 @@ function renderToolResult(result) {
   const details = document.createElement('details'); const disclosure = document.createElement('summary'); disclosure.textContent = 'Show details';
   const pre = document.createElement('pre'); pre.textContent = JSON.stringify(result, null, 2); details.append(disclosure, pre);
   container.append(heading, summary, details); document.getElementById('canvasEmptyState')?.remove(); document.getElementById('canvasPanel').append(container);
+}
+function updateSystemCard(output) {
+  document.getElementById('systemCpu').textContent = Number.isFinite(output.logical_cpus) ? `${output.logical_cpus} logical CPUs` : 'Unavailable';
+  document.getElementById('systemMemory').textContent = output.memory_percent ? `${String(output.memory_percent)} used` : (output.memory_used_gb || 'Unavailable');
+  document.getElementById('systemLoad').textContent = Array.isArray(output.load_average) ? output.load_average.slice(0, 3).map(value => Number(value).toFixed(2)).join(' · ') : 'Unavailable';
+  document.getElementById('systemNote').textContent = [output.os, output.uptime_hours ? `Uptime ${output.uptime_hours} h` : ''].filter(Boolean).join(' · ') || 'Live status from the local device.';
 }
 async function ensureAudio() {
   if (!audioCtx || audioCtx.state === 'closed') { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); workletLoaded=false; }
@@ -174,6 +184,16 @@ function updateState(state) {
   orbState = state;
   const labels = { idle:'Ready', listening:'Listening', transcribing:'Transcribing', thinking:'Thinking', speaking:'Speaking', working:'Working', seeing:'Seeing', watching:'Watching', interrupted:'Interrupted', disconnected:'Disconnected', approval_required:'Approval needed' };
   statusBadge.textContent = labels[state] || 'Ready'; document.getElementById('appShell').dataset.state = state;
+  const ambient = {
+    idle:['#8d74d3','#c975a5','#ef9a86'], listening:['#55c8b5','#508dc3','#b884df'],
+    transcribing:['#70c5d0','#847edb','#bd79c4'], thinking:['#9b7be0','#b66fc4','#e48aab'],
+    working:['#6ca5df','#8e78dc','#c77fbd'], speaking:['#e97884','#b84dc0','#6486e9'],
+    seeing:['#5cc5cb','#557fcb','#a578de'], watching:['#5cc5cb','#557fcb','#a578de'],
+    approval_required:['#e5be79','#d68d75','#aa7296'], disconnected:['#6d7183','#6d7183','#6d7183'],
+    interrupted:['#e5be79','#d68d75','#aa7296'],
+  }[state] || ['#8d74d3','#c975a5','#ef9a86'];
+  ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, ambient[index]));
+  document.getElementById('sessionState').textContent = labels[state] || 'Ready';
   const activity = document.getElementById('activityPill'); activity.hidden = !['thinking','working','transcribing'].includes(state);
   document.getElementById('activityText').textContent = labels[state] || 'Working';
   document.getElementById('interruptBtn').hidden = !['thinking','speaking','working','transcribing'].includes(state);
@@ -181,6 +201,7 @@ function updateState(state) {
 function setConnection(message, connected) {
   const pill = document.getElementById('connection'); pill.className = `connection-pill ${connected ? 'is-connected' : 'is-disconnected'}`;
   pill.querySelector('span').textContent = message;
+  document.getElementById('sessionConnection').textContent = connected ? 'Connected · local' : 'Reconnecting';
 }
 async function toggleMic() { if (isRecording) stopMic(); else await startMic(); }
 async function startMic() {
@@ -204,7 +225,7 @@ async function startMic() {
       }
     };
     micSource.connect(processor); processor.connect(audioCtx.destination);
-    isRecording = true; micBtn.setAttribute('aria-label', 'Stop microphone'); micBtn.title = 'Stop microphone'; micBtn.classList.add('active'); document.getElementById('micStatus').textContent = 'On'; document.getElementById('micLiveIndicator').hidden = false; document.getElementById('muteDockBtn').hidden = false; document.getElementById('endTurnBtn').hidden = false; updateState('listening');
+    isRecording = true; micBtn.setAttribute('aria-label', 'Stop microphone'); micBtn.title = 'Stop microphone'; micBtn.classList.add('active'); document.getElementById('micStatus').textContent = 'On'; document.getElementById('sessionMic').textContent = isMuted ? 'Muted' : 'On'; document.getElementById('micLiveIndicator').hidden = false; document.getElementById('muteDockBtn').hidden = false; document.getElementById('endTurnBtn').hidden = false; updateState('listening');
   } catch (error) { stopMic(); showError(error.name === 'NotAllowedError' ? 'Microphone permission denied. Allow microphone access in browser settings.' : `Microphone: ${error.message}`); }
   finally { micBtn.disabled = false; }
 }
@@ -212,7 +233,7 @@ function stopMic() {
   isRecording = false; micStream?.getTracks().forEach(track => track.stop());
   if (processor) { processor.port.onmessage = null; processor.disconnect(); processor = null; }
   micSource?.disconnect(); micSource = null; micStream = null;
-  micBtn.setAttribute('aria-label', 'Start microphone'); micBtn.title = 'Start microphone'; micBtn.classList.remove('active'); document.getElementById('micStatus').textContent = 'Off'; document.getElementById('micLiveIndicator').hidden = true; document.getElementById('muteDockBtn').hidden = true; document.getElementById('endTurnBtn').hidden = true;
+  micBtn.setAttribute('aria-label', 'Start microphone'); micBtn.title = 'Start microphone'; micBtn.classList.remove('active'); document.getElementById('micStatus').textContent = 'Off'; document.getElementById('sessionMic').textContent = 'Off'; document.getElementById('micLiveIndicator').hidden = true; document.getElementById('muteDockBtn').hidden = true; document.getElementById('endTurnBtn').hidden = true;
   if (!playingSources.size && !turnInProgress) updateState('idle');
 }
 function toggleMute() { sendAction('toggle_mute'); }
@@ -231,14 +252,24 @@ async function runVisionFrame() {
   } catch (error) { showError(error.message); }
 }
 function runKernelTool(tool) { sendAction('kernel_tool', { tool, params: {} }); }
-function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('assistantAnnounce').textContent = ''; document.getElementById('canvasPanel').replaceChildren(); }
+function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('assistantAnnounce').textContent = ''; document.getElementById('canvasClearBtn').click(); }
 async function checkModels() {
-  document.getElementById('modelStatus').textContent = 'Checking local model status…';
+  const summary = document.getElementById('modelStatus'); summary.textContent = 'Checking local model status…'; summary.className = 'model-summary';
+  document.getElementById('modelStatusSettings').textContent = 'Querying local model workers…';
   try {
     const response = await fetch('/api/health'); if (!response.ok) throw new Error(response.statusText);
-    const data = await response.json(); const ready = Boolean(data.llm?.ready && Object.values(data.speech || {}).every(model => model.ready));
-    document.getElementById('modelStatus').textContent = ready ? 'Local language and speech models are ready.' : 'Some local models are unavailable. Check the runner logs for details.';
-  } catch (error) { document.getElementById('modelStatus').textContent = 'Local model status could not be reached.'; showError(error.message); }
+    const data = await response.json(); const speech = Object.values(data.speech || {}); const readySpeech = speech.filter(model => model.ready).length;
+    const llmReady = Boolean(data.llm?.ready); const ready = llmReady && readySpeech === speech.length;
+    summary.textContent = ready ? 'Local services ready' : `${readySpeech}/${speech.length} speech workers ready${llmReady ? ' · LLM ready' : ' · LLM unavailable'}`;
+    summary.classList.toggle('ready', ready); summary.classList.toggle('unavailable', !ready);
+    document.getElementById('llmStatus').textContent = llmReady ? `Ready${data.llm.model ? ` · ${data.llm.model}` : ''}` : 'Unavailable';
+    document.getElementById('speechStatus').textContent = `${readySpeech}/${speech.length} ready`;
+    const modalities = data.llm?.modalities;
+    document.getElementById('modelCapabilities').textContent = modalities && typeof modalities === 'object'
+      ? Object.entries(modalities).filter(([, enabled]) => enabled).map(([name]) => name).join(', ') || 'Text'
+      : 'Local inference';
+    document.getElementById('modelStatusSettings').textContent = ready ? 'Local language and speech services are ready.' : 'Some local services are unavailable. See the runner logs for details.';
+  } catch (error) { summary.textContent = 'Local model status could not be reached.'; summary.classList.add('unavailable'); document.getElementById('modelStatusSettings').textContent = 'Local model status could not be reached.'; showError(error.message); }
 }
 document.getElementById('textForm').addEventListener('submit', async event => {
   event.preventDefault(); errorBox.textContent = ''; errorBox.hidden = true;
