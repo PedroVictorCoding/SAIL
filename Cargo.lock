@@ -1328,10 +1328,16 @@ name = "sail-agents"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
+ "ring",
  "sail-common",
+ "sail-guardian",
+ "sail-protocol",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -1354,10 +1360,13 @@ name = "sail-bridge"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "sail-agents",
  "sail-common",
+ "sail-guardian",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -1438,6 +1447,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
+ "tower",
  "tower-http 0.5.2",
  "tracing",
  "uuid",
@@ -1475,6 +1485,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "libc",
  "ring",
  "sail-common",
  "serde",
@@ -1483,6 +1494,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -1513,6 +1525,21 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "sail-runner"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "ring",
+ "sail-common",
+ "sail-guardian",
+ "sail-protocol",
+ "serde_json",
+ "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -2418,6 +2445,9 @@ name = "zeroize"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "zerotrie"

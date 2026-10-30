@@ -41,16 +41,28 @@ impl LocalKernelToolBroker {
     /// Convert a local tool invocation into a strongly-typed Guardian Capability
     pub fn tool_to_capability(call: &KernelToolCall) -> sail_guardian::Capability {
         match call.tool.as_str() {
-            "os:status" => sail_guardian::Capability::System(sail_guardian::SystemCapability::OsTelemetry),
-            "proc:list" => sail_guardian::Capability::System(sail_guardian::SystemCapability::ProcessInspect),
+            "os:status" => {
+                sail_guardian::Capability::System(sail_guardian::SystemCapability::OsTelemetry)
+            }
+            "proc:list" => {
+                sail_guardian::capability::bound_tool_invocation("proc:list", &call.params)
+            }
             "fs:query" => {
-                let path_str = call.params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                let path_str = call
+                    .params
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".");
                 sail_guardian::Capability::Filesystem(sail_guardian::FsCapability::Read {
                     path: std::path::PathBuf::from(path_str),
                 })
             }
-            "vision:frame" => sail_guardian::Capability::Device(sail_guardian::DeviceCapability::Camera),
-            cmd => sail_guardian::Capability::Tool(sail_guardian::ToolCapability::KernelTool(cmd.to_string())),
+            "vision:frame" => {
+                sail_guardian::capability::bound_tool_invocation("vision:frame", &call.params)
+            }
+            cmd => sail_guardian::Capability::Tool(sail_guardian::ToolCapability::KernelTool(
+                cmd.to_string(),
+            )),
         }
     }
 
@@ -60,6 +72,14 @@ impl LocalKernelToolBroker {
         caller: sail_common::types::SubsystemId,
         call: &KernelToolCall,
         token: Option<uuid::Uuid>,
+    ) -> KernelToolResult {
+        Self::execute_guarded_for(caller, call, token, None)
+    }
+    pub fn execute_guarded_for(
+        caller: sail_common::types::SubsystemId,
+        call: &KernelToolCall,
+        token: Option<uuid::Uuid>,
+        correlation: Option<uuid::Uuid>,
     ) -> KernelToolResult {
         let broker = match sail_guardian::global_broker() {
             Ok(b) => b,
@@ -76,9 +96,40 @@ impl LocalKernelToolBroker {
         };
 
         let cap = Self::tool_to_capability(call);
-        match broker.authorize_and_execute(caller, cap, token, None, || Self::execute_raw(call)) {
+        let execution = if call.tool == "fs:query" {
+            let path = call
+                .params
+                .get("path")
+                .and_then(|value| value.as_str())
+                .unwrap_or(".");
+            broker.authorize_read(
+                caller,
+                Path::new(path),
+                token,
+                correlation,
+                Self::tool_fs_query,
+            )
+        } else {
+            broker
+                .authorize_and_execute(caller, cap, token, correlation, || Self::execute_raw(call))
+        };
+        match execution {
             Ok(res) => res,
             Err(denied) => {
+                let approval_session = match &denied {
+                    sail_guardian::ExecutionDenied::ApprovalRequired { session_id, .. } => {
+                        Some(*session_id)
+                    }
+                    _ => None,
+                };
+                let approval_action = if approval_session.is_some()
+                    && ["proc:list", "fs:query"].contains(&call.tool.as_str())
+                    && serde_json::to_vec(&call.params).is_ok_and(|bytes| bytes.len() <= 8192)
+                {
+                    Some(serde_json::json!({"tool":call.tool,"params":call.params}))
+                } else {
+                    None
+                };
                 let error_code = match &denied {
                     sail_guardian::ExecutionDenied::SandboxViolation(
                         sail_guardian::SandboxViolation::PathEscapesRoot { .. }
@@ -99,6 +150,8 @@ impl LocalKernelToolBroker {
                         "error_code": error_code,
                         "workspace_root": std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into()),
                         "denied": true,
+                        "approval_session":approval_session,
+                        "approval_action":approval_action,
                     }),
                 }
             }
@@ -111,11 +164,11 @@ impl LocalKernelToolBroker {
     }
 
     /// Internal raw execution: only invoked by GuardianExecutionBroker after authorization
-    pub fn execute_raw(call: &KernelToolCall) -> KernelToolResult {
+    fn execute_raw(call: &KernelToolCall) -> KernelToolResult {
         match call.tool.as_str() {
             "os:status" => Self::tool_os_status(),
             "proc:list" => Self::tool_proc_list(&call.params),
-            "fs:query" => Self::tool_fs_query(&call.params),
+            "fs:query" => Self::error("fs:query", "Descriptor access required"),
             "vision:frame" => Self::tool_vision_frame(&call.params),
             unknown => KernelToolResult {
                 tool: unknown.to_string(),
@@ -233,70 +286,28 @@ impl LocalKernelToolBroker {
     }
 
     /// fs:query — Query local file system paths, directory entries, sizes
-    fn tool_fs_query(params: &serde_json::Value) -> KernelToolResult {
-        let requested = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let configured = std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into());
-        let root = match fs::canonicalize(&configured) {
-            Ok(p) => p,
-            Err(e) => {
-                return KernelToolResult {
-                    tool: "fs:query".into(),
-                    success: false,
-                    output: serde_json::json!({"error":"The configured workspace root is unavailable","error_code":"invalid_workspace_root","workspace_root":configured,"detail":e.to_string()}),
-                };
-            }
-        };
-        let candidate = Path::new(requested);
-        let candidate = if candidate.is_absolute() {
-            candidate.to_path_buf()
-        } else {
-            root.join(candidate)
-        };
-        let failure = |code: &str, message: String| KernelToolResult {
-            tool: "fs:query".into(),
-            success: false,
-            output: serde_json::json!({"error":message,"error_code":code,"requested_path":requested,"workspace_root":root,"hint":"Use a workspace-relative path, such as . or README.md. Do not retry an outside path."}),
-        };
-        let path = match fs::canonicalize(&candidate) {
-            Ok(p) => p,
-            Err(e) => {
-                return failure(
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        "not_found"
-                    } else {
-                        "path_unavailable"
-                    },
-                    format!("Cannot resolve requested path: {e}"),
+    fn tool_fs_query(file: sail_guardian::confined::ConfinedFile) -> KernelToolResult {
+        let result = (|| -> std::io::Result<serde_json::Value> {
+            let metadata = file.metadata()?;
+            if metadata.is_file() {
+                return Ok(
+                    serde_json::json!({"type":"file","path":file.path(),"size_bytes":metadata.len()}),
                 );
             }
-        };
-        if !path.starts_with(&root) {
-            return failure(
-                "outside_workspace",
-                "Path is outside the authorized workspace".into(),
-            );
-        }
-        tracing::debug!(requested_path=requested,resolved_path=%path.display(),workspace_root=%root.display(),"Filesystem query passed workspace boundary check");
-        let metadata = match fs::metadata(&path) {
-            Ok(m) => m,
-            Err(e) => return failure("metadata_unavailable", e.to_string()),
-        };
-        if metadata.is_file() {
-            return KernelToolResult {
+            let entries: Vec<_> = file
+                .entries(20)?
+                .into_iter()
+                .map(|(name, is_dir)| serde_json::json!({"name":name,"is_dir":is_dir}))
+                .collect();
+            Ok(serde_json::json!({"type":"directory","path":file.path(),"entries":entries}))
+        })();
+        match result {
+            Ok(output) => KernelToolResult {
                 tool: "fs:query".into(),
                 success: true,
-                output: serde_json::json!({"type":"file","path":path,"size_bytes":metadata.len()}),
-            };
-        }
-        let directory = match fs::read_dir(&path) {
-            Ok(d) => d,
-            Err(e) => return failure("directory_unavailable", e.to_string()),
-        };
-        let entries:Vec<_>=directory.filter_map(|entry|entry.ok()).take(20).map(|entry|serde_json::json!({"name":entry.file_name().to_string_lossy(),"is_dir":entry.file_type().is_ok_and(|t|t.is_dir())})).collect();
-        KernelToolResult {
-            tool: "fs:query".into(),
-            success: true,
-            output: serde_json::json!({"type":"directory","path":path,"entries":entries}),
+                output,
+            },
+            Err(error) => Self::error("fs:query", &error.to_string()),
         }
     }
 

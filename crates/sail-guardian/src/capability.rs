@@ -41,6 +41,14 @@ pub enum SystemCapability {
 pub enum ToolCapability {
     KernelTool(String),
     CliCommand(String),
+    SandboxCommand {
+        request_digest: String,
+        request: String,
+    },
+    Invocation {
+        tool: String,
+        arguments: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -79,9 +87,37 @@ impl Capability {
                     "vision:frame" => RiskLevel::High,
                     _ => RiskLevel::High,
                 },
-                ToolCapability::CliCommand(_) => RiskLevel::Critical,
+                ToolCapability::Invocation { tool, arguments }
+                    if tool == "local:time" && arguments == "{}" =>
+                {
+                    RiskLevel::Low
+                }
+                ToolCapability::Invocation { .. } => RiskLevel::High,
+                ToolCapability::CliCommand(_) | ToolCapability::SandboxCommand { .. } => {
+                    RiskLevel::Critical
+                }
             },
         }
     }
 }
 
+/// Bind a tool request to every argument. Large media stays out of prompts/audit;
+/// its immutable digest is the resource shown in the approval.
+pub fn bound_tool_invocation(tool: &str, input: &serde_json::Value) -> Capability {
+    let bytes = serde_json::to_vec(input).expect("JSON serialization");
+    let arguments = if tool == "vision:frame" || bytes.len() > 8192 {
+        let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
+        let digest: String = digest
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        serde_json::json!({"sha256":digest,"bytes":bytes.len(),"width":input.get("width"),"height":input.get("height"),"format":input.get("format")}).to_string()
+    } else {
+        String::from_utf8(bytes).expect("JSON UTF-8")
+    };
+    Capability::Tool(ToolCapability::Invocation {
+        tool: tool.into(),
+        arguments,
+    })
+}

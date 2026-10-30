@@ -116,6 +116,13 @@
   <button class="sheet-link" id="checkModelsBtn">Check local model status <span>›</span></button>
   <p class="sheet-note" id="modelStatusSettings">Model status is checked with the local SAIL server.</p>
   <button class="sheet-link" id="newConversationBtn">Start a new conversation <span>›</span></button>
+  <section aria-labelledby="approvalTitle">
+    <h3 id="approvalTitle">Owner approvals</h3>
+    <p class="sheet-note">Review the exact action before granting one execution. The owner token is kept only in this page.</p>
+    <input id="ownerApprovalToken" type="password" autocomplete="off" aria-label="Owner approval token" placeholder="Owner approval token" style="width:100%;padding:10px;background:var(--surface);border:var(--border);border-radius:12px">
+    <button class="sheet-link" id="refreshApprovalsBtn" type="button">Review pending requests <span>›</span></button>
+    <div id="ownerApprovals" role="status" aria-live="polite"></div>
+  </section>
   <details class="inspector"><summary>Developer details</summary><div class="telemetry-row"><span id="telVad">VAD —</span><span id="telConf">Confidence —</span><span id="telRms">RMS —</span></div></details>
 </aside>
 

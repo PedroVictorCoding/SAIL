@@ -5,6 +5,8 @@ const playbackTimers=new Set();
 let isRecording = false, isMuted = false, orbState = 'idle';
 let currentAmplitude = 0, wavePhase = 0, spectrum8 = Array(8).fill(0), orbFrozen = false;
 const activeTools = new Map();
+const lastToolCalls = new Map();
+const pendingApprovalActions = new Map();
 const tiers = ['Balanced', 'HighPerformance', 'LowPower']; let tierIdx = 0;
 const ambientPalettes = {
   idle:{ primary:'#9180E8', secondary:'#D080AC', tertiary:'#E7A290', glow:'rgba(208,128,172,.30)' },
@@ -70,6 +72,7 @@ function connectWs() {
   ws.onopen = () => { setConnection('Connected · local session', true); micBtn.disabled = false; if (orbState === 'disconnected') updateState('idle'); };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
+    pendingApprovalActions.clear(); lastToolCalls.clear();
     turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
   };
@@ -168,6 +171,12 @@ async function renderArtifact(artifact) {
   const pre = document.createElement('pre'); pre.textContent = artifact.content; container.append(pre);
 }
 function renderToolResult(result) {
+  const approval = result?.output?.approval_session;
+  if (approval) {
+    const action = result?.output?.approval_action || lastToolCalls.get(normalizeToolName(result.tool));
+    if (action) { pendingApprovalActions.set(approval, action); if (pendingApprovalActions.size > 128) pendingApprovalActions.delete(pendingApprovalActions.keys().next().value); }
+    showError('This action needs owner approval. Open Settings to review the exact request.');
+  }
   const container = document.createElement('article'); container.className = 'artifact-card';
   const output = result?.output ?? {}; const succeeded = Boolean(result?.success);
   if (result?.tool === 'os:status' && succeeded && output) updateSystemCard(output);
@@ -289,10 +298,14 @@ async function runVisionFrame() {
     const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale));
     const context = canvas.getContext('2d'); context.drawImage(image, 0, 0, canvas.width, canvas.height); image.close();
     const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    sendAction('kernel_tool', { tool: 'vision:frame', params: { width: canvas.width, height: canvas.height, format: 'rgba', data: Array.from(pixels) } });
+    runKernelTool('vision:frame', { width: canvas.width, height: canvas.height, format: 'rgba', data: Array.from(pixels) });
   } catch (error) { showError(error.message); }
 }
-function runKernelTool(tool, params = {}) { if (sendAction('kernel_tool', { tool, params })) updateToolActivity(tool, true); }
+function runKernelTool(tool, params = {}, approval_token) {
+  if (sendAction('kernel_tool', { tool, params, approval_token })) {
+    lastToolCalls.set(normalizeToolName(tool), {tool,params}); updateToolActivity(tool, true);
+  }
+}
 function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('assistantAnnounce').textContent = ''; document.getElementById('canvasClearBtn').click(); }
 async function checkModels() {
   const summary = document.getElementById('modelStatus'); summary.textContent = 'Checking local model status…'; summary.className = 'model-summary';
@@ -434,3 +447,43 @@ window.sailUi = Object.freeze({
   setOrbTelemetry: data => window.dispatchEvent(new CustomEvent('sail:orb-telemetry', { detail:data })),
   resumeOrbAnimation: () => { orbFrozen = false; },
 });
+
+async function ownerApprovalRequest(path, body) {
+  const token = document.getElementById('ownerApprovalToken').value;
+  const response = await fetch(`/api/guardian/${path}`, { method:body ? 'POST' : 'GET', cache:'no-store',
+    headers:{ Authorization:`Bearer ${token}`, ...(body ? {'Content-Type':'application/json'} : {}) },
+    ...(body ? { body:JSON.stringify(body) } : {}) });
+  if (!response.ok) throw new Error(response.status === 401 ? 'Owner token not accepted.' : response.status === 503 ? 'Owner approval service is not configured.' : 'Approval expired, revoked, or unavailable.');
+  return response.status === 204 ? null : response.json();
+}
+async function refreshOwnerApprovals() {
+  const output = document.getElementById('ownerApprovals'); output.textContent = 'Checking pending approvals…';
+  try {
+    const data = await ownerApprovalRequest('approvals'); output.replaceChildren();
+    if (!data.pending.length) { output.textContent = 'No pending approvals.'; return; }
+    for (const request of data.pending) {
+      const card = document.createElement('article'); card.className = 'artifact-card';
+      const title = document.createElement('p'); title.textContent = `${request.requester} · ${request.risk_level} risk`;
+      const exact = document.createElement('pre'); exact.textContent = JSON.stringify(request.capability, null, 2);
+      const scope = document.createElement('p'); scope.className = 'sheet-note'; scope.textContent = `Expires ${new Date(request.expires_at).toLocaleTimeString()} · Session ${request.correlation_id || 'native trusted caller'}`;
+      card.append(title,exact,scope);
+      const action = pendingApprovalActions.get(request.session_id);
+      if (action) {
+        const approve = document.createElement('button'); approve.className = 'quiet-button'; approve.textContent = 'Approve and retry once';
+        approve.addEventListener('click', async () => {
+          approve.disabled = true;
+          try { const result = await ownerApprovalRequest('resolve',{session_id:request.session_id,approved:true});
+            pendingApprovalActions.delete(request.session_id); runKernelTool(action.tool,action.params,result.token.token_id); await refreshOwnerApprovals();
+          } catch (error) { showError(error.message); approve.disabled = false; }
+        }); card.append(approve);
+      } else {
+        const note = document.createElement('p'); note.className='sheet-note'; note.textContent='This request belongs to another caller. Only its original session can execute it.'; card.append(note);
+      }
+      const reject = document.createElement('button'); reject.className='quiet-button'; reject.textContent='Deny / revoke';
+      reject.addEventListener('click', async () => { try { await ownerApprovalRequest('revoke',{session_id:request.session_id}); pendingApprovalActions.delete(request.session_id); await refreshOwnerApprovals(); } catch(error) { showError(error.message); } });
+      card.append(reject); output.append(card);
+    }
+  } catch(error) { output.textContent = error.message; }
+}
+document.getElementById('refreshApprovalsBtn').addEventListener('click',refreshOwnerApprovals);
+window.addEventListener('pagehide', () => { document.getElementById('ownerApprovalToken').value=''; pendingApprovalActions.clear(); lastToolCalls.clear(); });

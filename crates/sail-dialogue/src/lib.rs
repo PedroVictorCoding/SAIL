@@ -1,3 +1,4 @@
+pub mod approval_http;
 pub mod control;
 pub mod orb;
 pub mod pipeline;

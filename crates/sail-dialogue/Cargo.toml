@@ -32,4 +32,5 @@ rustfft = "6.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.24"

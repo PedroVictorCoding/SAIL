@@ -17,3 +17,6 @@ uuid.workspace = true
 chrono.workspace = true
 ring.workspace = true
 
+
+libc = "0.2"
+zeroize = { version = "1", features = ["serde"] }

@@ -41,6 +41,7 @@ async fn next_business_event(
 
 #[tokio::test]
 async fn test_full_sail_subsystem_ecosystem_loop() {
+    let _guardian = sail_guardian::GuardianSubsystem::new();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let mock = tokio::spawn(async move {

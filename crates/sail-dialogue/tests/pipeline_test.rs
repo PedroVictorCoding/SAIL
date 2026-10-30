@@ -82,6 +82,20 @@ fn profiles_preserve_wire_rate_and_apply_thread_budget() {
 #[test]
 fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
     let _guardian = sail_guardian::GuardianSubsystem::new();
+    _guardian.policy().grant_capability(
+        sail_common::types::SubsystemId::Dialogue,
+        sail_guardian::capability::bound_tool_invocation(
+            "proc:list",
+            &serde_json::json!({"limit":3}),
+        ),
+    );
+    _guardian.policy().grant_capability(
+        sail_common::types::SubsystemId::Dialogue,
+        sail_guardian::capability::bound_tool_invocation(
+            "vision:frame",
+            &serde_json::json!({"width":1,"height":1,"format":"rgb","data":[255,255,255]}),
+        ),
+    );
     assert!(
         LocalKernelToolBroker::execute(&KernelToolCall {
             tool: "os:status".into(),

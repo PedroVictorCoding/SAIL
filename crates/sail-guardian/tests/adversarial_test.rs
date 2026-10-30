@@ -5,11 +5,10 @@ use uuid::Uuid;
 
 use sail_common::types::SubsystemId;
 use sail_guardian::{
-    clear_global_broker, global_broker, ApprovalBroker,
-    AuditIntegrityError, AuditLedger, Capability, CredentialError, CredentialStore,
-    DecisionOutcome, ExecutionDenied, FsCapability, GuardianExecutionBroker,
-    PolicyEngine, SandboxPolicy, SandboxViolation,
-    SystemCapability, ToolCapability,
+    ApprovalBroker, AuditIntegrityError, AuditLedger, Capability, CredentialError, CredentialStore,
+    DecisionOutcome, ExecutionDenied, FsCapability, GuardianExecutionBroker, PolicyEngine,
+    SandboxPolicy, SandboxViolation, SystemCapability, ToolCapability, clear_global_broker,
+    global_broker,
 };
 
 /// Fixture helper: sets up isolated temporary directories for persistent vault & audit
@@ -26,6 +25,8 @@ impl TestHarness {
         let vault_dir = tmp_path.join("vault");
         let audit_file = tmp_path.join("audit.log");
         let _ = fs::create_dir_all(&vault_dir);
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&vault_dir, fs::Permissions::from_mode(0o700)).unwrap();
         Self {
             tmp_path,
             vault_dir,
@@ -69,7 +70,10 @@ fn test_adversarial_sandbox_path_traversal_and_sibling_prefix() {
     // 2. Double dot traversal escapes: "/workspace/subdir/../../workspace-evil/secret.txt"
     let subdir = root.join("subdir");
     fs::create_dir_all(&subdir).unwrap();
-    let traversal = subdir.join("../..").join("workspace-evil").join("secret.txt");
+    let traversal = subdir
+        .join("../..")
+        .join("workspace-evil")
+        .join("secret.txt");
     let res = sandbox.validate_path(&traversal, false);
     assert!(
         matches!(res, Err(SandboxViolation::PathEscapesRoot { .. })),
@@ -125,7 +129,7 @@ fn test_adversarial_sandbox_command_injection_and_interpreter_bypass() {
     for attack in attacks {
         let res = sandbox.validate_command(attack);
         assert!(
-            matches!(res, Err(SandboxViolation::ShellMetacharacterDetected { .. })),
+            matches!(res, Err(SandboxViolation::CommandNotAllowed { .. })),
             "Metacharacter attack '{attack}' must be rejected, got: {:?}",
             res
         );
@@ -153,10 +157,10 @@ fn test_adversarial_sandbox_command_injection_and_interpreter_bypass() {
         );
     }
 
-    // 4. Authorized commands without metacharacters succeed
-    assert!(sandbox.validate_command("git status").is_ok());
-    assert!(sandbox.validate_command("ls -la").is_ok());
-    assert!(sandbox.validate_command("cargo check").is_ok());
+    // 4. Even ordinary commands require the dedicated isolated runner
+    assert!(sandbox.validate_command("git status").is_err());
+    assert!(sandbox.validate_command("ls -la").is_err());
+    assert!(sandbox.validate_command("cargo check").is_err());
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -171,10 +175,13 @@ fn test_adversarial_capability_token_replay_and_tampering() {
         path: PathBuf::from("/home/main/SAIL/config.toml"),
     });
 
-    let session = broker.create_session(SubsystemId::Bridge, cap.clone(), "Update repository config");
+    let session =
+        broker.create_session(SubsystemId::Bridge, cap.clone(), "Update repository config");
 
     // 1. Resolve session with approval
-    let token = broker.resolve_session(session.session_id, true).expect("Approval should issue token");
+    let token = broker
+        .resolve_session(session.session_id, true)
+        .expect("Approval should issue token");
     assert_eq!(token.bound_actor, SubsystemId::Bridge);
     assert_eq!(token.bound_capability, cap);
 
@@ -190,23 +197,34 @@ fn test_adversarial_capability_token_replay_and_tampering() {
     );
 
     // 4. Actor impersonation attack: different subsystem attempts to consume the token
-    let session2 = broker.create_session(SubsystemId::Bridge, cap.clone(), "Legitimate Bridge session");
+    let session2 = broker.create_session(
+        SubsystemId::Bridge,
+        cap.clone(),
+        "Legitimate Bridge session",
+    );
     let token2 = broker.resolve_session(session2.session_id, true).unwrap();
     let impersonation = broker.consume_token(token2.token_id, SubsystemId::Agents, &cap);
     assert!(
-        matches!(impersonation, Err(sail_guardian::TokenConsumptionError::ActorMismatch { .. })),
+        matches!(
+            impersonation,
+            Err(sail_guardian::TokenConsumptionError::ActorMismatch { .. })
+        ),
         "Subsystem impersonation attempt must be rejected"
     );
 
     // 5. Parameter tampering / reparameterization attack: token was approved for config.toml, but attacker targets /etc/shadow
-    let session3 = broker.create_session(SubsystemId::Bridge, cap.clone(), "Legitimate config write");
+    let session3 =
+        broker.create_session(SubsystemId::Bridge, cap.clone(), "Legitimate config write");
     let token3 = broker.resolve_session(session3.session_id, true).unwrap();
     let tampered_cap = Capability::Filesystem(FsCapability::Write {
         path: PathBuf::from("/etc/shadow"),
     });
     let tampering = broker.consume_token(token3.token_id, SubsystemId::Bridge, &tampered_cap);
     assert!(
-        matches!(tampering, Err(sail_guardian::TokenConsumptionError::CapabilityMismatch)),
+        matches!(
+            tampering,
+            Err(sail_guardian::TokenConsumptionError::CapabilityMismatch)
+        ),
         "Reparameterization with altered target resource must be rejected"
     );
 }
@@ -271,20 +289,20 @@ fn test_adversarial_denied_execution_produces_zero_side_effects() {
     });
 
     let mut side_effect_executed = false;
-    let res = broker.authorize_and_execute(
-        SubsystemId::Dialogue,
-        outside_cap,
-        None,
-        None,
-        || {
-            side_effect_executed = true;
-            fs::write(&target_file, "corrupt").unwrap();
-        },
-    );
+    let res = broker.authorize_and_execute(SubsystemId::Dialogue, outside_cap, None, None, || {
+        side_effect_executed = true;
+        fs::write(&target_file, "corrupt").unwrap();
+    });
 
     assert!(res.is_err(), "Execution outside sandbox must be denied");
-    assert!(!side_effect_executed, "Side-effect function must never run on deny");
-    assert!(!target_file.exists(), "No filesystem side effects must be produced");
+    assert!(
+        !side_effect_executed,
+        "Side-effect function must never run on deny"
+    );
+    assert!(
+        !target_file.exists(),
+        "No filesystem side effects must be produced"
+    );
 
     // Denial must be logged in audit trail
     assert_eq!(audit.len(), 1);
@@ -303,7 +321,8 @@ fn test_adversarial_encrypted_vault_survives_restart_and_rejects_tampering() {
 
     // 1. Open persistent encrypted vault and store credential
     {
-        let vault = CredentialStore::open_persistent(&harness.vault_dir).expect("Open vault failed");
+        let vault =
+            CredentialStore::open_persistent(&harness.vault_dir).expect("Open vault failed");
         let handle = vault
             .store_credential(
                 SubsystemId::Bridge,
@@ -320,26 +339,36 @@ fn test_adversarial_encrypted_vault_survives_restart_and_rejects_tampering() {
 
     // 2. Restart simulation: reopen persistent vault from disk
     {
-        let restarted = CredentialStore::open_persistent(&harness.vault_dir).expect("Reopen vault failed");
+        let restarted =
+            CredentialStore::open_persistent(&harness.vault_dir).expect("Reopen vault failed");
         let handle = restarted
             .get_handle(SubsystemId::Bridge, "stripe_api", "read:charges")
             .expect("Handle resolution failed");
 
         // Verify secret execution works via handle
-        let verified = restarted.execute_with_secret(&handle, SubsystemId::Bridge, |s| s == secret_val);
+        let verified =
+            restarted.execute_with_secret(&handle, SubsystemId::Bridge, |s| s == secret_val);
         assert_eq!(verified, Ok(true));
 
         // Other subsystems cannot resolve or execute
         let unauthorized = restarted.get_handle(SubsystemId::Agents, "stripe_api", "read:charges");
-        assert!(matches!(unauthorized, Err(CredentialError::NotFound(..))));
+        assert!(matches!(
+            unauthorized,
+            Err(CredentialError::UntrustedConnector)
+        ));
     }
 
     // 3. Redaction verification: raw secret is stripped from logs
     {
         let vault = CredentialStore::open_persistent(&harness.vault_dir).unwrap();
-        let log_line = format!("Error while communicating: authorization failed for token {secret_val} on host");
+        let log_line = format!(
+            "Error while communicating: authorization failed for token {secret_val} on host"
+        );
         let sanitized = vault.redact_text(&log_line);
-        assert!(!sanitized.contains(secret_val), "Raw secret must be redacted from log strings");
+        assert!(
+            !sanitized.contains(secret_val),
+            "Raw secret must be redacted from log strings"
+        );
         assert!(sanitized.contains("[REDACTED_SECRET]"));
     }
 
@@ -370,7 +399,8 @@ fn test_adversarial_durable_audit_tampering_and_truncation_detection() {
 
     // 1. Create durable audit ledger and write records
     {
-        let ledger = AuditLedger::open_persistent(&harness.audit_file).expect("Failed to open audit log");
+        let ledger =
+            AuditLedger::open_persistent(&harness.audit_file).expect("Failed to open audit log");
         ledger.record(
             SubsystemId::Dialogue,
             Capability::System(SystemCapability::OsTelemetry),
@@ -385,7 +415,9 @@ fn test_adversarial_durable_audit_tampering_and_truncation_detection() {
         );
         ledger.record(
             SubsystemId::Agents,
-            Capability::Filesystem(FsCapability::Read { path: PathBuf::from("/etc/shadow") }),
+            Capability::Filesystem(FsCapability::Read {
+                path: PathBuf::from("/etc/shadow"),
+            }),
             DecisionOutcome::Denied,
             "Sandbox denied /etc read",
         );
@@ -395,7 +427,8 @@ fn test_adversarial_durable_audit_tampering_and_truncation_detection() {
 
     // 2. Normal restart boot-time verification
     {
-        let reloaded = AuditLedger::open_persistent(&harness.audit_file).expect("Verification failed on boot");
+        let reloaded =
+            AuditLedger::open_persistent(&harness.audit_file).expect("Verification failed on boot");
         assert_eq!(reloaded.len(), 3);
         assert!(reloaded.verify_chain());
     }
@@ -413,7 +446,10 @@ fn test_adversarial_durable_audit_tampering_and_truncation_detection() {
     // Boot-time verification MUST catch the tampered entry
     let boot_result = AuditLedger::open_persistent(&harness.audit_file);
     assert!(
-        matches!(boot_result, Err(AuditIntegrityError::TamperedEntry { sequence: 2, .. })),
+        matches!(
+            boot_result,
+            Err(AuditIntegrityError::TamperedEntry { sequence: 2, .. })
+        ),
         "Boot verification must detect tampered record content"
     );
 
@@ -423,7 +459,10 @@ fn test_adversarial_durable_audit_tampering_and_truncation_detection() {
 
     let boot_result_trunc = AuditLedger::open_persistent(&harness.audit_file);
     assert!(
-        matches!(boot_result_trunc, Err(AuditIntegrityError::SequenceBroken { .. })),
+        matches!(
+            boot_result_trunc,
+            Err(AuditIntegrityError::SequenceBroken { .. })
+        ),
         "Boot verification must detect deleted or skipped sequence entries"
     );
 }

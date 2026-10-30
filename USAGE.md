@@ -84,6 +84,13 @@ The assistant presents local tool results as a short summary. Open **Show detail
 
 Voice tools currently provide read-only inspection. They do not execute arbitrary shell commands, edit files, or install software. Filesystem inspection is limited to the configured workspace root.
 
+Process inspection, filesystem queries and image tools now require an exact, short-lived owner approval. Configure a securely generated `SAIL_APPROVAL_TOKEN` (at least 32 bytes) in the server's protected environment before startup. In **Settings → Owner approvals**, enter the same token, review the actor, exact resource and expiry, then choose **Approve and retry once**. The token is not saved in browser storage. If owner authentication is not configured, these operations fail closed; ordinary conversation and low-risk OS telemetry continue.
+
+A remembered process/file request can be retried in its original conversation. A new question or another browser connection cannot reuse its grant. The retry returns the local tool result; automatic continuation of the earlier model reasoning is not yet implemented. **Deny / revoke** invalidates the request and any issued token. For image tools, use the Local tools card to keep the selected frame associated with its request.
+
+`SAIL_TOOL_ROOT` sets the permitted data workspace at startup. Symlinks, hardlinked files, special files, cross-mount paths and private stores inside the root are rejected. `SAIL_VAULT_DIR` optionally enables the encrypted credential vault; it must be a private owner-owned directory and an invalid configured vault stops startup. See [Guardian execution](Docs/ARCHITECTURE/Guardian_Execution.md) for deployment and limitations of the separately provisioned command service.
+
+
 ### Ask for a diagram or structured explanation
 
 > Show the voice pipeline as a Mermaid diagram, then briefly explain each stage.

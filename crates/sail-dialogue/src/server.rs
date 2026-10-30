@@ -71,7 +71,14 @@ pub async fn run_dialogue_server_with_services(
         None => sail_mind::MindService::from_env()?,
     };
     let services = services.with_inference(inference.clone());
+    let owner_authority = std::env::var("SAIL_APPROVAL_TOKEN")
+        .ok()
+        .map(|token| sail_guardian::authority::ApprovalAuthority::new(&token))
+        .transpose()?;
+    let approval_routes =
+        crate::approval_http::router(owner_authority, sail_guardian::global_broker().ok());
     let app = Router::new()
+        .nest_service("/api/guardian", approval_routes)
         .route(
             "/",
             get(|| async { Html(include_str!("../web/index.html")) }),
@@ -369,7 +376,8 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                             "kernel_tool"=>{
                                 let name=value["tool"].as_str().unwrap_or_default();
                                 emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"tool_started","channel":"voice:vlm","tool":name})).await;
-                                let result=execute_tool(name,value.get("params").cloned().unwrap_or(json!({})));
+                                let token=value["approval_token"].as_str().and_then(|id|uuid::Uuid::parse_str(id).ok());
+                                let result=execute_tool_for(name,value.get("params").cloned().unwrap_or(json!({})),token,Some(tool_correlation(&session,epoch.load(Ordering::SeqCst))));
                                 emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"tool_result","channel":"voice:vlm","result":result})).await;
                             },
                             "playback_finished"=>{pipe.set_orb_state(OrbState::Idle);},
@@ -411,17 +419,38 @@ fn parse_vision(value: &Value) -> Result<Option<VisionFrameInput>> {
         data,
     }))
 }
-fn execute_tool(name: &str, params: Value) -> crate::KernelToolResult {
+fn tool_correlation(session: &str, epoch: u64) -> uuid::Uuid {
+    uuid::Uuid::from_u128(
+        uuid::Uuid::parse_str(session)
+            .expect("server-created session UUID")
+            .as_u128()
+            ^ epoch as u128,
+    )
+}
+fn execute_tool_for(
+    name: &str,
+    params: Value,
+    token: Option<uuid::Uuid>,
+    correlation: Option<uuid::Uuid>,
+) -> crate::KernelToolResult {
     let start = Instant::now();
-    info!(tool = name, "Authorizing local kernel operation via Guardian");
+    info!(
+        tool = name,
+        "Authorizing local kernel operation via Guardian"
+    );
     debug!(tool=name,arguments=%log_json(&params,2048),"Kernel tool arguments");
-    let result = match sail_agents::authorize_voice_operation(name) {
+    let mut result = match sail_agents::authorize_voice_operation(name) {
         Ok(tool) => {
             let call = KernelToolCall {
                 tool: tool.into(),
                 params,
             };
-            LocalKernelToolBroker::execute_guarded(sail_common::types::SubsystemId::Dialogue, &call, None)
+            LocalKernelToolBroker::execute_guarded_for(
+                sail_common::types::SubsystemId::Dialogue,
+                &call,
+                token,
+                correlation,
+            )
         }
         Err(e) => crate::KernelToolResult {
             tool: name.into(),
@@ -429,6 +458,7 @@ fn execute_tool(name: &str, params: Value) -> crate::KernelToolResult {
             output: json!({"error":e.to_string(), "denied": true}),
         },
     };
+    result.output = sail_common::diagnostics::redact_json(&result.output);
     if result.success {
         info!(tool=%result.tool,elapsed_ms=start.elapsed().as_millis(),"Local tool completed");
     } else {
@@ -619,6 +649,7 @@ async fn run_turn(
         &tx,
         current,
         &speech_tx,
+        Some(tool_correlation(&session, current)),
     )
     .await?;
     emit(&tx,current,json!({"type":"response_finished","generation_ms":start.elapsed().as_millis(),"turn_id":current})).await;
@@ -686,6 +717,7 @@ async fn reason_turn(
     tx: &mpsc::Sender<Outbound>,
     current: u64,
     speech_tx: &mpsc::Sender<String>,
+    correlation: Option<uuid::Uuid>,
 ) -> Result<(String, Value)> {
     let mut reply = String::new();
     let mut final_assistant = None;
@@ -858,7 +890,12 @@ async fn reason_turn(
                             }
                             let result = if name == "vision_frame" || name == "vision:frame" {
                                 match &visual_frame {
-                                    Some(frame) => execute_tool(name, serde_json::to_value(frame)?),
+                                    Some(frame) => execute_tool_for(
+                                        name,
+                                        serde_json::to_value(frame)?,
+                                        None,
+                                        correlation,
+                                    ),
                                     None => crate::KernelToolResult {
                                         tool: name.into(),
                                         success: false,
@@ -866,7 +903,7 @@ async fn reason_turn(
                                     },
                                 }
                             } else {
-                                execute_tool(name, params.clone())
+                                execute_tool_for(name, params.clone(), None, correlation)
                             };
                             guard.record(name, &params, result.clone());
                             result
@@ -964,6 +1001,16 @@ mod tests {
     }
     async fn exercise(prompt: &str, replies: Vec<Value>) -> (Vec<Value>, Vec<Value>, String) {
         let _guardian = sail_guardian::GuardianSubsystem::new();
+        // Explicit trusted fixture grant; production has no implicit process access.
+        for limit in 1..=3 {
+            _guardian.policy().grant_capability(
+                SubsystemId::Dialogue,
+                sail_guardian::capability::bound_tool_invocation(
+                    "proc:list",
+                    &json!({"limit":limit}),
+                ),
+            );
+        }
         let state = Arc::new(MockModel {
             replies: Mutex::new(replies.into()),
             requests: Mutex::new(Vec::new()),
@@ -990,7 +1037,7 @@ mod tests {
             json!({"role":"system","content":"Use only requested local tools"}),
             json!({"role":"user","content":prompt}),
         ];
-        let (reply, _) = reason_turn(&vlm, &mut messages, prompt, None, &tx, 1, &speech_tx)
+        let (reply, _) = reason_turn(&vlm, &mut messages, prompt, None, &tx, 1, &speech_tx, None)
             .await
             .unwrap();
         drop(tx);
@@ -1061,7 +1108,7 @@ mod tests {
             ];
             let (reply, _) = tokio::time::timeout(
                 std::time::Duration::from_secs(5),
-                reason_turn(&vlm, &mut messages, prompt, None, &tx, 1, &speech_tx),
+                reason_turn(&vlm, &mut messages, prompt, None, &tx, 1, &speech_tx, None),
             )
             .await
             .expect("First speech was blocked until model completion")

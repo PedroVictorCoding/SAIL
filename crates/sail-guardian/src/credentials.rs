@@ -1,18 +1,26 @@
 use chrono::{DateTime, Duration, Utc};
-use ring::aead::{Aad, BoundKey, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey, AES_256_GCM, NONCE_LEN};
+use ring::aead::{
+    AES_256_GCM, Aad, BoundKey, NONCE_LEN, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey,
+};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
-use tracing::{info, warn};
+use std::sync::{Mutex, RwLock};
+use tracing::info;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use sail_common::types::SubsystemId;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CredentialError {
+    #[error("Unknown or modified credential handle")]
+    InvalidHandle,
+    #[error("Only trusted Bridge connectors may hold credentials")]
+    UntrustedConnector,
     #[error("Credential for {0:?}:{1} not found")]
     NotFound(SubsystemId, String),
     #[error("Access denied: caller {actual:?} is not owner {expected:?}")]
@@ -25,10 +33,7 @@ pub enum CredentialError {
     #[error("Credential handle {0} has been revoked")]
     Revoked(Uuid),
     #[error("Requested scope '{requested}' is outside allowed scope '{allowed}'")]
-    ScopeMismatch {
-        requested: String,
-        allowed: String,
-    },
+    ScopeMismatch { requested: String, allowed: String },
     #[error("Vault cryptographic error: {0}")]
     CryptoError(String),
     #[error("Vault persistence error: {0}")]
@@ -45,11 +50,11 @@ pub struct CredentialHandle {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct StoredRecord {
     pub owner: SubsystemId,
     pub key: String,
-    pub secret: String,
+    pub secret: Zeroizing<String>,
     pub scope: String,
     pub created_at: DateTime<Utc>,
 }
@@ -68,9 +73,9 @@ impl NonceSequence for OneNonce {
 pub struct CredentialStore {
     secrets: RwLock<HashMap<(SubsystemId, String), StoredRecord>>,
     handles: RwLock<HashMap<Uuid, CredentialHandle>>,
-    revoked_handles: RwLock<HashSet<Uuid>>,
     vault_path: Option<PathBuf>,
-    encryption_key: [u8; 32],
+    encryption_key: Zeroizing<[u8; 32]>,
+    operation: Mutex<()>,
 }
 
 impl CredentialStore {
@@ -78,71 +83,108 @@ impl CredentialStore {
         // Ephemeral in-memory key if no vault path specified
         let rng = SystemRandom::new();
         let mut key = [0u8; 32];
-        let _ = rng.fill(&mut key);
+        rng.fill(&mut key).expect("secure randomness unavailable");
 
         Self {
             secrets: RwLock::new(HashMap::new()),
             handles: RwLock::new(HashMap::new()),
-            revoked_handles: RwLock::new(HashSet::new()),
             vault_path: None,
-            encryption_key: key,
+            encryption_key: Zeroizing::new(key),
+            operation: Mutex::new(()),
         }
     }
 
     /// Open or initialize an encrypted persistent credential vault backed by AES-256-GCM.
     pub fn open_persistent(vault_dir: &Path) -> Result<Self, CredentialError> {
-        let _ = fs::create_dir_all(vault_dir);
+        if !vault_dir.exists() {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(vault_dir)
+                .map_err(|e| CredentialError::IoError(e.to_string()))?;
+        }
+        let directory =
+            fs::symlink_metadata(vault_dir).map_err(|e| CredentialError::IoError(e.to_string()))?;
+        if !directory.is_dir()
+            || directory.uid() != unsafe { libc::geteuid() }
+            || directory.mode() & 0o077 != 0
+        {
+            return Err(CredentialError::IoError(
+                "Vault directory must be owner-only (0700), owned by daemon user and not a symlink"
+                    .into(),
+            ));
+        }
         let key_path = vault_dir.join("vault.key");
         let enc_path = vault_dir.join("vault.enc");
-
         let mut key = [0u8; 32];
-        if key_path.exists() {
-            let key_bytes = fs::read(&key_path)
-                .map_err(|e| CredentialError::IoError(format!("Failed to read vault key: {e}")))?;
-            if key_bytes.len() != 32 {
-                return Err(CredentialError::CryptoError("Invalid key length".into()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&key_path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                SystemRandom::new()
+                    .fill(&mut key)
+                    .map_err(|_| CredentialError::CryptoError("RNG failed".into()))?;
+                file.write_all(&key)
+                    .and_then(|()| file.sync_all())
+                    .map_err(|e| CredentialError::IoError(e.to_string()))?;
             }
-            key.copy_from_slice(&key_bytes);
-        } else {
-            let rng = SystemRandom::new();
-            rng.fill(&mut key)
-                .map_err(|_| CredentialError::CryptoError("Failed to generate random vault key".into()))?;
-            fs::write(&key_path, key)
-                .map_err(|e| CredentialError::IoError(format!("Failed to persist vault key: {e}")))?;
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                use std::io::Read;
+                let mut file = secure_open(&key_path)?;
+                if file
+                    .metadata()
+                    .map_err(|e| CredentialError::IoError(e.to_string()))?
+                    .len()
+                    != 32
+                {
+                    return Err(CredentialError::CryptoError("Invalid key length".into()));
+                }
+                file.read_exact(&mut key)
+                    .map_err(|e| CredentialError::IoError(e.to_string()))?;
+            }
+            Err(error) => return Err(CredentialError::IoError(error.to_string())),
         }
-
         let store = Self {
             secrets: RwLock::new(HashMap::new()),
             handles: RwLock::new(HashMap::new()),
-            revoked_handles: RwLock::new(HashSet::new()),
             vault_path: Some(enc_path.clone()),
-            encryption_key: key,
+            encryption_key: Zeroizing::new(key),
+            operation: Mutex::new(()),
         };
 
-        if enc_path.exists() {
+        if fs::symlink_metadata(&enc_path).is_ok() {
             store.load_from_disk(&enc_path)?;
         }
 
         Ok(store)
     }
 
-    fn encrypt_records(&self, records: &HashMap<(SubsystemId, String), StoredRecord>) -> Result<Vec<u8>, CredentialError> {
+    fn encrypt_records(
+        &self,
+        records: &HashMap<(SubsystemId, String), StoredRecord>,
+    ) -> Result<Vec<u8>, CredentialError> {
         let list: Vec<&StoredRecord> = records.values().collect();
-        let serialized = serde_json::to_vec(&list)
-            .map_err(|e| CredentialError::CryptoError(e.to_string()))?;
+        let serialized = Zeroizing::new(
+            serde_json::to_vec(&list).map_err(|e| CredentialError::CryptoError(e.to_string()))?,
+        );
 
         let rng = SystemRandom::new();
         let mut nonce_bytes = [0u8; NONCE_LEN];
         rng.fill(&mut nonce_bytes)
             .map_err(|_| CredentialError::CryptoError("RNG failed".into()))?;
 
-        let unbound = UnboundKey::new(&AES_256_GCM, &self.encryption_key)
+        let unbound = UnboundKey::new(&AES_256_GCM, self.encryption_key.as_ref())
             .map_err(|_| CredentialError::CryptoError("Key init failed".into()))?;
         let mut sealing_key = SealingKey::new(unbound, OneNonce(Some(nonce_bytes)));
 
         let mut in_out = serialized;
         sealing_key
-            .seal_in_place_append_tag(Aad::empty(), &mut in_out)
+            .seal_in_place_append_tag(Aad::empty(), &mut *in_out)
             .map_err(|_| CredentialError::CryptoError("Encryption failed".into()))?;
 
         let mut output = Vec::with_capacity(NONCE_LEN + in_out.len());
@@ -152,7 +194,10 @@ impl CredentialStore {
         Ok(output)
     }
 
-    fn decrypt_records(&self, ciphertext: &[u8]) -> Result<HashMap<(SubsystemId, String), StoredRecord>, CredentialError> {
+    fn decrypt_records(
+        &self,
+        ciphertext: &[u8],
+    ) -> Result<HashMap<(SubsystemId, String), StoredRecord>, CredentialError> {
         if ciphertext.len() < NONCE_LEN + 16 {
             return Err(CredentialError::CryptoError("Ciphertext too short".into()));
         }
@@ -161,11 +206,11 @@ impl CredentialStore {
         let mut nonce_arr = [0u8; NONCE_LEN];
         nonce_arr.copy_from_slice(nonce_bytes);
 
-        let unbound = UnboundKey::new(&AES_256_GCM, &self.encryption_key)
+        let unbound = UnboundKey::new(&AES_256_GCM, self.encryption_key.as_ref())
             .map_err(|_| CredentialError::CryptoError("Key init failed".into()))?;
         let mut opening_key = OpeningKey::new(unbound, OneNonce(Some(nonce_arr)));
 
-        let mut in_out = payload.to_vec();
+        let mut in_out = Zeroizing::new(payload.to_vec());
         let decrypted = opening_key
             .open_in_place(Aad::empty(), &mut in_out)
             .map_err(|_| CredentialError::CryptoError("Decryption failed or invalid tag".into()))?;
@@ -185,18 +230,38 @@ impl CredentialStore {
         if let Some(path) = &self.vault_path {
             let guard = self.secrets.read().unwrap();
             let encrypted = self.encrypt_records(&guard)?;
-            let tmp_path = path.with_extension("tmp");
-            fs::write(&tmp_path, encrypted)
-                .map_err(|e| CredentialError::IoError(format!("Write error: {e}")))?;
-            fs::rename(&tmp_path, path)
-                .map_err(|e| CredentialError::IoError(format!("Rename error: {e}")))?;
+            use std::io::Write;
+            let tmp_path = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
+            let result = (|| {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                    .open(&tmp_path)?;
+                file.write_all(&encrypted)?;
+                file.sync_all()?;
+                fs::rename(&tmp_path, path)?;
+                std::fs::File::open(path.parent().unwrap())?.sync_all()
+            })();
+            if let Err(error) = result {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(CredentialError::IoError(error.to_string()));
+            }
         }
         Ok(())
     }
 
     fn load_from_disk(&self, path: &Path) -> Result<(), CredentialError> {
-        let encrypted = fs::read(path)
-            .map_err(|e| CredentialError::IoError(format!("Read error: {e}")))?;
+        let mut encrypted = Vec::new();
+        use std::io::Read;
+        secure_open(path)?
+            .take(16 * 1024 * 1024 + 1)
+            .read_to_end(&mut encrypted)
+            .map_err(|e| CredentialError::IoError(e.to_string()))?;
+        if encrypted.len() > 16 * 1024 * 1024 {
+            return Err(CredentialError::IoError("Vault exceeds size limit".into()));
+        }
         let records = self.decrypt_records(&encrypted)?;
         let mut guard = self.secrets.write().unwrap();
         *guard = records;
@@ -213,24 +278,40 @@ impl CredentialStore {
         scope: impl Into<String>,
         ttl: Duration,
     ) -> Result<CredentialHandle, CredentialError> {
+        let _operation = self.operation.lock().unwrap();
+        if owner != SubsystemId::Bridge {
+            return Err(CredentialError::UntrustedConnector);
+        }
         let key_str = key.into();
         let scope_str = scope.into();
+        if scope_str.is_empty() || ttl <= Duration::zero() {
+            return Err(CredentialError::InvalidHandle);
+        }
         let now = Utc::now();
 
+        self.invalidate_handles(owner, &key_str);
         let record = StoredRecord {
             owner,
             key: key_str.clone(),
-            secret: secret.into(),
+            secret: Zeroizing::new(secret.into()),
             scope: scope_str.clone(),
             created_at: now,
         };
 
-        {
+        let previous = self
+            .secrets
+            .write()
+            .unwrap()
+            .insert((owner, key_str.clone()), record);
+        if let Err(error) = self.persist_to_disk() {
             let mut guard = self.secrets.write().unwrap();
-            guard.insert((owner, key_str.clone()), record);
+            if let Some(previous) = previous {
+                guard.insert((owner, key_str.clone()), previous);
+            } else {
+                guard.remove(&(owner, key_str.clone()));
+            }
+            return Err(error);
         }
-
-        self.persist_to_disk()?;
 
         let handle = CredentialHandle {
             handle_id: Uuid::new_v4(),
@@ -242,21 +323,14 @@ impl CredentialStore {
 
         {
             let mut guard = self.handles.write().unwrap();
+            guard.retain(|_, handle| handle.expires_at > Utc::now());
+            if guard.len() >= 4096 {
+                return Err(CredentialError::IoError("credential handle limit".into()));
+            }
             guard.insert(handle.handle_id, handle.clone());
         }
 
         Ok(handle)
-    }
-
-    /// Legacy convenience wrapper
-    pub fn set_secret(&self, owner: SubsystemId, key: impl Into<String>, secret: impl Into<String>) {
-        let _ = self.store_credential(owner, key, secret, "*", Duration::days(365));
-    }
-
-    /// Retrieve legacy secret directly (restricted strictly to the registered owner)
-    pub fn get_secret(&self, requester: SubsystemId, key: &str) -> Option<String> {
-        let guard = self.secrets.read().unwrap();
-        guard.get(&(requester, key.to_string())).map(|r| r.secret.clone())
     }
 
     /// Request an opaque scoped handle for an existing credential.
@@ -266,6 +340,10 @@ impl CredentialStore {
         key: &str,
         requested_scope: &str,
     ) -> Result<CredentialHandle, CredentialError> {
+        let _operation = self.operation.lock().unwrap();
+        if requester != SubsystemId::Bridge {
+            return Err(CredentialError::UntrustedConnector);
+        }
         let guard = self.secrets.read().unwrap();
         let record = guard
             .get(&(requester, key.to_string()))
@@ -278,7 +356,7 @@ impl CredentialStore {
             });
         }
 
-        if record.scope != "*" && !record.scope.contains(requested_scope) {
+        if requested_scope.is_empty() || (record.scope != "*" && record.scope != requested_scope) {
             return Err(CredentialError::ScopeMismatch {
                 requested: requested_scope.into(),
                 allowed: record.scope.clone(),
@@ -294,6 +372,10 @@ impl CredentialStore {
         };
 
         let mut handles_guard = self.handles.write().unwrap();
+        handles_guard.retain(|_, handle| handle.expires_at > Utc::now());
+        if handles_guard.len() >= 4096 {
+            return Err(CredentialError::IoError("credential handle limit".into()));
+        }
         handles_guard.insert(handle.handle_id, handle.clone());
 
         Ok(handle)
@@ -310,10 +392,14 @@ impl CredentialStore {
     where
         F: FnOnce(&str) -> R,
     {
-        if self.revoked_handles.read().unwrap().contains(&handle.handle_id) {
-            return Err(CredentialError::Revoked(handle.handle_id));
+        let _operation = self.operation.lock().unwrap();
+        if caller != SubsystemId::Bridge {
+            return Err(CredentialError::UntrustedConnector);
         }
-
+        let handles = self.handles.read().unwrap();
+        if handles.get(&handle.handle_id) != Some(handle) {
+            return Err(CredentialError::InvalidHandle);
+        }
         if Utc::now() > handle.expires_at {
             return Err(CredentialError::Expired(handle.handle_id));
         }
@@ -340,32 +426,60 @@ impl CredentialStore {
         key: &str,
         new_secret: impl Into<String>,
     ) -> Result<(), CredentialError> {
-        {
+        let _operation = self.operation.lock().unwrap();
+        self.invalidate_handles(owner, key);
+        let previous = {
             let mut guard = self.secrets.write().unwrap();
             let record = guard
                 .get_mut(&(owner, key.to_string()))
-                .ok_or_else(|| CredentialError::NotFound(owner, key.to_string()))?;
-            record.secret = new_secret.into();
+                .ok_or_else(|| CredentialError::NotFound(owner, key.into()))?;
+            std::mem::replace(&mut record.secret, Zeroizing::new(new_secret.into()))
+        };
+        if let Err(error) = self.persist_to_disk() {
+            self.secrets
+                .write()
+                .unwrap()
+                .get_mut(&(owner, key.to_string()))
+                .unwrap()
+                .secret = previous;
+            return Err(error);
         }
-        self.persist_to_disk()?;
         info!(owner = ?owner, key, "Credential rotated in vault");
         Ok(())
     }
 
     /// Revoke a credential and all associated handles
     pub fn revoke_credential(&self, owner: SubsystemId, key: &str) -> Result<(), CredentialError> {
-        {
-            let mut guard = self.secrets.write().unwrap();
-            guard.remove(&(owner, key.to_string()));
+        let _operation = self.operation.lock().unwrap();
+        self.invalidate_handles(owner, key);
+        let previous = self
+            .secrets
+            .write()
+            .unwrap()
+            .remove(&(owner, key.to_string()));
+        if let Err(error) = self.persist_to_disk() {
+            if let Some(previous) = previous {
+                self.secrets
+                    .write()
+                    .unwrap()
+                    .insert((owner, key.to_string()), previous);
+            }
+            return Err(error);
         }
-        self.persist_to_disk()?;
         Ok(())
     }
 
     /// Revoke a specific active handle immediately
+    fn invalidate_handles(&self, owner: SubsystemId, key: &str) {
+        self.handles
+            .write()
+            .unwrap()
+            .retain(|_, handle| handle.owner != owner || handle.key != key);
+    }
+
     pub fn revoke_handle(&self, handle_id: Uuid) {
-        let mut guard = self.revoked_handles.write().unwrap();
-        guard.insert(handle_id);
+        let _operation = self.operation.lock().unwrap();
+        self.handles.write().unwrap().remove(&handle_id);
     }
 
     /// Centralized structured log and trace redaction: scans text and replaces any known secret values with [REDACTED]
@@ -374,26 +488,12 @@ impl CredentialStore {
         let mut redacted = input.to_string();
 
         for record in guard.values() {
-            if record.secret.len() >= 4 && redacted.contains(&record.secret) {
-                redacted = redacted.replace(&record.secret, "[REDACTED_SECRET]");
+            if !record.secret.is_empty() && redacted.contains(record.secret.as_str()) {
+                redacted = redacted.replace(record.secret.as_str(), "[REDACTED_SECRET]");
             }
         }
 
         redacted
-    }
-
-    /// Reject prompt injection attacks attempting to exfiltrate or query all secrets
-    pub fn assert_no_credential_leakage(&self, prompt_text: &str) -> bool {
-        let lower = prompt_text.to_lowercase();
-        if lower.contains("print all credentials")
-            || lower.contains("dump secrets")
-            || lower.contains("export api keys")
-            || lower.contains("reveal authorization token")
-        {
-            warn!("Rejected untrusted prompt attempting to dump credential store");
-            return false;
-        }
-        true
     }
 }
 
@@ -401,4 +501,25 @@ impl Default for CredentialStore {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn secure_open(path: &Path) -> Result<std::fs::File, CredentialError> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|e| CredentialError::IoError(e.to_string()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| CredentialError::IoError(e.to_string()))?;
+    if !metadata.is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o077 != 0
+        || metadata.nlink() != 1
+    {
+        return Err(CredentialError::IoError(
+            "Vault files must be private, regular, unlinked elsewhere and owner-owned".into(),
+        ));
+    }
+    Ok(file)
 }

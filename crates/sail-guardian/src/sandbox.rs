@@ -7,11 +7,13 @@ use tracing::warn;
 pub struct SandboxPolicy {
     allowed_roots: Vec<PathBuf>,
     allowed_proc_paths: Vec<PathBuf>,
-    allowed_executables: Vec<String>,
+    confined_roots: Vec<crate::confined::ConfinedRoot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SandboxViolation {
+    #[error("Descriptor access denied for {path:?}: {detail}")]
+    DescriptorDenied { path: PathBuf, detail: String },
     #[error("Path {path:?} escapes allowed roots, resolving to {target:?}")]
     PathEscapesRoot { path: PathBuf, target: PathBuf },
     #[error("Path {path:?} does not exist")]
@@ -34,12 +36,11 @@ pub enum SandboxViolation {
 
 impl SandboxPolicy {
     pub fn new() -> Self {
-        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/home/main/SAIL"));
         let mut allowed = vec![
-            current_dir,
-            PathBuf::from("/home/main/SAIL"),
-            PathBuf::from("/home/main/.sail"),
-            PathBuf::from("/tmp/sail"),
+            std::env::var_os("SAIL_TOOL_ROOT")
+                .map(PathBuf::from)
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_default(),
         ];
 
         // Deduplicate and canonicalize roots where possible
@@ -55,7 +56,7 @@ impl SandboxPolicy {
         }
 
         Self {
-            allowed_roots: canonical_roots,
+            allowed_roots: canonical_roots.clone(),
             allowed_proc_paths: vec![
                 PathBuf::from("/proc/uptime"),
                 PathBuf::from("/proc/loadavg"),
@@ -63,24 +64,7 @@ impl SandboxPolicy {
                 PathBuf::from("/proc/cpuinfo"),
                 PathBuf::from("/proc/stat"),
             ],
-            allowed_executables: vec![
-                "git".into(),
-                "cargo".into(),
-                "rustc".into(),
-                "ls".into(),
-                "grep".into(),
-                "find".into(),
-                "cat".into(),
-                "echo".into(),
-                "diff".into(),
-                "uname".into(),
-                "whoami".into(),
-                "lscpu".into(),
-                "free".into(),
-                "ps".into(),
-                "uptime".into(),
-                "date".into(),
-            ],
+            confined_roots: canonical_roots_for_open(&canonical_roots),
         }
     }
 
@@ -88,7 +72,10 @@ impl SandboxPolicy {
         let r = root.into();
         let canonical = fs::canonicalize(&r).unwrap_or(r);
         if !self.allowed_roots.contains(&canonical) {
-            self.allowed_roots.push(canonical);
+            if let Ok(root) = crate::confined::ConfinedRoot::new(&canonical) {
+                self.confined_roots.push(root);
+                self.allowed_roots.push(canonical);
+            }
         }
         self
     }
@@ -96,7 +83,11 @@ impl SandboxPolicy {
     /// Validate that a path is securely constrained within the sandbox.
     /// Canonicalizes the path, resolves symlinks, denies path traversal escapes,
     /// verifies real targets stay beneath an allowed root, and rejects special device nodes.
-    pub fn validate_path(&self, target: &Path, is_write: bool) -> Result<PathBuf, SandboxViolation> {
+    pub fn validate_path(
+        &self,
+        target: &Path,
+        is_write: bool,
+    ) -> Result<PathBuf, SandboxViolation> {
         // 1. Check for null bytes or illegal empty path
         if target.as_os_str().is_empty() {
             return Err(SandboxViolation::PathEscapesRoot {
@@ -136,9 +127,10 @@ impl SandboxPolicy {
 
         // 3. Resolve path canonicalization
         let canonical_target = if target.exists() {
-            let canonical = fs::canonicalize(target).map_err(|_| SandboxViolation::PathDoesNotExist {
-                path: target.to_path_buf(),
-            })?;
+            let canonical =
+                fs::canonicalize(target).map_err(|_| SandboxViolation::PathDoesNotExist {
+                    path: target.to_path_buf(),
+                })?;
 
             // Check file type: reject special devices (block, char, fifo, socket)
             if let Ok(meta) = fs::symlink_metadata(&canonical) {
@@ -158,7 +150,11 @@ impl SandboxPolicy {
             while !curr.exists() {
                 if let Some(file_name) = curr.file_name() {
                     let file_name_str = file_name.to_string_lossy();
-                    if file_name_str == ".." || file_name_str == "." || file_name_str.contains('/') || file_name_str.contains('\\') {
+                    if file_name_str == ".."
+                        || file_name_str == "."
+                        || file_name_str.contains('/')
+                        || file_name_str.contains('\\')
+                    {
                         return Err(SandboxViolation::InvalidFilename {
                             path: target.to_path_buf(),
                         });
@@ -220,60 +216,34 @@ impl SandboxPolicy {
         self.validate_path(target, is_write).is_ok()
     }
 
-    /// Validate CLI execution command: enforces executable allowlist, rejects shell metacharacters,
-    /// and parses into typed executable binary + argument vector.
-    pub fn validate_command(&self, raw_cmd: &str) -> Result<(String, Vec<String>), SandboxViolation> {
-        let trimmed = raw_cmd.trim();
-        if trimmed.is_empty() {
-            return Err(SandboxViolation::CommandNotAllowed {
-                binary: String::new(),
-            });
-        }
+    /// Legacy host-shell authorization is deliberately unavailable. Commands must
+    /// use the isolated command runner; an executable name is not a sandbox.
+    pub fn validate_command(
+        &self,
+        raw_cmd: &str,
+    ) -> Result<(String, Vec<String>), SandboxViolation> {
+        Err(SandboxViolation::CommandNotAllowed {
+            binary: raw_cmd.split_whitespace().next().unwrap_or_default().into(),
+        })
+    }
 
-        // 1. Reject shell injection metacharacters
-        let forbidden_metachars = [';', '&', '|', '>', '<', '$', '`', '\n', '\r', '\0'];
-        for c in trimmed.chars() {
-            if forbidden_metachars.contains(&c) {
-                return Err(SandboxViolation::ShellMetacharacterDetected { character: c });
-            }
-        }
-
-        // 2. Tokenize into binary and arguments (handling standard quotes safely)
-        let tokens = tokenize_command(trimmed);
-        if tokens.is_empty() {
-            return Err(SandboxViolation::CommandNotAllowed {
-                binary: String::new(),
-            });
-        }
-
-        let binary_path = &tokens[0];
-        let binary_name = Path::new(binary_path)
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or(binary_path);
-
-        // 3. Reject interpreter chain execution
-        let interpreters = ["bash", "sh", "zsh", "python", "python3", "perl", "ruby", "node"];
-        if interpreters.contains(&binary_name) {
-            // Check if attempting inline script execution (-c, -e)
-            for arg in &tokens[1..] {
-                if arg == "-c" || arg == "-e" || arg.starts_with("-c") {
-                    return Err(SandboxViolation::InterpreterExecutionDenied {
-                        interpreter: binary_name.to_string(),
-                    });
-                }
-            }
-        }
-
-        // 4. Executable allowlist check
-        if !self.allowed_executables.contains(&binary_name.to_string()) {
-            return Err(SandboxViolation::CommandNotAllowed {
-                binary: binary_name.to_string(),
-            });
-        }
-
-        let args = tokens[1..].to_vec();
-        Ok((binary_name.to_string(), args))
+    pub fn open_read(
+        &self,
+        target: &Path,
+    ) -> Result<crate::confined::ConfinedFile, SandboxViolation> {
+        let root = self
+            .confined_roots
+            .iter()
+            .find(|root| !target.is_absolute() || target.starts_with(root.path()))
+            .ok_or_else(|| SandboxViolation::PathEscapesRoot {
+                path: target.into(),
+                target: target.into(),
+            })?;
+        root.open(target)
+            .map_err(|error| SandboxViolation::DescriptorDenied {
+                path: target.into(),
+                detail: error.to_string(),
+            })
     }
 
     pub fn is_command_safe(&self, cmd: &str) -> bool {
@@ -304,7 +274,10 @@ impl SandboxPolicy {
 
         // Safe process stats: /proc/<pid>/stat, /proc/<pid>/cmdline, /proc/<pid>/status
         let comps: Vec<_> = path.components().collect();
-        if comps.len() == 4 && comps[0] == Component::RootDir && comps[1] == Component::Normal("proc".as_ref()) {
+        if comps.len() == 4
+            && comps[0] == Component::RootDir
+            && comps[1] == Component::Normal("proc".as_ref())
+        {
             let pid_part = comps[2].as_os_str().to_string_lossy();
             let file_part = comps[3].as_os_str().to_string_lossy();
 
@@ -326,35 +299,9 @@ impl Default for SandboxPolicy {
     }
 }
 
-/// Simple whitespace and quote-aware command tokenizer without shell expansion
-fn tokenize_command(cmd: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-
-    for c in cmd.chars() {
-        match c {
-            '\'' if !in_double_quote => {
-                in_single_quote = !in_single_quote;
-            }
-            '"' if !in_single_quote => {
-                in_double_quote = !in_double_quote;
-            }
-            c if c.is_whitespace() && !in_single_quote && !in_double_quote => {
-                if !current.is_empty() {
-                    tokens.push(std::mem::take(&mut current));
-                }
-            }
-            c => {
-                current.push(c);
-            }
-        }
-    }
-
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-
-    tokens
+fn canonical_roots_for_open(paths: &[PathBuf]) -> Vec<crate::confined::ConfinedRoot> {
+    paths
+        .iter()
+        .filter_map(|path| crate::confined::ConfinedRoot::new(path).ok())
+        .collect()
 }
