@@ -33,6 +33,9 @@ impl LocalNeuralTts {
             threads: 4,
         }
     }
+    pub async fn warm_up(&self) -> Result<()> {
+        self.services.warm_tts(self.threads).await
+    }
     pub fn set_voice(&mut self, voice: &str, language: &str) {
         self.config.voice_timbre = voice.into();
         self.config.language = language.into();

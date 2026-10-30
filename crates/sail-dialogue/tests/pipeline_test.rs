@@ -81,6 +81,7 @@ fn profiles_preserve_wire_rate_and_apply_thread_budget() {
 }
 #[test]
 fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
+    let _guardian = sail_guardian::GuardianSubsystem::new();
     assert!(
         LocalKernelToolBroker::execute(&KernelToolCall {
             tool: "os:status".into(),

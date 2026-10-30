@@ -106,6 +106,14 @@ For measured image statistics, select an image and ask SAIL to inspect the frame
 
 Type in the message field and click **Send**. This uses the same session, local Gemma inference, speech output and Canvas. Microphone permission is not required. Sending a new message cancels the previous assistant turn.
 
+## Hear the reply before all the text is finished
+
+SAIL starts synthesizing the first complete sentence while Gemma generates the rest. Longer sentences can be committed at a natural clause boundary. Punctuation, questions, quoted endings, common abbreviations and decimal numbers are kept together so speech is not cut at arbitrary model-token boundaries. Kokoro keeps the selected voice and speed, and short pauses preserve the cadence between sentences and clauses.
+
+Kokoro is pre-warmed when the browser connects. A short, single-sentence answer may still finish generating before its first audio is ready; longer answers can overlap generation and playback. This remains local sentence/phrase synthesis, not a neural decoder that speaks unfinished words. Independently synthesized sentences can differ from whole-paragraph prosody, so lower latency does not guarantee identical intonation across the entire answer.
+
+The runner logs the first audio's readiness time as `first_audio_ms`, separately from model completion and total turn time. Use those measurements to distinguish model thinking/prefill time from speech synthesis delay.
+
 ## Understand the Orb and session
 
 The Orb indicates **idle**, **listening**, **thinking**, **speaking** or **interrupted**. The meters show audio level, speech confidence and measured VAD timing. VAD inference time and worker round-trip time are separate measurements; neither is the total time needed to produce a reply.
@@ -172,6 +180,25 @@ Open **https://192.168.1.101:8088** on the other device, then follow the same se
 
 The generated certificate lasts 365 days. Regenerating it also replaces its key, so clients must trust the replacement certificate. This listener has no user login; use it only on a trusted network and do not forward it to the public internet.
 
+## Follow what the runner is doing
+
+The runner prints detailed diagnostics by default and appends the same events to **`.local/runner.log`**. Each voice session and assistant turn has an ID, so you can follow a request through context retrieval, Gemma inference, tool authorization/execution, speech synthesis, Canvas delivery and cancellation. Logs include prompts, transcripts, bounded tool arguments/results, worker startup/output, timings and errors. Audio and image payloads are omitted.
+
+```bash
+# Watch the log while SAIL is running in another terminal.
+tail -f .local/runner.log
+```
+
+For every model text delta and processed audio frame, enable trace output:
+
+```bash
+RUST_LOG=warn,sail_core=debug,sail_common=debug,sail_dialogue=trace,sail_mind=trace \
+cargo run -p sail-core
+```
+
+Keep your usual TLS variables if starting in HTTPS mode. `RUST_LOG` overrides the default logging filter; use `RUST_LOG=info` for quieter output. When SAIL starts llama-server itself, its native output is forwarded into runner diagnostics and also appended to `.local/llama-server.log`. An already-running model server retains its own process output.
+
+A question such as “What tools do you have?” is answered without executing host tools. A denied or failed query switches the model to a final explanation. Repeated identical tool calls reuse the prior result and do not produce another execution or duplicate result card. After three tool rounds, a final model pass runs with tools disabled. That pass uses plain observations instead of native tool-call history. A streaming filter holds possible control-token prefixes before display/playback, so ordinary prose can start immediately. If the model still returns control syntax, SAIL discards pending unspoken text and presents a factual runtime summary of the existing results.
 ## Inspect local model status
 
 With the SAIL daemon running, use `cargo run -p sail-core --bin saild -- mind-status` to inspect real model capabilities, process ownership, limits and inference metrics. Use the same `SAIL_VOICE_BIND`/TLS variables as your daemon, or set `SAIL_MIND_STATUS_URL` to its loopback `/api/mind/status` endpoint. Model loading is reported separately from readiness. See the [Mind guide](Docs/ARCHITECTURE/Local_Inference.md) for CPU/Vulkan configuration and typed errors.

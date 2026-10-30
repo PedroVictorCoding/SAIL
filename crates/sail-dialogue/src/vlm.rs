@@ -38,8 +38,80 @@ pub struct VisionAnalysis {
 pub struct LocalKernelToolBroker;
 
 impl LocalKernelToolBroker {
-    /// Execute a kernel tool directly in pure Rust on the host without any external APIs
+    /// Convert a local tool invocation into a strongly-typed Guardian Capability
+    pub fn tool_to_capability(call: &KernelToolCall) -> sail_guardian::Capability {
+        match call.tool.as_str() {
+            "os:status" => sail_guardian::Capability::System(sail_guardian::SystemCapability::OsTelemetry),
+            "proc:list" => sail_guardian::Capability::System(sail_guardian::SystemCapability::ProcessInspect),
+            "fs:query" => {
+                let path_str = call.params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                sail_guardian::Capability::Filesystem(sail_guardian::FsCapability::Read {
+                    path: std::path::PathBuf::from(path_str),
+                })
+            }
+            "vision:frame" => sail_guardian::Capability::Device(sail_guardian::DeviceCapability::Camera),
+            cmd => sail_guardian::Capability::Tool(sail_guardian::ToolCapability::KernelTool(cmd.to_string())),
+        }
+    }
+
+    /// Execute a kernel tool through the mandatory Guardian execution gate.
+    /// Fails closed if Guardian is unavailable or if authorization is denied.
+    pub fn execute_guarded(
+        caller: sail_common::types::SubsystemId,
+        call: &KernelToolCall,
+        token: Option<uuid::Uuid>,
+    ) -> KernelToolResult {
+        let broker = match sail_guardian::global_broker() {
+            Ok(b) => b,
+            Err(e) => {
+                return KernelToolResult {
+                    tool: call.tool.clone(),
+                    success: false,
+                    output: serde_json::json!({
+                        "error": format!("Guardian execution gate unavailable: {e}"),
+                        "denied": true,
+                    }),
+                };
+            }
+        };
+
+        let cap = Self::tool_to_capability(call);
+        match broker.authorize_and_execute(caller, cap, token, None, || Self::execute_raw(call)) {
+            Ok(res) => res,
+            Err(denied) => {
+                let error_code = match &denied {
+                    sail_guardian::ExecutionDenied::SandboxViolation(
+                        sail_guardian::SandboxViolation::PathEscapesRoot { .. }
+                        | sail_guardian::SandboxViolation::SensitivePathBlocked { .. },
+                    ) => "outside_workspace",
+                    _ => "permission_denied",
+                };
+                let error_msg = if error_code == "outside_workspace" {
+                    "Path is outside the authorized workspace".to_string()
+                } else {
+                    format!("Execution denied by Guardian: {denied}")
+                };
+                KernelToolResult {
+                    tool: call.tool.clone(),
+                    success: false,
+                    output: serde_json::json!({
+                        "error": error_msg,
+                        "error_code": error_code,
+                        "workspace_root": std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into()),
+                        "denied": true,
+                    }),
+                }
+            }
+        }
+    }
+
+    /// Point-of-use gatekeeper entry point enforcing Guardian authorization
     pub fn execute(call: &KernelToolCall) -> KernelToolResult {
+        Self::execute_guarded(sail_common::types::SubsystemId::Dialogue, call, None)
+    }
+
+    /// Internal raw execution: only invoked by GuardianExecutionBroker after authorization
+    pub fn execute_raw(call: &KernelToolCall) -> KernelToolResult {
         match call.tool.as_str() {
             "os:status" => Self::tool_os_status(),
             "proc:list" => Self::tool_proc_list(&call.params),
@@ -162,59 +234,69 @@ impl LocalKernelToolBroker {
 
     /// fs:query — Query local file system paths, directory entries, sizes
     fn tool_fs_query(params: &serde_json::Value) -> KernelToolResult {
-        let target_path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-
-        let root = std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into());
-        let root = match fs::canonicalize(root) {
+        let requested = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let configured = std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into());
+        let root = match fs::canonicalize(&configured) {
             Ok(p) => p,
-            Err(e) => return Self::error("fs:query", &e.to_string()),
+            Err(e) => {
+                return KernelToolResult {
+                    tool: "fs:query".into(),
+                    success: false,
+                    output: serde_json::json!({"error":"The configured workspace root is unavailable","error_code":"invalid_workspace_root","workspace_root":configured,"detail":e.to_string()}),
+                };
+            }
         };
-        let candidate = Path::new(target_path);
+        let candidate = Path::new(requested);
         let candidate = if candidate.is_absolute() {
             candidate.to_path_buf()
         } else {
             root.join(candidate)
         };
-        let path = match fs::canonicalize(candidate) {
-            Ok(p) if p.starts_with(&root) => p,
-            _ => {
-                return Self::error(
-                    "fs:query",
-                    "Path is outside authorized workspace or does not exist",
+        let failure = |code: &str, message: String| KernelToolResult {
+            tool: "fs:query".into(),
+            success: false,
+            output: serde_json::json!({"error":message,"error_code":code,"requested_path":requested,"workspace_root":root,"hint":"Use a workspace-relative path, such as . or README.md. Do not retry an outside path."}),
+        };
+        let path = match fs::canonicalize(&candidate) {
+            Ok(p) => p,
+            Err(e) => {
+                return failure(
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        "not_found"
+                    } else {
+                        "path_unavailable"
+                    },
+                    format!("Cannot resolve requested path: {e}"),
                 );
             }
         };
-        if path.is_file() {
-            let metadata = fs::metadata(&path).ok();
+        if !path.starts_with(&root) {
+            return failure(
+                "outside_workspace",
+                "Path is outside the authorized workspace".into(),
+            );
+        }
+        tracing::debug!(requested_path=requested,resolved_path=%path.display(),workspace_root=%root.display(),"Filesystem query passed workspace boundary check");
+        let metadata = match fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) => return failure("metadata_unavailable", e.to_string()),
+        };
+        if metadata.is_file() {
             return KernelToolResult {
-                tool: "fs:query".to_string(),
+                tool: "fs:query".into(),
                 success: true,
-                output: serde_json::json!({
-                    "type": "file",
-                    "path": target_path,
-                    "size_bytes": metadata.map(|m| m.len()).unwrap_or(0),
-                }),
+                output: serde_json::json!({"type":"file","path":path,"size_bytes":metadata.len()}),
             };
         }
-
-        let mut entries = Vec::new();
-        if let Ok(dir_entries) = fs::read_dir(&path) {
-            for entry in dir_entries.flatten().take(20) {
-                entries.push(serde_json::json!({
-                    "name": entry.file_name().to_string_lossy(),
-                    "is_dir": entry.file_type().map(|t| t.is_dir()).unwrap_or(false),
-                }));
-            }
-        }
-
+        let directory = match fs::read_dir(&path) {
+            Ok(d) => d,
+            Err(e) => return failure("directory_unavailable", e.to_string()),
+        };
+        let entries:Vec<_>=directory.filter_map(|entry|entry.ok()).take(20).map(|entry|serde_json::json!({"name":entry.file_name().to_string_lossy(),"is_dir":entry.file_type().is_ok_and(|t|t.is_dir())})).collect();
         KernelToolResult {
-            tool: "fs:query".to_string(),
+            tool: "fs:query".into(),
             success: true,
-            output: serde_json::json!({
-                "type": "directory",
-                "path": target_path,
-                "entries": entries,
-            }),
+            output: serde_json::json!({"type":"directory","path":path,"entries":entries}),
         }
     }
 
@@ -273,6 +355,11 @@ impl VoiceVlm {
             runner: sail_mind::GemmaRunner::new(sail_mind::GemmaConfig::default()),
         }
     }
+    pub fn with_config(config: sail_mind::GemmaConfig) -> Self {
+        Self {
+            runner: sail_mind::GemmaRunner::new(config),
+        }
+    }
     pub fn with_service(service: sail_mind::MindService) -> Self {
         Self {
             runner: sail_mind::GemmaRunner::from_service(service),
@@ -292,10 +379,27 @@ impl VoiceVlm {
         messages: Vec<serde_json::Value>,
         tx: tokio::sync::mpsc::Sender<String>,
     ) -> Result<serde_json::Value> {
+        self.stream_with_tools(messages, true, tx).await
+    }
+    pub async fn stream_with_tools(
+        &self,
+        messages: Vec<serde_json::Value>,
+        allow_tools: bool,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> Result<serde_json::Value> {
         self.runner
-            .stream_chat(messages, tool_definitions(), tx)
+            .stream_chat(
+                messages,
+                if allow_tools {
+                    tool_definitions()
+                } else {
+                    serde_json::json!([])
+                },
+                tx,
+            )
             .await
     }
+
     pub async fn reason_and_route(
         &self,
         prompt: &str,
@@ -318,7 +422,7 @@ pub fn tool_definitions() -> serde_json::Value {
     serde_json::json!([
         {"type":"function","function":{"name":"os_status","description":"Read local OS memory, uptime and load","parameters":{"type":"object","properties":{}}}},
         {"type":"function","function":{"name":"proc_list","description":"List local processes","parameters":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":100}}}}},
-        {"type":"function","function":{"name":"fs_query","description":"Inspect a path within the authorized workspace","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}},
+        {"type":"function","function":{"name":"fs_query","description":"Inspect a file or directory inside the authorized workspace. Use relative paths; dot (.) means the workspace root. Never probe outside paths or retry a denied query.","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}},
         {"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}}
     ])
 }

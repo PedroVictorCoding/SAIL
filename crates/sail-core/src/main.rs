@@ -1,8 +1,8 @@
+mod logging;
 mod status;
 use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use sail_agents::AgentsSubsystem;
 use sail_arena::ArenaSubsystem;
@@ -16,17 +16,12 @@ use sail_common::{
 use sail_dialogue::DialogueSubsystem;
 use sail_discovery::DiscoverySubsystem;
 use sail_flow::FlowSubsystem;
+use sail_guardian::GuardianSubsystem;
 use sail_mind::MindSubsystem;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "sail_core=info,sail_common=info,sail_mind=info,sail_agents=info,sail_flow=info,sail_discovery=info,sail_arena=info,sail_bridge=info,sail_dialogue=info,sail_canvas=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    logging::init()?;
 
     if std::env::args().nth(1).as_deref() == Some("mind-status") {
         let status = status::read().await?;
@@ -52,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut discovery = DiscoverySubsystem::new();
     let mut flow = FlowSubsystem::new();
     let mut agents = AgentsSubsystem::new();
+    let mut guardian = GuardianSubsystem::new();
 
     // Call init on each subsystem
     mind.init(&bus).await?;
@@ -62,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     discovery.init(&bus).await?;
     flow.init(&bus).await?;
     agents.init(&bus).await?;
+    guardian.init(&bus).await?;
 
     arena.start().await?;
     let arena = Arc::new(arena);
@@ -76,6 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     discovery.start().await?;
     flow.start().await?;
     agents.start().await?;
+    guardian.start().await?;
 
     // Wrap in Arc for event dispatchers
     let mind_arc = Arc::new(mind);
@@ -86,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let discovery_arc = Arc::new(discovery);
     let flow_arc = Arc::new(flow);
     let agents_arc = Arc::new(agents);
+    let guardian_arc = Arc::new(guardian);
 
     // Spawn event dispatcher loops for each subsystem
     spawn_subsystem_worker(SubsystemId::Mind, mind_arc, &bus);
@@ -96,8 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spawn_subsystem_worker(SubsystemId::Discovery, discovery_arc, &bus);
     spawn_subsystem_worker(SubsystemId::Flow, flow_arc, &bus);
     spawn_subsystem_worker(SubsystemId::Agents, agents_arc, &bus);
+    spawn_subsystem_worker(SubsystemId::Guardian, guardian_arc, &bus);
 
-    info!("All 8 SAIL subsystems bootstrapped and listening on the event bus");
+    info!("All 9 SAIL subsystems (including SAIL Guardian) bootstrapped and listening on the event bus");
 
     // Publish system ready event
     let ready_event = SailEvent::new(
@@ -141,6 +141,7 @@ fn spawn_subsystem_worker(
     let mut rx = bus.subscribe_filtered(subsystem_id);
     tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {
+            tracing::debug!(subsystem=%subsystem_id,event_id=%event.id,source=%event.source,target=?event.target,payload=%sail_common::diagnostics::log_json(&serde_json::to_value(&event.payload).unwrap_or_default(),4096),"Dispatching subsystem event");
             if let Err(err) = subsystem.handle_event(&event).await {
                 error!(subsystem = %subsystem_id, error = %err, "Error processing event");
             }
