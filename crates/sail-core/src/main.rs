@@ -1,3 +1,4 @@
+mod status;
 use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info};
@@ -27,6 +28,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    if std::env::args().nth(1).as_deref() == Some("mind-status") {
+        let status = status::read().await?;
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(());
+    }
     info!("==================================================");
     info!("Starting SAIL Core Assistant Runtime");
     info!("==================================================");
@@ -35,7 +41,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bus = EventBus::new();
 
     // Initialize all 8 Subsystems
-    let mut mind = MindSubsystem::new("models/gemma4-v2-Q4_K_M.gguf");
+    let model_path =
+        std::env::var("SAIL_MODEL_PATH").unwrap_or("models/gemma4-v2-Q4_K_M.gguf".into());
+    let mut mind = MindSubsystem::try_new(model_path)?;
+    let model_service = mind.model_service()?;
     let mut arena = ArenaSubsystem::new();
     let mut bridge = BridgeSubsystem::new();
     let mut canvas = CanvasSubsystem::new();
@@ -119,6 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let _ = bus.publish(shutdown_event);
 
+    model_service.shutdown().await?;
     info!("SAIL Core shutdown complete.");
     Ok(())
 }

@@ -128,24 +128,25 @@ impl LocalKernelToolBroker {
             for entry in entries.flatten() {
                 if let Ok(file_type) = entry.file_type()
                     && file_type.is_dir()
-                        && let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() {
-                            let cmdline_path = entry.path().join("cmdline");
-                            if let Ok(cmdline) = fs::read(cmdline_path) {
-                                let name = String::from_utf8_lossy(&cmdline)
-                                    .replace('\0', " ")
-                                    .trim()
-                                    .to_string();
-                                if !name.is_empty() {
-                                    processes.push(serde_json::json!({
-                                        "pid": pid,
-                                        "command": name.chars().take(48).collect::<String>(),
-                                    }));
-                                    if processes.len() >= limit {
-                                        break;
-                                    }
-                                }
+                    && let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>()
+                {
+                    let cmdline_path = entry.path().join("cmdline");
+                    if let Ok(cmdline) = fs::read(cmdline_path) {
+                        let name = String::from_utf8_lossy(&cmdline)
+                            .replace('\0', " ")
+                            .trim()
+                            .to_string();
+                        if !name.is_empty() {
+                            processes.push(serde_json::json!({
+                                "pid": pid,
+                                "command": name.chars().take(48).collect::<String>(),
+                            }));
+                            if processes.len() >= limit {
+                                break;
                             }
                         }
+                    }
+                }
             }
         }
 
@@ -271,6 +272,17 @@ impl VoiceVlm {
         Self {
             runner: sail_mind::GemmaRunner::new(sail_mind::GemmaConfig::default()),
         }
+    }
+    pub fn with_service(service: sail_mind::MindService) -> Self {
+        Self {
+            runner: sail_mind::GemmaRunner::from_service(service),
+        }
+    }
+    pub fn with_services(services: &sail_mind::VoiceModelServices) -> Self {
+        services
+            .inference()
+            .map(Self::with_service)
+            .unwrap_or_else(|| Self::new("local"))
     }
     pub async fn health(&self) -> serde_json::Value {
         self.runner.health().await

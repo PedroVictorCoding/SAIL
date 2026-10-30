@@ -28,14 +28,32 @@ fn spawn_subsystem_worker(
     });
 }
 
+async fn next_business_event(
+    rx: &mut sail_common::FilteredReceiver,
+) -> sail_common::Result<SailEvent> {
+    loop {
+        let event = rx.recv().await?;
+        if !matches!(event.payload, EventPayload::SystemReady { .. }) {
+            return Ok(event);
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_full_sail_subsystem_ecosystem_loop() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let mock = tokio::spawn(async move {
-        let app=axum::Router::new().route("/v1/chat/completions",axum::routing::post(|axum::Json(value):axum::Json<serde_json::Value>|async move {
-            axum::Json(serde_json::json!({"choices":[{"message":{"role":"assistant","content":format!("Mock inference: {}",value["messages"][1]["content"].as_str().unwrap())}}]}))
-        }));
+        let app=axum::Router::new()
+            .route("/health",axum::routing::get(||async{axum::Json(serde_json::json!({"status":"ok"}))}))
+            .route("/props",axum::routing::get(||async{axum::Json(serde_json::json!({"modalities":{"tools":true,"vision":false},"n_ctx":8192}))}))
+            .route("/apply-template",axum::routing::post(||async{axum::Json(serde_json::json!({"prompt":"fixture"}))}))
+            .route("/tokenize",axum::routing::post(||async{axum::Json(serde_json::json!({"tokens":[1,2]}))}))
+            .route("/v1/chat/completions",axum::routing::post(|axum::Json(value):axum::Json<serde_json::Value>|async move {
+                let content=format!("Mock inference: {}",value["messages"].as_array().unwrap().iter().find(|m|m["role"]=="user").unwrap()["content"].as_str().unwrap());
+                let event=serde_json::json!({"choices":[{"delta":{"content":content},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":8}});
+                ([("content-type","text/event-stream")],format!("data: {event}\n\ndata: [DONE]\n\n"))
+            }));
         axum::serve(listener, app).await.unwrap();
     });
     let bus = EventBus::new();
@@ -112,10 +130,13 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
     bus.publish(user_utterance).unwrap();
 
     // Verify Dialogue receives the response delta from Agents
-    let response_delta = tokio::time::timeout(Duration::from_secs(2), rx_dialogue.recv())
-        .await
-        .expect("Timed out waiting for Dialogue response delta")
-        .expect("Failed to receive event");
+    let response_delta = tokio::time::timeout(
+        Duration::from_secs(2),
+        next_business_event(&mut rx_dialogue),
+    )
+    .await
+    .expect("Timed out waiting for Dialogue response delta")
+    .expect("Failed to receive event");
 
     match response_delta.payload {
         EventPayload::DialogueResponseDelta {
@@ -131,10 +152,11 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
     }
 
     // Verify Canvas received the visual render artifact from Agents
-    let canvas_render = tokio::time::timeout(Duration::from_secs(2), rx_canvas.recv())
-        .await
-        .expect("Timed out waiting for Canvas render")
-        .expect("Failed to receive event");
+    let canvas_render =
+        tokio::time::timeout(Duration::from_secs(2), next_business_event(&mut rx_canvas))
+            .await
+            .expect("Timed out waiting for Canvas render")
+            .expect("Failed to receive event");
 
     match canvas_render.payload {
         EventPayload::CanvasRender {
@@ -165,10 +187,11 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
     bus.publish(gap).unwrap();
 
     // Flow should receive ResearchTriggerDispatched, then task execution occurs
-    let flow_event = tokio::time::timeout(Duration::from_secs(2), rx_flow.recv())
-        .await
-        .expect("Timed out waiting for Flow trigger")
-        .expect("Failed to receive event");
+    let flow_event =
+        tokio::time::timeout(Duration::from_secs(2), next_business_event(&mut rx_flow))
+            .await
+            .expect("Timed out waiting for Flow trigger")
+            .expect("Failed to receive event");
 
     match flow_event.payload {
         EventPayload::ResearchTriggerDispatched { workflow_id, query } => {

@@ -171,6 +171,10 @@ Open **https://192.168.1.101:8088** on the other device, then follow the same se
 
 The generated certificate lasts 365 days. Regenerating it also replaces its key, so clients must trust the replacement certificate. This listener has no user login; use it only on a trusted network and do not forward it to the public internet.
 
+## Inspect local model status
+
+With the SAIL daemon running, use `cargo run -p sail-core --bin saild -- mind-status` to inspect real model capabilities, process ownership, limits and inference metrics. Use the same `SAIL_VOICE_BIND`/TLS variables as your daemon, or set `SAIL_MIND_STATUS_URL` to its loopback `/api/mind/status` endpoint. Model loading is reported separately from readiness. See the [Mind guide](Docs/ARCHITECTURE/Local_Inference.md) for CPU/Vulkan configuration and typed errors.
+
 ## Troubleshooting
 
 | Symptom | What to check |

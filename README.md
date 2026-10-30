@@ -64,6 +64,10 @@ flowchart TB
 - **SAIL Mind**: Local Gemma 4 (`models/gemma4-v2-Q4_K_M.gguf` via `llama-server`), native SSM/MoE models, inference adapters, context window allocation, and compute routing.
 - **SAIL Bridge**: Host OS integration, sandboxed command execution, browser/application connectors, and peripheral communication.
 
+## Local Model Service
+
+SAIL Mind provides versioned Rust inference contracts, shared model routing and budgets, cancellation, capability detection, and supervised local CPU/Vulkan execution. See the [Mind guide](Docs/ARCHITECTURE/Local_Inference.md) and [inference v1 contracts](Docs/PROTOCOL/Inference_V1.md). Run `cargo run -p sail-core --bin saild -- mind-status` to inspect the running daemon.
+
 ## Local Voice Pipeline
 
 `16kHz PCM → Silero → Whisper → Session → Gemma → Kokoro → Orb`

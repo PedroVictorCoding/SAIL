@@ -28,13 +28,14 @@ impl RealtimeVoicePipeline {
         Self::with_services(VoiceModelServices::new(), uuid::Uuid::new_v4().to_string())
     }
     pub fn with_services(services: VoiceModelServices, session: String) -> Self {
+        let vlm = Arc::new(VoiceVlm::with_services(&services));
         Self {
             vad: SileroVad::with_services(SileroVadConfig::default(), services.clone(), session),
             orb: OrbEngine::new(),
             control: VoiceControl::new(),
             stt: LocalStreamingStt::with_services(services.clone()),
             tts: LocalNeuralTts::with_services(TtsConfig::default(), services),
-            vlm: Arc::new(VoiceVlm::new("local")),
+            vlm,
         }
     }
     pub fn orb_state(&self) -> OrbState {

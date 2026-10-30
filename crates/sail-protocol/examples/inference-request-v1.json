@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "request_id": "f636fd06-1caf-491c-989b-bcf3e5811c93",
+  "model": "gemma4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain the local inference pipeline briefly."
+    }
+  ],
+  "tools": [],
+  "tool_choice": "none",
+  "generation": {
+    "max_tokens": 64,
+    "temperature": 0.4
+  }
+}

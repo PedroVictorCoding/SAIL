@@ -1,4 +1,13 @@
+pub mod backend;
+pub mod config;
 pub mod gemma;
+pub mod local;
+pub mod service;
+mod validation;
+pub use config::LocalModelConfig;
+pub use sail_protocol as protocol;
+pub use service::MindService;
+pub use tokio_util::sync::CancellationToken;
 pub mod voice;
 pub use voice::VoiceModelServices;
 
@@ -29,17 +38,40 @@ impl MindSubsystem {
             model_path: p.clone(),
             ..Default::default()
         };
+        let runner = GemmaRunner::new(config);
+        let mut voice = VoiceModelServices::new();
+        if let Ok(service) = runner.service() {
+            voice = voice.with_inference(service);
+        }
         Self {
             bus: None,
-            runner: GemmaRunner::new(config),
+            runner,
             model_path: p,
-            voice: VoiceModelServices::new(),
+            voice,
         }
     }
 
+    pub fn try_new(model_path: impl Into<PathBuf>) -> sail_protocol::Result<Self> {
+        let path = model_path.into();
+        let mut config = LocalModelConfig::from_env()?;
+        config.model_path = path.clone();
+        let service = MindService::new(config, Default::default())?;
+        Ok(Self {
+            bus: None,
+            model_path: path,
+            runner: GemmaRunner::from_service(service.clone()),
+            voice: VoiceModelServices::new().with_inference(service),
+        })
+    }
+    pub fn model_service(&self) -> sail_protocol::Result<MindService> {
+        self.runner.service()
+    }
     pub fn with_gemma_config(mut self, config: GemmaConfig) -> Self {
         self.model_path = config.model_path.clone();
         self.runner = GemmaRunner::new(config);
+        if let Ok(service) = self.runner.service() {
+            self.voice = self.voice.clone().with_inference(service);
+        }
         self
     }
     pub fn voice_services(&self) -> VoiceModelServices {
@@ -59,28 +91,33 @@ impl Subsystem for MindSubsystem {
 
     async fn init(&mut self, bus: &EventBus) -> Result<()> {
         self.bus = Some(bus.clone());
-        if self.model_path.exists() {
-            info!(path = ?self.model_path, "SAIL Mind detected local Gemma 4 weights");
-            if let Err(error) = self.runner.ensure_server_running().await {
-                warn!(%error,"Local model startup failed; see .local/llama-server.log");
+        let service = self
+            .model_service()
+            .map_err(|e| sail_common::SailError::Config(e.to_string()))?;
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            match service.start().await {
+                Ok(()) => {
+                    info!("SAIL Mind local inference is ready");
+                    let _ = bus.publish(SailEvent::new(
+                        SubsystemId::Mind,
+                        EventPayload::SystemReady {
+                            subsystem: SubsystemId::Mind,
+                        },
+                    ));
+                }
+                Err(error) => {
+                    warn!(%error,"Local Mind startup unavailable; status remains visible and inference can retry")
+                }
             }
-        } else {
-            warn!(path = ?self.model_path, "SAIL Mind model weights file not found; inference unavailable until a local server is configured");
-        }
+        });
+
         Ok(())
     }
 
     async fn start(&mut self) -> Result<()> {
         info!("SAIL Mind inference subsystem started (Gemma 4 integration active)");
-        if let Some(bus) = &self.bus {
-            let event = SailEvent::new(
-                self.id(),
-                EventPayload::SystemReady {
-                    subsystem: self.id(),
-                },
-            );
-            let _ = bus.publish(event);
-        }
+
         Ok(())
     }
 
@@ -88,7 +125,7 @@ impl Subsystem for MindSubsystem {
         if let EventPayload::InferenceRequested {
             request_id,
             prompt,
-            model_preference: _,
+            model_preference,
         } = &event.payload
         {
             info!(
@@ -97,8 +134,36 @@ impl Subsystem for MindSubsystem {
                 "SAIL Mind generating response via Gemma 4"
             );
 
-            let content = self.runner.complete(prompt).await?;
-            let tokens_used = content.split_whitespace().count();
+            let service = self
+                .model_service()
+                .map_err(|e| sail_common::SailError::Inference(e.to_string()))?;
+            let mut request = sail_protocol::InferenceRequest::text(prompt.clone());
+            request.model = model_preference.clone();
+            let response = match service.infer(request, CancellationToken::new(), None).await {
+                Ok(response) => response,
+                Err(error) => {
+                    if let Some(bus) = &self.bus {
+                        let _ = bus.publish(
+                            SailEvent::new(
+                                self.id(),
+                                EventPayload::InferenceFailed {
+                                    request_id: request_id.clone(),
+                                    error,
+                                },
+                            )
+                            .with_target(event.source),
+                        );
+                    }
+                    return Ok(());
+                }
+            };
+            let content = response
+                .message
+                .content
+                .text()
+                .unwrap_or_default()
+                .to_owned();
+            let tokens_used = response.usage.output_tokens.unwrap_or(0) as usize;
 
             if let Some(bus) = &self.bus {
                 let response = SailEvent::new(
@@ -119,6 +184,12 @@ impl Subsystem for MindSubsystem {
 
     async fn shutdown(&mut self) -> Result<()> {
         info!("SAIL Mind subsystem shutting down");
+        if let Ok(service) = self.model_service() {
+            service
+                .shutdown()
+                .await
+                .map_err(|e| sail_common::SailError::Inference(e.to_string()))?;
+        }
         Ok(())
     }
 }
