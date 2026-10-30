@@ -89,8 +89,9 @@ impl SpeechChunker {
 fn boundary(text: &str, finished: bool) -> Option<usize> {
     for (index, ch) in text.char_indices() {
         let sentence = matches!(ch, '.' | '?' | '!' | '。' | '？' | '！');
-        let clause = matches!(ch, ',' | ';' | ':' | '—') && text[..index].chars().count() >= 140;
-        if !sentence && !clause {
+        let clause = matches!(ch, ',' | ';' | ':' | '—') && text[..index].chars().count() >= 70;
+        let newline = ch == '\n' && text[..index].trim().len() >= 20;
+        if !sentence && !clause && !newline {
             continue;
         }
         let mut end = index + ch.len_utf8();
@@ -103,11 +104,21 @@ fn boundary(text: &str, finished: bool) -> Option<usize> {
             }
         }
         let next = text[end..].chars().next();
-        if next.is_none() && !finished {
-            continue;
-        }
-        if next.is_some_and(|c| !c.is_whitespace()) && !matches!(ch, '。' | '？' | '！') {
-            continue;
+        // Unambiguous sentence endings (question, exclamation, CJK terminators, or newlines)
+        // do not need to wait for a subsequent whitespace token when streaming.
+        let unambiguous = matches!(ch, '?' | '!' | '。' | '？' | '！' | '\n');
+        if !unambiguous {
+            if next.is_none() && !finished {
+                // For a period at the end of a multi-word phrase (not a single isolated token),
+                // check if the preceding token is a valid word rather than an abbreviation/digit.
+                let has_preceding_space = text[..index].trim_start().contains(char::is_whitespace);
+                if !has_preceding_space {
+                    continue;
+                }
+            }
+            if next.is_some_and(|c| !c.is_whitespace()) {
+                continue;
+            }
         }
         if ch == '.' {
             let token = text[..index]
@@ -142,8 +153,8 @@ fn boundary(text: &str, finished: bool) -> Option<usize> {
             {
                 continue;
             }
-            // Preserve ordered-list prefixes: "1. First item".
-            if lower.chars().all(|c| c.is_ascii_digit()) && text[..index].trim() == lower {
+            // Preserve ordered-list prefixes: "1. First item" or digits like "3.14".
+            if lower.chars().all(|c| c.is_ascii_digit()) {
                 continue;
             }
         }
@@ -167,9 +178,9 @@ pub fn pause_after_ms(text: &str) -> usize {
         .chars()
         .next_back()
     {
-        Some('.' | '?' | '!' | '。' | '？' | '！') => 140,
-        Some(';' | ':') => 85,
-        Some(',' | '—') => 60,
+        Some('.' | '?' | '!' | '。' | '？' | '！') => 35,
+        Some(';' | ':') => 20,
+        Some(',' | '—') => 15,
         _ => 0,
     }
 }
@@ -224,8 +235,20 @@ mod tests {
         let chunks = c.push(&clause);
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].ends_with(','));
-        assert_eq!(pause_after_ms(&chunks[0]), 60);
-        assert_eq!(pause_after_ms("Really?\""), 140);
-        assert_eq!(pause_after_ms("Hello."), 140);
+        assert_eq!(pause_after_ms(&chunks[0]), 15);
+        assert_eq!(pause_after_ms("Really?\""), 35);
+        assert_eq!(pause_after_ms("Hello."), 35);
+    }
+    #[test]
+    fn multi_word_sentences_and_questions_emit_promptly() {
+        let mut c = SpeechChunker::default();
+        assert_eq!(
+            c.push("The system is running normally."),
+            vec!["The system is running normally."]
+        );
+        assert_eq!(
+            c.push("How can I assist you?"),
+            vec!["How can I assist you?"]
+        );
     }
 }

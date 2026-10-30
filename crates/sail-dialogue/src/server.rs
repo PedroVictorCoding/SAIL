@@ -724,7 +724,24 @@ async fn reason_turn(
                     if let Some(delta)=delta{
                         let safe=gate.push(&delta);round_text.push_str(&safe);
                         publish_spoken_text(&safe,&mut reply,&mut chunker,tx,current,speech_tx,"model").await;
-                    }else{deltas_open=false;}
+                    }else{
+                        deltas_open=false;
+                        let tail = gate.finish();
+                        if !tail.is_empty() {
+                            round_text.push_str(&tail);
+                            publish_spoken_text(
+                                &tail,
+                                &mut reply,
+                                &mut chunker,
+                                tx,
+                                current,
+                                speech_tx,
+                                "model",
+                            )
+                            .await;
+                        }
+                        queue_speech(chunker.finish(), speech_tx).await;
+                    }
                 },
                 result=&mut completion=>{
                     let assistant = match result {
@@ -744,17 +761,19 @@ async fn reason_turn(
             }
         };
         let tail = gate.finish();
-        round_text.push_str(&tail);
-        publish_spoken_text(
-            &tail,
-            &mut reply,
-            &mut chunker,
-            tx,
-            current,
-            speech_tx,
-            "model",
-        )
-        .await;
+        if !tail.is_empty() {
+            round_text.push_str(&tail);
+            publish_spoken_text(
+                &tail,
+                &mut reply,
+                &mut chunker,
+                tx,
+                current,
+                speech_tx,
+                "model",
+            )
+            .await;
+        }
         let raw = assistant["content"].as_str().unwrap_or_default();
         let invalid = gate.blocked()
             || contains_tool_protocol(raw)
