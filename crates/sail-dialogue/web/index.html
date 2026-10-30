@@ -1,167 +1,75 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SAIL Voice Orb — Local Voice Pipeline</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: radial-gradient(circle at center, #0b111e 0%, #03060a 100%);
-    color: #e2e8f0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    padding: 20px;
-    overflow-x: hidden;
-  }
-  .header {
-    text-align: center;
-    margin-bottom: 16px;
-  }
-  h1 {
-    font-size: 24px;
-    font-weight: 700;
-    letter-spacing: 2px;
-    color: #38bdf8;
-    text-transform: uppercase;
-  }
-  .subtitle {
-    font-size: 12px;
-    color: #64748b;
-    margin-top: 4px;
-    letter-spacing: 1px;
-  }
-  #orbCanvas {
-    width: 320px;
-    height: 320px;
-    border-radius: 50%;
-    filter: drop-shadow(0 0 30px rgba(56, 189, 248, 0.25));
-  }
-  .equalizer-canvas {
-    width: 340px;
-    height: 50px;
-    margin-top: 10px;
-    margin-bottom: 12px;
-  }
-  .status-badge {
-    padding: 6px 16px;
-    border-radius: 9999px;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    background: rgba(15, 23, 42, 0.8);
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    margin-bottom: 12px;
-  }
-  .status-idle { color: #94a3b8; border-color: #475569; }
-  .status-listening { color: #38bdf8; border-color: #0284c7; box-shadow: 0 0 16px rgba(56, 189, 248, 0.4); }
-  .status-thinking { color: #c084fc; border-color: #9333ea; box-shadow: 0 0 16px rgba(192, 132, 252, 0.4); }
-  .status-speaking { color: #34d399; border-color: #059669; box-shadow: 0 0 16px rgba(52, 211, 153, 0.4); }
-  .status-interrupted { color: #f87171; border-color: #dc2626; box-shadow: 0 0 16px rgba(248, 113, 113, 0.5); }
-  .transcript-box {
-    max-width: 580px;
-    width: 100%;
-    min-height: 48px;
-    background: rgba(15, 23, 42, 0.7);
-    border: 1px solid rgba(51, 65, 85, 0.6);
-    border-radius: 10px;
-    padding: 10px 14px;
-    font-size: 13px;
-    color: #cbd5e1;
-    text-align: center;
-    backdrop-filter: blur(8px);
-    margin-bottom: 16px;
-  }
-  .controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
-    margin-bottom: 12px;
-  }
-  button {
-    background: #1e293b;
-    color: #e2e8f0;
-    border: 1px solid #334155;
-    padding: 8px 14px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 600;
-    transition: all 0.2s;
-  }
-  button:hover { background: #334155; border-color: #475569; }
-  button.active { background: #0284c7; border-color: #38bdf8; color: white; }
-  button.muted { background: #dc2626; border-color: #f87171; color: white; }
-  .telemetry-row {
-    font-size: 11px;
-    color: #64748b;
-    display: flex;
-    gap: 16px;
-    margin-top: 6px;
-  }
-  .tool-row {
-    margin-top: 8px;
-    display: flex;
-    gap: 6px;
-  }
-</style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#090b10">
+<title>SAIL — Local assistant</title>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<div class="header">
-  <h1>SAIL Voice Orb</h1>
-  <div class="subtitle">voice:vad · voice:stt · voice:vlm · voice:tts · voice:orb · voice:control</div>
-</div>
+<main class="app-shell" id="appShell">
+  <header class="topbar">
+    <h1 class="sr-only">SAIL Home</h1>
+    <a class="brand" href="#home" aria-label="SAIL Home"><span class="brand-orb" aria-hidden="true"></span><span><strong>SAIL</strong><small>LOCAL ASSISTANT</small></span></a>
+    <div class="top-actions"><span class="privacy-indicator" id="micLiveIndicator" hidden><i></i><span>Mic on</span></span><span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span><button class="icon-button" id="settingsOpen" aria-label="Open settings" title="Settings">⚙</button></div>
+  </header>
 
-<canvas id="orbCanvas" width="360" height="360"></canvas>
-<canvas id="equalizerCanvas" class="equalizer-canvas" width="340" height="50"></canvas>
+  <section class="home-view" id="homeView" aria-label="Home">
+    <div class="hero" id="hero">
+      <div class="orb-wrap" id="orbWrap"><canvas id="orbCanvas" width="360" height="360" role="img" aria-label="SAIL assistant orb"></canvas></div>
+      <div class="state-label" id="statusBadge" role="status" aria-live="polite">Ready</div>
+      <p class="context-line" id="transcript">Ready when you are.</p>
+    </div>
+    <div class="live-transcript" id="liveTranscript" aria-live="polite"></div>
+    <section class="camera-panel" id="cameraPanel" aria-label="Camera preview" hidden>
+      <div class="camera-heading"><span><i class="camera-live-dot"></i>Camera on · preview stays on this device</span><button class="quiet-button" id="cameraStopBtn" type="button">Stop camera</button></div>
+      <video id="cameraPreview" autoplay muted playsinline aria-label="Live camera preview"></video>
+      <button class="camera-capture" id="cameraCaptureBtn" type="button">Capture frame</button>
+    </section>
+    <div class="conversation" id="conversation" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions"></div>
+    <div class="sr-only" id="assistantAnnounce" aria-live="polite" aria-atomic="true"></div>
+    <div class="canvas-panel" id="canvasPanel" aria-label="Visual responses"></div>
+    <div class="error-toast" id="error" role="alert" hidden></div>
+  </section>
 
-<div id="statusBadge" class="status-badge status-idle">IDLE</div>
-<div id="transcript" class="transcript-box">Connect the microphone or type a message to start a local conversation</div>
+  <form class="composer" id="textForm">
+    <button class="composer-action" type="button" id="attachBtn" aria-label="Attach an image" title="Choose an image to analyze">＋</button>
+    <input id="imageInput" type="file" accept="image/png,image/jpeg" aria-label="Choose image (PNG or JPEG, up to 4 MB)" hidden>
+    <input id="textInput" type="text" aria-label="Message SAIL" placeholder="Ask SAIL anything…" maxlength="16000" autocomplete="off" required>
+    <button class="composer-action dock-mute" id="muteDockBtn" type="button" aria-label="Mute microphone" aria-pressed="false" hidden><span aria-hidden="true">⊘</span></button>
+    <button class="composer-action end-turn-action" id="endTurnBtn" type="button" aria-label="Finish speaking turn" title="Finish speaking turn" hidden><span aria-hidden="true">✓</span></button>
+    <button class="composer-action mic-action" id="micBtn" type="button" aria-label="Start microphone" title="Start microphone"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg></button>
+    <button class="composer-action stop-action" id="interruptBtn" type="button" aria-label="Interrupt current response" title="Interrupt" hidden><span aria-hidden="true">■</span></button>
+    <button class="composer-action send-action" id="sendBtn" type="submit" aria-label="Send message" title="Send"><span aria-hidden="true">↑</span></button>
+  </form>
 
-<div class="controls">
-  <button id="micBtn" onclick="toggleMic()">Start Microphone</button>
-  <button id="muteBtn" onclick="toggleMute()">Mute: OFF</button>
-  <button id="interruptBtn" onclick="interrupt()">Interrupt</button>
-  <select aria-label="Speech voice" onchange="sendAction('set_voice', {voice:this.value})" style="background:#1e293b;color:white;border:1px solid #334155;border-radius:6px;padding:8px"><option value="af_heart">English · Heart</option><option value="pf_dora">Português · Dora</option><option value="pm_alex">Português · Alex</option><option value="ef_dora">Español · Dora</option></select>
-  <button id="tierBtn" onclick="cycleTier()">Tier: Balanced</button>
-</div>
+  <button class="spaces-trigger" id="spacesOpen" aria-label="Open Spaces" title="Spaces"><span aria-hidden="true">⌘</span><span>Spaces</span></button>
+  <div class="activity-pill" id="activityPill" hidden><span class="activity-dot"></span><span id="activityText">Working</span></div>
+</main>
 
-<div class="tool-row">
-  <button onclick="runKernelTool('os:status')">Kernel: os:status</button>
-  <button onclick="runKernelTool('proc:list')">Kernel: proc:list</button>
-  <button onclick="runKernelTool('fs:query')">Kernel: fs:query</button>
-  <button onclick="runVisionFrame()">Kernel: vision:frame</button>
-</div>
+<div class="scrim" id="scrim" hidden></div>
+<aside class="sheet spaces-sheet" id="spacesSheet" role="dialog" aria-modal="true" aria-labelledby="spacesTitle" hidden>
+  <div class="sheet-grabber" aria-hidden="true"></div><div class="sheet-heading"><div><p class="eyebrow">YOUR WORKSPACE</p><h2 id="spacesTitle">Spaces</h2></div><button class="icon-button close-sheet" aria-label="Close Spaces">×</button></div>
+  <label class="search-box"><span aria-hidden="true">⌕</span><input id="spaceSearch" type="search" placeholder="Find a space…" aria-label="Find a space"></label>
+  <div class="space-list" id="spaceList"></div>
+</aside>
 
-<div class="controls">
-  <button onclick="sendAction('end_turn')">End turn</button>
-  <button onclick="resetSession()">New conversation</button>
-  <button onclick="checkModels()">Check local models</button>
-</div>
-<div id="connection" role="status">Connecting…</div>
-<div id="error" role="alert" style="color:#fca5a5;max-width:680px;margin:12px;white-space:pre-wrap"></div>
-<form id="textForm" class="controls" style="width:min(680px,100%)">
-  <input id="textInput" aria-label="Message" placeholder="Type a message…" maxlength="16000" required style="flex:1;padding:12px;background:#111827;color:white;border:1px solid #334155;border-radius:8px">
-  <button type="submit">Send</button>
-  <input id="imageInput" type="file" accept="image/png,image/jpeg" aria-label="Attach image (PNG or JPEG, 4 MB maximum)">
-</form>
-<section style="width:min(800px,100%);margin:16px 0" aria-label="Conversation and Canvas">
-  <div id="conversation" style="white-space:pre-wrap;overflow-wrap:anywhere"></div>
-  <div id="canvasPanel" style="margin-top:16px;overflow:auto"></div>
-</section>
-<div class="telemetry-row">
-  <span id="telVad">VAD inference: —</span>
-  <span id="telConf">Confidence: 0%</span>
-  <span id="telRms">RMS: 0.00</span>
-</div>
+<aside class="sheet context-sheet" id="contextSheet" role="dialog" aria-modal="true" aria-labelledby="contextTitle" hidden>
+  <div class="sheet-grabber" aria-hidden="true"></div><div class="sheet-heading"><div><p class="eyebrow">PREFERENCES</p><h2 id="contextTitle">Settings</h2></div><button class="icon-button close-sheet" aria-label="Close settings">×</button></div>
+  <div class="setting-row"><div><strong>Voice</strong><small>Choose a locally installed voice</small></div><select id="voiceSelect" aria-label="Speech voice"><option value="af_heart">English · Heart</option><option value="pf_dora">Português · Dora</option><option value="pm_alex">Português · Alex</option><option value="ef_dora">Español · Dora</option></select></div>
+  <div class="setting-row"><div><strong>Compute profile</strong><small>Set the local hardware tier</small></div><button class="quiet-button" id="tierBtn">Balanced</button></div>
+  <div class="setting-row"><div><strong>Microphone</strong><small id="micStatus">Off</small></div><button class="quiet-button" id="muteBtn" aria-pressed="false">Mute</button></div>
+  <button class="sheet-link" id="checkModelsBtn">Check local model status <span>›</span></button>
+  <p class="sheet-note" id="modelStatus">Model status is checked with the local SAIL server.</p>
+  <button class="sheet-link" id="newConversationBtn">Start a new conversation <span>›</span></button>
+  <details class="inspector"><summary>Developer details</summary><div class="telemetry-row"><span id="telVad">VAD —</span><span id="telConf">Confidence —</span><span id="telRms">RMS —</span></div></details>
+</aside>
 
+<section class="approval-sheet" id="approvalSheet" hidden aria-live="assertive"></section>
 <script src="/mermaid.js" defer></script>
 <script src="/voice.js" defer></script>
+<script src="/ui.js" defer></script>
 </body>
 </html>

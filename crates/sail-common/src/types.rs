@@ -131,6 +131,10 @@ pub enum EventPayload {
         prompt: String,
         model_preference: Option<String>,
     },
+    InferenceFailed {
+        request_id: String,
+        error: sail_protocol::InferenceError,
+    },
     InferenceCompleted {
         request_id: String,
         content: String,

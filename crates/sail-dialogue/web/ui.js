@@ -1,0 +1,144 @@
+'use strict';
+const spaces = [
+  { id:'dialogue', name:'Dialogue', subtitle:'Talk with SAIL', available:true, action:() => document.getElementById('textInput').focus() },
+  { id:'canvas', name:'Canvas', subtitle:'Visual responses', available:true, action:() => {
+    const panel = document.getElementById('canvasPanel');
+    if (!panel.childElementCount) { const empty = document.createElement('div'); empty.id = 'canvasEmptyState'; empty.className = 'artifact-card canvas-empty-state'; empty.textContent = 'Diagrams, images and structured results from your conversation will appear here.'; panel.append(empty); }
+    panel.scrollIntoView({ behavior:'smooth', block:'center' });
+  } },
+  { id:'vision', name:'Vision', subtitle:'Use camera or an image', available:true, action:() => startCamera() },
+  { id:'arena', name:'Arena', subtitle:'Knowledge', available:false },
+  { id:'flow', name:'Flow', subtitle:'Automations', available:false },
+  { id:'life', name:'Life', subtitle:'Personal space', available:false },
+  { id:'entertainment', name:'Entertainment', subtitle:'Listen and read', available:false },
+  { id:'mind', name:'Mind', subtitle:'Local models', available:true, action:() => document.getElementById('checkModelsBtn').click() },
+  { id:'agents', name:'Agents', subtitle:'Task execution', available:false },
+  { id:'guardian', name:'Guardian', subtitle:'Permissions', available:false },
+  { id:'bridge', name:'Bridge', subtitle:'Device tools', available:false },
+  { id:'discovery', name:'Discovery', subtitle:'Research', available:false },
+  { id:'pulse', name:'Pulse', subtitle:'Goals and routines', available:false },
+  { id:'sense', name:'Sense', subtitle:'Context', available:false },
+  { id:'mesh', name:'Mesh', subtitle:'Local network', available:false },
+  { id:'lab', name:'Lab', subtitle:'Experiments', available:false },
+];
+const spacesSheet = document.getElementById('spacesSheet');
+const contextSheet = document.getElementById('contextSheet');
+const scrim = document.getElementById('scrim');
+const sheets = [spacesSheet, contextSheet];
+let activeSheet = null;
+let priorFocus = null;
+function openSheet(sheet) {
+  if (activeSheet) closeSheet();
+  priorFocus = document.activeElement; activeSheet = sheet;
+  sheet.hidden = false; scrim.hidden = false;
+  requestAnimationFrame(() => scrim.classList.add('visible'));
+  document.body.style.overflow = 'hidden';
+  sheet.querySelector('button,input,select')?.focus();
+}
+function closeSheet() {
+  if (!activeSheet) return;
+  scrim.classList.remove('visible'); activeSheet.hidden = true;
+  const wasSpaces = activeSheet === spacesSheet; activeSheet = null;
+  if (wasSpaces && window.location.hash === '#spaces') history.replaceState(null, '', location.pathname + location.search);
+  setTimeout(() => { if (!activeSheet) scrim.hidden = true; }, 240);
+  document.body.style.overflow = ''; priorFocus?.focus?.();
+}
+function renderSpaces(filter = '') {
+  const list = document.getElementById('spaceList'); list.replaceChildren();
+  const query = filter.trim().toLocaleLowerCase();
+  for (const space of spaces.filter(item => `${item.name} ${item.subtitle}`.toLocaleLowerCase().includes(query))) {
+    const button = document.createElement('button'); button.type = 'button';
+    button.className = 'space-card'; button.dataset.space = space.id;
+    button.setAttribute('aria-label', space.available ? `${space.name}: ${space.subtitle}` : `${space.name}: Not connected`);
+    const icon = document.createElement('span'); icon.className = 'space-icon'; icon.setAttribute('aria-hidden', 'true');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use'); use.setAttribute('href', `/icons.svg#${space.id}`); svg.append(use); icon.append(svg);
+    const text = document.createElement('span'); text.className = 'space-name'; text.textContent = space.name;
+    const subtitle = document.createElement('small'); subtitle.className = 'space-subtitle'; subtitle.textContent = space.available ? space.subtitle : 'Not connected';
+    text.append(subtitle); button.append(icon, text);
+    button.addEventListener('click', () => {
+      if (!space.available) { showError(`${space.name} is not connected in this build.`); return; }
+      closeSheet(); space.action?.();
+    });
+    list.append(button);
+  }
+}
+renderSpaces();
+document.getElementById('spacesOpen').addEventListener('click', () => { location.hash = '#spaces'; openSheet(spacesSheet); });
+document.getElementById('settingsOpen').addEventListener('click', () => openSheet(contextSheet));
+document.querySelectorAll('.close-sheet').forEach(button => button.addEventListener('click', closeSheet));
+scrim.addEventListener('click', closeSheet);
+document.getElementById('spaceSearch').addEventListener('input', event => renderSpaces(event.target.value));
+document.getElementById('attachBtn').addEventListener('click', () => document.getElementById('imageInput').click());
+document.getElementById('micBtn').addEventListener('click', () => toggleMic());
+document.getElementById('muteDockBtn').addEventListener('click', () => toggleMute());
+document.getElementById('endTurnBtn').addEventListener('click', () => sendAction('end_turn'));
+document.getElementById('interruptBtn').addEventListener('click', () => interrupt());
+document.getElementById('newConversationBtn').addEventListener('click', () => { resetSession(); closeSheet(); });
+document.getElementById('muteBtn').addEventListener('click', () => toggleMute());
+document.getElementById('tierBtn').addEventListener('click', () => cycleTier());
+document.getElementById('voiceSelect').addEventListener('change', event => sendAction('set_voice', { voice:event.target.value }));
+document.getElementById('checkModelsBtn').addEventListener('click', () => checkModels());
+document.getElementById('imageInput').addEventListener('change', event => {
+  const file = event.target.files?.[0];
+  if (file) { document.getElementById('transcript').textContent = `Image selected · ${file.name}. Send a message to analyze it locally.`; }
+});
+document.getElementById('cameraStopBtn').addEventListener('click', () => stopCamera());
+document.getElementById('cameraCaptureBtn').addEventListener('click', () => captureCameraFrame());
+document.addEventListener('keydown', event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (!activeSheet) openSheet(spacesSheet); else closeSheet(); }
+  if (event.key === 'Escape' && activeSheet) closeSheet();
+  if (event.key === 'Tab' && activeSheet) {
+    const candidates = [...activeSheet.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),summary')].filter(node => node.offsetParent !== null);
+    if (!candidates.length) return;
+    if (event.shiftKey && document.activeElement === candidates[0]) { event.preventDefault(); candidates.at(-1).focus(); }
+    else if (!event.shiftKey && document.activeElement === candidates.at(-1)) { event.preventDefault(); candidates[0].focus(); }
+  }
+});
+let touchStartY = null;
+document.addEventListener('touchstart', event => { touchStartY = event.touches[0]?.clientY ?? null; }, { passive:true });
+document.addEventListener('touchend', event => {
+  if (touchStartY === null) return;
+  const delta = event.changedTouches[0].clientY - touchStartY; touchStartY = null;
+  if (!activeSheet && delta < -90 && window.scrollY < 8) openSheet(spacesSheet);
+  else if (activeSheet && delta > 90 && activeSheet.scrollTop <= 0) closeSheet();
+}, { passive:true });
+window.addEventListener('hashchange', () => { if (location.hash === '#spaces' && !activeSheet) openSheet(spacesSheet); else if (location.hash !== '#spaces' && activeSheet === spacesSheet) closeSheet(); });
+
+let cameraStream = null;
+async function startCamera() {
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    showError('Camera access requires HTTPS or localhost in a supported browser.'); return;
+  }
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:false });
+    const video = document.getElementById('cameraPreview'); video.srcObject = cameraStream;
+    document.getElementById('cameraPanel').hidden = false;
+    document.getElementById('appShell').dataset.camera = 'on';
+    updateState('seeing');
+    video.focus?.();
+  } catch (error) {
+    showError(error.name === 'NotAllowedError' ? 'Camera permission was not granted.' : `Camera: ${error.message}`);
+  }
+}
+function stopCamera() {
+  cameraStream?.getTracks().forEach(track => track.stop()); cameraStream = null;
+  const video = document.getElementById('cameraPreview'); video.srcObject = null;
+  document.getElementById('cameraPanel').hidden = true;
+  delete document.getElementById('appShell').dataset.camera;
+  if (orbState === 'seeing') updateState(isRecording ? 'listening' : 'idle');
+}
+async function captureCameraFrame() {
+  const video = document.getElementById('cameraPreview');
+  if (!cameraStream || !video.videoWidth) { showError('Camera preview is not ready yet.'); return; }
+  const scale = Math.min(1, 960 / video.videoWidth, 720 / video.videoHeight);
+  const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(video.videoWidth * scale)); canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  const data = canvas.toDataURL('image/jpeg', .86);
+  const vision = { format:'image/jpeg', data_base64:data.split(',')[1] };
+  renderArtifact({ artifact_type:'image', content:data });
+  if (sendAction('text', { text:'Analyze this camera frame.', vision })) {
+    updateState('thinking');
+  }
+}
+window.addEventListener('pagehide', stopCamera);

@@ -360,6 +360,17 @@ impl VoiceVlm {
             runner: sail_mind::GemmaRunner::new(config),
         }
     }
+    pub fn with_service(service: sail_mind::MindService) -> Self {
+        Self {
+            runner: sail_mind::GemmaRunner::from_service(service),
+        }
+    }
+    pub fn with_services(services: &sail_mind::VoiceModelServices) -> Self {
+        services
+            .inference()
+            .map(Self::with_service)
+            .unwrap_or_else(|| Self::new("local"))
+    }
     pub async fn health(&self) -> serde_json::Value {
         self.runner.health().await
     }

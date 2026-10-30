@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/sail-common",
+    "crates/sail-protocol",
     "crates/sail-mind",
     "crates/sail-arena",
     "crates/sail-bridge",
@@ -37,9 +38,11 @@ tower-http = { version = "0.5", features = ["cors", "fs"] }
 futures-util = "0.3"
 base64 = "0.22"
 bytes = "1.7"
+tokio-util = { version = "0.7", features = ["rt"] }
 
 # Internal workspace crate dependencies
 sail-common = { path = "crates/sail-common" }
+sail-protocol = { path = "crates/sail-protocol" }
 sail-mind = { path = "crates/sail-mind" }
 sail-arena = { path = "crates/sail-arena" }
 sail-bridge = { path = "crates/sail-bridge" }

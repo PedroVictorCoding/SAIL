@@ -46,6 +46,7 @@ pub struct ServerState {
     bus: EventBus,
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
+    inference: sail_mind::MindService,
 }
 pub async fn run_dialogue_server(
     addr: SocketAddr,
@@ -65,6 +66,11 @@ pub async fn run_dialogue_server_with_services(
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let inference = match services.inference() {
+        Some(service) => service,
+        None => sail_mind::MindService::from_env()?,
+    };
+    let services = services.with_inference(inference.clone());
     let app = Router::new()
         .route(
             "/",
@@ -76,6 +82,42 @@ pub async fn run_dialogue_server_with_services(
                 (
                     [("content-type", "text/javascript")],
                     include_str!("../web/voice.js"),
+                )
+            }),
+        )
+        .route(
+            "/app.css",
+            get(|| async {
+                (
+                    [("content-type", "text/css; charset=utf-8")],
+                    include_str!("../web/app.css"),
+                )
+            }),
+        )
+        .route(
+            "/tokens.css",
+            get(|| async {
+                (
+                    [("content-type", "text/css; charset=utf-8")],
+                    include_str!("../web/tokens.css"),
+                )
+            }),
+        )
+        .route(
+            "/ui.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/ui.js"),
+                )
+            }),
+        )
+        .route(
+            "/icons.svg",
+            get(|| async {
+                (
+                    [("content-type", "image/svg+xml; charset=utf-8")],
+                    include_str!("../../../assets/source/icons/sail-icons.svg"),
                 )
             }),
         )
@@ -98,11 +140,13 @@ pub async fn run_dialogue_server_with_services(
             }),
         )
         .route("/api/health", get(health))
+        .route("/api/mind/status", get(mind_status))
         .route("/ws/voice", get(ws_handler))
         .with_state(Arc::new(ServerState {
             bus,
             services,
             arena,
+            inference,
         }));
     match (
         std::env::var("SAIL_TLS_CERT"),
@@ -130,10 +174,17 @@ pub async fn run_dialogue_server_with_services(
 async fn health(State(state): State<Arc<ServerState>>) -> Json<Value> {
     {
         let (speech, llm) = tokio::join!(state.services.health(), async {
-            VoiceVlm::new("local").health().await
+            VoiceVlm::with_service(state.inference.clone())
+                .health()
+                .await
         });
         Json(json!({"speech":speech,"llm":llm,"sample_rate":16000}))
     }
+}
+async fn mind_status(
+    State(state): State<Arc<ServerState>>,
+) -> Json<sail_mind::protocol::MindStatus> {
+    Json(state.inference.status().await)
 }
 async fn ws_handler(
     ws: WebSocketUpgrade,

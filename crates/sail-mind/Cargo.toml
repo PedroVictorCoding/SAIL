@@ -7,6 +7,8 @@ authors.workspace = true
 
 [dependencies]
 sail-common.workspace = true
+sail-protocol.workspace = true
+tokio-util.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 serde.workspace = true
@@ -17,6 +19,7 @@ reqwest.workspace = true
 futures-util.workspace = true
 bytes.workspace = true
 base64.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [dev-dependencies]
 axum.workspace = true

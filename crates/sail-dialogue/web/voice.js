@@ -3,17 +3,17 @@ let ws, audioCtx, micStream, processor, micSource;
 let workletLoaded=false;
 const playbackTimers=new Set();
 let isRecording = false, isMuted = false, orbState = 'idle';
-let currentAmplitude = 0, wavePhase = 0, spectrum8 = Array(8).fill(0);
+let currentAmplitude = 0, wavePhase = 0, spectrum8 = Array(8).fill(0), orbFrozen = false;
 const tiers = ['Balanced', 'HighPerformance', 'LowPower']; let tierIdx = 0;
 const orbCanvas = document.getElementById('orbCanvas'), ctx = orbCanvas.getContext('2d');
-const eqCanvas = document.getElementById('equalizerCanvas'), eqCtx = eqCanvas.getContext('2d');
 const statusBadge = document.getElementById('statusBadge'), transcriptBox = document.getElementById('transcript');
 const micBtn = document.getElementById('micBtn'), muteBtn = document.getElementById('muteBtn'), tierBtn = document.getElementById('tierBtn');
-const errorBox = document.getElementById('error'), connectionBox = document.getElementById('connection');
+const errorBox = document.getElementById('error');
 let playbackGeneration = 0, nextAudioTime = 0, playbackQueue = Promise.resolve(), pendingAudio = 0;
-let responseNode, responseText = '', turnFinished = false, artifactSerial = 0;
+let responseNode, responseText = '', turnFinished = false, turnInProgress = false, artifactSerial = 0;
 const playingSources = new Set();
-function showError(error) { errorBox.textContent = String(error); }
+let errorTimer;
+function showError(error) { errorBox.textContent = String(error); errorBox.hidden = false; clearTimeout(errorTimer); errorTimer = setTimeout(() => { errorBox.hidden = true; }, 8000); }
 function sendAction(action, fields = {}) {
   if (!ws || ws.readyState !== WebSocket.OPEN) { showError('Connection unavailable. Wait for reconnection.'); return false; }
   ws.send(JSON.stringify({ action, ...fields })); return true;
@@ -21,10 +21,10 @@ function sendAction(action, fields = {}) {
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws/voice`);
-  ws.onopen = () => { connectionBox.textContent = 'Connected · models run locally'; micBtn.disabled = false; };
+  ws.onopen = () => { setConnection('Connected · local session', true); micBtn.disabled = false; if (orbState === 'disconnected') updateState('idle'); };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
-    stopMic(); stopPlayback(); connectionBox.textContent = 'Disconnected · reconnecting…'; micBtn.disabled = true;
+    turnInProgress = false; stopMic(); stopPlayback(); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
   };
   ws.onmessage = (event) => {
@@ -37,29 +37,31 @@ function connectWs() {
       case 'telemetry':
         if (!playingSources.size) {
           currentAmplitude = data.rms; wavePhase = data.phase; spectrum8 = data.spectrum;
-          updateState(data.state);
+          if (!turnInProgress && pendingAudio === 0 && !playingSources.size) updateState(data.state);
         }
         document.getElementById('telVad').textContent = `VAD inference: ${(data.vad_us / 1000).toFixed(2)}ms · round trip: ${(data.vad_roundtrip_us / 1000).toFixed(2)}ms`;
         document.getElementById('telConf').textContent = `Confidence: ${(data.confidence * 100).toFixed(0)}%`;
         document.getElementById('telRms').textContent = `RMS: ${data.rms.toFixed(3)}`; break;
-      case 'transcript': transcriptBox.textContent = `${data.is_final ? 'You' : 'Hearing'}: ${data.text}`; break;
+      case 'transcript': transcriptBox.textContent = `${data.is_final ? 'You said' : 'Listening'} · ${data.text}`; document.getElementById('liveTranscript').textContent = data.text; break;
       case 'turn_started':
-        stopPlayback(); turnFinished = false; responseText = '';
+        stopPlayback(); turnFinished = false; turnInProgress = true; responseText = '';
         appendConversation('You', data.transcript);
         responseNode = appendConversation('SAIL', ''); updateState('thinking'); break;
       case 'response_delta':
         responseText += data.text;
         if (!responseNode) responseNode = appendConversation('SAIL', '');
-        responseNode.textContent = `SAIL: ${responseText}`; break;
+        responseNode.lastChild.textContent = responseText; break;
       case 'audio_chunk': queueAudio(data); break;
       case 'turn_finished':
+        turnInProgress = false;
+        document.getElementById('assistantAnnounce').textContent = responseText;
         turnFinished = true;
         if (!pendingAudio && !playingSources.size) finishPlayback();
-        if (data.latency_ms) connectionBox.textContent = `Connected · turn ${data.turn_id} · ${(data.latency_ms / 1000).toFixed(2)}s including synthesis`;
+        if (data.latency_ms) setConnection(`Connected · local turn ${(data.latency_ms / 1000).toFixed(1)}s`, true);
         break;
-      case 'interruption': stopPlayback(); updateState(data.state || 'interrupted'); break;
+      case 'interruption': turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
       case 'control': applyControl(data.control); break;
-      case 'tool_result': renderArtifact({ artifact_type: 'json', content: JSON.stringify(data.result, null, 2) }); break;
+      case 'tool_result': renderToolResult(data.result); break;
       case 'canvas': renderArtifact(data.artifact); break;
       case 'error': showError(data.message); break;
     }
@@ -67,17 +69,27 @@ function connectWs() {
 }
 function applyControl(control) {
   isMuted = control.is_muted;
-  muteBtn.textContent = `Mute: ${isMuted ? 'ON' : 'OFF'}`; muteBtn.className = isMuted ? 'muted' : '';
+  muteBtn.textContent = isMuted ? 'Unmute' : 'Mute'; muteBtn.setAttribute('aria-pressed', String(isMuted)); muteBtn.className = isMuted ? 'quiet-button muted' : 'quiet-button';
+  const micIndicator = document.getElementById('micLiveIndicator');
+  micIndicator.hidden = !isRecording; micIndicator.querySelector('span').textContent = isMuted ? 'Mic muted' : 'Mic on';
+  const dockMute = document.getElementById('muteDockBtn'); dockMute.hidden = !isRecording;
+  dockMute.setAttribute('aria-label', isMuted ? 'Unmute microphone' : 'Mute microphone'); dockMute.setAttribute('aria-pressed', String(isMuted));
+  dockMute.classList.toggle('muted', isMuted);
+  document.getElementById('endTurnBtn').hidden = !isRecording;
   const profile = { low_power: 'LowPower', balanced: 'Balanced', high_performance: 'HighPerformance' }[control.profile];
-  tierIdx = Math.max(0, tiers.indexOf(profile)); tierBtn.textContent = `Tier: ${tiers[tierIdx]}`;
+  tierIdx = Math.max(0, tiers.indexOf(profile)); tierBtn.textContent = tiers[tierIdx];
 }
 function appendConversation(role, text) {
-  const node = document.createElement('p'); node.style.margin = '12px 0'; node.textContent = `${role}: ${text}`;
-  document.getElementById('conversation').append(node); return node;
+  const node = document.createElement('article'); node.className = `message message-${role.toLowerCase()}`;
+  const label = document.createElement('span'); label.className = 'message-label'; label.textContent = role;
+  const content = document.createElement('span'); content.textContent = text;
+  node.append(label, content); document.getElementById('conversation').append(node); node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return node;
 }
 async function renderArtifact(artifact) {
-  const container = document.createElement('div'); container.style.cssText = 'padding:16px;margin:12px 0;border:1px solid #334155;border-radius:10px;background:#111827';
+  const container = document.createElement('div'); container.className = 'artifact-card';
   document.getElementById('canvasPanel').append(container);
+  document.getElementById('canvasEmptyState')?.remove();
+  const heading = document.createElement('div'); heading.className = 'artifact-heading'; heading.textContent = 'Canvas'; container.append(heading);
   if (artifact.artifact_type === 'mermaid' && window.mermaid) {
     try {
       const rendered = await mermaid.render(`diagram-${++artifactSerial}`, artifact.content);
@@ -85,10 +97,44 @@ async function renderArtifact(artifact) {
       container.innerHTML = rendered.svg; return;
     } catch { /* Show source if a model emits an invalid diagram. */ }
   }
+  if (artifact.artifact_type === 'json') {
+    try {
+      const parsed = JSON.parse(artifact.content);
+      const fields = document.createElement('dl'); fields.className = 'json-fields';
+      for (const [key, value] of Object.entries(parsed).slice(0, 12)) {
+        const term = document.createElement('dt'); term.textContent = key.replaceAll('_', ' ');
+        const description = document.createElement('dd');
+        description.textContent = value === null ? 'None' : typeof value === 'object' ? `${Array.isArray(value) ? value.length : Object.keys(value).length} ${Array.isArray(value) ? 'items' : 'fields'}` : String(value);
+        fields.append(term, description);
+      }
+      container.append(fields);
+      const details = document.createElement('details'); const disclosure = document.createElement('summary'); disclosure.textContent = 'Show structured data';
+      const pre = document.createElement('pre'); pre.textContent = JSON.stringify(parsed, null, 2); details.append(disclosure, pre); container.append(details); return;
+    } catch { /* Show invalid output safely as text. */ }
+  }
   if (artifact.artifact_type === 'image' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(artifact.content)) {
     const image = document.createElement('img'); image.src = artifact.content; image.alt = 'Conversation visual'; image.style.maxWidth = '100%'; container.append(image); return;
   }
-  const pre = document.createElement('pre'); pre.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere'; pre.textContent = artifact.content; container.append(pre);
+  const pre = document.createElement('pre'); pre.textContent = artifact.content; container.append(pre);
+}
+function renderToolResult(result) {
+  const container = document.createElement('article'); container.className = 'artifact-card';
+  const output = result?.output ?? {}; const succeeded = Boolean(result?.success);
+  const heading = document.createElement('div'); heading.className = 'artifact-heading';
+  const title = document.createElement('span'); title.textContent = String(result?.tool || 'Local action').replaceAll(':', ' · ');
+  const badge = document.createElement('span'); badge.className = succeeded ? 'result-success' : 'result-failure'; badge.textContent = succeeded ? '● Done' : '● Could not complete'; heading.append(title, badge);
+  const summary = document.createElement('p'); summary.className = 'result-summary';
+  if (Array.isArray(output?.processes)) summary.textContent = `${output.processes.length} ${output.processes.length === 1 ? 'process' : 'processes'} found`;
+  else if (Array.isArray(output?.entries)) summary.textContent = `${output.entries.length} ${output.entries.length === 1 ? 'item' : 'items'} in ${String(output.path || 'the selected folder')}`;
+  else if (output?.os) summary.textContent = `${String(output.os)} · ${String(output.logical_cpus || '—')} CPUs · ${String(output.memory_percent || '—')} memory used`;
+  else if (output?.error) summary.textContent = String(output.error);
+  else if (Number.isFinite(output?.width) && Number.isFinite(output?.height)) summary.textContent = `Image analyzed · ${output.width} × ${output.height} pixels`;
+  else if (typeof output?.summary === 'string') summary.textContent = output.summary;
+  else if (typeof output === 'string') summary.textContent = output;
+  else summary.textContent = succeeded ? 'The local action completed.' : 'The local action needs attention.';
+  const details = document.createElement('details'); const disclosure = document.createElement('summary'); disclosure.textContent = 'Show details';
+  const pre = document.createElement('pre'); pre.textContent = JSON.stringify(result, null, 2); details.append(disclosure, pre);
+  container.append(heading, summary, details); document.getElementById('canvasEmptyState')?.remove(); document.getElementById('canvasPanel').append(container);
 }
 async function ensureAudio() {
   if (!audioCtx || audioCtx.state === 'closed') { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); workletLoaded=false; }
@@ -124,7 +170,18 @@ function queueAudio(data) {
   }).catch(error => { if (generation === playbackGeneration) { pendingAudio = Math.max(0, pendingAudio - 1); showError(`Audio playback: ${error.message}`); } });
 }
 function finishPlayback() { updateState(isRecording ? 'listening' : 'idle'); currentAmplitude = 0; spectrum8 = Array(8).fill(0); sendAction('playback_finished'); }
-function updateState(state) { orbState = state; statusBadge.className = `status-badge status-${state}`; statusBadge.textContent = state.toUpperCase(); }
+function updateState(state) {
+  orbState = state;
+  const labels = { idle:'Ready', listening:'Listening', transcribing:'Transcribing', thinking:'Thinking', speaking:'Speaking', working:'Working', seeing:'Seeing', watching:'Watching', interrupted:'Interrupted', disconnected:'Disconnected', approval_required:'Approval needed' };
+  statusBadge.textContent = labels[state] || 'Ready'; document.getElementById('appShell').dataset.state = state;
+  const activity = document.getElementById('activityPill'); activity.hidden = !['thinking','working','transcribing'].includes(state);
+  document.getElementById('activityText').textContent = labels[state] || 'Working';
+  document.getElementById('interruptBtn').hidden = !['thinking','speaking','working','transcribing'].includes(state);
+}
+function setConnection(message, connected) {
+  const pill = document.getElementById('connection'); pill.className = `connection-pill ${connected ? 'is-connected' : 'is-disconnected'}`;
+  pill.querySelector('span').textContent = message;
+}
 async function toggleMic() { if (isRecording) stopMic(); else await startMic(); }
 async function startMic() {
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
@@ -147,7 +204,7 @@ async function startMic() {
       }
     };
     micSource.connect(processor); processor.connect(audioCtx.destination);
-    isRecording = true; micBtn.textContent = 'Stop Microphone'; micBtn.classList.add('active'); updateState('listening');
+    isRecording = true; micBtn.setAttribute('aria-label', 'Stop microphone'); micBtn.title = 'Stop microphone'; micBtn.classList.add('active'); document.getElementById('micStatus').textContent = 'On'; document.getElementById('micLiveIndicator').hidden = false; document.getElementById('muteDockBtn').hidden = false; document.getElementById('endTurnBtn').hidden = false; updateState('listening');
   } catch (error) { stopMic(); showError(error.name === 'NotAllowedError' ? 'Microphone permission denied. Allow microphone access in browser settings.' : `Microphone: ${error.message}`); }
   finally { micBtn.disabled = false; }
 }
@@ -155,8 +212,8 @@ function stopMic() {
   isRecording = false; micStream?.getTracks().forEach(track => track.stop());
   if (processor) { processor.port.onmessage = null; processor.disconnect(); processor = null; }
   micSource?.disconnect(); micSource = null; micStream = null;
-  micBtn.textContent = 'Start Microphone'; micBtn.classList.remove('active');
-  if (!playingSources.size) updateState('idle');
+  micBtn.setAttribute('aria-label', 'Start microphone'); micBtn.title = 'Start microphone'; micBtn.classList.remove('active'); document.getElementById('micStatus').textContent = 'Off'; document.getElementById('micLiveIndicator').hidden = true; document.getElementById('muteDockBtn').hidden = true; document.getElementById('endTurnBtn').hidden = true;
+  if (!playingSources.size && !turnInProgress) updateState('idle');
 }
 function toggleMute() { sendAction('toggle_mute'); }
 function cycleTier() { sendAction('set_tier', { profile: tiers[(tierIdx + 1) % tiers.length] }); }
@@ -174,17 +231,17 @@ async function runVisionFrame() {
   } catch (error) { showError(error.message); }
 }
 function runKernelTool(tool) { sendAction('kernel_tool', { tool, params: {} }); }
-function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('canvasPanel').replaceChildren(); }
+function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('assistantAnnounce').textContent = ''; document.getElementById('canvasPanel').replaceChildren(); }
 async function checkModels() {
-  connectionBox.textContent = 'Loading local speech models…';
+  document.getElementById('modelStatus').textContent = 'Checking local model status…';
   try {
     const response = await fetch('/api/health'); if (!response.ok) throw new Error(response.statusText);
-    const data = await response.json(); renderArtifact({ artifact_type: 'json', content: JSON.stringify(data, null, 2) });
-    connectionBox.textContent = data.llm.ready && Object.values(data.speech).every(model => model.ready) ? 'Local speech models ready' : 'Some local models are unavailable; see details below';
-  } catch (error) { showError(error.message); }
+    const data = await response.json(); const ready = Boolean(data.llm?.ready && Object.values(data.speech || {}).every(model => model.ready));
+    document.getElementById('modelStatus').textContent = ready ? 'Local language and speech models are ready.' : 'Some local models are unavailable. Check the runner logs for details.';
+  } catch (error) { document.getElementById('modelStatus').textContent = 'Local model status could not be reached.'; showError(error.message); }
 }
 document.getElementById('textForm').addEventListener('submit', async event => {
-  event.preventDefault(); errorBox.textContent = '';
+  event.preventDefault(); errorBox.textContent = ''; errorBox.hidden = true;
   const input = document.getElementById('textInput'), file = document.getElementById('imageInput').files[0];
   try {
     await ensureAudio(); let vision;
@@ -201,9 +258,10 @@ window.addEventListener('pagehide', () => { stopMic(); stopPlayback(); ws?.close
 if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
 // Render loop for 3D Glowing Orb & 8-Band Equalizer
 let time = 0;
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 function renderVisuals() {
   requestAnimationFrame(renderVisuals);
-  time += 0.035;
+  if (!orbFrozen && !reduceMotion.matches) time += 0.035;
 
   // 1. Draw Voice Orb
   const w = orbCanvas.width;
@@ -213,20 +271,24 @@ function renderVisuals() {
   ctx.clearRect(0, 0, w, h);
 
   const colors = {
-    idle: { in: '#38bdf8', out: '#0369a1', glow: 'rgba(56, 189, 248, 0.25)' },
-    listening: { in: '#06b6d4', out: '#0891b2', glow: 'rgba(6, 182, 212, 0.45)' },
-    thinking: { in: '#c084fc', out: '#7e22ce', glow: 'rgba(192, 132, 252, 0.45)' },
-    speaking: { in: '#34d399', out: '#059669', glow: 'rgba(52, 211, 153, 0.55)' },
-    interrupted: { in: '#f87171', out: '#dc2626', glow: 'rgba(248, 113, 113, 0.65)' }
-  }[orbState] || { in: '#38bdf8', out: '#0369a1', glow: 'rgba(56, 189, 248, 0.25)' };
+    idle: { in: '#ffbd9d', mid: '#ec6e99', out: '#5750bd', glow: 'rgba(240, 138, 137, 0.38)' },
+    listening: { in: '#a7eee1', mid: '#54bcb2', out: '#405eaf', glow: 'rgba(136, 200, 196, 0.46)' },
+    thinking: { in: '#e4c4ff', mid: '#a99ae3', out: '#674bb5', glow: 'rgba(169, 154, 227, 0.46)' },
+    speaking: { in: '#ffe0b0', mid: '#f08a89', out: '#a9489f', glow: 'rgba(240, 138, 137, 0.55)' },
+    interrupted: { in: '#f7d591', mid: '#e5be79', out: '#a96c61', glow: 'rgba(229, 190, 121, 0.45)' },
+    working: { in: '#e3c5ff', mid: '#9b80dc', out: '#564b96', glow: 'rgba(169, 154, 227, 0.42)' },
+    seeing: { in: '#cff1ff', mid: '#83b9e5', out: '#6654ac', glow: 'rgba(131, 185, 229, 0.42)' },
+    watching: { in: '#cff1ff', mid: '#83b9e5', out: '#6654ac', glow: 'rgba(131, 185, 229, 0.42)' },
+    approval_required: { in: '#fff0c4', mid: '#e5be79', out: '#9b6653', glow: 'rgba(229, 190, 121, 0.42)' }
+  }[orbState] || { in: '#ffbd9d', mid: '#ec6e99', out: '#5750bd', glow: 'rgba(240, 138, 137, 0.38)' };
 
-  const amp = orbState === 'speaking' || orbState === 'listening' ? currentAmplitude : 0.08;
-  const baseRadius = 75 + amp * 35;
+  const amp = orbState === 'speaking' || orbState === 'listening' ? Math.max(currentAmplitude, ...spectrum8) : 0.06;
+  const baseRadius = 79 + Math.min(amp, 1) * 23;
 
   // Ambient outer glow
-  const g = ctx.createRadialGradient(cx, cy, baseRadius * 0.4, cx, cy, baseRadius * 1.5);
-  g.addColorStop(0, colors.in);
-  g.addColorStop(0.6, colors.out);
+  const g = ctx.createRadialGradient(cx, cy, baseRadius * 0.2, cx, cy, baseRadius * 1.55);
+  g.addColorStop(0, `${colors.mid}66`);
+  g.addColorStop(0.5, `${colors.out}30`);
   g.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.beginPath();
   ctx.arc(cx, cy, baseRadius * 1.4, 0, Math.PI * 2);
@@ -237,8 +299,8 @@ function renderVisuals() {
   ctx.beginPath();
   for (let i = 0; i <= 64; i++) {
     const angle = (i / 64) * Math.PI * 2;
-    const wave = Math.sin(angle * 5 + time * 3 + wavePhase) * (6 + amp * 20) +
-                 Math.cos(angle * 3 - time * 2) * (3 + amp * 12);
+    const wave = Math.sin(angle * 3 + time * 0.55 + wavePhase) * (2 + amp * 12) +
+                 Math.cos(angle * 2 - time * 0.38) * (2 + amp * 7);
     const r = baseRadius + wave;
     const x = cx + Math.cos(angle) * r;
     const y = cy + Math.sin(angle) * r;
@@ -246,35 +308,33 @@ function renderVisuals() {
     else ctx.lineTo(x, y);
   }
   ctx.closePath();
-  const cg = ctx.createRadialGradient(cx - 15, cy - 15, 10, cx, cy, baseRadius);
-  cg.addColorStop(0, '#ffffff');
-  cg.addColorStop(0.3, colors.in);
+  const cg = ctx.createRadialGradient(cx - baseRadius * 0.28, cy - baseRadius * 0.32, 1, cx, cy, baseRadius * 1.08);
+  cg.addColorStop(0, '#fffaf1');
+  cg.addColorStop(0.18, colors.in);
+  cg.addColorStop(0.58, colors.mid);
   cg.addColorStop(1, colors.out);
   ctx.fillStyle = cg;
   ctx.shadowColor = colors.glow;
-  ctx.shadowBlur = 25 + amp * 35;
+  ctx.shadowBlur = 34 + amp * 26;
   ctx.fill();
   ctx.shadowBlur = 0;
-
-  // 2. Draw 8-Band Equalizer
-  eqCtx.clearRect(0, 0, eqCanvas.width, eqCanvas.height);
-  const barWidth = 34;
-  const barGap = 8;
-  const startX = 6;
-  for (let b = 0; b < 8; b++) {
-    const val = spectrum8[b] || 0.02;
-    const barHeight = Math.max(4, val * 42);
-    const x = startX + b * (barWidth + barGap);
-    const y = eqCanvas.height - barHeight;
-
-    const bg = eqCtx.createLinearGradient(0, y, 0, eqCanvas.height);
-    bg.addColorStop(0, colors.in);
-    bg.addColorStop(1, colors.out);
-    eqCtx.fillStyle = bg;
-    eqCtx.fillRect(x, y, barWidth, barHeight);
-  }
 }
 
 
 connectWs();
 renderVisuals();
+const mockableStates = new Set(['idle','listening','transcribing','thinking','speaking','working','seeing','watching','interrupted','disconnected','approval_required']);
+window.addEventListener('sail:orb-telemetry', event => {
+  const data = event.detail || {};
+  if (!mockableStates.has(data.state)) return;
+  orbFrozen = true;
+  const clamp = value => Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+  updateState(data.state); currentAmplitude = clamp(data.rms); wavePhase = Number.isFinite(data.phase) ? data.phase : 0;
+  if (Array.isArray(data.spectrum) && data.spectrum.length === 8) spectrum8 = data.spectrum.map(clamp);
+});
+// Browser-driven screenshot tools can dispatch fixed telemetry without opening
+// the microphone or presenting a fake connected state.
+window.sailUi = Object.freeze({
+  setOrbTelemetry: data => window.dispatchEvent(new CustomEvent('sail:orb-telemetry', { detail:data })),
+  resumeOrbAnimation: () => { orbFrozen = false; },
+});
