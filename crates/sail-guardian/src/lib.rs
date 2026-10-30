@@ -1,5 +1,6 @@
 pub mod approval;
 pub mod audit;
+pub mod broker;
 pub mod capability;
 pub mod credentials;
 pub mod policy;
@@ -9,12 +10,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::{info, warn};
 
-pub use approval::{ApprovalBroker, ApprovalSession};
-pub use audit::{AuditLedger, AuditReceipt, DecisionOutcome};
+pub use approval::{ApprovalBroker, ApprovalError, ApprovalSession, CapabilityToken, TokenConsumptionError};
+pub use audit::{AuditIntegrityError, AuditLedger, AuditReceipt, DecisionOutcome, GENESIS_HASH};
+pub use broker::{clear_global_broker, global_broker, register_global_broker, ExecutionDenied, GuardianExecutionBroker};
 pub use capability::{Capability, DeviceCapability, FsCapability, RiskLevel, SystemCapability, ToolCapability};
-pub use credentials::CredentialStore;
+pub use credentials::{CredentialError, CredentialHandle, CredentialStore};
 pub use policy::{AuthorizationDecision, PolicyEngine};
-pub use sandbox::SandboxPolicy;
+pub use sandbox::{SandboxPolicy, SandboxViolation};
 
 use sail_common::{
     bus::EventBus,
@@ -29,16 +31,37 @@ pub struct GuardianSubsystem {
     audit: Arc<AuditLedger>,
     approval: Arc<ApprovalBroker>,
     credentials: Arc<CredentialStore>,
+    sandbox: Arc<SandboxPolicy>,
+    broker: Arc<GuardianExecutionBroker>,
 }
 
 impl GuardianSubsystem {
     pub fn new() -> Self {
+        let policy = Arc::new(PolicyEngine::new());
+        let audit = Arc::new(AuditLedger::new());
+        let approval = Arc::new(ApprovalBroker::new());
+        let credentials = Arc::new(CredentialStore::new());
+        let sandbox = Arc::new(SandboxPolicy::new());
+        // Default interactive session camera consent for Dialogue
+        policy.grant_capability(SubsystemId::Dialogue, Capability::Device(DeviceCapability::Camera));
+
+        let broker = Arc::new(GuardianExecutionBroker::new(
+            policy.clone(),
+            audit.clone(),
+            approval.clone(),
+            sandbox.clone(),
+        ));
+
+        register_global_broker(broker.clone());
+
         Self {
             bus: None,
-            policy: Arc::new(PolicyEngine::new()),
-            audit: Arc::new(AuditLedger::new()),
-            approval: Arc::new(ApprovalBroker::new()),
-            credentials: Arc::new(CredentialStore::new()),
+            policy,
+            audit,
+            approval,
+            credentials,
+            sandbox,
+            broker,
         }
     }
 
@@ -56,6 +79,14 @@ impl GuardianSubsystem {
 
     pub fn credentials(&self) -> Arc<CredentialStore> {
         self.credentials.clone()
+    }
+
+    pub fn sandbox(&self) -> Arc<SandboxPolicy> {
+        self.sandbox.clone()
+    }
+
+    pub fn broker(&self) -> Arc<GuardianExecutionBroker> {
+        self.broker.clone()
     }
 
     /// Direct evaluation of a capability request
@@ -191,26 +222,40 @@ impl Subsystem for GuardianSubsystem {
             }
             EventPayload::UserApprovalResolved { request_id, approved } => {
                 if let Ok(session_uuid) = uuid::Uuid::parse_str(request_id) {
-                    let resolved = self.approval.resolve_session(session_uuid, *approved);
-                    if let Some(session) = resolved {
-                        info!(session_id = %session_uuid, approved, "User approval resolved by Guardian");
-                        let receipt = self.audit.record(
-                            session.requester,
-                            session.capability.clone(),
-                            if *approved { DecisionOutcome::Granted } else { DecisionOutcome::Denied },
-                            "User interactive approval resolution",
-                        );
+                    match self.approval.resolve_session(session_uuid, *approved) {
+                        Ok(token) => {
+                            info!(session_id = %session_uuid, token_id = %token.token_id, "User approval granted, issued capability token");
+                            let receipt = self.audit.record(
+                                token.bound_actor,
+                                token.bound_capability.clone(),
+                                DecisionOutcome::Granted,
+                                format!("User interactive approval granted token {}", token.token_id),
+                            );
 
-                        let receipt_event = SailEvent::new(
-                            self.id(),
-                            EventPayload::AuditReceiptCreated {
-                                receipt_id: receipt.receipt_id.to_string(),
-                                hash: receipt.hash,
-                                action: format!("{:?}", session.capability),
-                                decision: if *approved { "granted".into() } else { "denied".into() },
-                            },
-                        );
-                        let _ = bus.publish(receipt_event);
+                            let receipt_event = SailEvent::new(
+                                self.id(),
+                                EventPayload::AuditReceiptCreated {
+                                    receipt_id: receipt.receipt_id.to_string(),
+                                    hash: receipt.hash,
+                                    action: format!("{:?}", token.bound_capability),
+                                    decision: "granted".into(),
+                                },
+                            );
+                            let _ = bus.publish(receipt_event);
+                        }
+                        Err(err) => {
+                            warn!(session_id = %session_uuid, error = %err, "User approval failed or denied");
+                            let receipt_event = SailEvent::new(
+                                self.id(),
+                                EventPayload::AuditReceiptCreated {
+                                    receipt_id: uuid::Uuid::new_v4().to_string(),
+                                    hash: String::new(),
+                                    action: format!("session_{}", session_uuid),
+                                    decision: "denied".into(),
+                                },
+                            );
+                            let _ = bus.publish(receipt_event);
+                        }
                     }
                 }
             }

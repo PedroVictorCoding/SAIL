@@ -33,6 +33,12 @@ impl PolicyEngine {
         guard.insert((subsystem, capability));
     }
 
+    /// Check if a capability is explicitly granted
+    pub fn is_explicitly_granted(&self, subsystem: SubsystemId, capability: &Capability) -> bool {
+        let guard = self.explicit_grants.read().unwrap();
+        guard.contains(&(subsystem, capability.clone()))
+    }
+
     /// Revoke a capability
     pub fn revoke_capability(&self, subsystem: SubsystemId, capability: &Capability) {
         let mut guard = self.explicit_grants.write().unwrap();

@@ -38,8 +38,80 @@ pub struct VisionAnalysis {
 pub struct LocalKernelToolBroker;
 
 impl LocalKernelToolBroker {
-    /// Execute a kernel tool directly in pure Rust on the host without any external APIs
+    /// Convert a local tool invocation into a strongly-typed Guardian Capability
+    pub fn tool_to_capability(call: &KernelToolCall) -> sail_guardian::Capability {
+        match call.tool.as_str() {
+            "os:status" => sail_guardian::Capability::System(sail_guardian::SystemCapability::OsTelemetry),
+            "proc:list" => sail_guardian::Capability::System(sail_guardian::SystemCapability::ProcessInspect),
+            "fs:query" => {
+                let path_str = call.params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                sail_guardian::Capability::Filesystem(sail_guardian::FsCapability::Read {
+                    path: std::path::PathBuf::from(path_str),
+                })
+            }
+            "vision:frame" => sail_guardian::Capability::Device(sail_guardian::DeviceCapability::Camera),
+            cmd => sail_guardian::Capability::Tool(sail_guardian::ToolCapability::KernelTool(cmd.to_string())),
+        }
+    }
+
+    /// Execute a kernel tool through the mandatory Guardian execution gate.
+    /// Fails closed if Guardian is unavailable or if authorization is denied.
+    pub fn execute_guarded(
+        caller: sail_common::types::SubsystemId,
+        call: &KernelToolCall,
+        token: Option<uuid::Uuid>,
+    ) -> KernelToolResult {
+        let broker = match sail_guardian::global_broker() {
+            Ok(b) => b,
+            Err(e) => {
+                return KernelToolResult {
+                    tool: call.tool.clone(),
+                    success: false,
+                    output: serde_json::json!({
+                        "error": format!("Guardian execution gate unavailable: {e}"),
+                        "denied": true,
+                    }),
+                };
+            }
+        };
+
+        let cap = Self::tool_to_capability(call);
+        match broker.authorize_and_execute(caller, cap, token, None, || Self::execute_raw(call)) {
+            Ok(res) => res,
+            Err(denied) => {
+                let error_code = match &denied {
+                    sail_guardian::ExecutionDenied::SandboxViolation(
+                        sail_guardian::SandboxViolation::PathEscapesRoot { .. }
+                        | sail_guardian::SandboxViolation::SensitivePathBlocked { .. },
+                    ) => "outside_workspace",
+                    _ => "permission_denied",
+                };
+                let error_msg = if error_code == "outside_workspace" {
+                    "Path is outside the authorized workspace".to_string()
+                } else {
+                    format!("Execution denied by Guardian: {denied}")
+                };
+                KernelToolResult {
+                    tool: call.tool.clone(),
+                    success: false,
+                    output: serde_json::json!({
+                        "error": error_msg,
+                        "error_code": error_code,
+                        "workspace_root": std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into()),
+                        "denied": true,
+                    }),
+                }
+            }
+        }
+    }
+
+    /// Point-of-use gatekeeper entry point enforcing Guardian authorization
     pub fn execute(call: &KernelToolCall) -> KernelToolResult {
+        Self::execute_guarded(sail_common::types::SubsystemId::Dialogue, call, None)
+    }
+
+    /// Internal raw execution: only invoked by GuardianExecutionBroker after authorization
+    pub fn execute_raw(call: &KernelToolCall) -> KernelToolResult {
         match call.tool.as_str() {
             "os:status" => Self::tool_os_status(),
             "proc:list" => Self::tool_proc_list(&call.params),

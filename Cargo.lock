@@ -1430,6 +1430,7 @@ dependencies = [
  "sail-canvas",
  "sail-common",
  "sail-flow",
+ "sail-guardian",
  "sail-mind",
  "serde",
  "serde_json",

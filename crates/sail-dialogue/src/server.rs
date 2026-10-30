@@ -361,19 +361,20 @@ fn parse_vision(value: &Value) -> Result<Option<VisionFrameInput>> {
 }
 fn execute_tool(name: &str, params: Value) -> crate::KernelToolResult {
     let start = Instant::now();
-    info!(tool = name, "Authorizing local kernel operation");
+    info!(tool = name, "Authorizing local kernel operation via Guardian");
     debug!(tool=name,arguments=%log_json(&params,2048),"Kernel tool arguments");
     let result = match sail_agents::authorize_voice_operation(name) {
-        Ok(tool) => sail_flow::execute_voice_operation(tool, |tool| {
-            LocalKernelToolBroker::execute(&KernelToolCall {
+        Ok(tool) => {
+            let call = KernelToolCall {
                 tool: tool.into(),
                 params,
-            })
-        }),
+            };
+            LocalKernelToolBroker::execute_guarded(sail_common::types::SubsystemId::Dialogue, &call, None)
+        }
         Err(e) => crate::KernelToolResult {
             tool: name.into(),
             success: false,
-            output: json!({"error":e.to_string()}),
+            output: json!({"error":e.to_string(), "denied": true}),
         },
     };
     if result.success {
@@ -881,6 +882,7 @@ mod tests {
         json!({"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":name,"arguments":params.to_string()}}]})
     }
     async fn exercise(prompt: &str, replies: Vec<Value>) -> (Vec<Value>, Vec<Value>, String) {
+        let _guardian = sail_guardian::GuardianSubsystem::new();
         let state = Arc::new(MockModel {
             replies: Mutex::new(replies.into()),
             requests: Mutex::new(Vec::new()),

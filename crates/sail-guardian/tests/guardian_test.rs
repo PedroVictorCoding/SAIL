@@ -148,7 +148,7 @@ fn test_interactive_user_approval_workflow() {
 
     // User approves
     let resolved = broker.resolve_session(session.session_id, true);
-    assert!(resolved.is_some());
+    assert!(resolved.is_ok());
     assert_eq!(broker.list_pending().len(), 0);
 
     // Record decision in audit ledger
