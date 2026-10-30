@@ -51,11 +51,45 @@ impl SpeechTextGate {
     }
 }
 
-#[derive(Default)]
+pub const DEFAULT_MIN_WORDS_PER_SEGMENT: usize = 20;
+
+#[derive(Debug, Clone)]
 pub struct SpeechChunker {
     pending: String,
+    min_words: usize,
+}
+impl Default for SpeechChunker {
+    fn default() -> Self {
+        let min_words = std::env::var("SAIL_VOICE_MIN_WORDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_MIN_WORDS_PER_SEGMENT);
+        Self {
+            pending: String::new(),
+            min_words,
+        }
+    }
 }
 impl SpeechChunker {
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+    #[allow(dead_code)]
+    pub fn with_min_words(min_words: usize) -> Self {
+        Self {
+            pending: String::new(),
+            min_words,
+        }
+    }
+    #[allow(dead_code)]
+    pub fn min_words(&self) -> usize {
+        self.min_words
+    }
+    #[allow(dead_code)]
+    pub fn set_min_words(&mut self, min_words: usize) {
+        self.min_words = min_words;
+    }
     pub fn push(&mut self, text: &str) -> Vec<String> {
         self.pending.push_str(text);
         self.drain(false)
@@ -68,7 +102,7 @@ impl SpeechChunker {
     }
     fn drain(&mut self, finished: bool) -> Vec<String> {
         let mut result = Vec::new();
-        while let Some(end) = boundary(&self.pending, finished) {
+        while let Some(end) = boundary(&self.pending, finished, self.min_words) {
             let chunk = self.pending.drain(..end).collect::<String>();
             let chunk = chunk.trim().replace(['`', '*', '#'], "");
             if !chunk.trim().is_empty() {
@@ -86,7 +120,7 @@ impl SpeechChunker {
         result
     }
 }
-fn boundary(text: &str, finished: bool) -> Option<usize> {
+fn boundary(text: &str, finished: bool, min_words: usize) -> Option<usize> {
     for (index, ch) in text.char_indices() {
         let sentence = matches!(ch, '.' | '?' | '!' | '。' | '？' | '！');
         let clause = matches!(ch, ',' | ';' | ':' | '—') && text[..index].chars().count() >= 70;
@@ -158,6 +192,16 @@ fn boundary(text: &str, finished: bool) -> Option<usize> {
                 continue;
             }
         }
+
+        // Segment at sentence boundaries when the accumulated text exceeds min_words (e.g. >20 words).
+        // This avoids starting and stopping audio renders between short sentences.
+        if !finished && min_words > 0 {
+            let word_count = text[..end].split_whitespace().count();
+            if word_count <= min_words {
+                continue;
+            }
+        }
+
         return Some(end);
     }
     // A very long unpunctuated sentence is bounded at a complete word, not a token.
@@ -189,7 +233,7 @@ mod tests {
     use super::*;
     #[test]
     fn finds_sentences_inside_tokens_and_keeps_punctuation() {
-        let mut c = SpeechChunker::default();
+        let mut c = SpeechChunker::with_min_words(0);
         assert_eq!(c.push("Yes. This sentence is still"), vec!["Yes."]);
         assert!(c.push(" arriving").is_empty());
         assert_eq!(c.push("! And "), vec!["This sentence is still arriving!"]);
@@ -197,13 +241,13 @@ mod tests {
     }
     #[test]
     fn abbreviations_decimals_unicode_and_quotes_are_preserved() {
-        let mut c = SpeechChunker::default();
+        let mut c = SpeechChunker::with_min_words(0);
         assert_eq!(
             c.push("Dr. Silva measured 3.14 volts. \"Está correto?\" Sim "),
             vec!["Dr. Silva measured 3.14 volts.", "\"Está correto?\""]
         );
         assert_eq!(c.finish(), vec!["Sim"]);
-        let mut c = SpeechChunker::default();
+        let mut c = SpeechChunker::with_min_words(0);
         assert!(c.push("Hello.").is_empty());
         assert_eq!(c.push(" "), vec!["Hello."]);
     }
@@ -231,7 +275,7 @@ mod tests {
             "{}, and the next clause continues",
             "A complete phrase with useful context ".repeat(5).trim()
         );
-        let mut c = SpeechChunker::default();
+        let mut c = SpeechChunker::with_min_words(0);
         let chunks = c.push(&clause);
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].ends_with(','));
@@ -241,7 +285,7 @@ mod tests {
     }
     #[test]
     fn multi_word_sentences_and_questions_emit_promptly() {
-        let mut c = SpeechChunker::default();
+        let mut c = SpeechChunker::with_min_words(0);
         assert_eq!(
             c.push("The system is running normally."),
             vec!["The system is running normally."]
@@ -250,5 +294,22 @@ mod tests {
             c.push("How can I assist you?"),
             vec!["How can I assist you?"]
         );
+    }
+    #[test]
+    fn segmenting_by_sentences_requires_more_than_twenty_words_while_streaming() {
+        let mut c = SpeechChunker::default();
+        assert_eq!(c.min_words(), 20);
+        // Short sentences under 20 words must not trigger independent renders while streaming.
+        assert!(c.push("First short sentence. ").is_empty());
+        assert!(c.push("Second short sentence. ").is_empty());
+        // Once accumulated text across sentence boundaries exceeds 20 words, it emits in one render.
+        let addition = "Now we stream an additional sentence with enough extra words to push the total word count over twenty words for synthesis.";
+        let chunks = c.push(addition);
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].starts_with("First short sentence. Second short sentence."));
+        assert!(chunks[0].ends_with("for synthesis."));
+        // Final tail under 20 words flushes cleanly on finish.
+        c.push("Remaining short tail.");
+        assert_eq!(c.finish(), vec!["Remaining short tail."]);
     }
 }
