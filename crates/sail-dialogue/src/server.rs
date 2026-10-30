@@ -368,6 +368,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                             },
                             "kernel_tool"=>{
                                 let name=value["tool"].as_str().unwrap_or_default();
+                                emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"tool_started","channel":"voice:vlm","tool":name})).await;
                                 let result=execute_tool(name,value.get("params").cloned().unwrap_or(json!({})));
                                 emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"tool_result","channel":"voice:vlm","result":result})).await;
                             },
@@ -852,6 +853,9 @@ async fn reason_turn(
                                 output: json!({"error":"Remaining tool calls skipped after a failed or repeated operation"}),
                             }
                         } else {
+                            if publish {
+                                emit(tx,current,json!({"type":"tool_started","channel":"voice:vlm","tool":name})).await;
+                            }
                             let result = if name == "vision_frame" || name == "vision:frame" {
                                 match &visual_frame {
                                     Some(frame) => execute_tool(name, serde_json::to_value(frame)?),
