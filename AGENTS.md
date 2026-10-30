@@ -14,8 +14,8 @@ specific instructions may add requirements but must retain this branch/PR workfl
    branch switch or implementation could interfere with it.
 2. **Create a new task branch before editing.** Fetch the current remote state and
    create a fresh topic branch from the latest default branch, normally
-   `origin/main`. Use a descriptive name such as `codex/fix-voice-latency`,
-   `claude/update-usage-guide`, or `agent/<short-task-description>`.
+   `origin/main`. Use `agent/<context-driven-name>` for every agent task branch, for example
+   `agent/mind-local-inference-routing` or `agent/update-usage-guide`.
    Continue the same branch for follow-ups to that active task; do not reuse a
    branch from an unrelated, completed, or merged task.
 3. **Never commit or push directly to the default branch.** Do not develop on

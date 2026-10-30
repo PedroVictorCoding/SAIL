@@ -114,6 +114,7 @@ pub struct VoiceModelServices {
     vad: WorkerClient,
     stt: WorkerClient,
     tts: WorkerClient,
+    inference: Option<crate::MindService>,
 }
 impl Default for VoiceModelServices {
     fn default() -> Self {
@@ -126,7 +127,15 @@ impl VoiceModelServices {
             vad: WorkerClient::new("vad"),
             stt: WorkerClient::new("stt"),
             tts: WorkerClient::new("tts"),
+            inference: None,
         }
+    }
+    pub fn with_inference(mut self, service: crate::MindService) -> Self {
+        self.inference = Some(service);
+        self
+    }
+    pub fn inference(&self) -> Option<crate::MindService> {
+        self.inference.clone()
     }
     pub async fn health(&self) -> Value {
         let (vad, stt, tts) = tokio::join!(

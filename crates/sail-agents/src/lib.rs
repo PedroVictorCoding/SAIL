@@ -164,6 +164,19 @@ impl Subsystem for AgentsSubsystem {
                 let _ = bus.publish(arena_event);
             }
 
+            EventPayload::InferenceFailed { request_id, error } => {
+                let _ = bus.publish(
+                    SailEvent::new(
+                        self.id(),
+                        EventPayload::DialogueResponseDelta {
+                            session_id: request_id.clone(),
+                            delta: format!("Local inference unavailable: {error}"),
+                            is_finished: true,
+                        },
+                    )
+                    .with_target(SubsystemId::Dialogue),
+                );
+            }
             // Tool result received from Bridge
             EventPayload::ToolResult {
                 execution_id,
