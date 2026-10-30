@@ -358,8 +358,18 @@ function renderVisuals() {
   const cy = h / 2;
   ctx.clearRect(0, 0, w, h);
 
-  const palette = statePalette(paletteState(orbState));
-  const colors = { in:palette.primary, mid:palette.secondary, out:palette.tertiary, glow:palette.glow };
+  // Keep the original highlight/body/rim contrast; ambient tokens are too flat for sphere shading.
+  const colors = {
+    idle: { in: '#ffbd9d', mid: '#ec6e99', out: '#5750bd', glow: 'rgba(240, 138, 137, 0.38)' },
+    listening: { in: '#a7eee1', mid: '#54bcb2', out: '#405eaf', glow: 'rgba(136, 200, 196, 0.46)' },
+    thinking: { in: '#e4c4ff', mid: '#a99ae3', out: '#674bb5', glow: 'rgba(169, 154, 227, 0.46)' },
+    speaking: { in: '#ffe0b0', mid: '#f08a89', out: '#a9489f', glow: 'rgba(240, 138, 137, 0.55)' },
+    interrupted: { in: '#f7d591', mid: '#e5be79', out: '#a96c61', glow: 'rgba(229, 190, 121, 0.45)' },
+    working: { in: '#e3c5ff', mid: '#9b80dc', out: '#564b96', glow: 'rgba(169, 154, 227, 0.42)' },
+    seeing: { in: '#cff1ff', mid: '#83b9e5', out: '#6654ac', glow: 'rgba(131, 185, 229, 0.42)' },
+    watching: { in: '#cff1ff', mid: '#83b9e5', out: '#6654ac', glow: 'rgba(131, 185, 229, 0.42)' },
+    approval_required: { in: '#fff0c4', mid: '#e5be79', out: '#9b6653', glow: 'rgba(229, 190, 121, 0.42)' }
+  }[orbState] || { in: '#ffbd9d', mid: '#ec6e99', out: '#5750bd', glow: 'rgba(240, 138, 137, 0.38)' };
 
   const amp = !reduceMotion.matches && (orbState === 'speaking' || orbState === 'listening') ? Math.max(currentAmplitude, ...spectrum8) : 0.02;
   const baseRadius = 79 + Math.min(amp, 1) * 23;
