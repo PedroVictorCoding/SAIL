@@ -147,3 +147,10 @@ fn canvas_extracts_mermaid_and_json() {
     assert_eq!(artifacts[0].artifact_type, "mermaid");
     assert_eq!(artifacts[1].artifact_type, "json");
 }
+#[test]
+fn plain_dialogue_never_creates_canvas_artifacts() {
+    let artifacts = sail_canvas::voice_artifacts(
+        "I have checked the system status. Everything is running smoothly and memory is within limits.",
+    );
+    assert!(artifacts.is_empty());
+}

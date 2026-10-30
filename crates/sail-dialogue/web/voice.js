@@ -139,10 +139,13 @@ function appendConversation(role, text) {
   node.append(label, content); document.getElementById('conversation').append(node); node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return node;
 }
 async function renderArtifact(artifact) {
+  if (!artifact || !['mermaid', 'json', 'image', 'svg'].includes(artifact.artifact_type)) return;
   const container = document.createElement('div'); container.className = 'artifact-card';
   document.getElementById('canvasPanel').append(container);
   document.getElementById('canvasEmptyState')?.remove();
-  const heading = document.createElement('div'); heading.className = 'artifact-heading'; heading.textContent = 'Canvas'; container.append(heading);
+  const heading = document.createElement('div'); heading.className = 'artifact-heading';
+  heading.textContent = artifact.artifact_type === 'mermaid' ? 'Diagram' : artifact.artifact_type === 'json' ? 'Data' : 'Visual';
+  container.append(heading);
   if (artifact.artifact_type === 'mermaid' && window.mermaid) {
     try {
       const rendered = await mermaid.render(`diagram-${++artifactSerial}`, artifact.content);
@@ -168,7 +171,9 @@ async function renderArtifact(artifact) {
   if (artifact.artifact_type === 'image' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(artifact.content)) {
     const image = document.createElement('img'); image.src = artifact.content; image.alt = 'Conversation visual'; image.style.maxWidth = '100%'; container.append(image); return;
   }
-  const pre = document.createElement('pre'); pre.textContent = artifact.content; container.append(pre);
+  if (artifact.artifact_type === 'svg' && artifact.content.trim().startsWith('<svg')) {
+    container.innerHTML = artifact.content; return;
+  }
 }
 function renderToolResult(result) {
   const approval = result?.output?.approval_session;

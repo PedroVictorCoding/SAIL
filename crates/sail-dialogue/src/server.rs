@@ -1062,6 +1062,8 @@ mod tests {
             let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let signal = spoken.clone();
             let model_done = completed.clone();
+            let first_sentence = "Yes, I can begin speaking immediately because streaming voice synthesis starts playing without waiting for the full model completion to arrive.";
+            let prompt_first = first_sentence.to_string();
             let app=Router::new()
                 .route("/health", axum::routing::get(|| async { axum::Json(json!({"status":"ok"})) }))
                 .route("/props", axum::routing::get(|| async { axum::Json(json!({"modalities":{"vision":true,"tools":true},"default_generation_settings":{"n_ctx":4096}})) }))
@@ -1069,10 +1071,11 @@ mod tests {
                 .route("/tokenize", axum::routing::post(|axum::Json(_): axum::Json<Value>| async { axum::Json(json!({"tokens":[1,2,3,4,5,6,7,8]})) }))
                 .route("/v1/chat/completions",axum::routing::post(move|Json(_request):Json<Value>|{
                 let signal=signal.clone();let model_done=model_done.clone();
+                let prompt_first=prompt_first.clone();
                 async move{
                     let (parts,rx)=mpsc::channel::<std::result::Result<bytes::Bytes,std::convert::Infallible>>(4);
                     tokio::spawn(async move{
-                        let first=json!({"choices":[{"delta":{"content":"Yes, I can begin speaking. "}}]});
+                        let first=json!({"choices":[{"delta":{"content":format!("{prompt_first} ")}}]});
                         parts.send(Ok(bytes::Bytes::from(format!("data: {first}\n\n")))).await.unwrap();
                         signal.notified().await;
                         model_done.store(true,Ordering::SeqCst);
@@ -1094,9 +1097,10 @@ mod tests {
             });
             let (speech_tx, mut speech_rx) = mpsc::channel::<String>(16);
             let (tx, _rx) = mpsc::channel(128);
+            let expected_first = first_sentence.to_string();
             let consumer = tokio::spawn(async move {
                 let first = speech_rx.recv().await.unwrap();
-                assert_eq!(first, "Yes, I can begin speaking.");
+                assert_eq!(first, expected_first);
                 assert!(!completed.load(Ordering::SeqCst));
                 spoken.notify_one();
                 let second = speech_rx.recv().await.unwrap();
@@ -1115,7 +1119,7 @@ mod tests {
             .unwrap();
             assert_eq!(
                 reply,
-                "Yes, I can begin speaking. Can I keep the question's intonation?"
+                format!("{first_sentence} Can I keep the question's intonation?")
             );
             consumer.await.unwrap();
             drop(server);
