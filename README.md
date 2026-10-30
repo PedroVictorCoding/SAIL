@@ -62,6 +62,7 @@ flowchart TB
 - **SAIL Discovery**: Autonomous curiosity engine, learning resources, knowledge-gap identification, and proactive interest exploration.
 - **SAIL Agents**: Goal decomposition, specialized worker delegation, tool proposal & authorization, step verification, and task coordination.
 - **SAIL Mind**: Local Gemma 4 (`models/gemma4-v2-Q4_K_M.gguf` via `llama-server`), native SSM/MoE models, inference adapters, context window allocation, and compute routing.
+- **SAIL Guardian**: Access control, capability grants (`devices`, `files`, `system`, `tools`), sandbox policy, interactive user approvals, and tamper-evident SHA-256 audit receipts.
 - **SAIL Bridge**: Host OS integration, sandboxed command execution, browser/application connectors, and peripheral communication.
 
 ## Local Voice Pipeline
@@ -121,6 +122,7 @@ SAIL/
 │   ├── sail-discovery/    # Autonomous curiosity, gap detection, research pipelines
 │   ├── sail-agents/       # Planner, worker orchestration, tool verification
 │   ├── sail-mind/         # LLM/SSM inference router and llama.cpp/Gemma 4 adapter
+│   ├── sail-guardian/     # Access control, capability grants, sandbox policy & tamper-evident audit
 │   ├── sail-bridge/       # Host OS integration, sandboxed tool runner, client tools
 │   └── sail-core/         # Orchestrator binary, event dispatch loop, CLI daemon
 ├── Docs/ARCHITECTURE/     # Architecture specifications and Mermaid diagrams

@@ -14,6 +14,7 @@ pub enum SubsystemId {
     Agents,
     Mind,
     Bridge,
+    Guardian,
 }
 
 impl std::fmt::Display for SubsystemId {
@@ -31,6 +32,7 @@ impl std::fmt::Display for SubsystemId {
                 SubsystemId::Agents => "sail-agents",
                 SubsystemId::Mind => "sail-mind",
                 SubsystemId::Bridge => "sail-bridge",
+                SubsystemId::Guardian => "sail-guardian",
             }
         )
     }
@@ -153,5 +155,40 @@ pub enum EventPayload {
         canvas_id: String,
         artifact_type: String, // "mermaid", "markdown", "ui_card"
         content: String,
+    },
+
+    // Guardian Access Control & Audit Events
+    AccessEvaluationRequested {
+        request_id: String,
+        requester: SubsystemId,
+        capability: String,
+        resource: String,
+        justification: String,
+    },
+    AccessDecisionGranted {
+        request_id: String,
+        capability: String,
+        resource: String,
+    },
+    AccessDecisionDenied {
+        request_id: String,
+        capability: String,
+        resource: String,
+        reason: String,
+    },
+    UserApprovalPrompted {
+        request_id: String,
+        risk_level: String, // "low", "medium", "high", "critical"
+        description: String,
+    },
+    UserApprovalResolved {
+        request_id: String,
+        approved: bool,
+    },
+    AuditReceiptCreated {
+        receipt_id: String,
+        hash: String,
+        action: String,
+        decision: String,
     },
 }

@@ -9,6 +9,7 @@ members = [
     "crates/sail-canvas",
     "crates/sail-discovery",
     "crates/sail-flow",
+    "crates/sail-guardian",
     "crates/sail-core",
 ]
 resolver = "2"
@@ -29,6 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+ring = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.5", features = ["cors", "fs"] }
@@ -46,3 +48,4 @@ sail-dialogue = { path = "crates/sail-dialogue" }
 sail-canvas = { path = "crates/sail-canvas" }
 sail-discovery = { path = "crates/sail-discovery" }
 sail-flow = { path = "crates/sail-flow" }
+sail-guardian = { path = "crates/sail-guardian" }
