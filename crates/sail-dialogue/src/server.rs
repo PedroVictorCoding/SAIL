@@ -84,6 +84,15 @@ pub async fn run_dialogue_server_with_services(
             get(|| async { Html(include_str!("../web/index.html")) }),
         )
         .route(
+            "/card-modal.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/card-modal.js"),
+                )
+            }),
+        )
+        .route(
             "/voice.js",
             get(|| async {
                 (

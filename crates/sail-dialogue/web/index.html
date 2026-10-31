@@ -182,7 +182,23 @@
     </div>
   </form>
 </dialog>
+
+<dialog id="cardModal" class="capture-dialog card-modal" aria-labelledby="cardModalTitle">
+  <header class="card-modal-header">
+    <div class="card-modal-title">
+      <span class="card-modal-icon" id="cardModalIcon" aria-hidden="true">▧</span>
+      <div>
+        <h2 id="cardModalTitle">Card Details</h2>
+        <span class="card-modal-badge" id="cardModalBadge"></span>
+      </div>
+    </div>
+    <button type="button" class="card-action close-modal-btn" id="cardModalCloseBtn" aria-label="Close details" title="Close details">×</button>
+  </header>
+  <div class="card-modal-body" id="cardModalBody"></div>
+  <footer class="card-modal-footer" id="cardModalFooter"></footer>
+</dialog>
 <script src="/mermaid.js" defer></script>
+<script src="/card-modal.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/ui.js" defer></script>
 </body>

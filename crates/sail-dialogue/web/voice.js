@@ -221,46 +221,6 @@ function appendConversation(role, text) {
   const content = document.createElement('span'); content.textContent = text;
   node.append(label, content); document.getElementById('conversation').append(node); node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return node;
 }
-async function renderArtifact(artifact) {
-  if (!artifact || typeof artifact.content !== 'string' || !['mermaid', 'json', 'image', 'svg'].includes(artifact.artifact_type)) return;
-  const container = document.createElement('div'); container.className = 'artifact-card';
-  document.getElementById('canvasPanel').append(container);
-  document.getElementById('canvasEmptyState')?.remove();
-  const heading = document.createElement('div'); heading.className = 'artifact-heading';
-  heading.textContent = artifact.artifact_type === 'mermaid' ? 'Diagram' : artifact.artifact_type === 'json' ? 'Data' : 'Visual';
-  container.append(heading);
-  if (artifact.artifact_type === 'mermaid' && window.mermaid) {
-    try {
-      const rendered = await mermaid.render(`diagram-${++artifactSerial}`, artifact.content);
-      // Mermaid strict mode escapes labels and disables interaction in model output.
-      container.innerHTML = rendered.svg; return;
-    } catch { /* Show source if a model emits an invalid diagram. */ }
-  }
-  if (artifact.artifact_type === 'json') {
-    try {
-      const parsed = JSON.parse(artifact.content);
-      const fields = document.createElement('dl'); fields.className = 'json-fields';
-      for (const [key, value] of Object.entries(parsed).slice(0, 12)) {
-        const term = document.createElement('dt'); term.textContent = key.replaceAll('_', ' ');
-        const description = document.createElement('dd');
-        description.textContent = value === null ? 'None' : typeof value === 'object' ? `${Array.isArray(value) ? value.length : Object.keys(value).length} ${Array.isArray(value) ? 'items' : 'fields'}` : String(value);
-        fields.append(term, description);
-      }
-      container.append(fields);
-      const details = document.createElement('details'); const disclosure = document.createElement('summary'); disclosure.textContent = 'Show structured data';
-      const pre = document.createElement('pre'); pre.textContent = JSON.stringify(parsed, null, 2); details.append(disclosure, pre); container.append(details); return;
-    } catch { /* Show invalid output safely as text. */ }
-  }
-  if (artifact.artifact_type === 'image' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(artifact.content)) {
-    const image = document.createElement('img'); image.src = artifact.content; image.alt = 'Conversation visual'; image.style.maxWidth = '100%'; container.append(image); return;
-  }
-  if (artifact.artifact_type === 'svg' && artifact.content.trim().startsWith('<svg')) {
-    // or event handlers in the owner approval page. Never insert it as page markup.
-    const image = document.createElement('img'); image.alt = 'Generated visual';
-    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(artifact.content)}`;
-    container.append(image); return;
-  }
-}
 function renderToolResult(result) {
   const approval = result?.output?.approval_session;
   if (approval) {
@@ -271,32 +231,30 @@ function renderToolResult(result) {
   const container = document.createElement('article'); container.className = 'artifact-card';
   const output = result?.output ?? {}; const succeeded = Boolean(result?.success);
   if (result?.tool === 'os:status' && succeeded && output) updateSystemCard(output);
+
   const heading = document.createElement('div'); heading.className = 'artifact-heading';
   const title = document.createElement('span'); title.textContent = String(result?.tool || 'Local action').replaceAll(':', ' · ');
-  const badge = document.createElement('span'); badge.className = succeeded ? 'result-success' : 'result-failure'; badge.textContent = succeeded ? '● Done' : '● Could not complete'; heading.append(title, badge);
+
+  const rightWrap = document.createElement('div');
+  rightWrap.style.display = 'flex';
+  rightWrap.style.alignItems = 'center';
+  rightWrap.style.gap = '8px';
+  const badge = document.createElement('span');
+  badge.className = succeeded ? 'result-success' : 'result-failure';
+  badge.textContent = succeeded ? '● Done' : '● Could not complete';
+  const expandBtn = document.createElement('button');
+  expandBtn.type = 'button';
+  expandBtn.className = 'card-expand-btn';
+  expandBtn.title = 'Expand details into pop-up';
+  expandBtn.setAttribute('aria-label', 'Expand details into pop-up');
+  expandBtn.textContent = '⤢';
+  rightWrap.append(badge, expandBtn);
+  heading.append(title, rightWrap);
+
   const summary = document.createElement('p'); summary.className = 'result-summary';
   if (Array.isArray(output?.processes)) summary.textContent = `${output.processes.length} ${output.processes.length === 1 ? 'process' : 'processes'} found`;
   else if (Array.isArray(output?.entries)) summary.textContent = `${output.entries.length} ${output.entries.length === 1 ? 'item' : 'items'} in ${String(output.path || 'the selected folder')}`;
-  else if (Array.isArray(output?.issues)) {
-    summary.textContent = `${output.count} GitHub issues retrieved`;
-    const issueList = document.createElement('div');
-    issueList.className = 'forge-issue-list';
-    for (const issue of output.issues.slice(0, 8)) {
-      const item = document.createElement('div');
-      item.className = 'forge-issue-item';
-      const label = document.createElement('span'); label.textContent = `#${issue.number} ${issue.title}`; item.append(label);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'quiet-button mini-btn';
-      btn.textContent = 'Solve with Forge';
-      btn.addEventListener('click', () => {
-        sendAction('forge:enqueue', { issue_number: issue.number, task: issue.title });
-      });
-      item.append(btn);
-      issueList.append(item);
-    }
-    container.append(issueList);
-  }
+  else if (Array.isArray(output?.issues)) summary.textContent = `${output.count} GitHub issues retrieved`;
   else if (output?.job_id) summary.textContent = `Forge job enqueued: ${output.job_id} (Issue #${output.issue_number || '—'})`;
   else if (output?.bytes_written) summary.textContent = `Wrote ${output.bytes_written} bytes to ${output.path}`;
   else if (output?.content) summary.textContent = `Read ${output.bytes || output.content.length} bytes from ${output.path}`;
@@ -306,20 +264,88 @@ function renderToolResult(result) {
   else if (typeof output?.summary === 'string') summary.textContent = output.summary;
   else if (typeof output === 'string') summary.textContent = output;
   else summary.textContent = succeeded ? 'The local action completed.' : 'The local action needs attention.';
-  const details = document.createElement('details'); const disclosure = document.createElement('summary'); disclosure.textContent = 'Show details';
-  const pre = document.createElement('pre'); pre.textContent = JSON.stringify(result, null, 2); details.append(disclosure, pre);
-  if (output?.payload_ref) {
-    const view = document.createElement('button'); view.className='quiet-button'; view.textContent='Open full output';
-    view.addEventListener('click',()=>sendAction('tool_payload',{id:output.payload_ref})); container.append(view);
-  }
-  container.append(heading, summary, details); document.getElementById('canvasEmptyState')?.remove(); document.getElementById('canvasPanel').append(container);
+
+  const hint = document.createElement('div');
+  hint.className = 'card-expand-hint';
+  hint.innerHTML = '<span aria-hidden="true">⤢</span> View full details in pop-up';
+
+  container.append(heading, summary, hint);
+
+  const openModal = () => {
+    const modalBody = document.createElement('div');
+    const modalSummary = document.createElement('p');
+    modalSummary.className = 'result-summary';
+    modalSummary.style.fontSize = '14px';
+    modalSummary.style.marginBottom = '14px';
+    modalSummary.textContent = summary.textContent;
+    modalBody.append(modalSummary);
+
+    if (Array.isArray(output?.issues)) {
+      const issueList = document.createElement('div');
+      issueList.className = 'forge-issue-list';
+      issueList.style.marginBottom = '14px';
+      for (const issue of output.issues) {
+        const item = document.createElement('div');
+        item.className = 'forge-issue-item';
+        const label = document.createElement('span'); label.textContent = `#${issue.number} ${issue.title}`; item.append(label);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'quiet-button mini-btn';
+        btn.textContent = 'Solve with Forge';
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          sendAction('forge:enqueue', { issue_number: issue.number, task: issue.title });
+          document.getElementById('cardModal')?.close();
+        });
+        item.append(btn);
+        issueList.append(item);
+      }
+      modalBody.append(issueList);
+    }
+
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(result, null, 2);
+    modalBody.append(pre);
+    if (output?.payload_ref) {
+      const view=document.createElement('button'); view.className='quiet-button'; view.textContent='Open full output';
+      view.addEventListener('click',()=>{document.getElementById('cardModal')?.close();sendAction('tool_payload',{id:output.payload_ref});});
+      modalBody.append(view);
+    }
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'quiet-button';
+    copyBtn.textContent = 'Copy JSON';
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(JSON.stringify(result, null, 2));
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = 'Copy JSON'; }, 2000);
+    });
+
+    openCardModal({
+      icon: '⚙',
+      title: String(result?.tool || 'Local action'),
+      badge: succeeded ? '● Done' : '● Could not complete',
+      badgeClass: succeeded ? 'result-success' : 'result-failure',
+      bodyNode: modalBody,
+      footerNode: copyBtn
+    });
+  };
+
+  container.addEventListener('click', openModal);
+  expandBtn.addEventListener('click', (e) => { e.stopPropagation(); openModal(); });
+
+  document.getElementById('canvasEmptyState')?.remove();
+  document.getElementById('canvasPanel').append(container);
 }
+
 function updateSystemCard(output) {
   document.getElementById('systemCpu').textContent = Number.isFinite(output.logical_cpus) ? `${output.logical_cpus} logical CPUs` : 'Unavailable';
   document.getElementById('systemMemory').textContent = output.memory_percent ? `${String(output.memory_percent)} used` : (output.memory_used_gb || 'Unavailable');
   document.getElementById('systemLoad').textContent = Array.isArray(output.load_average) ? output.load_average.slice(0, 3).map(value => Number(value).toFixed(2)).join(' · ') : 'Unavailable';
   document.getElementById('systemNote').textContent = [output.os, output.uptime_hours ? `Uptime ${output.uptime_hours} h` : ''].filter(Boolean).join(' · ') || 'Live status from the local device.';
 }
+
 function renderApprovalCard(data) {
   const existing = document.getElementById(`approval-${data.session_id}`);
   if (existing) return;
@@ -333,10 +359,24 @@ function renderApprovalCard(data) {
   const title = document.createElement('span');
   title.innerHTML = `🛡️ <strong>Guardian Security Approval</strong>`;
 
+  const rightWrap = document.createElement('div');
+  rightWrap.style.display = 'flex';
+  rightWrap.style.alignItems = 'center';
+  rightWrap.style.gap = '8px';
+
   const badge = document.createElement('span');
   badge.className = 'approval-badge';
   badge.textContent = `${(data.risk_level || 'Medium').toUpperCase()} RISK`;
-  heading.append(title, badge);
+
+  const expandBtn = document.createElement('button');
+  expandBtn.type = 'button';
+  expandBtn.className = 'card-expand-btn';
+  expandBtn.title = 'Expand approval details into pop-up';
+  expandBtn.setAttribute('aria-label', 'Expand approval details into pop-up');
+  expandBtn.textContent = '⤢';
+
+  rightWrap.append(badge, expandBtn);
+  heading.append(title, rightWrap);
 
   const summary = document.createElement('p');
   summary.className = 'approval-rationale';
@@ -344,7 +384,7 @@ function renderApprovalCard(data) {
 
   const details = document.createElement('div');
   details.className = 'approval-target';
-  details.textContent = `Action: ${data.tool || 'Kernel tool'} ${data.params ? JSON.stringify(data.params) : ''}`;
+  details.textContent = `Action: ${data.tool || 'Kernel tool'}`;
 
   const actions = document.createElement('div');
   actions.className = 'approval-actions';
@@ -353,36 +393,84 @@ function renderApprovalCard(data) {
   approveBtn.type = 'button';
   approveBtn.className = 'approval-btn approve';
   approveBtn.innerHTML = '<span>✓</span> Approve & Execute';
-  approveBtn.textContent = 'Review exact request';
-  approveBtn.addEventListener('click', async () => {
-    approveBtn.disabled = true;
+  async function reviewOrApprove(button, scope) {
+    button.disabled=true;
     try {
-      if (!approveBtn.dataset.reviewed) {
-        const pending = await ownerApprovalRequest('approvals');
-        const request = pending.pending.find(item => item.session_id === data.session_id);
-        if (!request) throw new Error('This approval expired or was cancelled.');
-        details.textContent = JSON.stringify({actor:request.requester,capability:request.capability,correlation_id:request.correlation_id,expires_at:request.expires_at}, null, 2);
-        approveBtn.dataset.reviewed = 'true'; approveBtn.textContent = 'Approve and continue';
+      if (!button.dataset.reviewed) {
+        const pending=await ownerApprovalRequest('approvals');
+        const request=pending.pending.find(item=>item.session_id===data.session_id);
+        if(!request)throw new Error('This approval expired or was cancelled.');
+        scope.textContent=JSON.stringify({actor:request.requester,capability:request.capability,correlation_id:request.correlation_id,expires_at:request.expires_at},null,2);
+        button.dataset.reviewed='true';button.textContent='Approve and continue';
       } else {
-        await ownerApprovalRequest('resolve', {session_id:data.session_id,approved:true});
-        handleApprovalResolved({session_id:data.session_id,approved:true});
+        await ownerApprovalRequest('resolve',{session_id:data.session_id,approved:true});
+        button.dataset.resolved='true';handleApprovalResolved({session_id:data.session_id,approved:true});
       }
-    } catch(error) { showError(`${error.message} Enter the owner token in Settings → Owner approvals.`); }
-    finally { approveBtn.disabled = false; }
-  });
-
-  const denyBtn = document.createElement('button');
-  denyBtn.type = 'button'; denyBtn.className = 'approval-btn deny'; denyBtn.textContent = 'Deny';
-  denyBtn.addEventListener('click', async () => {
-    denyBtn.disabled = true;
-    try {
-      await ownerApprovalRequest('revoke', {session_id:data.session_id});
-      handleApprovalResolved({session_id:data.session_id,approved:false});
-    } catch(error) { showError(error.message); denyBtn.disabled = false; }
-  });
+    } catch(error){showError(`${error.message} Enter the owner token in Settings → Owner approvals.`);}
+    finally {button.disabled=Boolean(button.dataset.resolved);}
+  }
+  async function denyApproval(button) {
+    button.disabled=true;
+    try {await ownerApprovalRequest('revoke',{session_id:data.session_id});handleApprovalResolved({session_id:data.session_id,approved:false});}
+    catch(error){showError(error.message);button.disabled=false;}
+  }
+  approveBtn.textContent='Review exact request';
+  approveBtn.addEventListener('click',event=>{event.stopPropagation();return reviewOrApprove(approveBtn,details);});
+  const denyBtn=document.createElement('button');denyBtn.type='button';denyBtn.className='approval-btn deny';denyBtn.textContent='Deny';
+  denyBtn.addEventListener('click',event=>{event.stopPropagation();return denyApproval(denyBtn);});
 
   actions.append(approveBtn, denyBtn);
-  container.append(heading, summary, details, actions);
+
+  const hint = document.createElement('div');
+  hint.className = 'card-expand-hint';
+  hint.innerHTML = '<span aria-hidden="true">⤢</span> View security audit parameters in pop-up';
+
+  container.append(heading, summary, details, actions, hint);
+
+  const openModal = () => {
+    const modalBody = document.createElement('div');
+    const modalRationale = document.createElement('p');
+    modalRationale.className = 'approval-rationale';
+    modalRationale.style.fontSize = '14px';
+    modalRationale.style.marginBottom = '14px';
+    modalRationale.textContent = data.rationale || 'Explicit approval required by Guardian broker.';
+    modalBody.append(modalRationale);
+
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify({
+      session_id: data.session_id,
+      tool: data.tool,
+      params: data.params,
+      risk_level: data.risk_level || 'Medium'
+    }, null, 2);
+    modalBody.append(pre);
+
+    const modalActions = document.createElement('div');
+    modalActions.style.display = 'flex';
+    modalActions.style.gap = '10px';
+
+    const modalApprove = document.createElement('button');
+    modalApprove.type = 'button';
+    modalApprove.className = 'approval-btn approve';
+    modalApprove.textContent='Review exact request';
+    modalApprove.addEventListener('click',()=>reviewOrApprove(modalApprove,pre));
+    const modalDeny=document.createElement('button');modalDeny.type='button';modalDeny.className='approval-btn deny';modalDeny.textContent='Deny';
+    modalDeny.addEventListener('click',()=>denyApproval(modalDeny));
+
+    modalActions.append(modalApprove, modalDeny);
+
+    openCardModal({
+      icon: '🛡️',
+      title: 'Guardian Security Approval',
+      badge: `${(data.risk_level || 'Medium').toUpperCase()} RISK`,
+      badgeClass: 'approval-badge',
+      bodyNode: modalBody,
+      footerNode: modalActions
+    });
+  };
+
+  container.addEventListener('click', openModal);
+  expandBtn.addEventListener('click', (e) => { e.stopPropagation(); openModal(); });
 
   document.getElementById('canvasEmptyState')?.remove();
   document.getElementById('canvasPanel').prepend(container);
