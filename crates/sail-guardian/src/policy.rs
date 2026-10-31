@@ -103,18 +103,12 @@ impl PolicyEngine {
                 audit.record(requester, capability.clone(), DecisionOutcome::Granted, "Low-risk telemetry auto-approved");
                 AuthorizationDecision::Allowed
             }
-            // Medium risk (proc:list, internal fs queries)
+            // Medium risk requires the same explicit grant/approval boundary as higher tiers.
             RiskLevel::Medium => {
-                // If requested by Core or Dialogue during interactive user session, allow
-                if requester == SubsystemId::Core || requester == SubsystemId::Dialogue || requester == SubsystemId::Bridge {
-                    audit.record(requester, capability.clone(), DecisionOutcome::Granted, "Interactive session default grant");
-                    AuthorizationDecision::Allowed
-                } else {
-                    let session = approval_broker.create_session(requester, capability.clone(), justification);
-                    AuthorizationDecision::RequiresUserApproval {
-                        session_id: session.session_id,
-                        rationale: format!("Medium risk operation requires authorization: {:?}", capability),
-                    }
+                let session = approval_broker.create_session(requester, capability.clone(), justification);
+                AuthorizationDecision::RequiresUserApproval {
+                    session_id: session.session_id,
+                    rationale: format!("Medium risk operation requires authorization: {:?}", capability),
                 }
             }
             // High or Critical risk always requires user approval

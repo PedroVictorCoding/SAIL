@@ -1,3 +1,4 @@
+use sail_common::types::SubsystemId;
 use sail_dialogue::{
     HardwareTierProfile, KernelToolCall, LocalKernelToolBroker, OrbEngine, SileroVad,
     SileroVadConfig, VadEvent, VoiceControl,
@@ -81,7 +82,7 @@ fn profiles_preserve_wire_rate_and_apply_thread_budget() {
 }
 #[test]
 fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
-    let _guardian = sail_guardian::GuardianSubsystem::new();
+    let guardian = sail_guardian::GuardianSubsystem::new();
     assert!(
         LocalKernelToolBroker::execute(&KernelToolCall {
             tool: "os:status".into(),
@@ -89,10 +90,23 @@ fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
         })
         .success
     );
-    let processes = LocalKernelToolBroker::execute(&KernelToolCall {
+    let process_call = KernelToolCall {
         tool: "proc:list".into(),
         params: serde_json::json!({"limit":3}),
-    });
+    };
+    let denied = LocalKernelToolBroker::execute(&process_call);
+    assert!(!denied.success);
+    assert_eq!(denied.output["error_code"], "permission_denied");
+    let approval = guardian.approval();
+    let pending = approval.list_pending();
+    assert_eq!(pending.len(), 1);
+    let token = approval.resolve_session(pending[0].session_id, true).unwrap();
+    let processes = LocalKernelToolBroker::execute_guarded(
+        SubsystemId::Dialogue,
+        &process_call,
+        Some(token.token_id),
+    );
+    assert!(processes.success);
     assert!(processes.output["count"].as_u64().unwrap() <= 3);
     for path in ["/etc/passwd", "../../../../etc/passwd"] {
         assert!(
