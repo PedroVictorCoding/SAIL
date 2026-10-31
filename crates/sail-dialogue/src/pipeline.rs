@@ -52,8 +52,19 @@ impl RealtimeVoicePipeline {
         self.stt.threads = profile.thread_count();
         self.tts.threads = profile.thread_count();
     }
+    pub fn set_turn_detection(
+        &mut self,
+        settings: crate::control::TurnDetectionSettings,
+    ) -> Result<()> {
+        settings
+            .validate()
+            .map_err(|message| sail_common::error::SailError::Config(message.into()))?;
+        self.control.set_turn_detection(settings);
+        self.vad.set_turn_detection(settings);
+        Ok(())
+    }
     pub fn toggle_mute(&mut self) -> bool {
-        self.vad.reset();
+        // Mute pauses ingest; it must not discard an unfinished thought.
         self.control.toggle_mute()
     }
     pub fn interrupt(&mut self) {
@@ -65,7 +76,11 @@ impl RealtimeVoicePipeline {
         self.control.advance_turn()
     }
     pub fn snapshot(&self) -> Option<Vec<i16>> {
-        self.vad.snapshot()
+        if self.control.is_muted() {
+            None
+        } else {
+            self.vad.snapshot()
+        }
     }
     pub fn force_end_turn(&mut self) -> Option<Vec<i16>> {
         self.control.force_end_turn();
@@ -86,6 +101,7 @@ impl RealtimeVoicePipeline {
                     spectral_centroid: 0.,
                     process_duration_us: 0,
                     inference_us: 0,
+                    captured_ms: 0,
                 },
                 self.orb.compute_telemetry(&[], 16000),
             ));
@@ -115,5 +131,29 @@ impl RealtimeVoicePipeline {
         self.orb.set_state(OrbState::Idle);
         self.orb.set_transcript("");
         self.orb.set_speaker("none");
+    }
+}
+
+#[cfg(test)]
+mod turn_tests {
+    use super::*;
+    #[tokio::test]
+    async fn mute_preserves_pending_audio_and_skips_inference_until_resumed() {
+        let mut pipe = RealtimeVoicePipeline::new();
+        pipe.set_turn_detection(crate::control::TurnDetectionSettings {
+            mode: crate::control::TurnMode::Manual,
+            pause_ms: 3000,
+        })
+        .unwrap();
+        for _ in 0..4 {
+            pipe.vad.process_probability(&[100; 512], 0.9);
+        }
+        assert!(pipe.toggle_mute());
+        assert!(pipe.snapshot().is_none());
+        // Muted input cannot append audio or request an unavailable speech model.
+        assert!(pipe.ingest_frame(&[200; 512]).await.unwrap().0.is_none());
+        assert!(!pipe.toggle_mute());
+        let audio = pipe.force_end_turn().unwrap();
+        assert_eq!(audio, vec![100; 4 * 512]);
     }
 }

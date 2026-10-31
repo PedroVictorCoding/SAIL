@@ -3,6 +3,16 @@ class SailCapture extends AudioWorkletProcessor {
   constructor() {
     super(); this.ratio = sampleRate / 16000; this.weight = 0; this.sum = 0;
     this.frame = new Int16Array(512); this.index = 0;
+    this.port.onmessage = ({data}) => {
+      if (data?.action !== 'flush') return;
+      if (this.index > 0) this.publishFrame(this.index);
+      this.port.postMessage({type:'flushed',request_id:data.request_id});
+    };
+  }
+  publishFrame(count = 512) {
+    const buffer = new ArrayBuffer(1024), view = new DataView(buffer);
+    for (let j = 0; j < 512; j++) view.setInt16(j * 2, j < count ? this.frame[j] : 0, true);
+    this.port.postMessage(buffer, [buffer]); this.index = 0;
   }
   process(inputs, outputs) {
     const channels = inputs[0];
@@ -20,9 +30,7 @@ class SailCapture extends AudioWorkletProcessor {
           this.sum = 0; this.weight = 0;
           if (this.index === 512) {
             // Explicit little-endian transport, independent of host endianness.
-            const buffer = new ArrayBuffer(1024), view = new DataView(buffer);
-            for (let j = 0; j < 512; j++) view.setInt16(j * 2, this.frame[j], true);
-            this.port.postMessage(buffer, [buffer]); this.index = 0;
+            this.publishFrame();
           }
         }
       }

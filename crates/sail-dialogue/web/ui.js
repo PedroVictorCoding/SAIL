@@ -90,12 +90,14 @@ document.getElementById('spaceSearch').addEventListener('input', event => render
 document.getElementById('attachBtn').addEventListener('click', () => document.getElementById('imageInput').click());
 document.getElementById('micBtn').addEventListener('click', () => toggleMic());
 document.getElementById('muteDockBtn').addEventListener('click', () => toggleMute());
-document.getElementById('endTurnBtn').addEventListener('click', () => sendAction('end_turn'));
+document.getElementById('endTurnBtn').addEventListener('click', () => submitVoiceTurn());
 document.getElementById('interruptBtn').addEventListener('click', () => interrupt());
 document.getElementById('newConversationBtn').addEventListener('click', () => { resetSession(); closeSheet(); });
 document.getElementById('muteBtn').addEventListener('click', () => toggleMute());
 document.getElementById('tierBtn').addEventListener('click', () => cycleTier());
 document.getElementById('voiceSelect').addEventListener('change', event => sendAction('set_voice', { voice:event.target.value }));
+document.getElementById('turnModeSelect').addEventListener('change', setTurnDetection);
+document.getElementById('turnPauseInput').addEventListener('change', setTurnDetection);
 document.getElementById('checkModelsBtn').addEventListener('click', () => checkModels());
 document.getElementById('imageInput').addEventListener('change', event => {
   const file = event.target.files?.[0];

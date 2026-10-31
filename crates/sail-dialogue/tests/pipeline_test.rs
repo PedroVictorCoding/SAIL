@@ -6,6 +6,7 @@ use sail_dialogue::{
 #[test]
 fn vad_requires_contiguous_speech_and_preserves_onset_without_duplication() {
     let config = SileroVadConfig {
+        turn_mode: sail_dialogue::TurnMode::Automatic,
         min_speech_duration_ms: 64,
         min_silence_duration_ms: 64,
         speech_pad_ms: 32,
@@ -25,7 +26,7 @@ fn vad_requires_contiguous_speech_and_preserves_onset_without_duplication() {
     let (event, audio, _) = vad.process_probability(&[0; 512], 0.);
     assert_eq!(event, VadEvent::SpeechEnd);
     let audio = audio.unwrap();
-    assert_eq!(audio.len(), 5 * 512);
+    assert_eq!(audio.len(), 4 * 512);
     assert_eq!(&audio[..512], &[3; 512]);
     assert_eq!(&audio[512..1024], &[4; 512]);
     assert_eq!(&audio[1024..1536], &[5; 512]);
@@ -33,21 +34,32 @@ fn vad_requires_contiguous_speech_and_preserves_onset_without_duplication() {
     assert!(vad.finish().is_none());
 }
 #[test]
-fn vad_force_end_and_thirty_second_bound() {
-    let mut vad = SileroVad::new(SileroVadConfig::default());
+fn vad_force_end_and_recording_limit_hold_audio_until_explicit_send() {
+    let mut vad = SileroVad::new(SileroVadConfig {
+        max_turn_duration_ms: 1000,
+        ..Default::default()
+    });
     for _ in 0..4 {
         vad.process_probability(&[100; 512], 0.9);
     }
     assert!(vad.finish().is_some());
     assert!(vad.finish().is_none());
-    let mut ended = false;
-    for _ in 0..950 {
-        if vad.process_probability(&[100; 512], 0.9).0 == VadEvent::SpeechEnd {
-            ended = true;
-            break;
+    let mut limit_events = 0;
+    for _ in 0..100 {
+        let (event, audio, telemetry) = vad.process_probability(&[100; 512], 0.9);
+        assert!(
+            audio.is_none(),
+            "buffer limits must never split and submit a turn"
+        );
+        assert!(telemetry.captured_ms <= 1000);
+        if event == VadEvent::CaptureLimitReached {
+            limit_events += 1;
         }
     }
-    assert!(ended);
+    assert_eq!(limit_events, 1);
+    assert!(vad.snapshot().is_none());
+    assert_eq!(vad.finish().unwrap().len(), 16000);
+    assert!(vad.finish().is_none());
 }
 #[test]
 fn fft_separates_frequency_bands_and_respects_nyquist() {
@@ -100,7 +112,9 @@ fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
     let approval = guardian.approval();
     let pending = approval.list_pending();
     assert_eq!(pending.len(), 1);
-    let token = approval.resolve_session(pending[0].session_id, true).unwrap();
+    let token = approval
+        .resolve_session(pending[0].session_id, true)
+        .unwrap();
     let processes = LocalKernelToolBroker::execute_guarded(
         SubsystemId::Dialogue,
         &process_call,

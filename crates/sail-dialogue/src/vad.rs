@@ -1,3 +1,4 @@
+use crate::control::{MAX_RECORDING_MS, TurnDetectionSettings, TurnMode};
 use sail_common::error::{Result, SailError};
 use sail_mind::VoiceModelServices;
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,8 @@ pub struct SileroVadConfig {
     pub min_speech_duration_ms: usize,
     pub min_silence_duration_ms: usize,
     pub speech_pad_ms: usize,
+    pub turn_mode: TurnMode,
+    pub max_turn_duration_ms: usize,
 }
 impl Default for SileroVadConfig {
     fn default() -> Self {
@@ -16,8 +19,10 @@ impl Default for SileroVadConfig {
             sample_rate: 16000,
             threshold: 0.5,
             min_speech_duration_ms: 128,
-            min_silence_duration_ms: 350,
+            min_silence_duration_ms: TurnDetectionSettings::default().pause_ms,
             speech_pad_ms: 96,
+            turn_mode: TurnDetectionSettings::default().mode,
+            max_turn_duration_ms: MAX_RECORDING_MS,
         }
     }
 }
@@ -28,6 +33,7 @@ pub enum VadEvent {
     SpeechStart,
     InSpeech,
     SpeechEnd,
+    CaptureLimitReached,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VadTelemetry {
@@ -38,6 +44,7 @@ pub struct VadTelemetry {
     pub spectral_centroid: f32,
     pub process_duration_us: u64,
     pub inference_us: u64,
+    pub captured_ms: usize,
 }
 pub struct SileroVad {
     config: SileroVadConfig,
@@ -48,6 +55,7 @@ pub struct SileroVad {
     silence_samples: usize,
     audio: Vec<i16>,
     padding: VecDeque<i16>,
+    capture_full: bool,
 }
 impl SileroVad {
     pub fn new(config: SileroVadConfig) -> Self {
@@ -71,6 +79,7 @@ impl SileroVad {
             silence_samples: 0,
             audio: Vec::new(),
             padding: VecDeque::new(),
+            capture_full: false,
         }
     }
     pub async fn process_chunk(
@@ -83,7 +92,11 @@ impl SileroVad {
             ));
         }
         let start = Instant::now();
-        let (probability, inference_us) = self.services.vad(&self.session, samples).await?;
+        let (probability, inference_us) = if self.capture_full {
+            (0., 0)
+        } else {
+            self.services.vad(&self.session, samples).await?
+        };
         let (event, audio, mut telemetry) = self.process_probability(samples, probability);
         telemetry.process_duration_us = start.elapsed().as_micros() as u64;
         telemetry.inference_us = inference_us;
@@ -101,7 +114,9 @@ impl SileroVad {
             self.config.threshold
         };
         let event;
-        if probability >= threshold {
+        if self.capture_full {
+            event = VadEvent::Silence;
+        } else if probability >= threshold {
             if self.audio.is_empty() {
                 self.audio.extend(self.padding.iter());
             }
@@ -121,7 +136,9 @@ impl SileroVad {
         } else if self.speaking {
             self.audio.extend_from_slice(samples);
             self.silence_samples += samples.len();
-            event = if self.silence_samples >= self.config.min_silence_duration_ms * 16 {
+            event = if self.config.turn_mode == TurnMode::Automatic
+                && self.silence_samples >= self.config.min_silence_duration_ms * 16
+            {
                 VadEvent::SpeechEnd
             } else {
                 VadEvent::InSpeech
@@ -136,12 +153,28 @@ impl SileroVad {
         while self.padding.len() > self.config.speech_pad_ms * 16 {
             self.padding.pop_front();
         }
-        let event = if self.audio.len() >= 30 * 16000 {
-            VadEvent::SpeechEnd
+        let limit_samples = self
+            .config
+            .max_turn_duration_ms
+            .clamp(1000, MAX_RECORDING_MS)
+            * 16;
+        let event = if !self.capture_full
+            && self.speaking
+            && self.audio.len() >= limit_samples
+            && event != VadEvent::SpeechEnd
+        {
+            self.silence_samples = self
+                .silence_samples
+                .saturating_sub(self.audio.len() - limit_samples);
+            self.audio.truncate(limit_samples);
+            self.capture_full = true;
+            VadEvent::CaptureLimitReached
         } else {
             event
         };
+        let captured_ms = self.audio.len() / 16;
         let audio = if event == VadEvent::SpeechEnd {
+            self.trim_trailing_silence();
             self.speaking = false;
             self.speech_samples = 0;
             self.silence_samples = 0;
@@ -175,17 +208,19 @@ impl SileroVad {
                 spectral_centroid: 0.,
                 process_duration_us: 0,
                 inference_us: 0,
+                captured_ms,
             },
         )
     }
     pub fn snapshot(&self) -> Option<Vec<i16>> {
-        if self.speaking {
+        if self.speaking && !self.capture_full && self.audio.len() <= 30 * 16000 {
             Some(self.audio.clone())
         } else {
             None
         }
     }
     pub fn finish(&mut self) -> Option<Vec<i16>> {
+        self.trim_trailing_silence();
         let audio = if self.speaking {
             Some(std::mem::take(&mut self.audio))
         } else {
@@ -194,11 +229,22 @@ impl SileroVad {
         self.reset();
         audio
     }
+    pub fn set_turn_detection(&mut self, settings: TurnDetectionSettings) {
+        self.config.turn_mode = settings.mode;
+        self.config.min_silence_duration_ms = settings.pause_ms;
+    }
+    fn trim_trailing_silence(&mut self) {
+        let excess = self
+            .silence_samples
+            .saturating_sub(self.config.speech_pad_ms * 16);
+        self.audio.truncate(self.audio.len().saturating_sub(excess));
+    }
     pub fn reset(&mut self) {
         self.speaking = false;
         self.speech_samples = 0;
         self.silence_samples = 0;
         self.audio.clear();
         self.padding.clear();
+        self.capture_full = false;
     }
 }
