@@ -1,11 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use sail_forge::worktree::{IsolatedWorktree, WorktreeError};
 use sail_guardian::sandbox::SandboxPolicy;
+
+static BWRAP_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn setup_test_git_repo(path: &Path) {
     fs::create_dir_all(path).unwrap();
@@ -110,6 +112,7 @@ fn test_symlink_escape_rejection() {
 
 #[test]
 fn test_command_timeout_kills_child_process() {
+    let _lock = BWRAP_ENV_LOCK.lock().unwrap();
     let job_id = format!("test-timeout-{}", Uuid::new_v4());
     let temp_repo = std::env::temp_dir().join(format!("test_repo_{}", Uuid::new_v4()));
     setup_test_git_repo(&temp_repo);
@@ -170,6 +173,7 @@ fn test_worktree_retained_on_failure_for_inspection() {
 
 #[test]
 fn test_command_output_exceeding_pipe_buffer_does_not_deadlock() {
+    let _lock = BWRAP_ENV_LOCK.lock().unwrap();
     let job_id = format!("test-pipe-deadlock-{}", Uuid::new_v4());
     let temp_repo = std::env::temp_dir().join(format!("test_repo_{}", Uuid::new_v4()));
     setup_test_git_repo(&temp_repo);
@@ -204,6 +208,110 @@ fn test_command_output_exceeding_pipe_buffer_does_not_deadlock() {
         res.stdout
             .contains("[output truncated: exceeded 512KB sandbox limit]")
     );
+
+    let _ = fs::remove_dir_all(&temp_repo);
+}
+
+#[test]
+fn test_missing_bwrap_fails_closed_with_error() {
+    let _lock = BWRAP_ENV_LOCK.lock().unwrap();
+    let job_id = format!("test-bwrap-missing-{}", Uuid::new_v4());
+    let temp_repo = std::env::temp_dir().join(format!("test_repo_{}", Uuid::new_v4()));
+    setup_test_git_repo(&temp_repo);
+
+    let policy = Arc::new(SandboxPolicy::new());
+    let worktree = IsolatedWorktree::create(&job_id, &temp_repo, "HEAD", policy).unwrap();
+
+    // Set nonexistent bwrap binary
+    unsafe {
+        std::env::set_var("SAIL_BWRAP_BIN", "/opt/nonexistent/bin/bwrap");
+    }
+
+    let res = worktree.run_command("git", &["status"], 5);
+
+    unsafe {
+        std::env::remove_var("SAIL_BWRAP_BIN");
+    }
+
+    assert!(
+        matches!(res, Err(WorktreeError::BwrapUnavailable(_))),
+        "Must fail closed when bwrap is missing; got: {:?}",
+        res
+    );
+
+    let _ = fs::remove_dir_all(&temp_repo);
+}
+
+#[test]
+fn test_sandbox_confidentiality_prevents_private_file_and_network_access() {
+    let _lock = BWRAP_ENV_LOCK.lock().unwrap();
+    let job_id = format!("test-sandbox-sec-{}", Uuid::new_v4());
+    let temp_repo = std::env::temp_dir().join(format!("test_repo_{}", Uuid::new_v4()));
+    setup_test_git_repo(&temp_repo);
+
+    let policy = Arc::new(SandboxPolicy::new());
+    let worktree = IsolatedWorktree::create(&job_id, &temp_repo, "HEAD", policy).unwrap();
+
+    // Write a Cargo crate with a malicious build.rs that attempts host exfiltration
+    worktree
+        .write_file(
+            Path::new("Cargo.toml"),
+            "[package]\nname = \"exploit_probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+    let build_rs = r#"use std::fs;
+use std::net::TcpStream;
+
+fn main() {
+    // 1. Attempt reading /etc/shadow
+    if fs::read_to_string("/etc/shadow").is_ok() {
+        panic!("EXFIL_SHADOW_SUCCESS: read /etc/shadow from sandbox");
+    }
+
+    // 2. Attempt reading host SSH keys
+    if fs::read_dir("/home/main/.ssh").is_ok() || fs::read_to_string("/home/main/.ssh/id_rsa").is_ok() {
+        panic!("EXFIL_SSH_SUCCESS: accessed ~/.ssh from sandbox");
+    }
+
+    // 3. Attempt reading host Codex credentials
+    if fs::read_dir("/home/main/.codex").is_ok() || fs::read_to_string("/home/main/.codex/auth.json").is_ok() {
+        panic!("EXFIL_CODEX_SUCCESS: accessed ~/.codex from sandbox");
+    }
+
+    // 4. Attempt external network connection
+    if TcpStream::connect("1.1.1.1:80").is_ok() {
+        panic!("EXFIL_NET_SUCCESS: connected to internet from sandbox");
+    }
+
+    println!("cargo:warning=ALL_SECURITY_PROBES_THWARTED");
+}
+"#;
+
+    worktree
+        .write_file(Path::new("build.rs"), build_rs)
+        .unwrap();
+    worktree
+        .write_file(
+            Path::new("src/lib.rs"),
+            "pub fn probe() {}\n#[test]\nfn test_probe() { probe(); }\n",
+        )
+        .unwrap();
+
+    // Run cargo test inside Bubblewrap sandbox
+    let res = worktree.run_command("cargo", &["test"], 30);
+    assert!(res.is_ok(), "Sandbox command must execute: {:?}", res.err());
+    let output = res.unwrap();
+    assert_eq!(
+        output.status, 0,
+        "Build script failed: stderr={}",
+        output.stderr
+    );
+    assert!(output.stderr.contains("ALL_SECURITY_PROBES_THWARTED"));
+    assert!(!output.stderr.contains("EXFIL_SHADOW_SUCCESS"));
+    assert!(!output.stderr.contains("EXFIL_SSH_SUCCESS"));
+    assert!(!output.stderr.contains("EXFIL_CODEX_SUCCESS"));
+    assert!(!output.stderr.contains("EXFIL_NET_SUCCESS"));
 
     let _ = fs::remove_dir_all(&temp_repo);
 }

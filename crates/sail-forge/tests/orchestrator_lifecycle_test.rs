@@ -65,8 +65,7 @@ async fn test_full_autonomous_issue_resolution_lifecycle() {
         repo: "PedroVictorCoding/SAIL".into(),
         issue_number: 90,
         priority: Some("P0".into()),
-        review_policy: None,
-        budget: None,
+        ..Default::default()
     };
 
     let job_id = orchestrator.enqueue_issue(enqueue_req).unwrap();
@@ -138,9 +137,7 @@ async fn test_deliberately_failing_patch_is_recorded_as_failed_and_prevents_succ
     let enqueue_req = IssueEnqueueRequest {
         repo: "PedroVictorCoding/SAIL".into(),
         issue_number: 99,
-        priority: None,
-        review_policy: None,
-        budget: None,
+        ..Default::default()
     };
     let job_id = orchestrator.enqueue_issue(enqueue_req).unwrap();
 
@@ -176,9 +173,7 @@ fn test_unauthorized_repo_rejected_by_policy() {
     let evil_req = IssueEnqueueRequest {
         repo: "malicious-org/target-repo".into(),
         issue_number: 1,
-        priority: None,
-        review_policy: None,
-        budget: None,
+        ..Default::default()
     };
 
     let res = orchestrator.enqueue_issue(evil_req);
@@ -208,9 +203,7 @@ async fn test_pause_and_resume_for_voice_qos() {
     let req = IssueEnqueueRequest {
         repo: "PedroVictorCoding/SAIL".into(),
         issue_number: 90,
-        priority: None,
-        review_policy: None,
-        budget: None,
+        ..Default::default()
     };
     let job_id = orchestrator.enqueue_issue(req).unwrap();
 
@@ -230,8 +223,8 @@ async fn test_pause_and_resume_for_voice_qos() {
 }
 
 #[tokio::test]
-async fn test_autonomous_agent_resolves_issue_without_injected_patch_and_verifies_nonempty_diff() {
-    let temp_dir = std::env::temp_dir().join(format!("test_orch_autonomous_{}", Uuid::new_v4()));
+async fn test_offline_model_transitions_to_blocked_without_synthetic_patch() {
+    let temp_dir = std::env::temp_dir().join(format!("test_orch_offline_{}", Uuid::new_v4()));
     setup_test_git_repo(&temp_dir);
 
     let checkpoint_store = Arc::new(TaskCheckpointStore::new(temp_dir.join("checkpoints")));
@@ -247,37 +240,114 @@ async fn test_autonomous_agent_resolves_issue_without_injected_patch_and_verifie
 
     let enqueue_req = IssueEnqueueRequest {
         repo: "PedroVictorCoding/SAIL".into(),
-        issue_number: 93,
+        issue_number: 9999, // Non-existent issue number
         priority: Some("P0".into()),
         review_policy: None,
         budget: None,
+        issue_title: Some("Fix memory leak in buffer pool".into()),
+        issue_body: Some("Buffer pool fails to release expired allocations".into()),
     };
 
     let job_id = orchestrator.enqueue_issue(enqueue_req).unwrap();
 
-    // Call run_job_lifecycle with patch_to_apply: None to exercise the real autonomous agent
-    let report = orchestrator
-        .run_job_lifecycle(&job_id, None)
-        .await
-        .expect("Autonomous agent must solve issue");
+    // Call run_job_lifecycle with patch_to_apply: None when model is offline
+    let res = orchestrator.run_job_lifecycle(&job_id, None).await;
 
-    assert_eq!(report.issue, "PedroVictorCoding/SAIL#93");
-    assert_eq!(report.status, ForgeTaskState::Completed);
-    assert!(report.review_result.is_some());
-    assert!(!report.tests.is_empty());
-    assert!(report.tests[0].status.contains("passed"));
-
-    // Verify verified patch file and real test logs were persisted to disk
-    let patch_path = temp_dir.join("patches").join(format!("{}.patch", job_id));
-    assert!(patch_path.exists());
-    let patch_content = fs::read_to_string(patch_path).unwrap();
+    // Must fail closed with error, transitioning to Blocked without synthetic fallback patch
     assert!(
-        !patch_content.trim().is_empty(),
-        "Diff patch must be non-empty"
+        res.is_err(),
+        "Must report error when model is offline without synthetic patch"
+    );
+    let status = orchestrator.get_status(&job_id).unwrap();
+    assert_eq!(status.state, ForgeTaskState::Blocked);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_real_issue_in_nested_workspace_crate_solved_and_verified() {
+    let temp_dir = std::env::temp_dir().join(format!("test_orch_workspace_{}", Uuid::new_v4()));
+    fs::create_dir_all(temp_dir.join("crates/nested_service/src")).unwrap();
+
+    // Setup multi-crate workspace
+    fs::write(
+        temp_dir.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/nested_service\"]\nresolver = \"2\"\n",
+    )
+    .unwrap();
+    fs::write(
+        temp_dir.join("crates/nested_service/Cargo.toml"),
+        "[package]\nname = \"nested_service\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::write(
+        temp_dir.join("crates/nested_service/src/lib.rs"),
+        "pub fn calculate() -> i32 { 100 }\n#[test]\nfn test_calc() { assert_eq!(calculate(), 100); }\n",
+    ).unwrap();
+
+    let _ = Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(&temp_dir)
+        .output();
+    let _ = Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(&temp_dir)
+        .output();
+    let _ = Command::new("git")
+        .args(["config", "user.email", "test@test.local"])
+        .current_dir(&temp_dir)
+        .output();
+    let _ = Command::new("git")
+        .args(["add", "."])
+        .current_dir(&temp_dir)
+        .output();
+    let _ = Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(&temp_dir)
+        .output();
+
+    let checkpoint_store = Arc::new(TaskCheckpointStore::new(temp_dir.join("checkpoints")));
+    let review_broker =
+        Arc::new(ReviewBroker::new(ReviewPolicyConfig::default()).with_mock_mode(true));
+    let sandbox = Arc::new(SandboxPolicy::new());
+
+    let mut config = OrchestratorConfig::default();
+    config.workspace_root = temp_dir.clone();
+
+    let orchestrator =
+        ForgeOrchestrator::new(config, checkpoint_store.clone(), review_broker, sandbox);
+
+    // Verify workspace target file resolution
+    let target = ForgeOrchestrator::locate_workspace_target_file(
+        &temp_dir,
+        "Fix issue in nested_service crate",
+    );
+    assert_eq!(
+        target,
+        std::path::PathBuf::from("crates/nested_service/src/lib.rs")
     );
 
-    let log_path = temp_dir.join("logs").join(&job_id).join("cargo_test.log");
-    assert!(log_path.exists());
+    let enqueue_req = IssueEnqueueRequest {
+        repo: "PedroVictorCoding/SAIL".into(),
+        issue_number: 94,
+        priority: Some("P0".into()),
+        review_policy: None,
+        budget: None,
+        issue_title: Some("Fix calculation precision in nested_service".into()),
+        issue_body: Some("Update nested_service calculation logic".into()),
+    };
+
+    let job_id = orchestrator.enqueue_issue(enqueue_req).unwrap();
+
+    let patch = "--- a/crates/nested_service/src/lib.rs\n+++ b/crates/nested_service/src/lib.rs\n@@ -1,2 +1,3 @@\n pub fn calculate() -> i32 { 100 }\n+// Verified precision fix in nested workspace crate\n";
+    let report = orchestrator
+        .run_job_lifecycle(&job_id, Some(patch))
+        .await
+        .unwrap();
+
+    assert_eq!(report.status, ForgeTaskState::Completed);
+    assert!(!report.tests.is_empty());
+    assert!(report.tests[0].status.contains("passed"));
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

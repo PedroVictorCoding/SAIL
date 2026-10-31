@@ -274,3 +274,51 @@ async fn test_secrets_redacted_before_review_dispatch() {
     assert!(!sanitized.contains("sk-proj-test1234567890abcdef"));
     assert!(sanitized.contains("[REDACTED_SECRET]"));
 }
+
+#[tokio::test]
+async fn test_crash_after_reservation_prevents_subsequent_process_invocation() {
+    let temp_ledger =
+        std::env::temp_dir().join(format!("test_crash_ledger_{}.json", Uuid::new_v4()));
+    let config = ReviewPolicyConfig::default();
+
+    // Session 1: Create broker, reserve issue in ledger with fsync (simulating crash before process completion)
+    {
+        let broker = ReviewBroker::new(config.clone()).with_ledger_path(temp_ledger.clone());
+        let mut ledger = broker.get_ledger();
+        ledger.canonical_issue_attempts.insert(
+            "PedroVictorCoding/SAIL#100".into(),
+            "attempted:2026-10-31T15:00:00Z:dummy_hash".into(),
+        );
+        broker.persist_ledger_sync(&ledger);
+        // Process "crashes" here before execute_codex_review completes
+    }
+
+    // Session 2: Broker reboots after crash with persisted ledger on disk
+    let rebooted_broker = Arc::new(
+        ReviewBroker::new(config)
+            .with_ledger_path(temp_ledger.clone())
+            .with_mock_mode(true),
+    );
+
+    let req = ReviewRequest {
+        job_id: "job-post-crash".into(),
+        issue_id: "PedroVictorCoding/SAIL/#100".into(),
+        base_commit: "base123".into(),
+        diff_patch: "+++ b/src/lib.rs\n+// fix".into(),
+        test_manifest: "test result: ok".into(),
+    };
+
+    // Subsequent review request after reboot
+    let res = rebooted_broker.review(&req).await;
+
+    // Zero process invocations allowed on rebooted broker!
+    assert_eq!(
+        rebooted_broker.invocation_count(),
+        0,
+        "Crash-safe limit violated: process was invoked after daemon reboot when attempt was already reserved"
+    );
+    assert!(res.cached, "Must return cached/inconclusive fallback");
+    assert!(!res.verdict.passed);
+
+    let _ = fs::remove_file(&temp_ledger);
+}
