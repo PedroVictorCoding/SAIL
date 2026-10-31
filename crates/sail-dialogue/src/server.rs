@@ -963,7 +963,16 @@ mod tests {
         json!({"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":name,"arguments":params.to_string()}}]})
     }
     async fn exercise(prompt: &str, replies: Vec<Value>) -> (Vec<Value>, Vec<Value>, String) {
-        let _guardian = sail_guardian::GuardianSubsystem::new();
+        let guardian = sail_guardian::GuardianSubsystem::new();
+        guardian.policy().grant_capability(
+            sail_common::types::SubsystemId::Dialogue,
+            sail_guardian::Capability::System(sail_guardian::SystemCapability::ProcessInspect),
+        );
+        guardian.policy().grant_capability(
+            sail_common::types::SubsystemId::Dialogue,
+            sail_guardian::Capability::Tool(sail_guardian::ToolCapability::KernelTool("proc:list".into())),
+        );
+        let _guardian = guardian;
         let state = Arc::new(MockModel {
             replies: Mutex::new(replies.into()),
             requests: Mutex::new(Vec::new()),
