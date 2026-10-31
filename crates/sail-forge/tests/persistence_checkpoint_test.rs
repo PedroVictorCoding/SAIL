@@ -100,3 +100,4 @@ fn test_daemon_restart_recovery_lists_uncompleted_tasks() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+

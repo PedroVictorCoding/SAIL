@@ -254,3 +254,4 @@ pub struct ForgeJobReport {
     pub remaining_risks: Vec<String>,
     pub status: ForgeTaskState,
 }
+
