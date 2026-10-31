@@ -37,6 +37,8 @@ pub struct TaskCheckpoint {
     pub issue_title: Option<String>,
     #[serde(default)]
     pub issue_body: Option<String>,
+    #[serde(default)]
+    pub target_file: Option<String>,
 }
 
 impl TaskCheckpoint {
@@ -73,6 +75,7 @@ impl TaskCheckpoint {
             final_report: None,
             issue_title: None,
             issue_body: None,
+            target_file: None,
         }
     }
 

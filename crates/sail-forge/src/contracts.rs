@@ -148,6 +148,10 @@ pub struct IssueStatusResponse {
     pub wall_time_secs: u64,
     pub review_status: Option<String>,
     pub events: Vec<ForgeTaskEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_file: Option<String>,
 }
 
 /// Request to pause an active task (`forge:issue_pause`).
