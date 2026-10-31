@@ -14,7 +14,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
 
-pub use control::{HardwareTierProfile, VoiceControl, VoiceControlState};
+pub use control::{
+    HardwareTierProfile, TurnDetectionSettings, TurnMode, VoiceControl, VoiceControlState,
+};
 pub use orb::{AudioSpectrum8Band, OrbEngine, OrbState, OrbTelemetry};
 pub use pipeline::RealtimeVoicePipeline;
 pub use server::run_dialogue_server;

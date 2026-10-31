@@ -314,7 +314,11 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                     let current=epoch.load(Ordering::SeqCst);
                                     trace!(turn_id=current,event=?vad.event,confidence=vad.confidence,rms=vad.rms_power,inference_us=vad.inference_us,roundtrip_us=vad.process_duration_us,"Processed PCM frame through Silero and Orb");
                                     if speech_frames.is_multiple_of(32){debug!(turn_id=current,state=?orb.state,confidence=vad.confidence,rms=vad.rms_power,"Microphone/VAD heartbeat");}
-                                    emit(&tx,current,json!({"type":"telemetry","channel":"voice:orb","state":orb.state,"rms":orb.rms_level,"phase":orb.wave_phase,"spectrum":[orb.spectrum.sub_bass,orb.spectrum.bass,orb.spectrum.low_mid,orb.spectrum.mid,orb.spectrum.high_mid,orb.spectrum.presence,orb.spectrum.brilliance,orb.spectrum.air],"confidence":vad.confidence,"vad_us":vad.inference_us,"vad_roundtrip_us":vad.process_duration_us,"vad_event":vad.event,"speaker":orb.turn_speaker,"turn_id":current})).await;
+                                    emit(&tx,current,json!({"type":"telemetry","channel":"voice:orb","state":orb.state,"rms":orb.rms_level,"phase":orb.wave_phase,"spectrum":[orb.spectrum.sub_bass,orb.spectrum.bass,orb.spectrum.low_mid,orb.spectrum.mid,orb.spectrum.high_mid,orb.spectrum.presence,orb.spectrum.brilliance,orb.spectrum.air],"confidence":vad.confidence,"vad_us":vad.inference_us,"vad_roundtrip_us":vad.process_duration_us,"vad_event":vad.event,"captured_ms":vad.captured_ms,"speaker":orb.turn_speaker,"turn_id":current})).await;
+                                    if vad.event==VadEvent::CaptureLimitReached {
+                                        partial.take();
+                                        emit(&tx,current,json!({"type":"capture_limit","max_recording_ms":pipe.control_state().max_recording_ms,"message":"Recording limit reached. Your audio is held; send the turn or start a new conversation to discard it."})).await;
+                                    }
                                     speech_frames+=1;
                                     let partial_done=partial.as_ref().is_none_or(|h|h.0.is_finished());
                                     let cadence=match pipe.control_state().profile{HardwareTierProfile::LowPower=>64,HardwareTierProfile::Balanced=>32,HardwareTierProfile::HighPerformance=>24};
@@ -329,6 +333,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                     if let Some(audio)=audio {
                                         info!(turn_id=current,samples=audio.len(),audio_ms=audio.len()/16,"Speech boundary finalized; scheduling STT and assistant turn");
                                         partial.take();turn.take();pipe.advance_turn();
+                                        emit(&tx,current,json!({"type":"turn_committed","cause":"silence","audio_ms":audio.len()/16})).await;
                                         turn=Some(start_turn(state.clone(),session.clone(),current,history.clone(),tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio),epoch.clone()));
                                     }
                                 },
@@ -351,13 +356,18 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                             "set_tier"=>{
                                 let profile=match value["profile"].as_str(){Some("LowPower")=>HardwareTierProfile::LowPower,Some("HighPerformance")=>HardwareTierProfile::HighPerformance,_=>HardwareTierProfile::Balanced};pipe.set_hardware_profile(profile);
                             },
+                            "set_turn_detection"=>{
+                                let settings=serde_json::from_value::<crate::control::TurnDetectionSettings>(value["settings"].clone());
+                                let result=settings.map_err(|error|error.to_string()).and_then(|settings|pipe.set_turn_detection(settings).map_err(|error|error.to_string()));
+                                if let Err(message)=result {emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":message})).await;}
+                            },
                             "set_voice"=>{
                                 let voice=value["voice"].as_str().unwrap_or_default();
                                 let language=match voice {"af_heart"|"am_michael"=>Some("en-us"),"pf_dora"|"pm_alex"=>Some("pt-br"),"ef_dora"=>Some("es"),_=>None};
                                 if let Some(language)=language{pipe.tts.set_voice(voice,language);}else{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Unsupported voice"})).await;}
                             },
                             "end_turn"=>{
-                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);turn=Some(start_turn(state.clone(),session.clone(),current,history.clone(),tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio),epoch.clone()));}
+                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;turn=Some(start_turn(state.clone(),session.clone(),current,history.clone(),tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio),epoch.clone()));}
                             },
                             "text"=>{
                                 let prompt=value["text"].as_str().unwrap_or_default();
@@ -413,7 +423,10 @@ fn parse_vision(value: &Value) -> Result<Option<VisionFrameInput>> {
 }
 fn execute_tool(name: &str, params: Value) -> crate::KernelToolResult {
     let start = Instant::now();
-    info!(tool = name, "Authorizing local kernel operation via Guardian");
+    info!(
+        tool = name,
+        "Authorizing local kernel operation via Guardian"
+    );
     debug!(tool=name,arguments=%log_json(&params,2048),"Kernel tool arguments");
     let result = match sail_agents::authorize_voice_operation(name) {
         Ok(tool) => {
@@ -421,7 +434,11 @@ fn execute_tool(name: &str, params: Value) -> crate::KernelToolResult {
                 tool: tool.into(),
                 params,
             };
-            LocalKernelToolBroker::execute_guarded(sail_common::types::SubsystemId::Dialogue, &call, None)
+            LocalKernelToolBroker::execute_guarded(
+                sail_common::types::SubsystemId::Dialogue,
+                &call,
+                None,
+            )
         }
         Err(e) => crate::KernelToolResult {
             tool: name.into(),
@@ -970,7 +987,9 @@ mod tests {
         );
         guardian.policy().grant_capability(
             sail_common::types::SubsystemId::Dialogue,
-            sail_guardian::Capability::Tool(sail_guardian::ToolCapability::KernelTool("proc:list".into())),
+            sail_guardian::Capability::Tool(sail_guardian::ToolCapability::KernelTool(
+                "proc:list".into(),
+            )),
         );
         let _guardian = guardian;
         let state = Arc::new(MockModel {

@@ -23,7 +23,7 @@ Keep the terminal open while using SAIL. If an older SAIL process is already run
 4. Confirm that the speech models and local LLM report `ready: true`. Image reasoning also requires the LLM's `vision` modality to be enabled.
 5. Choose a voice: **English · Heart**, **Português · Dora**, **Português · Alex**, or **Español · Dora**.
 6. Click **Start Microphone** and allow microphone access in the browser.
-7. Speak a short request, then pause. SAIL detects the end of your turn automatically.
+7. Speak your request, then pause for about 3 seconds. Shorter thinking pauses stay in the same turn. Choose Manual turn taking in Settings if you want to decide when to send.
 
 For example:
 
@@ -35,16 +35,27 @@ The voice selector changes synthesized speech; ask for your preferred response l
 
 | Control | When to use it | What happens |
 |---|---|---|
-| **Microphone button** | Begin or finish hands-free input | Starts browser capture or releases the microphone. An on-screen indicator shows when the microphone is active. |
-| **Mute button** | Temporarily stop sending your voice | Appears while microphone capture is active. Playback continues; use the microphone button to release the device. |
+| **Microphone button** | Begin or finish hands-free input | Starts capture; clicking it again flushes the final microphone frame, stops capture, and submits the current turn. An on-screen indicator shows when the microphone is active. |
+| **Mute button** | Temporarily stop sending your voice | Pauses sending audio and retains your unfinished recording. Playback continues; the microphone button stops capture and sends the turn. |
 | **Interrupt button** | Stop a reply or change direction | Appears during a response and cancels generation and queued playback. |
-| **Finish turn button** | You have finished speaking and want to send now | Finalizes an active speech turn without waiting for the silence timeout. |
+| **Send turn button** | You have finished speaking and want to send now | Flushes the final microphone frame and submits the entire active recording without waiting for silence. |
 | **Settings → Compute profile** | Adjust the CPU budget | Cycles through Balanced, HighPerformance and LowPower. |
 | **Settings → Start a new conversation** | Start a different topic without earlier context | Cancels the current reply and clears this session's conversation and Canvas. |
 | **Spaces** | Open a subsystem | Dialogue, Canvas and Vision actions are connected; other spaces show Not connected until their runtime route is available. |
 | **Settings → Check local model status** | Confirm readiness or investigate a model error | Checks speech worker readiness and local LLM capabilities. |
 
 Speaking while SAIL is replying also triggers automatic interruption once speech is detected. For immediate, predictable cancellation, use **Interrupt**.
+
+### Speak continuously and take thinking pauses
+
+In **Settings → Turn taking**, choose:
+
+- **Automatic:** waits for **3 seconds of quiet** by default. Adjust **Thinking pause** between 0.5 and 10 seconds. Speech resumed before that timeout remains part of the same message.
+- **Manual · Send turn:** pauses never submit the recording. Keep speaking and thinking, then press **Send turn**, or click the microphone button to stop and send. Final STT receives the complete recording in one request; partial captions do not trigger replies. Mute can pause input without discarding what you have already said.
+
+The old automatic 30-second split is removed. A turn can now hold up to **3 minutes** (about 5.8 MB of 16 kHz PCM). At that limit capture stops and the recording is **held**, not automatically sent or split. Press **Send turn** to submit it; **Start a new conversation** discards it. The **Recorded** counter shows the buffer duration. Very long recordings may take longer to transcribe, and live partial previews stop after 30 seconds to avoid repeatedly decoding an ever-growing recording; the final transcription still uses all recorded audio.
+
+Settings apply to the current connection and keep already captured audio. A service can set defaults with `SAIL_VOICE_TURN_MODE=manual` (or `automatic`) and `SAIL_VOICE_PAUSE_MS=3000`. Restart the service and refresh the page after updating.
 
 ### Choose a hardware tier
 

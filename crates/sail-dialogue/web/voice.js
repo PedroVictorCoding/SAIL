@@ -3,6 +3,9 @@ let ws, audioCtx, micStream, processor, micSource;
 let workletLoaded=false;
 const playbackTimers=new Set();
 let isRecording = false, isMuted = false, orbState = 'idle';
+let captureHeld = false;
+let maxRecordingMs = 180000;
+let pendingCaptureFlush = null, captureFlushSerial = 0, submittingVoiceTurn = false;
 let currentAmplitude = 0, wavePhase = 0, spectrum8 = Array(8).fill(0), orbFrozen = false;
 const activeTools = new Map();
 const tiers = ['Balanced', 'HighPerformance', 'LowPower']; let tierIdx = 0;
@@ -70,7 +73,7 @@ function connectWs() {
   ws.onopen = () => { setConnection('Connected · local session', true); micBtn.disabled = false; if (orbState === 'disconnected') updateState('idle'); };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
-    turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
+    captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
   };
   ws.onmessage = (event) => {
@@ -83,15 +86,22 @@ function connectWs() {
       case 'telemetry':
         document.getElementById('sessionConfidence').textContent = `${(data.confidence * 100).toFixed(0)}%`;
         document.getElementById('sessionRms').textContent = Number(data.rms).toFixed(3);
+        const duration = `${formatCaptureTime(data.captured_ms || 0)} / ${formatCaptureTime(maxRecordingMs)}`;
+        if (document.getElementById('sessionDuration').textContent !== duration) document.getElementById('sessionDuration').textContent = duration;
         if (!playingSources.size) {
           currentAmplitude = data.rms; wavePhase = data.phase; spectrum8 = data.spectrum;
-          if (!turnInProgress && pendingAudio === 0 && !playingSources.size) updateState(data.state);
+          if (!captureHeld && !turnInProgress && pendingAudio === 0 && !playingSources.size) updateState(data.state);
         }
         document.getElementById('telVad').textContent = `VAD inference: ${(data.vad_us / 1000).toFixed(2)}ms · round trip: ${(data.vad_roundtrip_us / 1000).toFixed(2)}ms`;
         document.getElementById('telConf').textContent = `Confidence: ${(data.confidence * 100).toFixed(0)}%`;
         document.getElementById('telRms').textContent = `RMS: ${data.rms.toFixed(3)}`; break;
       case 'transcript': transcriptBox.textContent = `${data.is_final ? 'You said' : 'Listening'} · ${data.text}`; document.getElementById('liveTranscript').textContent = data.text; break;
+      case 'capture_limit':
+        stopMic(); setCaptureHeld(true); updateState('holding'); transcriptBox.textContent = data.message; break;
+      case 'turn_committed':
+        setCaptureHeld(false); turnInProgress = true; updateState('transcribing'); break;
       case 'turn_started':
+        setCaptureHeld(false);
         stopPlayback(); turnFinished = false; turnInProgress = true; responseText = '';
         appendConversation('You', data.transcript);
         responseNode = appendConversation('SAIL', ''); updateState('thinking'); break;
@@ -101,13 +111,14 @@ function connectWs() {
         responseNode.lastChild.textContent = responseText; break;
       case 'audio_chunk': queueAudio(data); break;
       case 'turn_finished':
+        setCaptureHeld(false);
         turnInProgress = false;
         document.getElementById('assistantAnnounce').textContent = responseText;
         turnFinished = true;
         if (!pendingAudio && !playingSources.size) finishPlayback();
         if (data.latency_ms) setConnection(`Connected · local turn ${(data.latency_ms / 1000).toFixed(1)}s`, true);
         break;
-      case 'interruption': turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
+      case 'interruption': setCaptureHeld(false); turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
       case 'control': applyControl(data.control); break;
       case 'tool_started': updateToolActivity(data.tool, true); break;
       case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); break;
@@ -125,9 +136,29 @@ function applyControl(control) {
   const dockMute = document.getElementById('muteDockBtn'); dockMute.hidden = !isRecording;
   dockMute.setAttribute('aria-label', isMuted ? 'Unmute microphone' : 'Mute microphone'); dockMute.setAttribute('aria-pressed', String(isMuted));
   dockMute.classList.toggle('muted', isMuted);
-  document.getElementById('endTurnBtn').hidden = !isRecording;
+  document.getElementById('endTurnBtn').hidden = !isRecording && !captureHeld;
+  const settings = control.turn_detection || { mode:'automatic', pause_ms:3000 };
+  maxRecordingMs = control.max_recording_ms || 180000;
+  document.getElementById('turnModeSelect').value = settings.mode;
+  document.getElementById('turnPauseInput').value = settings.pause_ms / 1000;
+  document.getElementById('turnPauseInput').disabled = settings.mode === 'manual';
+  document.getElementById('turnDetectionNote').textContent = settings.mode === 'manual'
+    ? 'Pauses stay inside this message. Press Send turn when you finish. Recording is held at the 3-minute limit.'
+    : `Waits ${settings.pause_ms / 1000} seconds of silence. Send turn submits immediately. Recording is held at the 3-minute limit.`;
   const profile = { low_power: 'LowPower', balanced: 'Balanced', high_performance: 'HighPerformance' }[control.profile];
   tierIdx = Math.max(0, tiers.indexOf(profile)); tierBtn.textContent = tiers[tierIdx];
+}
+function formatCaptureTime(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2,'0')}`;
+}
+function setCaptureHeld(held) {
+  captureHeld = held; micBtn.disabled = held || ws?.readyState !== WebSocket.OPEN;
+  document.getElementById('endTurnBtn').hidden = !isRecording && !held;
+}
+function setTurnDetection() {
+  const input = document.getElementById('turnPauseInput');
+  if (!input.checkValidity()) { input.reportValidity(); return; }
+  sendAction('set_turn_detection', { settings:{ mode:document.getElementById('turnModeSelect').value, pause_ms:Math.round(Number(input.value)*1000) } });
 }
 function appendConversation(role, text) {
   const node = document.createElement('article'); node.className = `message message-${role.toLowerCase()}`;
@@ -235,7 +266,7 @@ function finishPlayback() { updateState(isRecording ? 'listening' : 'idle'); cur
 function updateState(state) {
   const changed = orbState !== state;
   orbState = state;
-  const labels = { idle:'Ready', listening:'Listening', transcribing:'Understanding', thinking:'Thinking', speaking:'Speaking', working:'Working', seeing:'Seeing', watching:'Watching', interrupted:'Interrupted', disconnected:'Offline', approval_required:'Approval needed', error:'Attention' };
+  const labels = { holding:'Ready to send', idle:'Ready', listening:'Listening', transcribing:'Understanding', thinking:'Thinking', speaking:'Speaking', working:'Working', seeing:'Seeing', watching:'Watching', interrupted:'Interrupted', disconnected:'Offline', approval_required:'Approval needed', error:'Attention' };
   statusBadge.textContent = labels[state] || 'Ready'; document.getElementById('appShell').dataset.state = state;
   const palette = statePalette(paletteState(state));
   ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, [palette.primary,palette.secondary,palette.tertiary][index]));
@@ -249,8 +280,28 @@ function setConnection(message, connected) {
   pill.querySelector('span').textContent = message;
   document.getElementById('sessionConnection').textContent = connected ? 'Connected · local' : 'Reconnecting';
 }
-async function toggleMic() { if (isRecording) stopMic(); else await startMic(); }
+async function toggleMic() { if (isRecording) await submitVoiceTurn(true); else await startMic(); }
+async function submitVoiceTurn(stopAfter = false) {
+  if (submittingVoiceTurn) return;
+  submittingVoiceTurn = true; document.getElementById('endTurnBtn').disabled = true;
+  try {
+    const capture = processor;
+    if (isRecording && capture) {
+      await new Promise((resolve,reject) => {
+        const request_id = ++captureFlushSerial;
+        const timer = setTimeout(() => { pendingCaptureFlush = null; reject(new Error('Microphone did not finish sending its last frame. Try Send turn again.')); },1000);
+        pendingCaptureFlush = {request_id,resolve:() => {clearTimeout(timer);resolve();},reject:() => {clearTimeout(timer);reject(new Error('Microphone stopped before the turn was sent.'));}};
+        capture.port.postMessage({action:'flush',request_id});
+      });
+      if (processor !== capture || !isRecording) return;
+    }
+    if (stopAfter) stopMic();
+    sendAction('end_turn');
+  } catch(error) { showError(error.message); }
+  finally { submittingVoiceTurn = false; document.getElementById('endTurnBtn').disabled = false; }
+}
 async function startMic() {
+  if (captureHeld) { showError('Press Send turn to submit the recording before starting again.'); return; }
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     showError('Microphone requires a secure connection. On this computer use http://localhost:8088. From another device use HTTPS with a trusted certificate (see scripts/voice/tls.sh).'); return;
   }
@@ -265,6 +316,11 @@ async function startMic() {
     micSource = audioCtx.createMediaStreamSource(micStream);
     processor = new AudioWorkletNode(audioCtx, 'sail-capture');
     processor.port.onmessage = ({ data }) => {
+      if (data?.type === 'flushed') {
+        if (pendingCaptureFlush?.request_id === data.request_id) {const pending = pendingCaptureFlush;pendingCaptureFlush = null;pending.resolve();}
+        return;
+      }
+      if (!(data instanceof ArrayBuffer)) return;
       if (isRecording && !isMuted && ws?.readyState === WebSocket.OPEN) {
         if (ws.bufferedAmount > 64000) { showError('Audio connection is too slow; microphone stopped.'); stopMic(); return; }
         ws.send(data);
@@ -276,6 +332,7 @@ async function startMic() {
   finally { micBtn.disabled = false; }
 }
 function stopMic() {
+  if (pendingCaptureFlush) { const pending = pendingCaptureFlush; pendingCaptureFlush = null; pending.reject(); }
   isRecording = false; micStream?.getTracks().forEach(track => track.stop());
   if (processor) { processor.port.onmessage = null; processor.disconnect(); processor = null; }
   micSource?.disconnect(); micSource = null; micStream = null;

@@ -1,6 +1,45 @@
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+pub const MAX_RECORDING_MS: usize = 180_000;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnMode {
+    Automatic,
+    Manual,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnDetectionSettings {
+    pub mode: TurnMode,
+    pub pause_ms: usize,
+}
+impl Default for TurnDetectionSettings {
+    fn default() -> Self {
+        Self {
+            mode: if std::env::var("SAIL_VOICE_TURN_MODE").is_ok_and(|mode| mode == "manual") {
+                TurnMode::Manual
+            } else {
+                TurnMode::Automatic
+            },
+            pause_ms: std::env::var("SAIL_VOICE_PAUSE_MS")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|value| (500..=10000).contains(value))
+                .unwrap_or(3000),
+        }
+    }
+}
+impl TurnDetectionSettings {
+    pub fn validate(&self) -> std::result::Result<(), &'static str> {
+        if !(500..=10000).contains(&self.pause_ms) {
+            Err("Pause must be between 0.5 and 10 seconds")
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HardwareTierProfile {
@@ -37,6 +76,9 @@ pub struct VoiceControlState {
     pub is_muted: bool,
     pub active_turn: u64,
     pub auto_barge_in_enabled: bool,
+    #[serde(default)]
+    pub turn_detection: TurnDetectionSettings,
+    pub max_recording_ms: usize,
 }
 
 pub struct VoiceControl {
@@ -51,6 +93,8 @@ impl VoiceControl {
                 is_muted: false,
                 active_turn: 0,
                 auto_barge_in_enabled: true,
+                turn_detection: TurnDetectionSettings::default(),
+                max_recording_ms: MAX_RECORDING_MS,
             },
         }
     }
@@ -59,6 +103,9 @@ impl VoiceControl {
         &self.state
     }
 
+    pub fn set_turn_detection(&mut self, settings: TurnDetectionSettings) {
+        self.state.turn_detection = settings;
+    }
     pub fn set_profile(&mut self, profile: HardwareTierProfile) {
         info!(profile = ?profile, "Updated microkernel hardware tier profile");
         self.state.profile = profile;
