@@ -226,7 +226,13 @@ function renderToolResult(result) {
   if (approval) {
     const action = result?.output?.approval_action || lastToolCalls.get(normalizeToolName(result.tool));
     if (action) { pendingApprovalActions.set(approval, action); if (pendingApprovalActions.size > 128) pendingApprovalActions.delete(pendingApprovalActions.keys().next().value); }
-    showError('This action needs owner approval. Open Settings to review the exact request.');
+    renderApprovalCard({
+      session_id: approval,
+      tool: result.tool,
+      rationale: result?.output?.error || 'Operation requires explicit user authorization before execution.'
+    });
+    updateState('approval_required');
+    return;
   }
   const container = document.createElement('article'); container.className = 'artifact-card';
   const output = result?.output ?? {}; const succeeded = Boolean(result?.success);
@@ -516,6 +522,24 @@ function updateForgePipeline(step) {
   });
 }
 
+function formatDiffHighlight(diffText) {
+  if (!diffText) return '';
+  const lines = diffText.split('\n');
+  return lines.map(line => {
+    const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ')) {
+      return `<span class="diff-line-file">${escaped}</span>`;
+    } else if (line.startsWith('@@')) {
+      return `<span class="diff-line-hunk">${escaped}</span>`;
+    } else if (line.startsWith('+')) {
+      return `<span class="diff-line-add">${escaped}</span>`;
+    } else if (line.startsWith('-')) {
+      return `<span class="diff-line-del">${escaped}</span>`;
+    }
+    return `<span>${escaped}</span>`;
+  }).join('\n');
+}
+
 function handleForgeEvent(data) {
   const jobContainer = document.getElementById('forgeActiveJob');
   if (!jobContainer) return;
@@ -548,6 +572,67 @@ function handleForgeEvent(data) {
   if(data.passed!==undefined)metadata('Review verdict:',`${data.passed ? '✓ Passed' : 'Failed'} (${data.finding_count||0} findings)`);
   if(data.pr_draft_ready)metadata('✓','Pull Request draft ready for review');
 
+  // Live Forge Code Stream & Diff Viewer
+  const liveStream = document.getElementById('forgeLiveStream');
+  const liveTitle = document.getElementById('forgeLiveTitle');
+  const liveFile = document.getElementById('forgeLiveFile');
+  const liveDiff = document.getElementById('forgeLiveDiff');
+  const liveLogs = document.getElementById('forgeLiveLogs');
+  const expandDiffBtn = document.getElementById('forgeExpandDiffBtn');
+
+  if (liveStream) {
+    const isLivePhase = ['planning', 'coding', 'testing'].includes(state);
+    if (data.diff || data.target_file || data.logs || isLivePhase) {
+      liveStream.hidden = false;
+      if (liveTitle) {
+        const stateLabels = {
+          worktree: '🌲 Provisioning isolated worktree...',
+          planning: '🧠 Synthesizing solution plan...',
+          coding: '⚡ Coding & applying unified patch...',
+          testing: '🧪 Running sandbox cargo tests...',
+          review: '🛡️ Automated Guardian code review...',
+          pr: '🚀 Pull request drafted',
+          completed: '✓ Solution verified & completed'
+        };
+        liveTitle.textContent = stateLabels[state] || `Forge: ${state}`;
+      }
+      if (data.target_file && liveFile) {
+        liveFile.textContent = data.target_file;
+        liveFile.hidden = false;
+      }
+      if (data.diff && liveDiff) {
+        liveDiff.innerHTML = `<code>${formatDiffHighlight(data.diff)}</code>`;
+        liveDiff.scrollTop = liveDiff.scrollHeight;
+      } else if (!data.diff && ['planning', 'coding'].includes(state) && liveDiff) {
+        liveDiff.innerHTML = `<code>// Generating code patch for ${data.target_file || 'workspace'}...</code>`;
+      }
+      if (Array.isArray(data.logs) && data.logs.length && liveLogs) {
+        liveLogs.replaceChildren();
+        data.logs.forEach((log, idx) => {
+          const item = document.createElement('div');
+          item.className = 'forge-live-log-item';
+          if (idx === data.logs.length - 1) item.classList.add('active');
+          item.textContent = log;
+          liveLogs.appendChild(item);
+        });
+        liveLogs.scrollTop = liveLogs.scrollHeight;
+      }
+
+      if (expandDiffBtn && typeof openCardModal === 'function') {
+        expandDiffBtn.onclick = (e) => {
+          e.stopPropagation();
+          const currentDiff = data.diff || liveDiff.textContent;
+          openCardModal({
+            title: `Forge Live Diff · ${data.target_file || jobId}`,
+            badge: `${state.toUpperCase()}`,
+            badgeClass: state === 'completed' ? 'result-success' : 'forge-state-active',
+            content: currentDiff,
+            contentType: 'code'
+          });
+        };
+      }
+    }
+  }
 }
 
 function renderForgeJobList(jobs) {

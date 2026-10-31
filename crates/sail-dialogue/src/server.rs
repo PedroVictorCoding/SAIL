@@ -339,6 +339,9 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                     state,
                     stage,
                     message,
+                    diff,
+                    target_file,
+                    logs,
                 } => {
                     emit(
                         &tx_bus,
@@ -350,6 +353,9 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                             "state": state,
                             "stage": stage,
                             "message": message,
+                            "diff": diff,
+                            "target_file": target_file,
+                            "logs": logs,
                         }),
                     )
                     .await;

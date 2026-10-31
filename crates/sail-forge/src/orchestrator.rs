@@ -307,6 +307,8 @@ impl ForgeOrchestrator {
                     wall_time_secs: cp.wall_time_secs,
                     review_status: cp.review_result.as_ref().map(|r| r.provider.clone()),
                     events: cp.events.clone(),
+                    patch: cp.patch.clone(),
+                    target_file: cp.target_file.clone(),
                 });
             }
         }
@@ -328,6 +330,8 @@ impl ForgeOrchestrator {
                         wall_time_secs: cp.wall_time_secs,
                         review_status: cp.review_result.as_ref().map(|r| r.provider.clone()),
                         events: cp.events.clone(),
+                        patch: cp.patch.clone(),
+                        target_file: cp.target_file.clone(),
                     });
                 }
             }
@@ -360,6 +364,9 @@ impl ForgeOrchestrator {
             state: "paused".into(),
             stage: "paused".into(),
             message: reason.to_string(),
+            diff: job.checkpoint.patch.clone(),
+            target_file: job.checkpoint.target_file.clone(),
+            logs: Some(vec![format!("Job paused: {reason}")]),
         });
 
         info!("Paused job {} ({})", resolved_id, reason);
@@ -390,6 +397,9 @@ impl ForgeOrchestrator {
             state: format!("{:?}", job.checkpoint.state),
             stage: "resumed".into(),
             message: "Resumed by scheduler".into(),
+            diff: job.checkpoint.patch.clone(),
+            target_file: job.checkpoint.target_file.clone(),
+            logs: Some(vec!["Job resumed by scheduler".into()]),
         });
 
         info!("Resumed job {}", resolved_id);
@@ -416,6 +426,9 @@ impl ForgeOrchestrator {
             state: "blocked".into(),
             stage: "cancelled".into(),
             message: reason.to_string(),
+            diff: job.checkpoint.patch.clone(),
+            target_file: job.checkpoint.target_file.clone(),
+            logs: Some(vec![format!("Job cancelled: {reason}")]),
         });
 
         info!("Cancelled job {} ({})", resolved_id, reason);
@@ -523,6 +536,27 @@ impl ForgeOrchestrator {
         // 2. Inspect worktree files to find context across workspace crates
         let query = format!("{} {}", title, body);
         let target_file = Self::locate_workspace_target_file(&worktree.root_dir, &query);
+
+        {
+            let mut jobs = self.active_jobs.lock().unwrap();
+            if let Some(job) = jobs.get_mut(job_id) {
+                job.checkpoint.target_file = Some(target_file.display().to_string());
+                let _ = self.checkpoint_store.save(&job.checkpoint);
+            }
+        }
+        self.emit_event(EventPayload::ForgeIssueStatusUpdated {
+            job_id: job_id.to_string(),
+            state: "planning".into(),
+            stage: "planning".into(),
+            message: format!("Inspecting symbols in {}", target_file.display()),
+            diff: None,
+            target_file: Some(target_file.display().to_string()),
+            logs: Some(vec![
+                format!("Retrieved issue #{}: {}", issue_number, title),
+                format!("Located candidate target file: {}", target_file.display()),
+                "Reading symbols and synthesizing unified diff...".into(),
+            ]),
+        });
 
         let current_code = worktree.read_file(&target_file).unwrap_or_default();
 
@@ -787,6 +821,12 @@ impl ForgeOrchestrator {
             state: "planning".into(),
             stage: "planning".into(),
             message: "Analyzing symbols and formulating resolution plan".into(),
+            diff: None,
+            target_file: None,
+            logs: Some(vec![
+                "Initializing isolated git worktree...".into(),
+                "Formulating resolution plan...".into(),
+            ]),
         });
 
         // 2. Setup isolated worktree
@@ -814,7 +854,16 @@ impl ForgeOrchestrator {
             job_id: job_id.to_string(),
             state: "coding".into(),
             stage: "coding".into(),
-            message: "Applying edits inside isolated worktree".into(),
+            message: "Synthesizing unified code diff".into(),
+            diff: None,
+            target_file: {
+                let jobs = self.active_jobs.lock().unwrap();
+                jobs.get(job_id).and_then(|j| j.checkpoint.target_file.clone())
+            },
+            logs: Some(vec![
+                "Isolated worktree initialized successfully.".into(),
+                "Synthesizing solution patch with coding model...".into(),
+            ]),
         });
 
         let effective_patch = match patch_to_apply {
@@ -865,6 +914,31 @@ impl ForgeOrchestrator {
 
         let diff_stat = format!("{} lines changed", diff.lines().count());
 
+        {
+            let mut jobs = self.active_jobs.lock().unwrap();
+            if let Some(job) = jobs.get_mut(job_id) {
+                job.checkpoint.patch = Some(diff.clone());
+                job.checkpoint.diff_stat = Some(diff_stat.clone());
+                let _ = self.checkpoint_store.save(&job.checkpoint);
+            }
+        }
+
+        self.emit_event(EventPayload::ForgeIssueStatusUpdated {
+            job_id: job_id.to_string(),
+            state: "coding".into(),
+            stage: "coding".into(),
+            message: format!("Applied code patch ({diff_stat})"),
+            diff: Some(diff.clone()),
+            target_file: {
+                let jobs = self.active_jobs.lock().unwrap();
+                jobs.get(job_id).and_then(|j| j.checkpoint.target_file.clone())
+            },
+            logs: Some(vec![
+                "Patch synthesized successfully.".into(),
+                format!("Applied diff ({diff_stat}) into isolated worktree."),
+            ]),
+        });
+
         self.check_interruption(job_id).await?;
 
         // 4. Testing phase: execute real tests inside sandbox with bounded iterative repair
@@ -882,7 +956,16 @@ impl ForgeOrchestrator {
             job_id: job_id.to_string(),
             state: "testing".into(),
             stage: "testing".into(),
-            message: "Executing quality gates in sandbox".into(),
+            message: format!("Executing sandbox tests ({diff_stat})"),
+            diff: Some(diff.clone()),
+            target_file: {
+                let jobs = self.active_jobs.lock().unwrap();
+                jobs.get(job_id).and_then(|j| j.checkpoint.target_file.clone())
+            },
+            logs: Some(vec![
+                "Code edits applied cleanly.".into(),
+                format!("Executing cargo test inside sandbox for {diff_stat}..."),
+            ]),
         });
 
         let logs_dir = self.config.workspace_root.join("logs").join(job_id);
