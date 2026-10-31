@@ -15,6 +15,7 @@ pub enum SubsystemId {
     Mind,
     Bridge,
     Guardian,
+    Forge,
 }
 
 impl std::fmt::Display for SubsystemId {
@@ -33,6 +34,7 @@ impl std::fmt::Display for SubsystemId {
                 SubsystemId::Mind => "sail-mind",
                 SubsystemId::Bridge => "sail-bridge",
                 SubsystemId::Guardian => "sail-guardian",
+                SubsystemId::Forge => "sail-forge",
             }
         )
     }
@@ -194,5 +196,32 @@ pub enum EventPayload {
         hash: String,
         action: String,
         decision: String,
+    },
+
+    // Forge Autonomous Coding Agent Events
+    ForgeIssueEnqueued {
+        job_id: String,
+        repo: String,
+        issue_number: u64,
+        priority: Option<String>,
+    },
+    ForgeIssueStatusUpdated {
+        job_id: String,
+        state: String,
+        stage: String,
+        message: String,
+    },
+    ForgeReviewCompleted {
+        job_id: String,
+        passed: bool,
+        cost_usd: f64,
+        finding_count: usize,
+    },
+    ForgeJobFinished {
+        job_id: String,
+        success: bool,
+        branch: String,
+        pr_draft_ready: bool,
+        summary: String,
     },
 }

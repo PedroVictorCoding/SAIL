@@ -25,6 +25,7 @@ sail-canvas.workspace = true
 sail-discovery.workspace = true
 sail-flow.workspace = true
 sail-guardian.workspace = true
+sail-forge.workspace = true
 
 tokio.workspace = true
 tracing.workspace = true
