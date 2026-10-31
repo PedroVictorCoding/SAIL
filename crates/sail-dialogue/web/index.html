@@ -122,6 +122,15 @@
   <details class="inspector"><summary>Developer details</summary><div class="telemetry-row"><span id="telVad">VAD —</span><span id="telConf">Confidence —</span><span id="telRms">RMS —</span></div></details>
 </aside>
 
+<dialog id="captureDialog" class="capture-dialog" aria-labelledby="captureTitle">
+  <h2 id="captureTitle">Capture an image</h2>
+  <p id="captureExplanation">Choose what SAIL should see. The image is analyzed locally.</p>
+  <div class="capture-options">
+    <button class="quiet-button" id="captureCameraChoice" type="button">Take camera picture</button>
+    <button class="quiet-button" id="captureScreenChoice" type="button">Take screenshot</button>
+    <button class="quiet-button" id="captureCancel" type="button">Cancel</button>
+  </div>
+</dialog>
 <script src="/mermaid.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/ui.js" defer></script>

@@ -534,6 +534,16 @@ async fn run_turn(
         emit(&tx, current, json!({"type":"turn_finished","state":"idle"})).await;
         return Ok(());
     }
+    if vision.is_none() {
+        let h = history.lock().await;
+        let previous = h.iter().rev().find(|m| m["role"] == "user")
+            .and_then(|m| m["content"].as_str());
+        if let Some(source) = crate::visual_capture::requested_source(&prompt, previous) {
+            info!(source, "Requesting browser visual capture before reasoning");
+            emit(&tx, current, json!({"type":"capture_required","source":source,"prompt":prompt,"turn_id":current})).await;
+            return Ok(());
+        }
+    }
     emit(
         &tx,
         current,

@@ -73,14 +73,17 @@ function connectWs() {
   ws.onopen = () => { setConnection('Connected · local session', true); micBtn.disabled = false; if (orbState === 'disconnected') updateState('idle'); };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
-    captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
+    cancelVisualCapture(); captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
   };
   ws.onmessage = (event) => {
     let data;
     try { data = JSON.parse(event.data); } catch { showError('Invalid server message'); return; }
     switch (data.type) {
+      case 'capture_required':
+        setCaptureHeld(false); turnInProgress = false; stopPlayback(); requestVisualCapture(data); break;
       case 'session':
+        cancelVisualCapture();
         document.getElementById('conversation').replaceChildren(); responseNode = null;
         applyControl(data.control); break;
       case 'telemetry':
@@ -102,6 +105,7 @@ function connectWs() {
         setCaptureHeld(false); turnInProgress = true; updateState('transcribing'); break;
       case 'turn_started':
         setCaptureHeld(false);
+        cancelVisualCapture();
         stopPlayback(); turnFinished = false; turnInProgress = true; responseText = '';
         appendConversation('You', data.transcript);
         responseNode = appendConversation('SAIL', ''); updateState('thinking'); break;
@@ -118,7 +122,7 @@ function connectWs() {
         if (!pendingAudio && !playingSources.size) finishPlayback();
         if (data.latency_ms) setConnection(`Connected · local turn ${(data.latency_ms / 1000).toFixed(1)}s`, true);
         break;
-      case 'interruption': setCaptureHeld(false); turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
+      case 'interruption': cancelVisualCapture(); setCaptureHeld(false); turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
       case 'control': applyControl(data.control); break;
       case 'tool_started': updateToolActivity(data.tool, true); break;
       case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); break;

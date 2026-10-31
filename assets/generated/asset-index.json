@@ -2,6 +2,6 @@
   "version": 1,
   "assets": [
     {"id":"sail.icons","type":"svg","source":"assets/source/icons/sail-icons.svg","outputs":[{"target":"assets/generated/sail-icons.svg","sha256":"c4a71dc0f66a60adecbf6bb406c14a68a10fa1a037a20cf4c17ca0cc47578064"}],"provenance":"Original SAIL interface icon set authored in this repository.","dark":true,"light":true,"license":"MIT OR Apache-2.0","fallback":"Visible subsystem labels remain available without icon rendering","bytes":3140,"sha256":"c4a71dc0f66a60adecbf6bb406c14a68a10fa1a037a20cf4c17ca0cc47578064"},
-    {"id":"sail.orb","type":"procedural","source":"crates/sail-dialogue/web/voice.js","outputs":[{"target":"runtime:canvas2d","sha256":null}],"provenance":"Procedural Canvas2D rendering code authored in this repository.","dark":true,"light":false,"license":"MIT OR Apache-2.0","fallback":"Reduced-motion static orb in the same Canvas2D renderer","bytes":35635,"sha256":"7e90623f748e05d4b030c83242ba9c2a7301cc65604da223a84649f42310b17a"}
+    {"id":"sail.orb","type":"procedural","source":"crates/sail-dialogue/web/voice.js","outputs":[{"target":"runtime:canvas2d","sha256":null}],"provenance":"Procedural Canvas2D rendering code authored in this repository.","dark":true,"light":false,"license":"MIT OR Apache-2.0","fallback":"Reduced-motion static orb in the same Canvas2D renderer","bytes":35880,"sha256":"09fa6dfe0d9cfe7a95aeb0032d754485047ddb97c3c940404eb4047cce00e592"}
   ]
 }
