@@ -6,10 +6,10 @@ use uuid::Uuid;
 use sail_common::types::SubsystemId;
 use sail_guardian::{
     clear_global_broker, global_broker, ApprovalBroker,
-    AuditIntegrityError, AuditLedger, Capability, CredentialError, CredentialStore,
-    DecisionOutcome, ExecutionDenied, FsCapability, GuardianExecutionBroker,
-    PolicyEngine, SandboxPolicy, SandboxViolation,
-    SystemCapability, ToolCapability,
+    AuditIntegrityError, AuditLedger, Capability, CredentialError, CredentialHandle,
+    CredentialStore, DecisionOutcome, ExecutionDenied, FsCapability, GuardianExecutionBroker,
+    PolicyEngine, SandboxPolicy, SandboxViolation, SecretString,
+    SystemCapability, ToolCapability, VaultStatus,
 };
 
 /// Fixture helper: sets up isolated temporary directories for persistent vault & audit
@@ -520,9 +520,13 @@ fn test_adversarial_encrypted_vault_survives_restart_and_rejects_tampering() {
         let verified = restarted.execute_with_secret(&handle, SubsystemId::Bridge, |s| s == secret_val);
         assert_eq!(verified, Ok(true));
 
-        // Other subsystems cannot resolve or execute
+        // Untrusted subsystems cannot request handles or execute
         let unauthorized = restarted.get_handle(SubsystemId::Agents, "stripe_api", "read:charges");
-        assert!(matches!(unauthorized, Err(CredentialError::NotFound(..))));
+        assert!(matches!(unauthorized, Err(CredentialError::UntrustedCaller(SubsystemId::Agents))));
+
+        // Other subsystems cannot access keys they do not own
+        let other_subsystem = restarted.get_handle(SubsystemId::Discovery, "stripe_api", "read:charges");
+        assert!(matches!(other_subsystem, Err(CredentialError::NotFound(..))));
     }
 
     // 3. Redaction verification: raw secret is stripped from logs
@@ -549,6 +553,368 @@ fn test_adversarial_encrypted_vault_survives_restart_and_rejects_tampering() {
             "Tampered vault ciphertext must fail decryption and fail closed"
         );
     }
+}
+
+#[test]
+fn test_adversarial_vault_lock_unlock_and_zeroize_memory() {
+    let harness = TestHarness::new();
+    let secret_val = "prod_db_super_secret_credentials_67890";
+
+    // 1. Open persistent vault, store credential, obtain key
+    let key_bytes = {
+        let vault = CredentialStore::open_persistent(&harness.vault_dir).unwrap();
+        vault
+            .store_credential(
+                SubsystemId::Bridge,
+                "postgres_url",
+                secret_val,
+                "db:write",
+                chrono::Duration::hours(1),
+            )
+            .unwrap();
+
+        assert_eq!(vault.status(), VaultStatus::Unlocked);
+        assert!(!vault.is_locked());
+
+        // Read key from disk for unlock test
+        fs::read(harness.vault_dir.join("vault.key")).unwrap()
+    };
+
+    // 2. Lock the vault and verify fail-closed behavior
+    {
+        let vault = CredentialStore::open_persistent(&harness.vault_dir).unwrap();
+        let handle = vault
+            .get_handle(SubsystemId::Bridge, "postgres_url", "db:write")
+            .unwrap();
+
+        // Lock vault
+        vault.lock();
+        assert_eq!(vault.status(), VaultStatus::Locked);
+        assert!(vault.is_locked());
+
+        // Any attempt to retrieve or execute fails with VaultLocked
+        assert_eq!(
+            vault.get_handle(SubsystemId::Bridge, "postgres_url", "db:write"),
+            Err(CredentialError::VaultLocked)
+        );
+        assert_eq!(
+            vault.execute_with_secret(&handle, SubsystemId::Bridge, |_| ()),
+            Err(CredentialError::VaultLocked)
+        );
+        assert_eq!(
+            vault.store_credential(
+                SubsystemId::Bridge,
+                "new_key",
+                "sec",
+                "*",
+                chrono::Duration::hours(1)
+            ),
+            Err(CredentialError::VaultLocked)
+        );
+        assert_eq!(vault.get_secret(SubsystemId::Bridge, "postgres_url"), None);
+
+        // 3. Unlock with wrong key fails
+        let wrong_key = [0xAAu8; 32];
+        let unlock_err = vault.unlock(&wrong_key);
+        assert!(unlock_err.is_err());
+        assert!(vault.is_locked());
+
+        // 4. Unlock with correct master key succeeds and restores access
+        vault
+            .unlock(&key_bytes)
+            .expect("Unlock with valid key must succeed");
+        assert_eq!(vault.status(), VaultStatus::Unlocked);
+        assert!(!vault.is_locked());
+
+        let restored_handle = vault
+            .get_handle(SubsystemId::Bridge, "postgres_url", "db:write")
+            .unwrap();
+        let check =
+            vault.execute_with_secret(&restored_handle, SubsystemId::Bridge, |s| s == secret_val);
+        assert_eq!(check, Ok(true));
+    }
+}
+
+#[test]
+fn test_adversarial_untrusted_callers_cannot_request_credentials() {
+    let harness = TestHarness::new();
+    let vault = CredentialStore::open_persistent(&harness.vault_dir).unwrap();
+
+    vault
+        .store_credential(
+            SubsystemId::Bridge,
+            "api_key",
+            "secret_api_key_value",
+            "api:read",
+            chrono::Duration::hours(2),
+        )
+        .unwrap();
+
+    // Untrusted model/agent subsystems: Dialogue, Agents, Mind, Canvas
+    let untrusted_callers = [
+        SubsystemId::Dialogue,
+        SubsystemId::Agents,
+        SubsystemId::Mind,
+        SubsystemId::Canvas,
+    ];
+
+    for untrusted in untrusted_callers {
+        // 1. Cannot get raw secrets
+        assert_eq!(
+            vault.get_secret(untrusted, "api_key"),
+            None,
+            "Untrusted caller {untrusted:?} must never receive raw secrets"
+        );
+
+        // 2. Cannot request handles
+        let handle_res = vault.get_handle(untrusted, "api_key", "api:read");
+        assert_eq!(
+            handle_res,
+            Err(CredentialError::UntrustedCaller(untrusted)),
+            "Untrusted caller {untrusted:?} must be rejected with UntrustedCaller"
+        );
+
+        // 3. Even with a valid Bridge handle, untrusted caller cannot execute
+        let bridge_handle = vault
+            .get_handle(SubsystemId::Bridge, "api_key", "api:read")
+            .unwrap();
+        let exec_res = vault.execute_with_secret(&bridge_handle, untrusted, |_| ());
+        assert_eq!(
+            exec_res,
+            Err(CredentialError::UntrustedCaller(untrusted)),
+            "Untrusted caller {untrusted:?} must not be allowed to execute closure"
+        );
+    }
+}
+
+#[test]
+fn test_adversarial_connector_scope_isolation_by_resource_account_operation() {
+    let harness = TestHarness::new();
+    let vault = CredentialStore::open_persistent(&harness.vault_dir).unwrap();
+
+    vault
+        .store_credential(
+            SubsystemId::Bridge,
+            "github_pat",
+            "ghp_my_personal_github_token_9876543210",
+            "github.com:personal:repo:read",
+            chrono::Duration::hours(4),
+        )
+        .unwrap();
+
+    // 1. Requesting exact or narrower scope succeeds
+    let valid_handle = vault
+        .get_handle(
+            SubsystemId::Bridge,
+            "github_pat",
+            "github.com:personal:repo:read",
+        )
+        .expect("Matching scope must succeed");
+
+    // 2. Requesting broader scope (e.g. write instead of read) fails
+    let write_scope_err = vault.get_handle(
+        SubsystemId::Bridge,
+        "github_pat",
+        "github.com:personal:repo:write",
+    );
+    assert!(matches!(
+        write_scope_err,
+        Err(CredentialError::ScopeMismatch { .. })
+    ));
+
+    // 3. Requesting different resource (e.g. gitlab.com) fails
+    let resource_err = vault.get_handle(
+        SubsystemId::Bridge,
+        "github_pat",
+        "gitlab.com:personal:repo:read",
+    );
+    assert!(matches!(
+        resource_err,
+        Err(CredentialError::ScopeMismatch { .. })
+    ));
+
+    // 4. Requesting different account (e.g. org instead of personal) fails
+    let account_err = vault.get_handle(
+        SubsystemId::Bridge,
+        "github_pat",
+        "github.com:org:repo:read",
+    );
+    assert!(matches!(
+        account_err,
+        Err(CredentialError::ScopeMismatch { .. })
+    ));
+
+    // 5. Scoped action execution validates target resource, account, and operation
+    let exec_ok = vault.execute_with_scoped_action(
+        &valid_handle,
+        SubsystemId::Bridge,
+        "github.com",
+        Some("personal"),
+        "repo:read",
+        |sec| sec.starts_with("ghp_"),
+    );
+    assert_eq!(exec_ok, Ok(true));
+
+    // Executing against unauthorized operation fails
+    let exec_forbidden_op = vault.execute_with_scoped_action(
+        &valid_handle,
+        SubsystemId::Bridge,
+        "github.com",
+        Some("personal"),
+        "repo:delete",
+        |_| (),
+    );
+    assert!(matches!(
+        exec_forbidden_op,
+        Err(CredentialError::ScopeMismatch { .. })
+    ));
+}
+
+#[test]
+fn test_adversarial_zeroize_debug_and_audit_receipt_redaction() {
+    let harness = TestHarness::new();
+    let secret = "sk_live_very_confidential_stripe_api_key_44332211";
+    let token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+
+    // 1. SecretString never exposes raw secrets in Debug or Display
+    let sec_str = SecretString::new(secret);
+    let debug_out = format!("{:?}", sec_str);
+    let display_out = format!("{}", sec_str);
+    assert_eq!(debug_out, "[REDACTED_SECRET]");
+    assert_eq!(display_out, "[REDACTED_SECRET]");
+    assert!(!debug_out.contains(secret));
+    assert!(!display_out.contains(secret));
+
+    // 2. redact_text sanitizes known secrets, bearer tokens, and prefixed keys
+    let vault = CredentialStore::open_persistent(&harness.vault_dir).unwrap();
+    vault
+        .store_credential(
+            SubsystemId::Bridge,
+            "stripe_key",
+            secret,
+            "*",
+            chrono::Duration::hours(1),
+        )
+        .unwrap();
+
+    let raw_trace =
+        format!("Sending request: Authorization: Bearer {secret} with backup token={token}");
+    let redacted = vault.redact_text(&raw_trace);
+    assert!(!redacted.contains(secret));
+    assert!(!redacted.contains(token));
+    assert!(redacted.contains("[REDACTED_SECRET]"));
+
+    // 3. JSON value redaction sanitizes sensitive fields
+    let json_val = serde_json::json!({
+        "username": "admin",
+        "api_token": secret,
+        "nested": {
+            "password": "unencrypted_pass",
+            "url": "https://api.example.com",
+        }
+    });
+    let redacted_json = vault.redact_value(&json_val);
+    let json_str = serde_json::to_string(&redacted_json).unwrap();
+    assert!(!json_str.contains(secret));
+    assert!(!json_str.contains("unencrypted_pass"));
+
+    // 4. Audit ledger automatically scrubs sensitive tokens in reasons and capabilities
+    let ledger = AuditLedger::open_persistent(&harness.audit_file).unwrap();
+    let receipt = ledger.record(
+        SubsystemId::Bridge,
+        Capability::Tool(ToolCapability::CliCommand(format!(
+            "curl -H 'Authorization: Bearer {token}' https://api.github.com"
+        ))),
+        DecisionOutcome::Granted,
+        format!("Authorized sync for token {token}"),
+    );
+
+    assert!(
+        !receipt.reason.contains(token),
+        "Audit receipt reason must never contain raw tokens"
+    );
+    assert!(
+        !format!("{:?}", receipt.capability).contains(token),
+        "Audit receipt capability must never contain raw tokens"
+    );
+    assert!(receipt.reason.contains("[REDACTED_SECRET]"));
+}
+
+#[test]
+fn test_adversarial_credential_rotation_and_revocation() {
+    let harness = TestHarness::new();
+    let vault = CredentialStore::open_persistent(&harness.vault_dir).unwrap();
+
+    let initial_sec = "initial_secret_version_1";
+    let rotated_sec = "rotated_secret_version_2";
+
+    // 1. Store initial credential
+    vault
+        .store_credential(
+            SubsystemId::Bridge,
+            "service_token",
+            initial_sec,
+            "*",
+            chrono::Duration::hours(2),
+        )
+        .unwrap();
+
+    let handle1 = vault
+        .get_handle(SubsystemId::Bridge, "service_token", "*")
+        .unwrap();
+    assert_eq!(
+        vault
+            .execute_with_secret(&handle1, SubsystemId::Bridge, |s| s.to_string())
+            .unwrap(),
+        initial_sec
+    );
+
+    // 2. Rotate credential
+    vault
+        .rotate_credential(SubsystemId::Bridge, "service_token", rotated_sec)
+        .unwrap();
+
+    let handle2 = vault
+        .get_handle(SubsystemId::Bridge, "service_token", "*")
+        .unwrap();
+    assert_eq!(
+        vault
+            .execute_with_secret(&handle2, SubsystemId::Bridge, |s| s.to_string())
+            .unwrap(),
+        rotated_sec
+    );
+
+    // 3. Revoke specific handle
+    vault.revoke_handle(handle2.handle_id);
+    let revoked_exec = vault.execute_with_secret(&handle2, SubsystemId::Bridge, |_| ());
+    assert_eq!(
+        revoked_exec,
+        Err(CredentialError::Revoked(handle2.handle_id))
+    );
+
+    // 4. Expired handle rejected
+    let expired_handle = CredentialHandle {
+        handle_id: Uuid::new_v4(),
+        owner: SubsystemId::Bridge,
+        key: "service_token".into(),
+        scope: "*".into(),
+        expires_at: chrono::Utc::now() - chrono::Duration::seconds(10),
+    };
+    let expired_exec = vault.execute_with_secret(&expired_handle, SubsystemId::Bridge, |_| ());
+    assert_eq!(
+        expired_exec,
+        Err(CredentialError::Expired(expired_handle.handle_id))
+    );
+
+    // 5. Revoke entire credential
+    vault
+        .revoke_credential(SubsystemId::Bridge, "service_token")
+        .unwrap();
+    let get_after_revoke = vault.get_handle(SubsystemId::Bridge, "service_token", "*");
+    assert!(matches!(
+        get_after_revoke,
+        Err(CredentialError::NotFound(..))
+    ));
 }
 
 // ------------------------------------------------------------------------------------------------
