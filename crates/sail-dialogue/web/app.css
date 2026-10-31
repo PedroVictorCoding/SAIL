@@ -260,4 +260,3 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 .forge-issue-list { display:grid; gap:6px; margin-top:10px }
 .forge-issue-item { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:6px 10px; border-radius:10px; background:#ffffff06; font-size:12px }
 .mini-btn { min-height:28px; padding:0 8px; font-size:11px }
-

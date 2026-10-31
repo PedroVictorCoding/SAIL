@@ -1032,4 +1032,3 @@ pub fn global_orchestrator() -> Result<Arc<ForgeOrchestrator>, String> {
         .clone()
         .ok_or_else(|| "Forge orchestrator is uninitialized or unavailable".to_string())
 }
-

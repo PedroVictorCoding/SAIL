@@ -8,6 +8,8 @@ let maxRecordingMs = 180000;
 let pendingCaptureFlush = null, captureFlushSerial = 0, submittingVoiceTurn = false;
 let currentAmplitude = 0, wavePhase = 0, spectrum8 = Array(8).fill(0), orbFrozen = false;
 const activeTools = new Map();
+const lastToolCalls = new Map();
+const pendingApprovalActions = new Map();
 const tiers = ['Balanced', 'HighPerformance', 'LowPower']; let tierIdx = 0;
 const ambientPalettes = {
   idle:{ primary:'#9180E8', secondary:'#D080AC', tertiary:'#E7A290', glow:'rgba(208,128,172,.30)' },
@@ -90,6 +92,7 @@ function connectWs() {
   };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
+    pendingApprovalActions.clear(); lastToolCalls.clear();
     cancelVisualCapture(); captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
   };
@@ -141,6 +144,19 @@ function connectWs() {
         break;
       case 'interruption': cancelVisualCapture(); setCaptureHeld(false); turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
       case 'control': applyControl(data.control); break;
+      case 'tool_event': {
+        const event = data.event;
+        if (event.approval_session) {
+          pendingApprovalActions.set(event.approval_session, { automatic:true });
+          renderApprovalCard({session_id:event.approval_session,tool:event.tool,rationale:'Review the exact operation with your owner credentials before continuing.'});
+          updateState('approval_required');
+          transcriptBox.textContent = 'Approval needed · Open Settings → Owner approvals to review the exact operation.';
+        }
+        updateToolActivity(event.tool, !['completed','failed','cancelled'].includes(event.state));
+        if (event.state === 'executing') updateState('working');
+        if (['completed','failed','cancelled'].includes(event.state)) updateState(turnInProgress ? 'thinking' : 'idle');
+        break;
+      }
       case 'tool_started': updateToolActivity(data.tool, true); break;
       case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); break;
       case 'canvas': renderArtifact(data.artifact); break;
@@ -206,7 +222,7 @@ function appendConversation(role, text) {
   node.append(label, content); document.getElementById('conversation').append(node); node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return node;
 }
 async function renderArtifact(artifact) {
-  if (!artifact || !['mermaid', 'json', 'image', 'svg'].includes(artifact.artifact_type)) return;
+  if (!artifact || typeof artifact.content !== 'string' || !['mermaid', 'json', 'image', 'svg'].includes(artifact.artifact_type)) return;
   const container = document.createElement('div'); container.className = 'artifact-card';
   document.getElementById('canvasPanel').append(container);
   document.getElementById('canvasEmptyState')?.remove();
@@ -239,10 +255,19 @@ async function renderArtifact(artifact) {
     const image = document.createElement('img'); image.src = artifact.content; image.alt = 'Conversation visual'; image.style.maxWidth = '100%'; container.append(image); return;
   }
   if (artifact.artifact_type === 'svg' && artifact.content.trim().startsWith('<svg')) {
-    container.innerHTML = artifact.content; return;
+    // or event handlers in the owner approval page. Never insert it as page markup.
+    const image = document.createElement('img'); image.alt = 'Generated visual';
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(artifact.content)}`;
+    container.append(image); return;
   }
 }
 function renderToolResult(result) {
+  const approval = result?.output?.approval_session;
+  if (approval) {
+    const action = result?.output?.approval_action || lastToolCalls.get(normalizeToolName(result.tool));
+    if (action) { pendingApprovalActions.set(approval, action); if (pendingApprovalActions.size > 128) pendingApprovalActions.delete(pendingApprovalActions.keys().next().value); }
+    showError('This action needs owner approval. Open Settings to review the exact request.');
+  }
   const container = document.createElement('article'); container.className = 'artifact-card';
   const output = result?.output ?? {}; const succeeded = Boolean(result?.success);
   if (result?.tool === 'os:status' && succeeded && output) updateSystemCard(output);
@@ -259,13 +284,13 @@ function renderToolResult(result) {
     for (const issue of output.issues.slice(0, 8)) {
       const item = document.createElement('div');
       item.className = 'forge-issue-item';
-      item.innerHTML = `<span><strong>#${issue.number}</strong> ${issue.title}</span>`;
+      const label = document.createElement('span'); label.textContent = `#${issue.number} ${issue.title}`; item.append(label);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'quiet-button mini-btn';
       btn.textContent = 'Solve with Forge';
       btn.addEventListener('click', () => {
-        sendAction('forge:enqueue', { issue_number: issue.number, title: issue.title });
+        sendAction('forge:enqueue', { issue_number: issue.number, task: issue.title });
       });
       item.append(btn);
       issueList.append(item);
@@ -283,6 +308,10 @@ function renderToolResult(result) {
   else summary.textContent = succeeded ? 'The local action completed.' : 'The local action needs attention.';
   const details = document.createElement('details'); const disclosure = document.createElement('summary'); disclosure.textContent = 'Show details';
   const pre = document.createElement('pre'); pre.textContent = JSON.stringify(result, null, 2); details.append(disclosure, pre);
+  if (output?.payload_ref) {
+    const view = document.createElement('button'); view.className='quiet-button'; view.textContent='Open full output';
+    view.addEventListener('click',()=>sendAction('tool_payload',{id:output.payload_ref})); container.append(view);
+  }
   container.append(heading, summary, details); document.getElementById('canvasEmptyState')?.remove(); document.getElementById('canvasPanel').append(container);
 }
 function updateSystemCard(output) {
@@ -297,18 +326,18 @@ function renderApprovalCard(data) {
   const container = document.createElement('article');
   container.className = 'artifact-card approval-card';
   container.id = `approval-${data.session_id}`;
-  
+
   const heading = document.createElement('div');
   heading.className = 'artifact-heading';
-  
+
   const title = document.createElement('span');
   title.innerHTML = `🛡️ <strong>Guardian Security Approval</strong>`;
-  
+
   const badge = document.createElement('span');
   badge.className = 'approval-badge';
   badge.textContent = `${(data.risk_level || 'Medium').toUpperCase()} RISK`;
   heading.append(title, badge);
-  
+
   const summary = document.createElement('p');
   summary.className = 'approval-rationale';
   summary.textContent = data.rationale || `Operation requires explicit user authorization before execution.`;
@@ -316,45 +345,45 @@ function renderApprovalCard(data) {
   const details = document.createElement('div');
   details.className = 'approval-target';
   details.textContent = `Action: ${data.tool || 'Kernel tool'} ${data.params ? JSON.stringify(data.params) : ''}`;
-  
+
   const actions = document.createElement('div');
   actions.className = 'approval-actions';
-  
+
   const approveBtn = document.createElement('button');
   approveBtn.type = 'button';
   approveBtn.className = 'approval-btn approve';
   approveBtn.innerHTML = '<span>✓</span> Approve & Execute';
-  approveBtn.addEventListener('click', () => {
+  approveBtn.textContent = 'Review exact request';
+  approveBtn.addEventListener('click', async () => {
     approveBtn.disabled = true;
-    denyBtn.disabled = true;
-    approveBtn.textContent = 'Approving…';
-    sendAction('resolve_approval', {
-      session_id: data.session_id,
-      approved: true,
-      tool: data.tool,
-      params: data.params
-    });
+    try {
+      if (!approveBtn.dataset.reviewed) {
+        const pending = await ownerApprovalRequest('approvals');
+        const request = pending.pending.find(item => item.session_id === data.session_id);
+        if (!request) throw new Error('This approval expired or was cancelled.');
+        details.textContent = JSON.stringify({actor:request.requester,capability:request.capability,correlation_id:request.correlation_id,expires_at:request.expires_at}, null, 2);
+        approveBtn.dataset.reviewed = 'true'; approveBtn.textContent = 'Approve and continue';
+      } else {
+        await ownerApprovalRequest('resolve', {session_id:data.session_id,approved:true});
+        handleApprovalResolved({session_id:data.session_id,approved:true});
+      }
+    } catch(error) { showError(`${error.message} Enter the owner token in Settings → Owner approvals.`); }
+    finally { approveBtn.disabled = false; }
   });
-  
+
   const denyBtn = document.createElement('button');
-  denyBtn.type = 'button';
-  denyBtn.className = 'approval-btn deny';
-  denyBtn.innerHTML = '<span>✕</span> Deny';
-  denyBtn.addEventListener('click', () => {
-    approveBtn.disabled = true;
+  denyBtn.type = 'button'; denyBtn.className = 'approval-btn deny'; denyBtn.textContent = 'Deny';
+  denyBtn.addEventListener('click', async () => {
     denyBtn.disabled = true;
-    denyBtn.textContent = 'Denying…';
-    sendAction('resolve_approval', {
-      session_id: data.session_id,
-      approved: false,
-      tool: data.tool,
-      params: data.params
-    });
+    try {
+      await ownerApprovalRequest('revoke', {session_id:data.session_id});
+      handleApprovalResolved({session_id:data.session_id,approved:false});
+    } catch(error) { showError(error.message); denyBtn.disabled = false; }
   });
-  
+
   actions.append(approveBtn, denyBtn);
   container.append(heading, summary, details, actions);
-  
+
   document.getElementById('canvasEmptyState')?.remove();
   document.getElementById('canvasPanel').prepend(container);
   container.scrollIntoView({ behavior:'smooth', block:'nearest' });
@@ -369,7 +398,7 @@ function handleApprovalResolved(data) {
     const status = document.createElement('span');
     if (data.approved) {
       status.className = 'approval-resolved approved';
-      status.textContent = '✓ Approved by user · Executed';
+      status.textContent = '✓ Approved · Execution may now continue';
     } else {
       status.className = 'approval-resolved denied';
       status.textContent = '✕ Denied by user';
@@ -399,13 +428,13 @@ function handleForgeEvent(data) {
   const jobContainer = document.getElementById('forgeActiveJob');
   if (!jobContainer) return;
   document.getElementById('forgeEmptyState')?.remove();
-  
+
   const eventType = data.event_type || data.type;
   const jobId = data.job_id || 'Job';
   const state = data.state || data.status?.state || (data.success ? 'completed' : 'active');
-  
+
   updateForgePipeline(state);
-  
+
   let jobCard = document.getElementById(`forge-job-${jobId}`);
   if (!jobCard) {
     jobCard = document.createElement('div');
@@ -413,33 +442,20 @@ function handleForgeEvent(data) {
     jobCard.className = 'forge-job-item';
     jobContainer.prepend(jobCard);
   }
-  
+
   const badgeClass = state === 'completed' ? 'result-success' : state === 'blocked' ? 'result-failure' : 'forge-state-active';
-  
-  let reviewHtml = '';
-  if (data.passed !== undefined) {
-    reviewHtml = `<div class="forge-meta-line"><span>Review verdict:</span> <strong>${data.passed ? '✓ Passed' : 'Failed'} (${data.finding_count || 0} findings)</strong></div>`;
-  }
-  let branchHtml = '';
-  if (data.branch) {
-    branchHtml = `<div class="forge-meta-line"><span>Branch:</span> <code>${data.branch}</code></div>`;
-  }
-  let prHtml = '';
-  if (data.pr_draft_ready) {
-    prHtml = `<div class="forge-meta-line" style="color:var(--good);"><strong>✓ Pull Request draft ready for review</strong></div>`;
-  }
-  
-  jobCard.innerHTML = `
-    <div class="forge-job-heading">
-      <span><strong>${jobId}</strong> ${data.issue_number ? `· Issue #${data.issue_number}` : ''}</span>
-      <span class="${badgeClass}">● ${state}</span>
-    </div>
-    ${data.repo ? `<div class="forge-meta-line"><span>Repo:</span> <strong>${data.repo}</strong></div>` : ''}
-    ${data.task || data.summary || data.message ? `<div class="forge-task-desc">${data.task || data.summary || data.message}</div>` : ''}
-    ${branchHtml}
-    ${reviewHtml}
-    ${prHtml}
-  `;
+
+  jobCard.replaceChildren();
+  const heading=document.createElement('div');heading.className='forge-job-heading';
+  const label=document.createElement('span');label.textContent=`${jobId}${data.issue_number ? ` · Issue #${data.issue_number}` : ''}`;
+  const badge=document.createElement('span');badge.className=badgeClass;badge.textContent=`● ${state}`;heading.append(label,badge);jobCard.append(heading);
+  const metadata=(label,value)=>{const line=document.createElement('div');line.className='forge-meta-line';const key=document.createElement('span');key.textContent=label;const text=document.createElement('strong');text.textContent=String(value);line.append(key,text);jobCard.append(line);};
+  if(data.repo)metadata('Repo:',data.repo);
+  if(data.task||data.summary||data.message){const text=document.createElement('div');text.className='forge-task-desc';text.textContent=String(data.task||data.summary||data.message);jobCard.append(text);}
+  if(data.branch)metadata('Branch:',data.branch);
+  if(data.passed!==undefined)metadata('Review verdict:',`${data.passed ? '✓ Passed' : 'Failed'} (${data.finding_count||0} findings)`);
+  if(data.pr_draft_ready)metadata('✓','Pull Request draft ready for review');
+
 }
 
 function renderForgeJobList(jobs) {
@@ -594,10 +610,14 @@ async function runVisionFrame() {
     const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale));
     const context = canvas.getContext('2d'); context.drawImage(image, 0, 0, canvas.width, canvas.height); image.close();
     const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    sendAction('kernel_tool', { tool: 'vision:frame', params: { width: canvas.width, height: canvas.height, format: 'rgba', data: Array.from(pixels) } });
+    runKernelTool('vision:frame', { width: canvas.width, height: canvas.height, format: 'rgba', data: Array.from(pixels) });
   } catch (error) { showError(error.message); }
 }
-function runKernelTool(tool, params = {}) { if (sendAction('kernel_tool', { tool, params })) updateToolActivity(tool, true); }
+function runKernelTool(tool, params = {}, approval_token) {
+  if (sendAction('kernel_tool', { tool, params, approval_token })) {
+    lastToolCalls.set(normalizeToolName(tool), {tool,params}); updateToolActivity(tool, true);
+  }
+}
 function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('assistantAnnounce').textContent = ''; document.getElementById('canvasClearBtn').click(); }
 async function checkModels() {
   const summary = document.getElementById('modelStatus'); summary.textContent = 'Checking local model status…'; summary.className = 'model-summary';
@@ -647,7 +667,6 @@ document.getElementById('textForm').addEventListener('submit', async event => {
 });
 window.addEventListener('pagehide', () => { stopMic(); stopPlayback(); ws?.close(); audioCtx?.close(); });
 if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
-// Render loop for 3D Glowing Orb & 8-Band Equalizer
 let time = 0;
 let animationFrame = 0;
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -656,7 +675,6 @@ function renderVisuals() {
   if (document.hidden) return;
   if (!orbFrozen && !reduceMotion.matches) time += 0.035;
 
-  // 1. Draw Voice Orb
   const w = orbCanvas.width;
   const h = orbCanvas.height;
   const cx = w / 2;
@@ -681,7 +699,6 @@ function renderVisuals() {
   const visualTime = reduceMotion.matches ? 0 : time;
   const visualPhase = reduceMotion.matches ? 0 : wavePhase;
 
-  // Ambient outer glow
   const g = ctx.createRadialGradient(cx, cy, baseRadius * 0.2, cx, cy, baseRadius * 1.55);
   g.addColorStop(0, `${colors.mid}66`);
   g.addColorStop(0.5, `${colors.out}30`);
@@ -691,7 +708,6 @@ function renderVisuals() {
   ctx.fillStyle = g;
   ctx.fill();
 
-  // Wavy oscillating orb surface
   ctx.beginPath();
   for (let i = 0; i <= 64; i++) {
     const angle = (i / 64) * Math.PI * 2;
@@ -733,9 +749,47 @@ window.addEventListener('sail:orb-telemetry', event => {
   updateState(data.state); currentAmplitude = clamp(data.rms); wavePhase = Number.isFinite(data.phase) ? data.phase : 0;
   if (Array.isArray(data.spectrum) && data.spectrum.length === 8) spectrum8 = data.spectrum.map(clamp);
 });
-// Browser-driven screenshot tools can dispatch fixed telemetry without opening
-// the microphone or presenting a fake connected state.
 window.sailUi = Object.freeze({
   setOrbTelemetry: data => window.dispatchEvent(new CustomEvent('sail:orb-telemetry', { detail:data })),
   resumeOrbAnimation: () => { orbFrozen = false; },
 });
+
+async function ownerApprovalRequest(path, body) {
+  const token = document.getElementById('ownerApprovalToken').value;
+  const response = await fetch(`/api/guardian/${path}`, { method:body ? 'POST' : 'GET', cache:'no-store',
+    headers:{ Authorization:`Bearer ${token}`, ...(body ? {'Content-Type':'application/json'} : {}) },
+    ...(body ? { body:JSON.stringify(body) } : {}) });
+  if (!response.ok) throw new Error(response.status === 401 ? 'Owner token not accepted.' : response.status === 503 ? 'Owner approval service is not configured.' : 'Approval expired, revoked, or unavailable.');
+  return response.status === 204 ? null : response.json();
+}
+async function refreshOwnerApprovals() {
+  const output = document.getElementById('ownerApprovals'); output.textContent = 'Checking pending approvals…';
+  try {
+    const data = await ownerApprovalRequest('approvals'); output.replaceChildren();
+    if (!data.pending.length) { output.textContent = 'No pending approvals.'; return; }
+    for (const request of data.pending) {
+      const card = document.createElement('article'); card.className = 'artifact-card';
+      const title = document.createElement('p'); title.textContent = `${request.requester} · ${request.risk_level} risk`;
+      const exact = document.createElement('pre'); exact.textContent = JSON.stringify(request.capability, null, 2);
+      const scope = document.createElement('p'); scope.className = 'sheet-note'; scope.textContent = `Expires ${new Date(request.expires_at).toLocaleTimeString()} · Session ${request.correlation_id || 'native trusted caller'}`;
+      card.append(title,exact,scope);
+      const action = pendingApprovalActions.get(request.session_id) || { automatic:true };
+      if (action) {
+        const approve = document.createElement('button'); approve.className = 'quiet-button'; approve.textContent = action.automatic ? 'Approve and continue' : 'Approve and retry once';
+        approve.addEventListener('click', async () => {
+          approve.disabled = true;
+          try { const result = await ownerApprovalRequest('resolve',{session_id:request.session_id,approved:true});
+            pendingApprovalActions.delete(request.session_id); if (!action.automatic) runKernelTool(action.tool,action.params,result.token.token_id); await refreshOwnerApprovals();
+          } catch (error) { showError(error.message); approve.disabled = false; }
+        }); card.append(approve);
+      } else {
+        const note = document.createElement('p'); note.className='sheet-note'; note.textContent='This request belongs to another caller. Only its original session can execute it.'; card.append(note);
+      }
+      const reject = document.createElement('button'); reject.className='quiet-button'; reject.textContent='Deny / revoke';
+      reject.addEventListener('click', async () => { try { await ownerApprovalRequest('revoke',{session_id:request.session_id}); pendingApprovalActions.delete(request.session_id); await refreshOwnerApprovals(); } catch(error) { showError(error.message); } });
+      card.append(reject); output.append(card);
+    }
+  } catch(error) { output.textContent = error.message; }
+}
+document.getElementById('refreshApprovalsBtn').addEventListener('click',refreshOwnerApprovals);
+window.addEventListener('pagehide', () => { document.getElementById('ownerApprovalToken').value=''; pendingApprovalActions.clear(); lastToolCalls.clear(); });

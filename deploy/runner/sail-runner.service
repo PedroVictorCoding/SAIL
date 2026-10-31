@@ -1,0 +1,24 @@
+[Unit]
+Description=SAIL isolated command broker
+Requires=sail-runner.socket
+After=sail-runner.socket
+[Service]
+Type=simple
+User=sail-runner
+Group=sail
+ExecStart=/usr/local/libexec/sail-runner
+EnvironmentFile=/etc/sail/runner.env
+Environment=SAIL_RUNNER_CGROUP=/sys/fs/cgroup/system.slice/sail-runner.service
+Delegate=cpu memory pids
+DelegateSubgroup=supervisor
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/sys/fs/cgroup/system.slice/sail-runner.service
+MemoryMax=2G
+TasksMax=160
+KillMode=control-group
+TimeoutStopSec=5
+Restart=on-failure

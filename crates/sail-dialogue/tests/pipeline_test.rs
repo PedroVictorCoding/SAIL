@@ -131,17 +131,37 @@ fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
             .success
         );
     }
-    let valid = LocalKernelToolBroker::execute(&KernelToolCall {
-        tool: "vision:frame".into(),
-        params: serde_json::json!({"width":1,"height":1,"format":"rgb","data":[255,255,255]}),
-    });
-    assert!(valid.success);
-    assert_eq!(valid.output["average_luminance"], 1.0);
-    let invalid = LocalKernelToolBroker::execute(&KernelToolCall {
-        tool: "vision:frame".into(),
-        params: serde_json::json!({"width":100,"height":1,"format":"rgb","data":[255]}),
-    });
-    assert!(!invalid.success);
+    for (params, expected) in [
+        (
+            serde_json::json!({"width":1,"height":1,"format":"rgb","data":[255,255,255]}),
+            true,
+        ),
+        (
+            serde_json::json!({"width":100,"height":1,"format":"rgb","data":[255]}),
+            false,
+        ),
+    ] {
+        let call = KernelToolCall {
+            tool: "vision:frame".into(),
+            params,
+        };
+        let denied = LocalKernelToolBroker::execute(&call);
+        assert!(!denied.success);
+        let pending = approval.list_pending();
+        assert_eq!(pending.len(), 1);
+        let token = approval
+            .resolve_session(pending[0].session_id, true)
+            .unwrap();
+        let result = LocalKernelToolBroker::execute_guarded(
+            SubsystemId::Dialogue,
+            &call,
+            Some(token.token_id),
+        );
+        assert_eq!(result.success, expected);
+        if expected {
+            assert_eq!(result.output["average_luminance"], 1.0);
+        }
+    }
     assert!(sail_agents::authorize_voice_operation("shell:exec").is_err());
 }
 #[test]

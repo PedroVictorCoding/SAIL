@@ -1,0 +1,15 @@
+[package]
+name = "sail-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+sail-common.workspace = true
+sail-protocol.workspace = true
+sail-guardian.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+libc = "0.2"
+ring.workspace = true
