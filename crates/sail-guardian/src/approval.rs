@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 use uuid::Uuid;
 
-use crate::capability::{Capability, RiskLevel};
+use crate::capability::{Capability, DeviceCapability, RiskLevel};
 use sail_common::types::SubsystemId;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -17,6 +17,10 @@ pub enum ApprovalError {
     Denied,
     #[error("Approval session was revoked")]
     Revoked,
+    #[error("Resolver {0:?} is not authorized to resolve user approvals (untrusted client)")]
+    UnauthorizedResolver(SubsystemId),
+    #[error("Device {0:?} is not active or consent missing")]
+    DeviceConsentMissing(DeviceCapability),
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -39,12 +43,23 @@ pub enum TokenConsumptionError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveDeviceIndicator {
+    pub session_id: Uuid,
+    pub device: DeviceCapability,
+    pub actor: SubsystemId,
+    pub started_at: DateTime<Utc>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalSession {
     pub session_id: Uuid,
+    pub correlation_id: Option<Uuid>,
     pub requester: SubsystemId,
     pub capability: Capability,
     pub risk_level: RiskLevel,
     pub rationale: String,
+    pub resource: Option<String>,
     pub requested_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
@@ -53,8 +68,10 @@ pub struct ApprovalSession {
 pub struct CapabilityToken {
     pub token_id: Uuid,
     pub session_id: Uuid,
+    pub correlation_id: Option<Uuid>,
     pub bound_actor: SubsystemId,
     pub bound_capability: Capability,
+    pub bound_resource: Option<String>,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub single_use: bool,
@@ -67,10 +84,11 @@ struct ApprovalState {
     consumed_tokens: HashSet<Uuid>,
     revoked_sessions: HashSet<Uuid>,
     revoked_tokens: HashSet<Uuid>,
+    active_devices: HashMap<DeviceCapability, ActiveDeviceIndicator>,
 }
 
 pub struct ApprovalBroker {
-    // One lock linearizes issuance, revocation, and successful consumption.
+    // One lock linearizes issuance, revocation, device indicators, and consumption.
     state: RwLock<ApprovalState>,
     timeout_duration: Duration,
     token_ttl: Duration,
@@ -85,6 +103,12 @@ impl ApprovalBroker {
         }
     }
 
+    /// Checks if a subsystem identity is authorized to resolve interactive user approvals.
+    /// Only trusted interactive host UI / Core daemon is permitted. Untrusted agents are rejected.
+    pub fn is_authorized_approval_source(source: SubsystemId) -> bool {
+        matches!(source, SubsystemId::Core)
+    }
+
     /// Register a new interactive approval session for high/critical risk operations
     pub fn create_session(
         &self,
@@ -92,14 +116,28 @@ impl ApprovalBroker {
         capability: Capability,
         rationale: impl Into<String>,
     ) -> ApprovalSession {
+        self.create_session_with_details(requester, capability, rationale, None, None)
+    }
+
+    /// Register an approval session with explicit resource and correlation IDs
+    pub fn create_session_with_details(
+        &self,
+        requester: SubsystemId,
+        capability: Capability,
+        rationale: impl Into<String>,
+        resource: Option<String>,
+        correlation_id: Option<Uuid>,
+    ) -> ApprovalSession {
         let session_id = Uuid::new_v4();
         let now = Utc::now();
         let session = ApprovalSession {
             session_id,
+            correlation_id,
             requester,
             risk_level: capability.risk_level(),
             capability,
             rationale: rationale.into(),
+            resource,
             requested_at: now,
             expires_at: now + self.timeout_duration,
         };
@@ -109,9 +147,29 @@ impl ApprovalBroker {
         session
     }
 
-    /// Resolve an approval from a trusted caller and issue an opaque, single-use handle.
-    /// Binding is enforced against broker-owned state; this method does not authenticate users.
+    /// Authenticated session resolution: ensures only authorized UI/admin clients can approve
+    pub fn resolve_session_authenticated(
+        &self,
+        session_id: Uuid,
+        approved: bool,
+        resolver: SubsystemId,
+    ) -> Result<CapabilityToken, ApprovalError> {
+        if !Self::is_authorized_approval_source(resolver) {
+            return Err(ApprovalError::UnauthorizedResolver(resolver));
+        }
+        self.resolve_session_internal(session_id, approved)
+    }
+
+    /// Resolve an approval session (defaults to internal/Core resolver)
     pub fn resolve_session(
+        &self,
+        session_id: Uuid,
+        approved: bool,
+    ) -> Result<CapabilityToken, ApprovalError> {
+        self.resolve_session_internal(session_id, approved)
+    }
+
+    fn resolve_session_internal(
         &self,
         session_id: Uuid,
         approved: bool,
@@ -138,8 +196,10 @@ impl ApprovalBroker {
         let token = CapabilityToken {
             token_id,
             session_id,
+            correlation_id: session.correlation_id,
             bound_actor: session.requester,
             bound_capability: session.capability,
+            bound_resource: session.resource,
             issued_at: now,
             expires_at: now + self.token_ttl,
             single_use: true,
@@ -222,6 +282,76 @@ impl ApprovalBroker {
             .filter(|s| now < s.expires_at)
             .cloned()
             .collect()
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Camera & Microphone Hardware Indicators and Immediate Stop Semantics
+    // --------------------------------------------------------------------------------------------
+
+    /// Register an active hardware device stream (camera, microphone) with visible indicator.
+    pub fn register_device_activity(
+        &self,
+        device: DeviceCapability,
+        actor: SubsystemId,
+    ) -> Result<ActiveDeviceIndicator, ApprovalError> {
+        let mut state = self.state.write().unwrap();
+        let indicator = ActiveDeviceIndicator {
+            session_id: Uuid::new_v4(),
+            device: device.clone(),
+            actor,
+            started_at: Utc::now(),
+            is_active: true,
+        };
+        state.active_devices.insert(device, indicator.clone());
+        Ok(indicator)
+    }
+
+    /// Retrieve all currently active hardware device indicators (for UI display)
+    pub fn active_device_indicators(&self) -> Vec<ActiveDeviceIndicator> {
+        let state = self.state.read().unwrap();
+        state.active_devices.values().filter(|i| i.is_active).cloned().collect()
+    }
+
+    /// Check if a hardware device has an active stream
+    pub fn is_device_active(&self, device: DeviceCapability) -> bool {
+        let state = self.state.read().unwrap();
+        state.active_devices.get(&device).map(|i| i.is_active).unwrap_or(false)
+    }
+
+    /// Immediate stop semantics: mark device inactive and revoke all tokens bound to it.
+    pub fn stop_device(&self, device: DeviceCapability) {
+        let mut state = self.state.write().unwrap();
+        state.active_devices.remove(&device);
+
+        // Revoke any tokens issued for this device
+        let target_cap = Capability::Device(device);
+        let matching_tokens: Vec<Uuid> = state
+            .tokens
+            .values()
+            .filter(|t| t.bound_capability == target_cap)
+            .map(|t| t.token_id)
+            .collect();
+
+        for tid in matching_tokens {
+            state.revoked_tokens.insert(tid);
+        }
+    }
+
+    /// Emergency stop semantics: immediately halt all active hardware device streams and revoke grants.
+    pub fn emergency_stop_all_devices(&self) {
+        let mut state = self.state.write().unwrap();
+        state.active_devices.clear();
+
+        let device_tokens: Vec<Uuid> = state
+            .tokens
+            .values()
+            .filter(|t| matches!(t.bound_capability, Capability::Device(_)))
+            .map(|t| t.token_id)
+            .collect();
+
+        for tid in device_tokens {
+            state.revoked_tokens.insert(tid);
+        }
     }
 }
 
