@@ -411,3 +411,45 @@ fn vault_lock_wipes_handles_and_wrong_unlock_key_stays_locked() {
         Ok(true)
     );
 }
+
+#[test]
+fn writes_replace_only_confined_regular_files_and_never_follow_links() {
+    use std::os::unix::fs::symlink;
+    let workspace = Workspace::new();
+    let root = workspace.0.join("root");
+    fs::create_dir(&root).unwrap();
+    let sandbox = SandboxPolicy::from_roots([&root]);
+    assert_eq!(
+        sandbox
+            .write_file(std::path::Path::new("note.txt"), b"first")
+            .unwrap(),
+        5
+    );
+    assert_eq!(fs::read(root.join("note.txt")).unwrap(), b"first");
+    assert!(
+        sandbox
+            .write_file(std::path::Path::new("../outside"), b"bad")
+            .is_err()
+    );
+    assert!(
+        sandbox
+            .write_file(std::path::Path::new(".env"), b"bad")
+            .is_err()
+    );
+    let outside = workspace.0.join("outside");
+    fs::write(&outside, b"original").unwrap();
+    symlink(&outside, root.join("link")).unwrap();
+    assert!(
+        sandbox
+            .write_file(std::path::Path::new("link"), b"bad")
+            .is_err()
+    );
+    assert_eq!(fs::read(outside).unwrap(), b"original");
+    let readonly = SandboxPolicy::from_roots([&root]).with_read_only_root(&root);
+    assert!(
+        readonly
+            .write_file(std::path::Path::new("note.txt"), b"bad")
+            .is_err()
+    );
+    assert_eq!(fs::read(root.join("note.txt")).unwrap(), b"first");
+}

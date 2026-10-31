@@ -38,7 +38,7 @@ impl ConfinedRoot {
     pub fn path(&self) -> &Path {
         &self.path
     }
-    pub fn open(&self, requested: &Path) -> io::Result<ConfinedFile> {
+    fn relative<'a>(&self, requested: &'a Path) -> io::Result<&'a Path> {
         let relative = if requested.is_absolute() {
             requested
                 .strip_prefix(&self.path)
@@ -67,6 +67,69 @@ impl ConfinedRoot {
         } else {
             relative
         };
+        Ok(relative)
+    }
+    /// Replace one regular workspace file relative to a pinned parent. No
+    /// caller pathname is reopened after confinement, and links are not followed.
+    pub fn atomic_write(&self, requested: &Path, content: &[u8]) -> io::Result<usize> {
+        use std::io::Write;
+        if content.len() > 65536 {
+            return Err(io::Error::other("write exceeds 64 KiB"));
+        }
+        let relative = self.relative(requested)?;
+        let basename = relative
+            .file_name()
+            .ok_or_else(|| io::Error::other("file name required"))?;
+        let parent = self.open(
+            relative
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new(".")),
+        )?;
+        if !parent.metadata()?.is_dir() {
+            return Err(io::Error::other("parent is not a directory"));
+        }
+        match self.open(relative) {
+            Ok(file) if file.metadata()?.is_file() => {}
+            Ok(_) => return Err(io::Error::other("only regular files may be replaced")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let temporary = CString::new(format!(".sail-write-{}", uuid::Uuid::new_v4())).unwrap();
+        let target = CString::new(basename.as_bytes()).map_err(io::Error::other)?;
+        let directory = parent.descriptor.as_raw_fd();
+        // SAFETY: names remain valid and the pinned directory descriptor is owned.
+        let fd = unsafe {
+            libc::openat(
+                directory,
+                temporary.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let result = (|| {
+            // SAFETY: successful openat returned a newly owned descriptor.
+            let mut file = unsafe { File::from_raw_fd(fd) };
+            file.write_all(content)?;
+            file.sync_all()?;
+            // renameat replaces the directory entry, never a symlink's target.
+            if unsafe { libc::renameat(directory, temporary.as_ptr(), directory, target.as_ptr()) }
+                != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(content.len())
+        })();
+        if result.is_err() {
+            unsafe { libc::unlinkat(directory, temporary.as_ptr(), 0) };
+        }
+        result
+    }
+    pub fn open(&self, requested: &Path) -> io::Result<ConfinedFile> {
+        let relative = self.relative(requested)?;
         let name = CString::new(relative.as_os_str().as_bytes())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
         #[cfg(target_os = "linux")]

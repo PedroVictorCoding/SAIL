@@ -46,7 +46,8 @@ function toolCard(tool) {
   const name = normalizeToolName(tool);
   if (name.startsWith('vision:')) return document.getElementById('canvasCard');
   if (name === 'os:status') return document.getElementById('systemCard');
-  if (name.startsWith('proc:') || name.startsWith('fs:')) return document.getElementById('toolsCard');
+  if (name.startsWith('proc:') || name.startsWith('fs:') || name.startsWith('github:')) return document.getElementById('toolsCard');
+  if (name.startsWith('forge:')) return document.getElementById('forgeCard');
   return null;
 }
 function updateToolActivity(tool, active) {
@@ -62,7 +63,18 @@ function syncActivityPill() {
   const activity = document.getElementById('activityPill');
   const stateLabels = { thinking:'Thinking', working:'Working', transcribing:'Transcribing' };
   activity.hidden = activeTools.size === 0 && !stateLabels[orbState];
-  const labels = { 'os:status':'Checking system', 'proc:list':'Checking processes', 'fs:query':'Looking in workspace', 'vision:frame':'Analyzing image' };
+  const labels = {
+    'os:status':'Checking system',
+    'proc:list':'Checking processes',
+    'fs:query':'Looking in workspace',
+    'fs:read':'Reading workspace file',
+    'fs:write':'Writing workspace file',
+    'vision:frame':'Analyzing image',
+    'forge:enqueue':'Dispatching Forge task',
+    'forge:status':'Checking Forge job',
+    'forge:list':'Listing Forge tasks',
+    'github:issues':'Checking GitHub repo',
+  };
   document.getElementById('activityText').textContent = activeTools.size ? labels[[...activeTools.keys()].at(-1)] || 'Using a local tool' : stateLabels[orbState] || '';
 }
 function sendAction(action, fields = {}) {
@@ -72,7 +84,12 @@ function sendAction(action, fields = {}) {
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws/voice`);
-  ws.onopen = () => { setConnection('Connected · local session', true); micBtn.disabled = false; if (orbState === 'disconnected') updateState('idle'); };
+  ws.onopen = () => {
+    setConnection('Connected · local session', true);
+    micBtn.disabled = false;
+    if (orbState === 'disconnected') updateState('idle');
+    sendAction('forge:list');
+  };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
     pendingApprovalActions.clear(); lastToolCalls.clear();
@@ -131,6 +148,7 @@ function connectWs() {
         const event = data.event;
         if (event.approval_session) {
           pendingApprovalActions.set(event.approval_session, { automatic:true });
+          renderApprovalCard({session_id:event.approval_session,tool:event.tool,rationale:'Review the exact operation with your owner credentials before continuing.'});
           updateState('approval_required');
           transcriptBox.textContent = 'Approval needed · Open Settings → Owner approvals to review the exact operation.';
         }
@@ -142,6 +160,24 @@ function connectWs() {
       case 'tool_started': updateToolActivity(data.tool, true); break;
       case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); break;
       case 'canvas': renderArtifact(data.artifact); break;
+      case 'approval_required':
+        renderApprovalCard(data);
+        updateState('approval_required');
+        break;
+      case 'approval_resolved':
+        handleApprovalResolved(data);
+        break;
+      case 'forge_event':
+      case 'forge_enqueued':
+      case 'forge_status_response':
+        handleForgeEvent(data);
+        break;
+      case 'forge_jobs':
+        renderForgeJobList(data.jobs);
+        break;
+      case 'forge_cancelled':
+        handleForgeCancelled(data);
+        break;
       case 'error': showError(data.message); break;
     }
   };
@@ -219,7 +255,6 @@ async function renderArtifact(artifact) {
     const image = document.createElement('img'); image.src = artifact.content; image.alt = 'Conversation visual'; image.style.maxWidth = '100%'; container.append(image); return;
   }
   if (artifact.artifact_type === 'svg' && artifact.content.trim().startsWith('<svg')) {
-    // SVG is untrusted model output. Image-document mode cannot run its scripts
     // or event handlers in the owner approval page. Never insert it as page markup.
     const image = document.createElement('img'); image.alt = 'Generated visual';
     image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(artifact.content)}`;
@@ -242,6 +277,29 @@ function renderToolResult(result) {
   const summary = document.createElement('p'); summary.className = 'result-summary';
   if (Array.isArray(output?.processes)) summary.textContent = `${output.processes.length} ${output.processes.length === 1 ? 'process' : 'processes'} found`;
   else if (Array.isArray(output?.entries)) summary.textContent = `${output.entries.length} ${output.entries.length === 1 ? 'item' : 'items'} in ${String(output.path || 'the selected folder')}`;
+  else if (Array.isArray(output?.issues)) {
+    summary.textContent = `${output.count} GitHub issues retrieved`;
+    const issueList = document.createElement('div');
+    issueList.className = 'forge-issue-list';
+    for (const issue of output.issues.slice(0, 8)) {
+      const item = document.createElement('div');
+      item.className = 'forge-issue-item';
+      const label = document.createElement('span'); label.textContent = `#${issue.number} ${issue.title}`; item.append(label);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'quiet-button mini-btn';
+      btn.textContent = 'Solve with Forge';
+      btn.addEventListener('click', () => {
+        sendAction('forge:enqueue', { issue_number: issue.number, task: issue.title });
+      });
+      item.append(btn);
+      issueList.append(item);
+    }
+    container.append(issueList);
+  }
+  else if (output?.job_id) summary.textContent = `Forge job enqueued: ${output.job_id} (Issue #${output.issue_number || '—'})`;
+  else if (output?.bytes_written) summary.textContent = `Wrote ${output.bytes_written} bytes to ${output.path}`;
+  else if (output?.content) summary.textContent = `Read ${output.bytes || output.content.length} bytes from ${output.path}`;
   else if (output?.os) summary.textContent = `${String(output.os)} · ${String(output.logical_cpus || '—')} CPUs · ${String(output.memory_percent || '—')} memory used`;
   else if (output?.error) summary.textContent = String(output.error);
   else if (Number.isFinite(output?.width) && Number.isFinite(output?.height)) summary.textContent = `Image analyzed · ${output.width} × ${output.height} pixels`;
@@ -261,6 +319,174 @@ function updateSystemCard(output) {
   document.getElementById('systemMemory').textContent = output.memory_percent ? `${String(output.memory_percent)} used` : (output.memory_used_gb || 'Unavailable');
   document.getElementById('systemLoad').textContent = Array.isArray(output.load_average) ? output.load_average.slice(0, 3).map(value => Number(value).toFixed(2)).join(' · ') : 'Unavailable';
   document.getElementById('systemNote').textContent = [output.os, output.uptime_hours ? `Uptime ${output.uptime_hours} h` : ''].filter(Boolean).join(' · ') || 'Live status from the local device.';
+}
+function renderApprovalCard(data) {
+  const existing = document.getElementById(`approval-${data.session_id}`);
+  if (existing) return;
+  const container = document.createElement('article');
+  container.className = 'artifact-card approval-card';
+  container.id = `approval-${data.session_id}`;
+  
+  const heading = document.createElement('div');
+  heading.className = 'artifact-heading';
+  
+  const title = document.createElement('span');
+  title.innerHTML = `🛡️ <strong>Guardian Security Approval</strong>`;
+  
+  const badge = document.createElement('span');
+  badge.className = 'approval-badge';
+  badge.textContent = `${(data.risk_level || 'Medium').toUpperCase()} RISK`;
+  heading.append(title, badge);
+  
+  const summary = document.createElement('p');
+  summary.className = 'approval-rationale';
+  summary.textContent = data.rationale || `Operation requires explicit user authorization before execution.`;
+
+  const details = document.createElement('div');
+  details.className = 'approval-target';
+  details.textContent = `Action: ${data.tool || 'Kernel tool'} ${data.params ? JSON.stringify(data.params) : ''}`;
+  
+  const actions = document.createElement('div');
+  actions.className = 'approval-actions';
+  
+  const approveBtn = document.createElement('button');
+  approveBtn.type = 'button';
+  approveBtn.className = 'approval-btn approve';
+  approveBtn.innerHTML = '<span>✓</span> Approve & Execute';
+  approveBtn.textContent = 'Review exact request';
+  approveBtn.addEventListener('click', async () => {
+    approveBtn.disabled = true;
+    try {
+      if (!approveBtn.dataset.reviewed) {
+        const pending = await ownerApprovalRequest('approvals');
+        const request = pending.pending.find(item => item.session_id === data.session_id);
+        if (!request) throw new Error('This approval expired or was cancelled.');
+        details.textContent = JSON.stringify({actor:request.requester,capability:request.capability,correlation_id:request.correlation_id,expires_at:request.expires_at}, null, 2);
+        approveBtn.dataset.reviewed = 'true'; approveBtn.textContent = 'Approve and continue';
+      } else {
+        await ownerApprovalRequest('resolve', {session_id:data.session_id,approved:true});
+        handleApprovalResolved({session_id:data.session_id,approved:true});
+      }
+    } catch(error) { showError(`${error.message} Enter the owner token in Settings → Owner approvals.`); }
+    finally { approveBtn.disabled = false; }
+  });
+
+  const denyBtn = document.createElement('button');
+  denyBtn.type = 'button'; denyBtn.className = 'approval-btn deny'; denyBtn.textContent = 'Deny';
+  denyBtn.addEventListener('click', async () => {
+    denyBtn.disabled = true;
+    try {
+      await ownerApprovalRequest('revoke', {session_id:data.session_id});
+      handleApprovalResolved({session_id:data.session_id,approved:false});
+    } catch(error) { showError(error.message); denyBtn.disabled = false; }
+  });
+
+  actions.append(approveBtn, denyBtn);
+  container.append(heading, summary, details, actions);
+  
+  document.getElementById('canvasEmptyState')?.remove();
+  document.getElementById('canvasPanel').prepend(container);
+  container.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+function handleApprovalResolved(data) {
+  const card = document.getElementById(`approval-${data.session_id}`);
+  if (!card) return;
+  const actions = card.querySelector('.approval-actions');
+  if (actions) {
+    actions.replaceChildren();
+    const status = document.createElement('span');
+    if (data.approved) {
+      status.className = 'approval-resolved approved';
+      status.textContent = '✓ Approved · Execution may now continue';
+    } else {
+      status.className = 'approval-resolved denied';
+      status.textContent = '✕ Denied by user';
+    }
+    actions.append(status);
+  }
+}
+
+function updateForgePipeline(step) {
+  const chips = document.querySelectorAll('.forge-chip');
+  const stepMap = {
+    'worktree': 0, 'created': 0, 'enqueued': 0,
+    'planning': 1, 'solution': 1,
+    'coding': 2,
+    'testing': 3,
+    'review': 4, 'reviewing': 4,
+    'pr': 5, 'completed': 5, 'pr_draft_ready': 5
+  };
+  const activeIdx = stepMap[String(step).toLowerCase()] ?? -1;
+  chips.forEach((chip, idx) => {
+    chip.classList.toggle('active', idx === activeIdx);
+    chip.classList.toggle('done', activeIdx >= 0 && idx < activeIdx);
+  });
+}
+
+function handleForgeEvent(data) {
+  const jobContainer = document.getElementById('forgeActiveJob');
+  if (!jobContainer) return;
+  document.getElementById('forgeEmptyState')?.remove();
+  
+  const eventType = data.event_type || data.type;
+  const jobId = data.job_id || 'Job';
+  const state = data.state || data.status?.state || (data.success ? 'completed' : 'active');
+  
+  updateForgePipeline(state);
+  
+  let jobCard = document.getElementById(`forge-job-${jobId}`);
+  if (!jobCard) {
+    jobCard = document.createElement('div');
+    jobCard.id = `forge-job-${jobId}`;
+    jobCard.className = 'forge-job-item';
+    jobContainer.prepend(jobCard);
+  }
+  
+  const badgeClass = state === 'completed' ? 'result-success' : state === 'blocked' ? 'result-failure' : 'forge-state-active';
+  
+  jobCard.replaceChildren();
+  const heading=document.createElement('div');heading.className='forge-job-heading';
+  const label=document.createElement('span');label.textContent=`${jobId}${data.issue_number ? ` · Issue #${data.issue_number}` : ''}`;
+  const badge=document.createElement('span');badge.className=badgeClass;badge.textContent=`● ${state}`;heading.append(label,badge);jobCard.append(heading);
+  const metadata=(label,value)=>{const line=document.createElement('div');line.className='forge-meta-line';const key=document.createElement('span');key.textContent=label;const text=document.createElement('strong');text.textContent=String(value);line.append(key,text);jobCard.append(line);};
+  if(data.repo)metadata('Repo:',data.repo);
+  if(data.task||data.summary||data.message){const text=document.createElement('div');text.className='forge-task-desc';text.textContent=String(data.task||data.summary||data.message);jobCard.append(text);}
+  if(data.branch)metadata('Branch:',data.branch);
+  if(data.passed!==undefined)metadata('Review verdict:',`${data.passed ? '✓ Passed' : 'Failed'} (${data.finding_count||0} findings)`);
+  if(data.pr_draft_ready)metadata('✓','Pull Request draft ready for review');
+
+}
+
+function renderForgeJobList(jobs) {
+  const jobContainer = document.getElementById('forgeActiveJob');
+  if (!jobContainer) return;
+  if (!Array.isArray(jobs) || jobs.length === 0) {
+    jobContainer.innerHTML = '<p class="forge-empty" id="forgeEmptyState">No active Forge jobs. Ask SAIL or enqueue below.</p>';
+    return;
+  }
+  jobContainer.replaceChildren();
+  for (const job of jobs) {
+    handleForgeEvent({
+      job_id: job.job_id,
+      repo: job.repo,
+      issue_number: job.issue_number,
+      state: typeof job.state === 'string' ? job.state : JSON.stringify(job.state),
+      branch: job.branch,
+      summary: job.diff_stat ? `${job.diff_stat.files_changed} files changed, +${job.diff_stat.insertions}/-${job.diff_stat.deletions}` : null,
+    });
+  }
+}
+
+function handleForgeCancelled(data) {
+  const jobCard = document.getElementById(`forge-job-${data.job_id}`);
+  if (jobCard) {
+    const badge = jobCard.querySelector('.forge-job-heading span:last-child');
+    if (badge) {
+      badge.className = 'result-failure';
+      badge.textContent = '● Cancelled';
+    }
+  }
 }
 async function ensureAudio() {
   if (!audioCtx || audioCtx.state === 'closed') { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); workletLoaded=false; }
@@ -441,7 +667,6 @@ document.getElementById('textForm').addEventListener('submit', async event => {
 });
 window.addEventListener('pagehide', () => { stopMic(); stopPlayback(); ws?.close(); audioCtx?.close(); });
 if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
-// Render loop for 3D Glowing Orb & 8-Band Equalizer
 let time = 0;
 let animationFrame = 0;
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -450,7 +675,6 @@ function renderVisuals() {
   if (document.hidden) return;
   if (!orbFrozen && !reduceMotion.matches) time += 0.035;
 
-  // 1. Draw Voice Orb
   const w = orbCanvas.width;
   const h = orbCanvas.height;
   const cx = w / 2;
@@ -475,7 +699,6 @@ function renderVisuals() {
   const visualTime = reduceMotion.matches ? 0 : time;
   const visualPhase = reduceMotion.matches ? 0 : wavePhase;
 
-  // Ambient outer glow
   const g = ctx.createRadialGradient(cx, cy, baseRadius * 0.2, cx, cy, baseRadius * 1.55);
   g.addColorStop(0, `${colors.mid}66`);
   g.addColorStop(0.5, `${colors.out}30`);
@@ -485,7 +708,6 @@ function renderVisuals() {
   ctx.fillStyle = g;
   ctx.fill();
 
-  // Wavy oscillating orb surface
   ctx.beginPath();
   for (let i = 0; i <= 64; i++) {
     const angle = (i / 64) * Math.PI * 2;
@@ -527,8 +749,6 @@ window.addEventListener('sail:orb-telemetry', event => {
   updateState(data.state); currentAmplitude = clamp(data.rms); wavePhase = Number.isFinite(data.phase) ? data.phase : 0;
   if (Array.isArray(data.spectrum) && data.spectrum.length === 8) spectrum8 = data.spectrum.map(clamp);
 });
-// Browser-driven screenshot tools can dispatch fixed telemetry without opening
-// the microphone or presenting a fake connected state.
 window.sailUi = Object.freeze({
   setOrbTelemetry: data => window.dispatchEvent(new CustomEvent('sail:orb-telemetry', { detail:data })),
   resumeOrbAnimation: () => { orbFrozen = false; },

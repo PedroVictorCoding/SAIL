@@ -22,4 +22,5 @@ license = "MIT OR Apache-2.0"
 dark = true
 light = false
 fallback = "Reduced-motion static orb in the same Canvas2D renderer"
-max_bytes = 50000
+# This source also contains the unified Forge and authenticated approval UI.
+max_bytes = 60000

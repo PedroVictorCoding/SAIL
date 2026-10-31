@@ -141,6 +141,46 @@ pub fn scheduler(broker: Arc<sail_guardian::GuardianExecutionBroker>) -> Arc<Too
             timeout_ms:120000,resource_class:"io".into(),concurrency_limit:4,
         },Arc::new(NamedKernel(id))).expect("kernel descriptor");
     }
+    for (id, properties, effect) in [
+        (
+            "fs:write",
+            json!({"path":{"type":"string","maxLength":4096},"content":{"type":"string","maxLength":32700}}),
+            ToolEffect::Mutating,
+        ),
+        (
+            "fs:read",
+            json!({"path":{"type":"string","maxLength":4096}}),
+            ToolEffect::ReadOnly,
+        ),
+        (
+            "forge:enqueue",
+            json!({"issue_number":{"type":"integer","minimum":1},"repo":{"type":"string","maxLength":512},"task":{"type":"string","maxLength":12000},"body":{"type":"string","maxLength":12000}}),
+            ToolEffect::Mutating,
+        ),
+        (
+            "forge:cancel",
+            json!({"job_id":{"type":"string","maxLength":128},"reason":{"type":"string","maxLength":2048}}),
+            ToolEffect::Mutating,
+        ),
+        (
+            "forge:status",
+            json!({"job_id":{"type":"string","maxLength":128}}),
+            ToolEffect::ReadOnly,
+        ),
+        ("forge:list", json!({}), ToolEffect::ReadOnly),
+        (
+            "github:issues",
+            json!({"limit":{"type":"integer","minimum":1,"maximum":50}}),
+            ToolEffect::ReadOnly,
+        ),
+    ] {
+        registry.register(ToolDescriptor {
+            id:id.into(),version:1,description:format!("Local {id}"),
+            input_schema:json!({"type":"object","properties":properties,"additionalProperties":false}),
+            output_schema:json!({"type":"string","maxLength":1048576}),security_effect:effect,
+            required_capabilities:vec![id.into()],timeout_ms:120000,resource_class:"io".into(),concurrency_limit:2,
+        },Arc::new(NamedKernel(id))).expect("Forge and file descriptor");
+    }
     registry.register(ToolDescriptor {
         id:"canvas:publish".into(),version:1,description:"Present a diagram or structured information beside the conversation".into(),
         input_schema:json!({"type":"object","properties":{"artifact_type":{"type":"string","enum":["mermaid","json","svg"],"maxLength":16},"content":{"type":"string","maxLength":32700}},"required":["artifact_type","content"],"additionalProperties":false}),

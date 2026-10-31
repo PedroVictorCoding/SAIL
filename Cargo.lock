@@ -1443,6 +1443,7 @@ dependencies = [
  "sail-canvas",
  "sail-common",
  "sail-flow",
+ "sail-forge",
  "sail-guardian",
  "sail-mind",
  "sail-protocol",

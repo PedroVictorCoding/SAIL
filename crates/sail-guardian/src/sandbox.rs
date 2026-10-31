@@ -249,6 +249,28 @@ impl SandboxPolicy {
             target: target.into(),
         })
     }
+    pub fn write_file(&self, path: &Path, content: &[u8]) -> Result<usize, SandboxViolation> {
+        for root in &self.confined_roots {
+            if path.is_absolute() && !path.starts_with(root.path()) {
+                continue;
+            }
+            let absolute = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                root.path().join(path)
+            };
+            if self.read_only_roots.iter().any(|r| absolute.starts_with(r)) {
+                return Err(SandboxViolation::WriteToReadOnlyRoot { path: absolute });
+            }
+            return root
+                .atomic_write(path, content)
+                .map_err(|_| SandboxViolation::SensitivePathBlocked { path: absolute });
+        }
+        Err(SandboxViolation::PathEscapesRoot {
+            path: path.into(),
+            target: path.into(),
+        })
+    }
     pub fn allowed_roots(&self) -> &[PathBuf] {
         &self.allowed_roots
     }

@@ -82,11 +82,16 @@ impl ToolLoopGuard {
     fn key(name: &str, params: &Value) -> String {
         let canonical = sail_agents::authorize_voice_operation(name).unwrap_or(name);
         let normalized = match canonical {
-            "fs:query" => json!({"path":params.get("path").and_then(Value::as_str).unwrap_or(".")}),
+            "fs:query" | "fs:read" => {
+                json!({"path":params.get("path").and_then(Value::as_str).unwrap_or(".")})
+            }
             "proc:list" => {
                 json!({"limit":params.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1,100)})
             }
-            "os:status" | "vision:frame" => json!({}),
+            "os:status" | "vision:frame" | "forge:list" => json!({}),
+            "forge:enqueue" | "fs:write" => params.clone(),
+            "forge:status" | "forge:cancel" => json!({"job_id":params.get("job_id")}),
+            "github:issues" => json!({"limit":params.get("limit")}),
             _ => params.clone(),
         };
         format!("{canonical}:{normalized}")
@@ -171,6 +176,33 @@ pub fn tool_status_summary(messages: &[Value]) -> String {
                 "vision:frame" => {
                     format!("{tool}: measured the attached image's luminance and edge density.")
                 }
+                "fs:read" => format!(
+                    "{tool}: read {}.",
+                    output["path"].as_str().unwrap_or("file")
+                ),
+                "fs:write" => format!(
+                    "{tool}: wrote {} bytes to {}.",
+                    output["bytes_written"].as_u64().unwrap_or(0),
+                    output["path"].as_str().unwrap_or("file")
+                ),
+                "forge:enqueue" => format!(
+                    "{tool}: dispatched Forge coding job {} for issue #{}.",
+                    output["job_id"].as_str().unwrap_or("unknown"),
+                    output["issue_number"].as_u64().unwrap_or(0)
+                ),
+                "forge:status" => format!(
+                    "{tool}: Forge job {} is {}.",
+                    output["status"]["job_id"].as_str().unwrap_or("unknown"),
+                    output["status"]["state"].as_str().unwrap_or("active")
+                ),
+                "forge:list" => format!(
+                    "{tool}: retrieved {} Forge jobs.",
+                    output["count"].as_u64().unwrap_or(0)
+                ),
+                "github:issues" => format!(
+                    "{tool}: retrieved {} open GitHub issues.",
+                    output["count"].as_u64().unwrap_or(0)
+                ),
                 _ => format!("{tool}: operation completed."),
             }
         };
