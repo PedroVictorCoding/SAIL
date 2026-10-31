@@ -253,19 +253,20 @@ function renderToolResult(result) {
   if (Array.isArray(output?.processes)) summary.textContent = `${output.processes.length} ${output.processes.length === 1 ? 'process' : 'processes'} found`;
   else if (Array.isArray(output?.entries)) summary.textContent = `${output.entries.length} ${output.entries.length === 1 ? 'item' : 'items'} in ${String(output.path || 'the selected folder')}`;
   else if (Array.isArray(output?.issues)) {
-    summary.textContent = `${output.count} GitHub issues retrieved`;
+    summary.textContent = `${output.count} GitHub issues retrieved (sorted by priority)`;
     const issueList = document.createElement('div');
     issueList.className = 'forge-issue-list';
     for (const issue of output.issues.slice(0, 8)) {
       const item = document.createElement('div');
       item.className = 'forge-issue-item';
-      item.innerHTML = `<span><strong>#${issue.number}</strong> ${issue.title}</span>`;
+      const prio = issue.priority || 'P?';
+      item.innerHTML = `<span class="forge-priority-pill ${prio.toLowerCase().replace('?', 'unknown')}">${prio}</span> <span style="min-width:0; overflow:hidden; text-overflow:ellipsis;"><strong>#${issue.number}</strong> ${issue.title}</span>`;
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'quiet-button mini-btn';
       btn.textContent = 'Solve with Forge';
       btn.addEventListener('click', () => {
-        sendAction('forge:enqueue', { issue_number: issue.number, title: issue.title });
+        sendAction('forge:enqueue', { issue_number: issue.number, title: issue.title, priority: prio });
       });
       item.append(btn);
       issueList.append(item);

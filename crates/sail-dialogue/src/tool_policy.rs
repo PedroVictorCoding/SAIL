@@ -200,7 +200,7 @@ pub fn tool_status_summary(messages: &[Value]) -> String {
                     output["count"].as_u64().unwrap_or(0)
                 ),
                 "github:issues" => format!(
-                    "{tool}: retrieved {} open GitHub issues.",
+                    "{tool}: retrieved {} open GitHub issues sorted by priority.",
                     output["count"].as_u64().unwrap_or(0)
                 ),
                 _ => format!("{tool}: operation completed."),

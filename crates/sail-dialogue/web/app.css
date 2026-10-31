@@ -260,4 +260,23 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 .forge-issue-list { display:grid; gap:6px; margin-top:10px }
 .forge-issue-item { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:6px 10px; border-radius:10px; background:#ffffff06; font-size:12px }
 .mini-btn { min-height:28px; padding:0 8px; font-size:11px }
+.forge-priority-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  flex-shrink: 0;
+}
+.forge-priority-pill.p0 { background: #e0525233; color: #ff8585; border: 1px solid #e0525266; }
+.forge-priority-pill.p1 { background: #e5be7933; color: #f7d591; border: 1px solid #e5be7966; }
+.forge-priority-pill.p2 { background: #8174d433; color: #d6d1ff; border: 1px solid #8174d466; }
+.forge-priority-pill.p3 { background: #4faf9c33; color: #7fd4c1; border: 1px solid #4faf9c66; }
+.forge-priority-pill.p4 { background: #ffffff14; color: #a5acbf; border: 1px solid #ffffff1a; }
+.forge-priority-pill.punknown { background: #ffffff0d; color: #7b8091; border: 1px solid #ffffff12; }
 
