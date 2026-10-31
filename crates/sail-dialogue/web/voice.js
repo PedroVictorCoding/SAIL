@@ -326,18 +326,18 @@ function renderApprovalCard(data) {
   const container = document.createElement('article');
   container.className = 'artifact-card approval-card';
   container.id = `approval-${data.session_id}`;
-  
+
   const heading = document.createElement('div');
   heading.className = 'artifact-heading';
-  
+
   const title = document.createElement('span');
   title.innerHTML = `🛡️ <strong>Guardian Security Approval</strong>`;
-  
+
   const badge = document.createElement('span');
   badge.className = 'approval-badge';
   badge.textContent = `${(data.risk_level || 'Medium').toUpperCase()} RISK`;
   heading.append(title, badge);
-  
+
   const summary = document.createElement('p');
   summary.className = 'approval-rationale';
   summary.textContent = data.rationale || `Operation requires explicit user authorization before execution.`;
@@ -345,10 +345,10 @@ function renderApprovalCard(data) {
   const details = document.createElement('div');
   details.className = 'approval-target';
   details.textContent = `Action: ${data.tool || 'Kernel tool'} ${data.params ? JSON.stringify(data.params) : ''}`;
-  
+
   const actions = document.createElement('div');
   actions.className = 'approval-actions';
-  
+
   const approveBtn = document.createElement('button');
   approveBtn.type = 'button';
   approveBtn.className = 'approval-btn approve';
@@ -383,7 +383,7 @@ function renderApprovalCard(data) {
 
   actions.append(approveBtn, denyBtn);
   container.append(heading, summary, details, actions);
-  
+
   document.getElementById('canvasEmptyState')?.remove();
   document.getElementById('canvasPanel').prepend(container);
   container.scrollIntoView({ behavior:'smooth', block:'nearest' });
@@ -428,13 +428,13 @@ function handleForgeEvent(data) {
   const jobContainer = document.getElementById('forgeActiveJob');
   if (!jobContainer) return;
   document.getElementById('forgeEmptyState')?.remove();
-  
+
   const eventType = data.event_type || data.type;
   const jobId = data.job_id || 'Job';
   const state = data.state || data.status?.state || (data.success ? 'completed' : 'active');
-  
+
   updateForgePipeline(state);
-  
+
   let jobCard = document.getElementById(`forge-job-${jobId}`);
   if (!jobCard) {
     jobCard = document.createElement('div');
@@ -442,9 +442,9 @@ function handleForgeEvent(data) {
     jobCard.className = 'forge-job-item';
     jobContainer.prepend(jobCard);
   }
-  
+
   const badgeClass = state === 'completed' ? 'result-success' : state === 'blocked' ? 'result-failure' : 'forge-state-active';
-  
+
   jobCard.replaceChildren();
   const heading=document.createElement('div');heading.className='forge-job-heading';
   const label=document.createElement('span');label.textContent=`${jobId}${data.issue_number ? ` · Issue #${data.issue_number}` : ''}`;
