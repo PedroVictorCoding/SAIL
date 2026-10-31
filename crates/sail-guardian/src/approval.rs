@@ -1,4 +1,4 @@
-use crate::capability::{Capability, RiskLevel};
+use crate::capability::{Capability, DeviceCapability, RiskLevel};
 use chrono::{DateTime, Duration, Utc};
 use sail_common::types::SubsystemId;
 use serde::{Deserialize, Serialize};
@@ -60,6 +60,14 @@ pub struct CapabilityToken {
     pub expires_at: DateTime<Utc>,
     pub single_use: bool,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveDeviceIndicator {
+    pub session_id: Uuid,
+    pub device: DeviceCapability,
+    pub actor: SubsystemId,
+    pub started_at: DateTime<Utc>,
+    pub is_active: bool,
+}
 #[derive(Clone, Copy)]
 enum TokenState {
     Ready,
@@ -70,6 +78,7 @@ enum TokenState {
 struct State {
     pending: HashMap<Uuid, ApprovalSession>,
     tokens: HashMap<Uuid, (CapabilityToken, TokenState)>,
+    active_devices: HashMap<DeviceCapability, ActiveDeviceIndicator>,
 }
 /// Trusted in-process authority. Network/event clients must authenticate before
 /// calling resolve_session. Approval events alone can never mint authority.
@@ -223,6 +232,84 @@ impl ApprovalBroker {
             .tokens
             .get(&id)
             .is_some_and(|(_, s)| matches!(s, TokenState::Revoked))
+    }
+    /// Trusted execution-side lookup; never exposed over the event bus.
+    pub fn register_device_activity(
+        &self,
+        device: DeviceCapability,
+        actor: SubsystemId,
+    ) -> Result<ActiveDeviceIndicator, ApprovalError> {
+        let indicator = ActiveDeviceIndicator {
+            session_id: Uuid::new_v4(),
+            device: device.clone(),
+            actor,
+            started_at: Utc::now(),
+            is_active: true,
+        };
+        self.state
+            .lock()
+            .unwrap()
+            .active_devices
+            .insert(device, indicator.clone());
+        Ok(indicator)
+    }
+    pub fn active_device_indicators(&self) -> Vec<ActiveDeviceIndicator> {
+        self.state
+            .lock()
+            .unwrap()
+            .active_devices
+            .values()
+            .cloned()
+            .collect()
+    }
+    pub fn is_device_active(&self, device: DeviceCapability) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .active_devices
+            .contains_key(&device)
+    }
+    pub fn stop_device(&self, device: DeviceCapability) {
+        let mut state = self.state.lock().unwrap();
+        state.active_devices.remove(&device);
+        for (token, status) in state.tokens.values_mut() {
+            if token.bound_capability == Capability::Device(device.clone()) {
+                *status = TokenState::Revoked;
+            }
+        }
+        state
+            .pending
+            .retain(|_, session| session.capability != Capability::Device(device.clone()));
+    }
+    pub fn emergency_stop_all_devices(&self) {
+        for device in [
+            DeviceCapability::Camera,
+            DeviceCapability::Microphone,
+            DeviceCapability::Speaker,
+            DeviceCapability::Display,
+        ] {
+            self.stop_device(device);
+        }
+    }
+    pub fn resolved_token(&self, session: Uuid) -> Result<Option<Uuid>, ApprovalError> {
+        let state = self.state.lock().unwrap();
+        if let Some(pending) = state.pending.get(&session) {
+            return if pending.expires_at > Utc::now() {
+                Ok(None)
+            } else {
+                Err(ApprovalError::Expired(session))
+            };
+        }
+        for (token, status) in state.tokens.values() {
+            if token.session_id == session {
+                return match status {
+                    TokenState::Ready if token.expires_at > Utc::now() => Ok(Some(token.token_id)),
+                    TokenState::Revoked => Err(ApprovalError::Revoked),
+                    _ => Err(ApprovalError::Expired(session)),
+                };
+            }
+        }
+        Err(ApprovalError::Denied)
     }
     pub fn list_pending(&self) -> Vec<ApprovalSession> {
         let now = Utc::now();

@@ -23,7 +23,10 @@ pub use broker::{
 pub use capability::{
     Capability, DeviceCapability, FsCapability, RiskLevel, SystemCapability, ToolCapability,
 };
-pub use credentials::{CredentialError, CredentialHandle, CredentialStore};
+pub use credentials::{
+    CredentialError, CredentialHandle, CredentialScope, CredentialStore, ScopedResource,
+    SecretString, VaultStatus,
+};
 pub use policy::{AuthorizationDecision, PolicyEngine};
 pub use sandbox::{SandboxPolicy, SandboxViolation};
 
@@ -253,6 +256,7 @@ impl Subsystem for GuardianSubsystem {
                 // EventBus source IDs are not authenticated identities. Only a trusted
                 // owner transport may resolve ApprovalBroker sessions directly.
                 warn!("Ignored unauthenticated approval event");
+                self.audit.record_with_correlation(event.source,Capability::Tool(ToolCapability::KernelTool("approval:resolve".into())),DecisionOutcome::Denied,"Unauthorized approval resolution attempt: event source is not an authenticated owner",event.correlation_id);
             }
             _ => {}
         }

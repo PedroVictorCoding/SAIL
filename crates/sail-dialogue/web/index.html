@@ -45,7 +45,7 @@
 
         <article class="workspace-card session-card" id="sessionCard">
           <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">◌</span><div><h3>Voice session</h3><p>Live browser session</p></div></div><span class="mini-state" id="sessionState">Ready</span></header>
-          <div class="session-lines"><div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div><div><span>Microphone</span><strong id="sessionMic">Off</strong></div><div><span>VAD confidence</span><strong id="sessionConfidence">—</strong></div><div><span>Input level</span><strong id="sessionRms">—</strong></div></div>
+          <div class="session-lines"><div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div><div><span>Microphone</span><strong id="sessionMic">Off</strong></div><div><span>VAD confidence</span><strong id="sessionConfidence">—</strong></div><div><span>Input level</span><strong id="sessionRms">—</strong></div><div><span>Recorded</span><strong id="sessionDuration">0:00 / 3:00</strong></div></div>
           <div class="session-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
         </article>
 
@@ -92,7 +92,7 @@
         <input id="imageInput" type="file" accept="image/png,image/jpeg" aria-label="Choose image (PNG or JPEG, up to 4 MB)" hidden>
         <input id="textInput" type="text" aria-label="Message SAIL" placeholder="Ask SAIL anything…" maxlength="16000" autocomplete="off" required>
         <button class="composer-action dock-mute" id="muteDockBtn" type="button" aria-label="Mute microphone" aria-pressed="false" hidden><span aria-hidden="true">⊘</span></button>
-        <button class="composer-action end-turn-action" id="endTurnBtn" type="button" aria-label="Finish speaking turn" title="Finish speaking turn" hidden><span aria-hidden="true">✓</span></button>
+        <button class="composer-action end-turn-action" id="endTurnBtn" type="button" aria-label="Finish speaking turn" title="Finish speaking turn" hidden><span>Send turn</span></button>
         <button class="composer-action mic-action" id="micBtn" type="button" aria-label="Start microphone" title="Start microphone"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg></button>
         <button class="composer-action stop-action" id="interruptBtn" type="button" aria-label="Interrupt current response" title="Interrupt" hidden><span aria-hidden="true">■</span></button>
         <button class="composer-action send-action" id="sendBtn" type="submit" aria-label="Send message" title="Send"><span aria-hidden="true">↑</span></button>
@@ -112,6 +112,9 @@
   <div class="sheet-grabber" aria-hidden="true"></div><div class="sheet-heading"><div><p class="eyebrow">PREFERENCES</p><h2 id="contextTitle">Settings</h2></div><button class="icon-button close-sheet" aria-label="Close settings">×</button></div>
   <div class="setting-row"><div><strong>Voice</strong><small>Choose a locally installed voice</small></div><select id="voiceSelect" aria-label="Speech voice"><option value="af_heart">English · Heart</option><option value="pf_dora">Português · Dora</option><option value="pm_alex">Português · Alex</option><option value="ef_dora">Español · Dora</option></select></div>
   <div class="setting-row"><div><strong>Compute profile</strong><small>Set the local hardware tier</small></div><button class="quiet-button" id="tierBtn">Balanced</button></div>
+  <div class="setting-row"><div><strong>Turn taking</strong><small>Keep thinking pauses inside your message</small></div><select id="turnModeSelect" aria-label="When to send a spoken turn"><option value="automatic">Automatic</option><option value="manual">Manual · Send turn</option></select></div>
+  <div class="setting-row"><div><strong>Thinking pause</strong><small>Seconds of quiet before replying</small></div><input id="turnPauseInput" type="number" required min="0.5" max="10" step="any" value="3" aria-label="Seconds of silence before sending"></div>
+  <p class="sheet-note" id="turnDetectionNote">Waits 3 seconds of silence. Send turn submits immediately. A recording can hold up to 3 minutes.</p>
   <div class="setting-row"><div><strong>Microphone</strong><small id="micStatus">Off</small></div><button class="quiet-button" id="muteBtn" aria-pressed="false">Mute</button></div>
   <button class="sheet-link" id="checkModelsBtn">Check local model status <span>›</span></button>
   <p class="sheet-note" id="modelStatusSettings">Model status is checked with the local SAIL server.</p>
@@ -126,6 +129,15 @@
   <details class="inspector"><summary>Developer details</summary><div class="telemetry-row"><span id="telVad">VAD —</span><span id="telConf">Confidence —</span><span id="telRms">RMS —</span></div></details>
 </aside>
 
+<dialog id="captureDialog" class="capture-dialog" aria-labelledby="captureTitle">
+  <h2 id="captureTitle">Capture an image</h2>
+  <p id="captureExplanation">Choose what SAIL should see. The image is analyzed locally.</p>
+  <div class="capture-options">
+    <button class="quiet-button" id="captureCameraChoice" type="button">Take camera picture</button>
+    <button class="quiet-button" id="captureScreenChoice" type="button">Take screenshot</button>
+    <button class="quiet-button" id="captureCancel" type="button">Cancel</button>
+  </div>
+</dialog>
 <script src="/mermaid.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/ui.js" defer></script>

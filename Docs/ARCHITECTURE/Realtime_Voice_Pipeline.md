@@ -38,7 +38,7 @@ Qwen3-ASR and Qwen3-TTS are alternative engines described in the feature request
 
 Each connection has a UUID, separate VAD recurrent state, audio buffer, control state and bounded history. Context is limited to six conversation pairs and a 24KB history budget; the oldest pairs are also removed before inference to keep text and image reservations within a 20KB prompt budget (an individual pair can reach the 16KB input limit). Arena retrieves relevant records only from the same session; its voice records are bounded and removed on reset/disconnect. This voice history is memory-only and does not survive a runtime restart.
 
-Browser hardware audio is resampled in an AudioWorklet to signed little-endian 16-bit mono PCM at 16kHz. The resampler carries phase between callbacks and emits exact 512-sample frames. Silero uses 128ms minimum speech, 350ms silence, 96ms pre-roll and hysteresis. A tentative onset interrupted by silence is discarded. Utterances are bounded to 30 seconds. Sub-3ms inference is a target measured in telemetry, not an unconditional timing guarantee.
+Browser hardware audio is resampled in an AudioWorklet to signed little-endian 16-bit mono PCM at 16kHz. The resampler carries phase between callbacks and emits exact 512-sample frames. Silero uses 128ms minimum speech, a configurable 3000ms silence endpoint by default, 96ms pre-roll and hysteresis. A tentative onset interrupted by silence is discarded. Automatic turn taking retains speech across shorter pauses; manual mode holds the recording until explicit Send turn. The 180-second PCM buffer cap emits `capture_limit` and holds the audio instead of splitting or submitting it. Partial snapshots stop growing after 30 seconds, while final STT receives the full recording. Trailing quiet is trimmed to the configured speech padding at submission, without removing internal thinking pauses. Explicit submission flushes the AudioWorklet partial frame before sending `end_turn`. Sub-3ms inference is a target measured in telemetry, not an unconditional timing guarantee.
 
 A separate turn task performs final STT, retrieves context, streams Gemma deltas, handles authorized tool calls, synthesizes sentence fragments and publishes Canvas artifacts. The socket continues processing controls and microphone audio. Each turn has a generation number. Manual interruption, a new text turn, reset or detected user speech aborts the old task; stale outgoing deltas and audio are discarded. The browser stops active and scheduled audio and drops pending decodes. Speech workers may finish the current inference internally, but its cancelled response is not played.
 
@@ -66,6 +66,7 @@ Binary messages contain 16kHz mono PCM16LE (at most 8192 bytes; even byte count)
 {"action":"set_voice","voice":"pf_dora"}
 {"action":"interrupt"}
 {"action":"end_turn"}
+{"action":"set_turn_detection","settings":{"mode":"manual","pause_ms":3000}}
 {"action":"reset"}
 {"action":"playback_finished"}
 {"action":"kernel_tool","tool":"fs:query","params":{"path":"."}}
@@ -117,3 +118,14 @@ A per-round `SpeechTextGate` filters split model control markers without bufferi
 The speech consumer runs concurrently with model generation. Kokoro is pre-warmed when a session connects; each committed unit is synthesized at the selected voice/speed, streamed in ordered 100ms packets, and followed by a short punctuation-aware silence because Kokoro trims its output. This preserves local sentence/question intonation and phrase cadence, while independent synthesis cannot guarantee the same global prosody as a full-paragraph pass.
 
 `response_finished` marks text/model completion independently of the remaining TTS queue. `turn_finished.first_audio_ms` records the time from turn processing to first synthesized audio readiness, and the logs report it before normal total-turn completion. It is a server readiness measurement, not browser audio-device latency. A regression model deliberately waits for the speech consumer to receive its first sentence before producing its final text, verifying causal overlap on both tool-enabled and tool-disabled answer paths.
+
+### Turn-taking events
+
+`voice:control` includes `turn_detection: {mode: automatic|manual, pause_ms}` and
+`max_recording_ms`. Pause changes are bounded to 500–10000ms and preserve active
+capture. `telemetry.captured_ms` exposes the current retained PCM duration.
+`turn_committed` signals that audio was handed to final STT; only final transcription
+starts an LLM turn. `capture_limit` asks the client to stop capture, retain its
+send control and show that audio is held. Mute pauses ingest and partial inference without discarding the recording; explicit
+interruption/reset discards it. Held capture neither appends more audio nor
+emits another limit event until it is sent or reset. `end_turn` consumes it once.

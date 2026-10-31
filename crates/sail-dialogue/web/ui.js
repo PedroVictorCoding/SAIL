@@ -90,12 +90,14 @@ document.getElementById('spaceSearch').addEventListener('input', event => render
 document.getElementById('attachBtn').addEventListener('click', () => document.getElementById('imageInput').click());
 document.getElementById('micBtn').addEventListener('click', () => toggleMic());
 document.getElementById('muteDockBtn').addEventListener('click', () => toggleMute());
-document.getElementById('endTurnBtn').addEventListener('click', () => sendAction('end_turn'));
+document.getElementById('endTurnBtn').addEventListener('click', () => submitVoiceTurn());
 document.getElementById('interruptBtn').addEventListener('click', () => interrupt());
 document.getElementById('newConversationBtn').addEventListener('click', () => { resetSession(); closeSheet(); });
 document.getElementById('muteBtn').addEventListener('click', () => toggleMute());
 document.getElementById('tierBtn').addEventListener('click', () => cycleTier());
 document.getElementById('voiceSelect').addEventListener('change', event => sendAction('set_voice', { voice:event.target.value }));
+document.getElementById('turnModeSelect').addEventListener('change', setTurnDetection);
+document.getElementById('turnPauseInput').addEventListener('change', setTurnDetection);
 document.getElementById('checkModelsBtn').addEventListener('click', () => checkModels());
 document.getElementById('imageInput').addEventListener('change', event => {
   const file = event.target.files?.[0];
@@ -160,3 +162,72 @@ async function captureCameraFrame() {
   }
 }
 window.addEventListener('pagehide', stopCamera);
+
+// Screen sharing requires transient user activation: never invoke it from a
+// WebSocket callback. Preserve the original request until a frame is attached.
+let pendingVisualCapture = null;
+const captureDialog = document.getElementById('captureDialog');
+function cancelVisualCapture() {
+  pendingVisualCapture = null;
+  if (captureDialog.open) captureDialog.close();
+}
+function requestVisualCapture(request) {
+  cancelVisualCapture();
+  pendingVisualCapture = request;
+  document.getElementById('captureExplanation').textContent = request.source === 'screen'
+    ? 'Share a screen or window to take one screenshot for local analysis.'
+    : request.source === 'camera'
+      ? 'Allow camera access to take one picture for local analysis.'
+      : 'Camera picture or screenshot? Choose what SAIL should see for local analysis.';
+  document.getElementById('captureCameraChoice').hidden = request.source === 'screen';
+  document.getElementById('captureScreenChoice').hidden = request.source === 'camera';
+  updateState('idle');
+  captureDialog.showModal();
+}
+async function captureRequestedVisual(source) {
+  const request = pendingVisualCapture;
+  if (!request) return;
+  let stream;
+  const buttons = [...captureDialog.querySelectorAll('button')];
+  buttons.forEach(button => button.disabled = true);
+  try {
+    if (!window.isSecureContext) throw new Error('Capture requires HTTPS or localhost.');
+    // Invoke the browser permission picker synchronously from this click.
+    if (source === 'screen') {
+      if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Screen capture is unavailable in this browser.');
+      stream = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:false });
+    } else {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera capture is unavailable in this browser.');
+      stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:false });
+    }
+    if (pendingVisualCapture !== request) return;
+    const video = document.createElement('video');
+    video.muted = true; video.playsInline = true; video.srcObject = stream;
+    await Promise.race([
+      video.play().then(() => { if (!video.videoWidth) throw new Error('No image frame was received.'); }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for an image frame.')), 10000))
+    ]);
+    if (pendingVisualCapture !== request) return;
+    const scale = Math.min(1, 960 / video.videoWidth, 720 / video.videoHeight);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    const data = canvas.toDataURL('image/jpeg', .86);
+    if (sendAction('text', { text:request.prompt, vision:{ format:'image/jpeg', data_base64:data.split(',')[1] } })) {
+      renderArtifact({ artifact_type:'image', content:data });
+      cancelVisualCapture(); updateState('thinking');
+    }
+  } catch (error) {
+    if (pendingVisualCapture === request) showError(error.name === 'NotAllowedError'
+      ? 'Capture cancelled or permission denied. Choose a source to retry, or cancel.' : error.message);
+  } finally {
+    stream?.getTracks().forEach(track => track.stop());
+    buttons.forEach(button => button.disabled = false);
+  }
+}
+document.getElementById('captureCameraChoice').addEventListener('click', () => captureRequestedVisual('camera'));
+document.getElementById('captureScreenChoice').addEventListener('click', () => captureRequestedVisual('screen'));
+document.getElementById('captureCancel').addEventListener('click', cancelVisualCapture);
+captureDialog.addEventListener('cancel', cancelVisualCapture);
+window.addEventListener('pagehide', cancelVisualCapture);

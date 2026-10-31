@@ -367,3 +367,47 @@ fn concurrent_symlink_swaps_never_open_the_outside_target() {
     }
     attacker.join().unwrap();
 }
+
+#[test]
+fn vault_lock_wipes_handles_and_wrong_unlock_key_stays_locked() {
+    use std::os::unix::fs::PermissionsExt;
+    let workspace = Workspace::new();
+    fs::set_permissions(&workspace.0, fs::Permissions::from_mode(0o700)).unwrap();
+    let store = CredentialStore::open_persistent(&workspace.0).unwrap();
+    store
+        .store_credential(
+            SubsystemId::Bridge,
+            "account",
+            "secret",
+            "read",
+            chrono::Duration::minutes(1),
+        )
+        .unwrap();
+    let handle = store
+        .get_handle(SubsystemId::Bridge, "account", "read")
+        .unwrap();
+    let key = fs::read(workspace.0.join("vault.key")).unwrap();
+    store.lock();
+    assert!(store.is_locked());
+    assert!(
+        store
+            .execute_with_secret(&handle, SubsystemId::Bridge, |_| ())
+            .is_err()
+    );
+    assert!(store.unlock(&[0; 32]).is_err());
+    assert!(store.is_locked());
+    store.unlock(&key).unwrap();
+    assert!(!store.is_locked());
+    assert!(
+        store
+            .execute_with_secret(&handle, SubsystemId::Bridge, |_| ())
+            .is_err()
+    );
+    let new = store
+        .get_handle(SubsystemId::Bridge, "account", "read")
+        .unwrap();
+    assert_eq!(
+        store.execute_with_secret(&new, SubsystemId::Bridge, |s| s == "secret"),
+        Ok(true)
+    );
+}

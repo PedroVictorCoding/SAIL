@@ -23,7 +23,7 @@ Keep the terminal open while using SAIL. If an older SAIL process is already run
 4. Confirm that the speech models and local LLM report `ready: true`. Image reasoning also requires the LLM's `vision` modality to be enabled.
 5. Choose a voice: **English · Heart**, **Português · Dora**, **Português · Alex**, or **Español · Dora**.
 6. Click **Start Microphone** and allow microphone access in the browser.
-7. Speak a short request, then pause. SAIL detects the end of your turn automatically.
+7. Speak your request, then pause for about 3 seconds. Shorter thinking pauses stay in the same turn. Choose Manual turn taking in Settings if you want to decide when to send.
 
 For example:
 
@@ -35,16 +35,27 @@ The voice selector changes synthesized speech; ask for your preferred response l
 
 | Control | When to use it | What happens |
 |---|---|---|
-| **Microphone button** | Begin or finish hands-free input | Starts browser capture or releases the microphone. An on-screen indicator shows when the microphone is active. |
-| **Mute button** | Temporarily stop sending your voice | Appears while microphone capture is active. Playback continues; use the microphone button to release the device. |
+| **Microphone button** | Begin or finish hands-free input | Starts capture; clicking it again flushes the final microphone frame, stops capture, and submits the current turn. An on-screen indicator shows when the microphone is active. |
+| **Mute button** | Temporarily stop sending your voice | Pauses sending audio and retains your unfinished recording. Playback continues; the microphone button stops capture and sends the turn. |
 | **Interrupt button** | Stop a reply or change direction | Appears during a response and cancels generation and queued playback. |
-| **Finish turn button** | You have finished speaking and want to send now | Finalizes an active speech turn without waiting for the silence timeout. |
+| **Send turn button** | You have finished speaking and want to send now | Flushes the final microphone frame and submits the entire active recording without waiting for silence. |
 | **Settings → Compute profile** | Adjust the CPU budget | Cycles through Balanced, HighPerformance and LowPower. |
 | **Settings → Start a new conversation** | Start a different topic without earlier context | Cancels the current reply and clears this session's conversation and Canvas. |
 | **Spaces** | Open a subsystem | Dialogue, Canvas and Vision actions are connected; other spaces show Not connected until their runtime route is available. |
 | **Settings → Check local model status** | Confirm readiness or investigate a model error | Checks speech worker readiness and local LLM capabilities. |
 
 Speaking while SAIL is replying also triggers automatic interruption once speech is detected. For immediate, predictable cancellation, use **Interrupt**.
+
+### Speak continuously and take thinking pauses
+
+In **Settings → Turn taking**, choose:
+
+- **Automatic:** waits for **3 seconds of quiet** by default. Adjust **Thinking pause** between 0.5 and 10 seconds. Speech resumed before that timeout remains part of the same message.
+- **Manual · Send turn:** pauses never submit the recording. Keep speaking and thinking, then press **Send turn**, or click the microphone button to stop and send. Final STT receives the complete recording in one request; partial captions do not trigger replies. Mute can pause input without discarding what you have already said.
+
+The old automatic 30-second split is removed. A turn can now hold up to **3 minutes** (about 5.8 MB of 16 kHz PCM). At that limit capture stops and the recording is **held**, not automatically sent or split. Press **Send turn** to submit it; **Start a new conversation** discards it. The **Recorded** counter shows the buffer duration. Very long recordings may take longer to transcribe, and live partial previews stop after 30 seconds to avoid repeatedly decoding an ever-growing recording; the final transcription still uses all recorded audio.
+
+Settings apply to the current connection and keep already captured audio. A service can set defaults with `SAIL_VOICE_TURN_MODE=manual` (or `automatic`) and `SAIL_VOICE_PAUSE_MS=3000`. Restart the service and refresh the page after updating.
 
 ### Choose a hardware tier
 
@@ -236,3 +247,44 @@ This generates speech, detects it with Silero, transcribes it with Whisper, and 
 ## End your session
 
 Use **Stop Microphone** when you no longer want capture. Use **Interrupt** if you also want the current reply to stop. Close the tab when finished, then press **Ctrl+C** in the SAIL terminal to shut down the runtime. A llama-server that SAIL started is stopped with it; a model server that was already running remains independently managed.
+
+### Capture a picture or screenshot during conversation
+
+Say or type “Take a screenshot and explain this error” for the screen, or
+“Take a camera picture and tell me what you see” for the camera. SAIL pauses
+reasoning until the browser captures an image. Click the capture button to open
+the browser permission picker. Screen capture lets you choose a screen, window,
+or tab; camera capture takes one frame. Both require HTTPS or localhost and
+browser support. Capture stops immediately after the frame is obtained.
+
+“Capture an image and tell me what you see” uses the previous user message to
+resolve screen/camera context when possible; otherwise SAIL asks which source
+you mean. Permission denial or cancellation never submits an imageless request.
+The original request and captured image are sent together to the local model.
+Existing uploaded images are analyzed directly without requesting device capture.
+
+
+### Authorize and continue a tool operation
+
+Configure `SAIL_APPROVAL_TOKEN` (at least 32 bytes) in the protected daemon service
+configuration. When a process query or command needs approval, open Settings →
+Owner approvals, enter that owner token, and review the exact arguments, actor,
+risk and task correlation. **Approve and continue** resumes the waiting request;
+you do not need to repeat the question. Deny/revoke or Interrupt cancels it.
+Approvals expire after 60 seconds. No operation starts using a grant that expired
+while waiting for an execution slot. The owner token stays in page memory.
+
+Ask “What time is it?”, “List three processes”, or “Inspect the workspace root”.
+Time and OS telemetry need no elevated grant; other observations are explicitly
+approved. The result returns to the model for its answer and appears on Canvas.
+Large outputs expose **Open full output** instead of expanding model context.
+They are available only within the originating session/turn and expire.
+
+For command requests, an administrator must install and validate the dedicated
+runner service described in `Docs/ARCHITECTURE/Guardian_Execution.md` and
+`deploy/runner/`. Configure the daemon's `SAIL_RUNNER_SOCKET` and
+`SAIL_RUNNER_UID` to match that service. A request such as “Run /bin/echo with
+argument hello in the sandbox” requires exact owner approval and runs without
+network or host workspace mounts. Missing service/configuration produces an
+explicit failure; it never executes the command on the daemon host. This flow
+does not provide host administration or reviewed filesystem artifact export.

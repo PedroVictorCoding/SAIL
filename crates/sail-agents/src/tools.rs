@@ -27,6 +27,10 @@ pub struct ToolContext {
 }
 #[async_trait]
 pub trait Tool: Send + Sync {
+    /// Trusted adapters may bind a stronger capability than the generic invocation.
+    fn capability(&self, tool: &str, input: &Value) -> Capability {
+        ToolScheduler::capability(tool, input)
+    }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<Value, ToolFailure>;
 }
 struct Entry {
@@ -179,7 +183,7 @@ fn schema_supported(schema: &Value, depth: usize) -> Result<(), String> {
             }
         }
         Some("string") => {
-            if schema["maxLength"].as_u64().is_none_or(|n| n > 65536) {
+            if schema["maxLength"].as_u64().is_none_or(|n| n > 1048576) {
                 return Err("string maxLength required".into());
             }
         }
@@ -527,7 +531,7 @@ impl ToolScheduler {
         foreground: bool,
     ) -> ToolObservation {
         let mut sequence = 0;
-        let mut event = |state| {
+        let mut event = |state, approval_session| {
             sequence += 1;
             let _ = self.events.send(ToolEvent {
                 version: 1,
@@ -536,9 +540,10 @@ impl ToolScheduler {
                 sequence,
                 tool: tool.into(),
                 state,
+                approval_session,
             });
         };
-        event(ToolState::Queued);
+        event(ToolState::Queued, None);
         let entry = self.registry.entries.read().unwrap().get(tool).cloned();
         let mut observation = ToolObservation {
             version: 1,
@@ -555,12 +560,12 @@ impl ToolScheduler {
         };
         let Some(entry) = entry else {
             observation.error = Some("backend_unavailable".into());
-            event(ToolState::Failed);
+            event(ToolState::Failed, None);
             return observation;
         };
         if let Err(error) = validate(&entry.descriptor.input_schema, &input) {
             observation.error = Some(error);
-            event(ToolState::Failed);
+            event(ToolState::Failed, None);
             return observation;
         }
         let class = {
@@ -578,7 +583,47 @@ impl ToolScheduler {
                 })
                 .clone()
         };
+        let active_token = Arc::new(Mutex::new(token));
         let job = async {
+            event(ToolState::PolicyPending, None);
+            let capability = entry.backend.capability(tool, &input);
+            let mut grant = token;
+            let mut pending = None;
+            if grant.is_none()
+                && capability.risk_level() != sail_guardian::RiskLevel::Low
+                && !self.guardian.policy().is_explicitly_granted_for(
+                    context.actor,
+                    &capability,
+                    Some(context.correlation_id),
+                )
+            {
+                let session = self.guardian.approval().create_session_for(
+                    Some(context.correlation_id),
+                    context.actor,
+                    capability.clone(),
+                    "Scheduled tool requires exact owner approval",
+                );
+                let session_id = session.session_id;
+                pending = Some(PendingApproval {
+                    broker: self.guardian.approval().clone(),
+                    session: session_id,
+                });
+                event(ToolState::PolicyPending, Some(session_id));
+                loop {
+                    match self.guardian.approval().resolved_token(session_id) {
+                        Ok(Some(token)) => {
+                            grant = Some(token);
+                            break;
+                        }
+                        Ok(None) => tokio::time::sleep(Duration::from_millis(25)).await,
+                        Err(error) => return Err(error.to_string()),
+                    }
+                }
+            }
+            // Keep the approval alive until the operation finishes. Cancellation
+            // or dropping the operation revokes it; execution never gets a new ID.
+            let _pending = pending;
+            *active_token.lock().unwrap() = grant;
             let _background = if foreground {
                 None
             } else {
@@ -592,17 +637,22 @@ impl ToolScheduler {
             } else {
                 Some(self.writes.acquire().await.map_err(|e| e.to_string())?)
             };
-            event(ToolState::PolicyPending);
-            self.guardian
-                .authorize_and_execute(
-                    context.actor,
-                    Self::capability(tool, &input),
-                    token,
-                    Some(context.correlation_id),
-                    || (),
-                )
-                .map_err(|error| error.to_string())?;
-            event(ToolState::Executing);
+            // Consume at the point of dispatch, after queueing. A grant that
+            // expired or was revoked while waiting cannot start an effect.
+            if let Err(error) = self.guardian.authorize_and_execute(
+                context.actor,
+                capability,
+                grant,
+                Some(context.correlation_id),
+                || (),
+            ) {
+                if let sail_guardian::ExecutionDenied::ApprovalRequired { session_id, .. } = &error
+                {
+                    self.guardian.approval().revoke_session(*session_id);
+                }
+                return Err(error.to_string());
+            }
+            event(ToolState::Executing, None);
             let mut attempt = 0;
             loop {
                 match entry.backend.execute(context.clone(), input.clone()).await {
@@ -624,15 +674,12 @@ impl ToolScheduler {
             }
         };
         let revoked = async {
-            if let Some(token) = token {
-                loop {
-                    if self.guardian.approval().is_revoked(token) {
-                        return;
-                    }
-                    tokio::time::sleep(Duration::from_millis(25)).await;
+            loop {
+                let token = *active_token.lock().unwrap();
+                if token.is_some_and(|token| self.guardian.approval().is_revoked(token)) {
+                    return;
                 }
-            } else {
-                std::future::pending::<()>().await;
+                tokio::time::sleep(Duration::from_millis(25)).await;
             }
         };
         let outcome = tokio::select! {biased;_=context.cancel.cancelled()=>Err("cancelled".to_string()),_=revoked=>Err("revoked".to_string()),result=tokio::time::timeout(Duration::from_millis(entry.descriptor.timeout_ms),job)=>result.unwrap_or_else(|_|Err("deadline_exceeded".into()))};
@@ -672,13 +719,16 @@ impl ToolScheduler {
         if !observation.success {
             context.cancel.cancel();
         }
-        event(if observation.success {
-            ToolState::Completed
-        } else if observation.error.as_deref() == Some("cancelled") {
-            ToolState::Cancelled
-        } else {
-            ToolState::Failed
-        });
+        event(
+            if observation.success {
+                ToolState::Completed
+            } else if observation.error.as_deref() == Some("cancelled") {
+                ToolState::Cancelled
+            } else {
+                ToolState::Failed
+            },
+            None,
+        );
         observation
     }
 }
@@ -687,6 +737,15 @@ pub fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+struct PendingApproval {
+    broker: Arc<sail_guardian::ApprovalBroker>,
+    session: Uuid,
+}
+impl Drop for PendingApproval {
+    fn drop(&mut self) {
+        self.broker.revoke_session(self.session);
+    }
 }
 pub struct LocalTime;
 #[async_trait]

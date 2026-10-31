@@ -453,6 +453,84 @@ pub fn dispatch(
     )
 }
 
+/// Trusted scheduler adapter entry. The caller must already have consumed the
+/// exact command invocation grant. Never expose this primitive as a client route.
+pub fn dispatch_authorized(
+    socket: &Path,
+    expected_runner_uid: u32,
+    plan: &CommandPlan,
+    cancel: CancellationToken,
+) -> io::Result<CommandResult> {
+    use std::io::Read;
+    plan.validate().map_err(io::Error::other)?;
+    let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
+    let mut peer = std::mem::MaybeUninit::<libc::ucred>::uninit();
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    if unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            peer.as_mut_ptr().cast(),
+            &mut length,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { peer.assume_init() }.uid != expected_runner_uid
+        || expected_runner_uid == unsafe { libc::geteuid() }
+        || expected_runner_uid == 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "unexpected runner peer",
+        ));
+    }
+    let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let monitor_stopped = stopped.clone();
+    let watcher = stream.try_clone()?;
+    let monitor = std::thread::spawn(move || {
+        while !monitor_stopped.load(std::sync::atomic::Ordering::Acquire) {
+            if cancel.is_cancelled() {
+                let _ = watcher.shutdown(std::net::Shutdown::Both);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    });
+    let _monitor = Monitor {
+        stopped,
+        thread: Some(monitor),
+    };
+    stream.set_read_timeout(Some(Duration::from_millis(plan.limits.wall_ms + 5000)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let bytes = serde_json::to_vec(plan).map_err(io::Error::other)?;
+    if bytes.len() > 64 * 1024 {
+        return Err(io::Error::other("command request frame limit"));
+    }
+    stream.write_all(&(bytes.len() as u32).to_be_bytes())?;
+    stream.write_all(&bytes)?;
+    let mut size = [0; 4];
+    stream.read_exact(&mut size)?;
+    let size = u32::from_be_bytes(size) as usize;
+    if size > 2 * 1024 * 1024 {
+        return Err(io::Error::other("command result frame limit"));
+    }
+    let mut bytes = vec![0; size];
+    stream.read_exact(&mut bytes)?;
+    let mut result: CommandResult = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    if result.version != 1
+        || result.request_id != plan.request_id
+        || result.correlation_id != plan.correlation_id
+    {
+        return Err(io::Error::other("command result correlation mismatch"));
+    }
+    result.stdout = sail_common::diagnostics::redact(&result.stdout);
+    result.stderr = sail_common::diagnostics::redact(&result.stderr);
+    Ok(result)
+}
+
 struct Monitor {
     stopped: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,

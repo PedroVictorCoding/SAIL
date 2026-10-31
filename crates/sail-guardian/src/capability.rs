@@ -92,6 +92,12 @@ impl Capability {
                 {
                     RiskLevel::Low
                 }
+                ToolCapability::Invocation { tool, .. } if tool == "canvas:publish" => {
+                    RiskLevel::Low
+                }
+                ToolCapability::Invocation { tool, .. } if tool == "command:execute" => {
+                    RiskLevel::Critical
+                }
                 ToolCapability::Invocation { .. } => RiskLevel::High,
                 ToolCapability::CliCommand(_) | ToolCapability::SandboxCommand { .. } => {
                     RiskLevel::Critical

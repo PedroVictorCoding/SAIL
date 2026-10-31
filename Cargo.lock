@@ -1413,6 +1413,7 @@ dependencies = [
  "sail-dialogue",
  "sail-discovery",
  "sail-flow",
+ "sail-forge",
  "sail-guardian",
  "sail-mind",
  "serde_json",
@@ -1431,6 +1432,7 @@ dependencies = [
  "axum-server",
  "base64 0.22.1",
  "bytes",
+ "chrono",
  "futures-util",
  "image",
  "reqwest",
@@ -1443,10 +1445,13 @@ dependencies = [
  "sail-flow",
  "sail-guardian",
  "sail-mind",
+ "sail-protocol",
+ "sail-runner",
  "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "tower",
  "tower-http 0.5.2",
  "tracing",
@@ -1474,6 +1479,26 @@ dependencies = [
  "sail-common",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "sail-forge"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "libc",
+ "reqwest",
+ "ring",
+ "sail-common",
+ "sail-guardian",
+ "sail-protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "uuid",
@@ -2447,6 +2472,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 dependencies = [
  "serde",
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

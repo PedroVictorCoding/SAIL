@@ -34,11 +34,99 @@ pub enum CredentialError {
     Revoked(Uuid),
     #[error("Requested scope '{requested}' is outside allowed scope '{allowed}'")]
     ScopeMismatch { requested: String, allowed: String },
+    #[error("Vault is locked")]
+    VaultLocked,
     #[error("Vault cryptographic error: {0}")]
     CryptoError(String),
     #[error("Vault persistence error: {0}")]
     IoError(String),
 }
+
+/// Formatting-safe zeroizing secret buffer for trusted connector internals.
+#[derive(Clone)]
+pub struct SecretString(Zeroizing<String>);
+impl SecretString {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(Zeroizing::new(value.into()))
+    }
+    pub fn expose_secret(&self) -> &str {
+        self.0.as_str()
+    }
+}
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED_SECRET]")
+    }
+}
+impl std::fmt::Display for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED_SECRET]")
+    }
+}
+/// Structured credential scope to isolate connector access by resource, account and operation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ScopedResource {
+    pub resource: String,
+    pub account: Option<String>,
+    pub operation: String,
+}
+
+impl ScopedResource {
+    pub fn new(
+        resource: impl Into<String>,
+        account: Option<String>,
+        operation: impl Into<String>,
+    ) -> Self {
+        Self {
+            resource: resource.into(),
+            account,
+            operation: operation.into(),
+        }
+    }
+
+    pub fn parse(scope_str: &str) -> Self {
+        let parts: Vec<&str> = scope_str.split(':').collect();
+        match parts.len() {
+            1 => Self {
+                resource: parts[0].to_string(),
+                account: None,
+                operation: "*".to_string(),
+            },
+            2 => Self {
+                resource: parts[0].to_string(),
+                account: None,
+                operation: parts[1].to_string(),
+            },
+            _ => Self {
+                resource: parts[0].to_string(),
+                account: Some(parts[1].to_string()),
+                operation: parts[2..].join(":"),
+            },
+        }
+    }
+
+    pub fn permits(
+        &self,
+        target_resource: &str,
+        target_account: Option<&str>,
+        target_op: &str,
+    ) -> bool {
+        if self.resource != "*" && self.resource != target_resource {
+            return false;
+        }
+        if let Some(account) = &self.account {
+            if account != "*" && target_account != Some(account.as_str()) {
+                return false;
+            }
+        }
+        if self.operation != "*" && self.operation != target_op {
+            return false;
+        }
+        true
+    }
+}
+
+pub type CredentialScope = ScopedResource;
 
 /// Opaque, scoped credential handle returned to connectors. Raw secrets are NEVER exposed to models or untrusted callers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -74,11 +162,58 @@ pub struct CredentialStore {
     secrets: RwLock<HashMap<(SubsystemId, String), StoredRecord>>,
     handles: RwLock<HashMap<Uuid, CredentialHandle>>,
     vault_path: Option<PathBuf>,
-    encryption_key: Zeroizing<[u8; 32]>,
+    encryption_key: RwLock<Option<Zeroizing<[u8; 32]>>>,
     operation: Mutex<()>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VaultStatus {
+    Locked,
+    Unlocked,
+}
 impl CredentialStore {
+    pub fn status(&self) -> VaultStatus {
+        if self.is_locked() {
+            VaultStatus::Locked
+        } else {
+            VaultStatus::Unlocked
+        }
+    }
+    pub fn is_locked(&self) -> bool {
+        self.encryption_key.read().unwrap().is_none()
+    }
+    pub fn lock(&self) {
+        let _operation = self.operation.lock().unwrap();
+        self.handles.write().unwrap().clear();
+        self.secrets.write().unwrap().clear();
+        *self.encryption_key.write().unwrap() = None;
+    }
+    pub fn open_persistent_locked(path: &Path) -> Result<Self, CredentialError> {
+        let store = Self::open_persistent(path)?;
+        store.lock();
+        Ok(store)
+    }
+    pub fn unlock(&self, master_key: &[u8]) -> Result<(), CredentialError> {
+        let _operation = self.operation.lock().unwrap();
+        if master_key.len() != 32 {
+            return Err(CredentialError::CryptoError(
+                "Master key must be 32 bytes".into(),
+            ));
+        }
+        self.handles.write().unwrap().clear();
+        self.secrets.write().unwrap().clear();
+        let mut key = Zeroizing::new([0u8; 32]);
+        key.copy_from_slice(master_key);
+        *self.encryption_key.write().unwrap() = Some(key);
+        if let Some(path) = &self.vault_path {
+            if let Err(error) = self.load_from_disk(path) {
+                *self.encryption_key.write().unwrap() = None;
+                self.secrets.write().unwrap().clear();
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
     pub fn new() -> Self {
         // Ephemeral in-memory key if no vault path specified
         let rng = SystemRandom::new();
@@ -89,7 +224,7 @@ impl CredentialStore {
             secrets: RwLock::new(HashMap::new()),
             handles: RwLock::new(HashMap::new()),
             vault_path: None,
-            encryption_key: Zeroizing::new(key),
+            encryption_key: RwLock::new(Some(Zeroizing::new(key))),
             operation: Mutex::new(()),
         }
     }
@@ -153,7 +288,7 @@ impl CredentialStore {
             secrets: RwLock::new(HashMap::new()),
             handles: RwLock::new(HashMap::new()),
             vault_path: Some(enc_path.clone()),
-            encryption_key: Zeroizing::new(key),
+            encryption_key: RwLock::new(Some(Zeroizing::new(key))),
             operation: Mutex::new(()),
         };
 
@@ -178,8 +313,16 @@ impl CredentialStore {
         rng.fill(&mut nonce_bytes)
             .map_err(|_| CredentialError::CryptoError("RNG failed".into()))?;
 
-        let unbound = UnboundKey::new(&AES_256_GCM, self.encryption_key.as_ref())
-            .map_err(|_| CredentialError::CryptoError("Key init failed".into()))?;
+        let unbound = UnboundKey::new(
+            &AES_256_GCM,
+            self.encryption_key
+                .read()
+                .unwrap()
+                .as_ref()
+                .ok_or(CredentialError::VaultLocked)?
+                .as_ref(),
+        )
+        .map_err(|_| CredentialError::CryptoError("Key init failed".into()))?;
         let mut sealing_key = SealingKey::new(unbound, OneNonce(Some(nonce_bytes)));
 
         let mut in_out = serialized;
@@ -206,8 +349,16 @@ impl CredentialStore {
         let mut nonce_arr = [0u8; NONCE_LEN];
         nonce_arr.copy_from_slice(nonce_bytes);
 
-        let unbound = UnboundKey::new(&AES_256_GCM, self.encryption_key.as_ref())
-            .map_err(|_| CredentialError::CryptoError("Key init failed".into()))?;
+        let unbound = UnboundKey::new(
+            &AES_256_GCM,
+            self.encryption_key
+                .read()
+                .unwrap()
+                .as_ref()
+                .ok_or(CredentialError::VaultLocked)?
+                .as_ref(),
+        )
+        .map_err(|_| CredentialError::CryptoError("Key init failed".into()))?;
         let mut opening_key = OpeningKey::new(unbound, OneNonce(Some(nonce_arr)));
 
         let mut in_out = Zeroizing::new(payload.to_vec());
@@ -279,6 +430,9 @@ impl CredentialStore {
         ttl: Duration,
     ) -> Result<CredentialHandle, CredentialError> {
         let _operation = self.operation.lock().unwrap();
+        if self.is_locked() {
+            return Err(CredentialError::VaultLocked);
+        }
         if owner != SubsystemId::Bridge {
             return Err(CredentialError::UntrustedConnector);
         }
@@ -341,6 +495,9 @@ impl CredentialStore {
         requested_scope: &str,
     ) -> Result<CredentialHandle, CredentialError> {
         let _operation = self.operation.lock().unwrap();
+        if self.is_locked() {
+            return Err(CredentialError::VaultLocked);
+        }
         if requester != SubsystemId::Bridge {
             return Err(CredentialError::UntrustedConnector);
         }
@@ -393,6 +550,9 @@ impl CredentialStore {
         F: FnOnce(&str) -> R,
     {
         let _operation = self.operation.lock().unwrap();
+        if self.is_locked() {
+            return Err(CredentialError::VaultLocked);
+        }
         if caller != SubsystemId::Bridge {
             return Err(CredentialError::UntrustedConnector);
         }
@@ -419,6 +579,32 @@ impl CredentialStore {
         Ok(action(&record.secret))
     }
 
+    pub fn execute_with_scoped_action<F, R>(
+        &self,
+        handle: &CredentialHandle,
+        caller: SubsystemId,
+        target_resource: &str,
+        target_account: Option<&str>,
+        target_op: &str,
+        action: F,
+    ) -> Result<R, CredentialError>
+    where
+        F: FnOnce(&str) -> R,
+    {
+        let parsed_scope = ScopedResource::parse(&handle.scope);
+        if !parsed_scope.permits(target_resource, target_account, target_op) {
+            return Err(CredentialError::ScopeMismatch {
+                requested: format!(
+                    "{target_resource}:{}:{}",
+                    target_account.unwrap_or("*"),
+                    target_op
+                ),
+                allowed: handle.scope.clone(),
+            });
+        }
+        self.execute_with_secret(handle, caller, action)
+    }
+
     /// Rotate credential value, invalidating previous secret
     pub fn rotate_credential(
         &self,
@@ -427,6 +613,9 @@ impl CredentialStore {
         new_secret: impl Into<String>,
     ) -> Result<(), CredentialError> {
         let _operation = self.operation.lock().unwrap();
+        if self.is_locked() {
+            return Err(CredentialError::VaultLocked);
+        }
         self.invalidate_handles(owner, key);
         let previous = {
             let mut guard = self.secrets.write().unwrap();
@@ -451,6 +640,9 @@ impl CredentialStore {
     /// Revoke a credential and all associated handles
     pub fn revoke_credential(&self, owner: SubsystemId, key: &str) -> Result<(), CredentialError> {
         let _operation = self.operation.lock().unwrap();
+        if self.is_locked() {
+            return Err(CredentialError::VaultLocked);
+        }
         self.invalidate_handles(owner, key);
         let previous = self
             .secrets
@@ -482,6 +674,22 @@ impl CredentialStore {
         self.handles.write().unwrap().remove(&handle_id);
     }
 
+    pub fn redact_value(&self, value: &serde_json::Value) -> serde_json::Value {
+        let sanitized = sail_common::diagnostics::redact_json(value);
+        match &sanitized {
+            serde_json::Value::String(text) => serde_json::Value::String(self.redact_text(text)),
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(|item| self.redact_value(item)).collect())
+            }
+            serde_json::Value::Object(fields) => serde_json::Value::Object(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), self.redact_value(v)))
+                    .collect(),
+            ),
+            value => value.clone(),
+        }
+    }
     /// Centralized structured log and trace redaction: scans text and replaces any known secret values with [REDACTED]
     pub fn redact_text(&self, input: &str) -> String {
         let guard = self.secrets.read().unwrap();
@@ -493,7 +701,7 @@ impl CredentialStore {
             }
         }
 
-        redacted
+        redact_credential_patterns(&redacted)
     }
 }
 
@@ -522,4 +730,38 @@ fn secure_open(path: &Path) -> Result<std::fs::File, CredentialError> {
         ));
     }
     Ok(file)
+}
+
+/// Preserve generic connector redaction independently of the registered vault.
+pub fn redact_credential_patterns(input: &str) -> String {
+    let mut output = String::new();
+    let mut bearer = false;
+    for part in input.split_inclusive(char::is_whitespace) {
+        let token = part.trim_end_matches(char::is_whitespace);
+        let tail = &part[token.len()..];
+        let prefix = [
+            "ghp_",
+            "github_pat_",
+            "sk_live_",
+            "sk_test_",
+            "sk-proj-",
+            "xoxb-",
+            "xoxp-",
+        ]
+        .iter()
+        .filter_map(|p| token.find(p))
+        .min();
+        if bearer {
+            output.push_str("[REDACTED_SECRET]");
+            bearer = false;
+        } else if let Some(start) = prefix {
+            output.push_str(&token[..start]);
+            output.push_str("[REDACTED_SECRET]");
+        } else {
+            output.push_str(token);
+            bearer = token == "Bearer";
+        }
+        output.push_str(tail);
+    }
+    output
 }

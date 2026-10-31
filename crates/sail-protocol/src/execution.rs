@@ -135,6 +135,8 @@ pub struct ToolEvent {
     pub sequence: u64,
     pub tool: String,
     pub state: ToolState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_session: Option<Uuid>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolObservation {

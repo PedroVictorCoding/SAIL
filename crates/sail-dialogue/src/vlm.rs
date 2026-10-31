@@ -163,6 +163,23 @@ impl LocalKernelToolBroker {
         Self::execute_guarded(sail_common::types::SubsystemId::Dialogue, call, None)
     }
 
+    /// Crate-internal adapter entry; the scheduler already consumed the exact
+    /// invocation grant. Filesystem effects still operate on confined descriptors.
+    pub(crate) fn execute_scheduled(call: &KernelToolCall) -> KernelToolResult {
+        if call.tool == "fs:query" {
+            let path = call.params["path"].as_str().unwrap_or(".");
+            return match sail_guardian::global_broker().and_then(|broker| {
+                broker
+                    .sandbox()
+                    .open_read(Path::new(path))
+                    .map_err(Into::into)
+            }) {
+                Ok(file) => Self::tool_fs_query(file),
+                Err(error) => Self::error("fs:query", &error.to_string()),
+            };
+        }
+        Self::execute_raw(call)
+    }
     /// Internal raw execution: only invoked by GuardianExecutionBroker after authorization
     fn execute_raw(call: &KernelToolCall) -> KernelToolResult {
         match call.tool.as_str() {
@@ -434,6 +451,9 @@ pub fn tool_definitions() -> serde_json::Value {
         {"type":"function","function":{"name":"os_status","description":"Read local OS memory, uptime and load","parameters":{"type":"object","properties":{}}}},
         {"type":"function","function":{"name":"proc_list","description":"List local processes","parameters":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":100}}}}},
         {"type":"function","function":{"name":"fs_query","description":"Inspect a file or directory inside the authorized workspace. Use relative paths; dot (.) means the workspace root. Never probe outside paths or retry a denied query.","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}},
+        {"type":"function","function":{"name":"canvas_publish","description":"Display a diagram or structured visual beside the conversation","parameters":{"type":"object","properties":{"artifact_type":{"type":"string","enum":["mermaid","json","svg"]},"content":{"type":"string","maxLength":32700}},"required":["artifact_type","content"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"local_time","description":"Read the current local device UTC clock","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
+        {"type":"function","function":{"name":"command_execute","description":"Execute a command in the isolated no-network runner after exact owner approval. Never host shell execution. Runner may be unavailable.","parameters":{"type":"object","properties":{"executable":{"type":"string","maxLength":4096},"argv":{"type":"array","maxItems":128,"items":{"type":"string","maxLength":8192}}},"required":["executable","argv"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}}
     ])
 }

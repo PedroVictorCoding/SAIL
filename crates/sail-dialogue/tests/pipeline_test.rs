@@ -1,3 +1,4 @@
+use sail_common::types::SubsystemId;
 use sail_dialogue::{
     HardwareTierProfile, KernelToolCall, LocalKernelToolBroker, OrbEngine, SileroVad,
     SileroVadConfig, VadEvent, VoiceControl,
@@ -5,6 +6,7 @@ use sail_dialogue::{
 #[test]
 fn vad_requires_contiguous_speech_and_preserves_onset_without_duplication() {
     let config = SileroVadConfig {
+        turn_mode: sail_dialogue::TurnMode::Automatic,
         min_speech_duration_ms: 64,
         min_silence_duration_ms: 64,
         speech_pad_ms: 32,
@@ -24,7 +26,7 @@ fn vad_requires_contiguous_speech_and_preserves_onset_without_duplication() {
     let (event, audio, _) = vad.process_probability(&[0; 512], 0.);
     assert_eq!(event, VadEvent::SpeechEnd);
     let audio = audio.unwrap();
-    assert_eq!(audio.len(), 5 * 512);
+    assert_eq!(audio.len(), 4 * 512);
     assert_eq!(&audio[..512], &[3; 512]);
     assert_eq!(&audio[512..1024], &[4; 512]);
     assert_eq!(&audio[1024..1536], &[5; 512]);
@@ -32,21 +34,32 @@ fn vad_requires_contiguous_speech_and_preserves_onset_without_duplication() {
     assert!(vad.finish().is_none());
 }
 #[test]
-fn vad_force_end_and_thirty_second_bound() {
-    let mut vad = SileroVad::new(SileroVadConfig::default());
+fn vad_force_end_and_recording_limit_hold_audio_until_explicit_send() {
+    let mut vad = SileroVad::new(SileroVadConfig {
+        max_turn_duration_ms: 1000,
+        ..Default::default()
+    });
     for _ in 0..4 {
         vad.process_probability(&[100; 512], 0.9);
     }
     assert!(vad.finish().is_some());
     assert!(vad.finish().is_none());
-    let mut ended = false;
-    for _ in 0..950 {
-        if vad.process_probability(&[100; 512], 0.9).0 == VadEvent::SpeechEnd {
-            ended = true;
-            break;
+    let mut limit_events = 0;
+    for _ in 0..100 {
+        let (event, audio, telemetry) = vad.process_probability(&[100; 512], 0.9);
+        assert!(
+            audio.is_none(),
+            "buffer limits must never split and submit a turn"
+        );
+        assert!(telemetry.captured_ms <= 1000);
+        if event == VadEvent::CaptureLimitReached {
+            limit_events += 1;
         }
     }
-    assert!(ended);
+    assert_eq!(limit_events, 1);
+    assert!(vad.snapshot().is_none());
+    assert_eq!(vad.finish().unwrap().len(), 16000);
+    assert!(vad.finish().is_none());
 }
 #[test]
 fn fft_separates_frequency_bands_and_respects_nyquist() {
@@ -81,21 +94,7 @@ fn profiles_preserve_wire_rate_and_apply_thread_budget() {
 }
 #[test]
 fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
-    let _guardian = sail_guardian::GuardianSubsystem::new();
-    _guardian.policy().grant_capability(
-        sail_common::types::SubsystemId::Dialogue,
-        sail_guardian::capability::bound_tool_invocation(
-            "proc:list",
-            &serde_json::json!({"limit":3}),
-        ),
-    );
-    _guardian.policy().grant_capability(
-        sail_common::types::SubsystemId::Dialogue,
-        sail_guardian::capability::bound_tool_invocation(
-            "vision:frame",
-            &serde_json::json!({"width":1,"height":1,"format":"rgb","data":[255,255,255]}),
-        ),
-    );
+    let guardian = sail_guardian::GuardianSubsystem::new();
     assert!(
         LocalKernelToolBroker::execute(&KernelToolCall {
             tool: "os:status".into(),
@@ -103,10 +102,25 @@ fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
         })
         .success
     );
-    let processes = LocalKernelToolBroker::execute(&KernelToolCall {
+    let process_call = KernelToolCall {
         tool: "proc:list".into(),
         params: serde_json::json!({"limit":3}),
-    });
+    };
+    let denied = LocalKernelToolBroker::execute(&process_call);
+    assert!(!denied.success);
+    assert_eq!(denied.output["error_code"], "permission_denied");
+    let approval = guardian.approval();
+    let pending = approval.list_pending();
+    assert_eq!(pending.len(), 1);
+    let token = approval
+        .resolve_session(pending[0].session_id, true)
+        .unwrap();
+    let processes = LocalKernelToolBroker::execute_guarded(
+        SubsystemId::Dialogue,
+        &process_call,
+        Some(token.token_id),
+    );
+    assert!(processes.success);
     assert!(processes.output["count"].as_u64().unwrap() <= 3);
     for path in ["/etc/passwd", "../../../../etc/passwd"] {
         assert!(
@@ -117,17 +131,37 @@ fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
             .success
         );
     }
-    let valid = LocalKernelToolBroker::execute(&KernelToolCall {
-        tool: "vision:frame".into(),
-        params: serde_json::json!({"width":1,"height":1,"format":"rgb","data":[255,255,255]}),
-    });
-    assert!(valid.success);
-    assert_eq!(valid.output["average_luminance"], 1.0);
-    let invalid = LocalKernelToolBroker::execute(&KernelToolCall {
-        tool: "vision:frame".into(),
-        params: serde_json::json!({"width":100,"height":1,"format":"rgb","data":[255]}),
-    });
-    assert!(!invalid.success);
+    for (params, expected) in [
+        (
+            serde_json::json!({"width":1,"height":1,"format":"rgb","data":[255,255,255]}),
+            true,
+        ),
+        (
+            serde_json::json!({"width":100,"height":1,"format":"rgb","data":[255]}),
+            false,
+        ),
+    ] {
+        let call = KernelToolCall {
+            tool: "vision:frame".into(),
+            params,
+        };
+        let denied = LocalKernelToolBroker::execute(&call);
+        assert!(!denied.success);
+        let pending = approval.list_pending();
+        assert_eq!(pending.len(), 1);
+        let token = approval
+            .resolve_session(pending[0].session_id, true)
+            .unwrap();
+        let result = LocalKernelToolBroker::execute_guarded(
+            SubsystemId::Dialogue,
+            &call,
+            Some(token.token_id),
+        );
+        assert_eq!(result.success, expected);
+        if expected {
+            assert_eq!(result.output["average_luminance"], 1.0);
+        }
+    }
     assert!(sail_agents::authorize_voice_operation("shell:exec").is_err());
 }
 #[test]

@@ -131,6 +131,36 @@ Sequenced typed events distinguish queued, policy-pending, executing, completed,
 failed and cancelled operations. Outputs above 4 KiB become expiring,
 correlation-scoped references in an 8 MiB memory store; output above 1 MiB is
 rejected. Bridge uses this scheduler and registers an actual local clock backend;
-unregistered tools report unavailable rather than fabricated success. Web/data,
-Canvas, book playback and command-runner adapters, full Dialogue turn coordination,
-and Android event consumers remain follow-up integrations.
+unregistered tools report unavailable rather than fabricated success. Dialogue uses the same scheduler for OS/process/workspace observations, the
+local clock, Canvas publishing and isolated command requests. Model reasoning
+awaits each observation before continuing its answer; speech fragments already
+committed can play independently. Browser tool actions use the same execution
+path. The registered command adapter requires `SAIL_RUNNER_SOCKET` and
+`SAIL_RUNNER_UID`, validates the service peer, and forwards cancellation over the
+socket. It reports unavailable/error results when the service is not installed;
+it never falls back to a daemon-UID subprocess.
+
+An approval is a pending execution state, not a failed cached observation. The
+scheduler emits the approval session with the same request/correlation IDs,
+waits for authenticated owner resolution, then consumes the exact single-use
+grant after acquiring execution slots, immediately before dispatch. No slot is
+held while the user thinks. Denial, timeout, disconnect, interruption and task
+cancellation revoke pending approvals; approving a cancelled request cannot
+resurrect it. Browser Settings uses **Approve and continue**, without issuing a
+second tool call. Trusted native Bridge callers can also wait for owner approval.
+
+The WebSocket `tool_plan` action accepts a bounded list of typed `ToolStep`
+objects with dependency IDs. The server supplies actor and session/turn
+correlation; callers cannot substitute either. Independent operations run in
+parallel, while sandbox/mutating operations serialize. `tool_event` carries
+versioned, request-correlated sequences to the browser. Large results remain
+references in model context; `tool_payload` retrieves a full payload only for the
+original actor and current session/turn, and presents it on Canvas on demand.
+Canvas publish results travel separately from conversational text.
+
+Web/data/book adapters, the Python/memory/browser tool packs and Android event
+consumers are not implemented by this patch. Input staging, reviewed filesystem
+artifact export, PTYs and privileged helpers are also outside this runtime path;
+none is simulated by successful placeholder results. Target-host runner
+installation and adversarial namespace/cgroup validation remain required before
+certifying the deployment.

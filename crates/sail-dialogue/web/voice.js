@@ -3,6 +3,9 @@ let ws, audioCtx, micStream, processor, micSource;
 let workletLoaded=false;
 const playbackTimers=new Set();
 let isRecording = false, isMuted = false, orbState = 'idle';
+let captureHeld = false;
+let maxRecordingMs = 180000;
+let pendingCaptureFlush = null, captureFlushSerial = 0, submittingVoiceTurn = false;
 let currentAmplitude = 0, wavePhase = 0, spectrum8 = Array(8).fill(0), orbFrozen = false;
 const activeTools = new Map();
 const lastToolCalls = new Map();
@@ -73,28 +76,39 @@ function connectWs() {
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
     pendingApprovalActions.clear(); lastToolCalls.clear();
-    turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
+    cancelVisualCapture(); captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
   };
   ws.onmessage = (event) => {
     let data;
     try { data = JSON.parse(event.data); } catch { showError('Invalid server message'); return; }
     switch (data.type) {
+      case 'capture_required':
+        setCaptureHeld(false); turnInProgress = false; stopPlayback(); requestVisualCapture(data); break;
       case 'session':
+        cancelVisualCapture();
         document.getElementById('conversation').replaceChildren(); responseNode = null;
         applyControl(data.control); break;
       case 'telemetry':
         document.getElementById('sessionConfidence').textContent = `${(data.confidence * 100).toFixed(0)}%`;
         document.getElementById('sessionRms').textContent = Number(data.rms).toFixed(3);
+        const duration = `${formatCaptureTime(data.captured_ms || 0)} / ${formatCaptureTime(maxRecordingMs)}`;
+        if (document.getElementById('sessionDuration').textContent !== duration) document.getElementById('sessionDuration').textContent = duration;
         if (!playingSources.size) {
           currentAmplitude = data.rms; wavePhase = data.phase; spectrum8 = data.spectrum;
-          if (!turnInProgress && pendingAudio === 0 && !playingSources.size) updateState(data.state);
+          if (!captureHeld && !turnInProgress && pendingAudio === 0 && !playingSources.size) updateState(data.state);
         }
         document.getElementById('telVad').textContent = `VAD inference: ${(data.vad_us / 1000).toFixed(2)}ms · round trip: ${(data.vad_roundtrip_us / 1000).toFixed(2)}ms`;
         document.getElementById('telConf').textContent = `Confidence: ${(data.confidence * 100).toFixed(0)}%`;
         document.getElementById('telRms').textContent = `RMS: ${data.rms.toFixed(3)}`; break;
       case 'transcript': transcriptBox.textContent = `${data.is_final ? 'You said' : 'Listening'} · ${data.text}`; document.getElementById('liveTranscript').textContent = data.text; break;
+      case 'capture_limit':
+        stopMic(); setCaptureHeld(true); updateState('holding'); transcriptBox.textContent = data.message; break;
+      case 'turn_committed':
+        setCaptureHeld(false); turnInProgress = true; updateState('transcribing'); break;
       case 'turn_started':
+        setCaptureHeld(false);
+        cancelVisualCapture();
         stopPlayback(); turnFinished = false; turnInProgress = true; responseText = '';
         appendConversation('You', data.transcript);
         responseNode = appendConversation('SAIL', ''); updateState('thinking'); break;
@@ -104,14 +118,27 @@ function connectWs() {
         responseNode.lastChild.textContent = responseText; break;
       case 'audio_chunk': queueAudio(data); break;
       case 'turn_finished':
+        setCaptureHeld(false);
         turnInProgress = false;
         document.getElementById('assistantAnnounce').textContent = responseText;
         turnFinished = true;
         if (!pendingAudio && !playingSources.size) finishPlayback();
         if (data.latency_ms) setConnection(`Connected · local turn ${(data.latency_ms / 1000).toFixed(1)}s`, true);
         break;
-      case 'interruption': turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
+      case 'interruption': cancelVisualCapture(); setCaptureHeld(false); turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
       case 'control': applyControl(data.control); break;
+      case 'tool_event': {
+        const event = data.event;
+        if (event.approval_session) {
+          pendingApprovalActions.set(event.approval_session, { automatic:true });
+          updateState('approval_required');
+          transcriptBox.textContent = 'Approval needed · Open Settings → Owner approvals to review the exact operation.';
+        }
+        updateToolActivity(event.tool, !['completed','failed','cancelled'].includes(event.state));
+        if (event.state === 'executing') updateState('working');
+        if (['completed','failed','cancelled'].includes(event.state)) updateState(turnInProgress ? 'thinking' : 'idle');
+        break;
+      }
       case 'tool_started': updateToolActivity(data.tool, true); break;
       case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); break;
       case 'canvas': renderArtifact(data.artifact); break;
@@ -128,9 +155,29 @@ function applyControl(control) {
   const dockMute = document.getElementById('muteDockBtn'); dockMute.hidden = !isRecording;
   dockMute.setAttribute('aria-label', isMuted ? 'Unmute microphone' : 'Mute microphone'); dockMute.setAttribute('aria-pressed', String(isMuted));
   dockMute.classList.toggle('muted', isMuted);
-  document.getElementById('endTurnBtn').hidden = !isRecording;
+  document.getElementById('endTurnBtn').hidden = !isRecording && !captureHeld;
+  const settings = control.turn_detection || { mode:'automatic', pause_ms:3000 };
+  maxRecordingMs = control.max_recording_ms || 180000;
+  document.getElementById('turnModeSelect').value = settings.mode;
+  document.getElementById('turnPauseInput').value = settings.pause_ms / 1000;
+  document.getElementById('turnPauseInput').disabled = settings.mode === 'manual';
+  document.getElementById('turnDetectionNote').textContent = settings.mode === 'manual'
+    ? 'Pauses stay inside this message. Press Send turn when you finish. Recording is held at the 3-minute limit.'
+    : `Waits ${settings.pause_ms / 1000} seconds of silence. Send turn submits immediately. Recording is held at the 3-minute limit.`;
   const profile = { low_power: 'LowPower', balanced: 'Balanced', high_performance: 'HighPerformance' }[control.profile];
   tierIdx = Math.max(0, tiers.indexOf(profile)); tierBtn.textContent = tiers[tierIdx];
+}
+function formatCaptureTime(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2,'0')}`;
+}
+function setCaptureHeld(held) {
+  captureHeld = held; micBtn.disabled = held || ws?.readyState !== WebSocket.OPEN;
+  document.getElementById('endTurnBtn').hidden = !isRecording && !held;
+}
+function setTurnDetection() {
+  const input = document.getElementById('turnPauseInput');
+  if (!input.checkValidity()) { input.reportValidity(); return; }
+  sendAction('set_turn_detection', { settings:{ mode:document.getElementById('turnModeSelect').value, pause_ms:Math.round(Number(input.value)*1000) } });
 }
 function appendConversation(role, text) {
   const node = document.createElement('article'); node.className = `message message-${role.toLowerCase()}`;
@@ -203,6 +250,10 @@ function renderToolResult(result) {
   else summary.textContent = succeeded ? 'The local action completed.' : 'The local action needs attention.';
   const details = document.createElement('details'); const disclosure = document.createElement('summary'); disclosure.textContent = 'Show details';
   const pre = document.createElement('pre'); pre.textContent = JSON.stringify(result, null, 2); details.append(disclosure, pre);
+  if (output?.payload_ref) {
+    const view = document.createElement('button'); view.className='quiet-button'; view.textContent='Open full output';
+    view.addEventListener('click',()=>sendAction('tool_payload',{id:output.payload_ref})); container.append(view);
+  }
   container.append(heading, summary, details); document.getElementById('canvasEmptyState')?.remove(); document.getElementById('canvasPanel').append(container);
 }
 function updateSystemCard(output) {
@@ -248,7 +299,7 @@ function finishPlayback() { updateState(isRecording ? 'listening' : 'idle'); cur
 function updateState(state) {
   const changed = orbState !== state;
   orbState = state;
-  const labels = { idle:'Ready', listening:'Listening', transcribing:'Understanding', thinking:'Thinking', speaking:'Speaking', working:'Working', seeing:'Seeing', watching:'Watching', interrupted:'Interrupted', disconnected:'Offline', approval_required:'Approval needed', error:'Attention' };
+  const labels = { holding:'Ready to send', idle:'Ready', listening:'Listening', transcribing:'Understanding', thinking:'Thinking', speaking:'Speaking', working:'Working', seeing:'Seeing', watching:'Watching', interrupted:'Interrupted', disconnected:'Offline', approval_required:'Approval needed', error:'Attention' };
   statusBadge.textContent = labels[state] || 'Ready'; document.getElementById('appShell').dataset.state = state;
   const palette = statePalette(paletteState(state));
   ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, [palette.primary,palette.secondary,palette.tertiary][index]));
@@ -262,8 +313,28 @@ function setConnection(message, connected) {
   pill.querySelector('span').textContent = message;
   document.getElementById('sessionConnection').textContent = connected ? 'Connected · local' : 'Reconnecting';
 }
-async function toggleMic() { if (isRecording) stopMic(); else await startMic(); }
+async function toggleMic() { if (isRecording) await submitVoiceTurn(true); else await startMic(); }
+async function submitVoiceTurn(stopAfter = false) {
+  if (submittingVoiceTurn) return;
+  submittingVoiceTurn = true; document.getElementById('endTurnBtn').disabled = true;
+  try {
+    const capture = processor;
+    if (isRecording && capture) {
+      await new Promise((resolve,reject) => {
+        const request_id = ++captureFlushSerial;
+        const timer = setTimeout(() => { pendingCaptureFlush = null; reject(new Error('Microphone did not finish sending its last frame. Try Send turn again.')); },1000);
+        pendingCaptureFlush = {request_id,resolve:() => {clearTimeout(timer);resolve();},reject:() => {clearTimeout(timer);reject(new Error('Microphone stopped before the turn was sent.'));}};
+        capture.port.postMessage({action:'flush',request_id});
+      });
+      if (processor !== capture || !isRecording) return;
+    }
+    if (stopAfter) stopMic();
+    sendAction('end_turn');
+  } catch(error) { showError(error.message); }
+  finally { submittingVoiceTurn = false; document.getElementById('endTurnBtn').disabled = false; }
+}
 async function startMic() {
+  if (captureHeld) { showError('Press Send turn to submit the recording before starting again.'); return; }
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     showError('Microphone requires a secure connection. On this computer use http://localhost:8088. From another device use HTTPS with a trusted certificate (see scripts/voice/tls.sh).'); return;
   }
@@ -278,6 +349,11 @@ async function startMic() {
     micSource = audioCtx.createMediaStreamSource(micStream);
     processor = new AudioWorkletNode(audioCtx, 'sail-capture');
     processor.port.onmessage = ({ data }) => {
+      if (data?.type === 'flushed') {
+        if (pendingCaptureFlush?.request_id === data.request_id) {const pending = pendingCaptureFlush;pendingCaptureFlush = null;pending.resolve();}
+        return;
+      }
+      if (!(data instanceof ArrayBuffer)) return;
       if (isRecording && !isMuted && ws?.readyState === WebSocket.OPEN) {
         if (ws.bufferedAmount > 64000) { showError('Audio connection is too slow; microphone stopped.'); stopMic(); return; }
         ws.send(data);
@@ -289,6 +365,7 @@ async function startMic() {
   finally { micBtn.disabled = false; }
 }
 function stopMic() {
+  if (pendingCaptureFlush) { const pending = pendingCaptureFlush; pendingCaptureFlush = null; pending.reject(); }
   isRecording = false; micStream?.getTracks().forEach(track => track.stop());
   if (processor) { processor.port.onmessage = null; processor.disconnect(); processor = null; }
   micSource?.disconnect(); micSource = null; micStream = null;
@@ -476,13 +553,13 @@ async function refreshOwnerApprovals() {
       const exact = document.createElement('pre'); exact.textContent = JSON.stringify(request.capability, null, 2);
       const scope = document.createElement('p'); scope.className = 'sheet-note'; scope.textContent = `Expires ${new Date(request.expires_at).toLocaleTimeString()} · Session ${request.correlation_id || 'native trusted caller'}`;
       card.append(title,exact,scope);
-      const action = pendingApprovalActions.get(request.session_id);
+      const action = pendingApprovalActions.get(request.session_id) || { automatic:true };
       if (action) {
-        const approve = document.createElement('button'); approve.className = 'quiet-button'; approve.textContent = 'Approve and retry once';
+        const approve = document.createElement('button'); approve.className = 'quiet-button'; approve.textContent = action.automatic ? 'Approve and continue' : 'Approve and retry once';
         approve.addEventListener('click', async () => {
           approve.disabled = true;
           try { const result = await ownerApprovalRequest('resolve',{session_id:request.session_id,approved:true});
-            pendingApprovalActions.delete(request.session_id); runKernelTool(action.tool,action.params,result.token.token_id); await refreshOwnerApprovals();
+            pendingApprovalActions.delete(request.session_id); if (!action.automatic) runKernelTool(action.tool,action.params,result.token.token_id); await refreshOwnerApprovals();
           } catch (error) { showError(error.message); approve.disabled = false; }
         }); card.append(approve);
       } else {

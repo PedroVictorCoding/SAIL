@@ -367,3 +367,178 @@ async fn revoking_consumed_approval_cancels_an_inflight_backend() {
     assert_eq!(result.error.as_deref(), Some("revoked"));
     assert!(!ctx.cancel.is_cancelled());
 }
+
+#[tokio::test]
+async fn approval_resumes_the_same_pending_request_without_a_second_dispatch() {
+    let registry = Arc::new(ToolRegistry::default());
+    let backend = fake(None, false, 0);
+    registry
+        .register(
+            descriptor("test:approved", ToolEffect::Mutating, 2000),
+            backend.clone(),
+        )
+        .unwrap();
+    let approval = Arc::new(ApprovalBroker::new());
+    let guardian = Arc::new(GuardianExecutionBroker::new(
+        Arc::new(PolicyEngine::new()),
+        Arc::new(AuditLedger::new()),
+        approval.clone(),
+        Arc::new(SandboxPolicy::new()),
+    ));
+    let scheduler = Arc::new(ToolScheduler::new(registry, guardian, 4));
+    let mut events = scheduler.subscribe();
+    let context = context();
+    let task_context = context.clone();
+    let scheduled = scheduler.clone();
+    let task = tokio::spawn(async move {
+        scheduled
+            .execute(task_context, "test:approved", json!({}), None, true)
+            .await
+    });
+    let session = loop {
+        let e = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if let Some(session) = e.approval_session {
+            assert_eq!(e.request_id, context.request_id);
+            break session;
+        }
+    };
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+    let duplicate = scheduler
+        .execute(context.clone(), "test:approved", json!({}), None, true)
+        .await;
+    assert_eq!(duplicate.error.as_deref(), Some("duplicate_inflight"));
+    approval.resolve_session(session, true).unwrap();
+    assert!(task.await.unwrap().success);
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        scheduler
+            .execute(context, "test:approved", json!({}), None, true)
+            .await
+            .success
+    );
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn cancelling_a_pending_approval_revokes_it_and_executes_nothing() {
+    let registry = Arc::new(ToolRegistry::default());
+    let backend = fake(None, false, 0);
+    registry
+        .register(
+            descriptor("test:cancel", ToolEffect::Mutating, 2000),
+            backend.clone(),
+        )
+        .unwrap();
+    let approval = Arc::new(ApprovalBroker::new());
+    let guardian = Arc::new(GuardianExecutionBroker::new(
+        Arc::new(PolicyEngine::new()),
+        Arc::new(AuditLedger::new()),
+        approval.clone(),
+        Arc::new(SandboxPolicy::new()),
+    ));
+    let scheduler = Arc::new(ToolScheduler::new(registry, guardian, 4));
+    let mut events = scheduler.subscribe();
+    let context = context();
+    let next = context.clone();
+    let scheduled = scheduler.clone();
+    let task = tokio::spawn(async move {
+        scheduled
+            .execute(next, "test:cancel", json!({}), None, true)
+            .await
+    });
+    let session = loop {
+        let e = events.recv().await.unwrap();
+        if let Some(s) = e.approval_session {
+            break s;
+        }
+    };
+    context.cancel.cancel();
+    assert_eq!(task.await.unwrap().error.as_deref(), Some("cancelled"));
+    assert!(approval.resolve_session(session, true).is_err());
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn queued_operation_does_not_consume_its_token_before_dispatch() {
+    let registry = Arc::new(ToolRegistry::default());
+    let backend = fake(None, false, 150);
+    registry
+        .register(
+            descriptor("test:serial", ToolEffect::Mutating, 2000),
+            backend.clone(),
+        )
+        .unwrap();
+    let approval = Arc::new(ApprovalBroker::new());
+    let policy = Arc::new(PolicyEngine::new());
+    let first_context = context();
+    let cap = ToolScheduler::capability("test:serial", &json!({}));
+    policy.grant_scoped(
+        SubsystemId::Agents,
+        cap.clone(),
+        Some(first_context.correlation_id),
+        chrono::Duration::seconds(60),
+    );
+    let guardian = Arc::new(GuardianExecutionBroker::new(
+        policy.clone(),
+        Arc::new(AuditLedger::new()),
+        approval.clone(),
+        Arc::new(SandboxPolicy::new()),
+    ));
+    let scheduler = Arc::new(ToolScheduler::new(registry, guardian, 4));
+    let scheduled = scheduler.clone();
+    let first = tokio::spawn(async move {
+        scheduled
+            .execute(first_context, "test:serial", json!({}), None, true)
+            .await
+    });
+    while backend.calls.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    let second_context = ToolContext {
+        correlation_id: Uuid::new_v4(),
+        ..context()
+    };
+    let session = approval.create_session_for(
+        Some(second_context.correlation_id),
+        SubsystemId::Agents,
+        cap.clone(),
+        "second serialized operation",
+    );
+    let token = approval.resolve_session(session.session_id, true).unwrap();
+    let scheduled = scheduler.clone();
+    let second_ctx = second_context.clone();
+    let mut events = scheduler.subscribe();
+    let second = tokio::spawn(async move {
+        scheduled
+            .execute(
+                second_ctx,
+                "test:serial",
+                json!({}),
+                Some(token.token_id),
+                true,
+            )
+            .await
+    });
+    loop {
+        let e = events.recv().await.unwrap();
+        if e.request_id == second_context.request_id && e.state == ToolState::PolicyPending {
+            break;
+        }
+    }
+    // Simulate another consumer winning the token while this operation queues.
+    // If the scheduler consumed it early, this assertion fails.
+    approval
+        .consume_token_for(
+            token.token_id,
+            SubsystemId::Agents,
+            &cap,
+            Some(second_context.correlation_id),
+        )
+        .unwrap();
+    assert!(first.await.unwrap().success);
+    assert!(!second.await.unwrap().success);
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+}
