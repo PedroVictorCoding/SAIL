@@ -229,3 +229,18 @@ This generates speech, detects it with Silero, transcribes it with Whisper, and 
 ## End your session
 
 Use **Stop Microphone** when you no longer want capture. Use **Interrupt** if you also want the current reply to stop. Close the tab when finished, then press **Ctrl+C** in the SAIL terminal to shut down the runtime. A llama-server that SAIL started is stopped with it; a model server that was already running remains independently managed.
+
+### Capture a picture or screenshot during conversation
+
+Say or type “Take a screenshot and explain this error” for the screen, or
+“Take a camera picture and tell me what you see” for the camera. SAIL pauses
+reasoning until the browser captures an image. Click the capture button to open
+the browser permission picker. Screen capture lets you choose a screen, window,
+or tab; camera capture takes one frame. Both require HTTPS or localhost and
+browser support. Capture stops immediately after the frame is obtained.
+
+“Capture an image and tell me what you see” uses the previous user message to
+resolve screen/camera context when possible; otherwise SAIL asks which source
+you mean. Permission denial or cancellation never submits an imageless request.
+The original request and captured image are sent together to the local model.
+Existing uploaded images are analyzed directly without requesting device capture.

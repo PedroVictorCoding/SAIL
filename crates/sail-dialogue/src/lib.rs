@@ -5,6 +5,7 @@ pub mod server;
 mod speech;
 pub mod stt;
 mod tool_policy;
+mod visual_capture;
 pub mod tts;
 pub mod vad;
 pub mod vlm;

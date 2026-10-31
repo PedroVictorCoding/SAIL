@@ -2,12 +2,12 @@ use chrono::Utc;
 use ring::digest::{Context, SHA256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::Semaphore;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use sail_common::bus::EventBus;
@@ -170,6 +170,8 @@ impl ForgeOrchestrator {
             budget,
             review_policy,
         );
+        checkpoint.issue_title = req.issue_title;
+        checkpoint.issue_body = req.issue_body;
 
         checkpoint.record_event(
             "enqueued",
@@ -350,63 +352,88 @@ impl ForgeOrchestrator {
         &self,
         repo: &str,
         issue_number: u64,
+        job_id: &str,
         worktree: &IsolatedWorktree,
     ) -> Result<String, String> {
         info!(
             "Fetching issue #{} details and codebase context for {}",
             issue_number, repo
         );
-        // 1. Fetch issue title and body from GitHub via gh CLI if available
-        let gh_out = std::process::Command::new("gh")
-            .args([
-                "issue",
-                "view",
-                &issue_number.to_string(),
-                "--repo",
-                repo,
-                "--json",
-                "title,body",
-            ])
-            .output();
 
-        let (title, body) = if let Ok(out) = gh_out {
-            if out.status.success() {
-                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+        // 1. Fetch issue title and body from checkpoint if pre-specified, otherwise query gh CLI
+        let (title, body) = {
+            let (cached_title, cached_body) = {
+                let jobs = self.active_jobs.lock().unwrap();
+                if let Some(j) = jobs.get(job_id) {
                     (
-                        val["title"].as_str().unwrap_or("").to_string(),
-                        val["body"].as_str().unwrap_or("").to_string(),
+                        j.checkpoint.issue_title.clone(),
+                        j.checkpoint.issue_body.clone(),
                     )
                 } else {
-                    (format!("Issue #{}", issue_number), String::new())
+                    (None, None)
                 }
+            };
+
+            if let (Some(t), Some(b)) = (cached_title, cached_body) {
+                (t, b)
             } else {
-                (format!("Issue #{}", issue_number), String::new())
+                let gh_out = std::process::Command::new("gh")
+                    .args([
+                        "issue",
+                        "view",
+                        &issue_number.to_string(),
+                        "--repo",
+                        repo,
+                        "--json",
+                        "title,body",
+                    ])
+                    .output();
+
+                match gh_out {
+                    Ok(out) if out.status.success() => {
+                        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                            (
+                                val["title"].as_str().unwrap_or("").to_string(),
+                                val["body"].as_str().unwrap_or("").to_string(),
+                            )
+                        } else {
+                            return Err(format!(
+                                "Failed to parse gh issue view output as JSON for #{}",
+                                issue_number
+                            ));
+                        }
+                    }
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                        return Err(format!(
+                            "GitHub issue #{} retrieval failed with status {}: {}",
+                            issue_number, out.status, stderr
+                        ));
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "Failed to execute gh CLI for issue #{}: {}",
+                            issue_number, e
+                        ));
+                    }
+                }
             }
-        } else {
-            (format!("Issue #{}", issue_number), String::new())
         };
 
-        // 2. Inspect worktree files to find context
-        let target_file = if worktree.root_dir.join("src/lib.rs").exists() {
-            "src/lib.rs"
-        } else if worktree.root_dir.join("src/main.rs").exists() {
-            "src/main.rs"
-        } else {
-            "src/lib.rs"
-        };
+        // 2. Inspect worktree files to find context across workspace crates
+        let query = format!("{} {}", title, body);
+        let target_file = Self::locate_workspace_target_file(&worktree.root_dir, &query);
 
-        let current_code = worktree
-            .read_file(std::path::Path::new(target_file))
-            .unwrap_or_default();
+        let current_code = worktree.read_file(&target_file).unwrap_or_default();
 
         // 3. Attempt local LLM inference if local server is active (port 8081 or 8080)
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(15))
             .build();
         if let Ok(c) = client {
             let prompt = format!(
-                "You are an expert Rust programmer solving issue #{}: {}\n{}\nExisting code:\n```rust\n{}\n```\nProvide a unified diff patch to solve this issue.",
-                issue_number, title, body, current_code
+                "You are an expert Rust programmer solving issue #{}: {}\n{}\nExisting code from {:?}:\n```rust\n{}\n```\nProvide a unified diff patch (starting with --- a/ and +++ b/) to solve this issue.",
+                issue_number, title, body, target_file, current_code
             );
 
             let payload = serde_json::json!({
@@ -431,18 +458,124 @@ impl ForgeOrchestrator {
             }
         }
 
-        // 4. Deterministic code synthesis if LLM is offline or in test suite
-        // Generates targeted non-empty unified diff for the identified target file
-        let comment_line = format!(
-            "// Verified solution for issue #{}: {}",
-            issue_number, title
-        );
-        let patch = format!(
-            "--- a/{}\n+++ b/{}\n@@ -1,1 +1,2 @@\n{}\n{}",
-            target_file, target_file, comment_line, current_code
+        // P0 Gate: Strictly fail closed if model is unavailable or returns an invalid patch.
+        // Fallback to synthetic comment-only patches is strictly prohibited.
+        Err(format!(
+            "Autonomous coding agent requires active model inference. Local model server (port 8081/8080) is offline or did not return a valid unified diff patch for issue #{}; fallback to synthetic patch is prohibited.",
+            issue_number
+        ))
+    }
+
+    /// Iterative repair patch synthesis when sandbox compiler or tests report errors.
+    async fn synthesize_repair_patch(
+        &self,
+        repo: &str,
+        issue_number: u64,
+        _worktree: &IsolatedWorktree,
+        compiler_errors: &str,
+    ) -> Result<String, String> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        let prompt = format!(
+            "You are an expert Rust programmer repairing failed tests for issue #{} in {}.\n\
+            Errors encountered during sandbox cargo test:\n```\n{}\n```\n\
+            Provide a corrected unified diff patch (starting with --- a/ and +++ b/) that resolves these compiler or assertion errors.",
+            issue_number, repo, compiler_errors
         );
 
-        Ok(patch)
+        let payload = serde_json::json!({
+            "prompt": prompt,
+            "n_predict": 1024,
+            "temperature": 0.1
+        });
+
+        for port in [8081, 8080] {
+            let url = format!("http://127.0.0.1:{}/completion", port);
+            if let Ok(resp) = client.post(&url).json(&payload).send().await {
+                if resp.status().is_success() {
+                    if let Ok(res_json) = resp.json::<serde_json::Value>().await {
+                        if let Some(content) = res_json["content"].as_str() {
+                            if content.contains("--- a/") && content.contains("+++ b/") {
+                                return Ok(content.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Err("Local model server offline or failed to synthesize repair patch".into())
+    }
+
+    /// Locate relevant target file across top-level or workspace crates (e.g. crates/*).
+    pub fn locate_workspace_target_file(worktree_root: &Path, query: &str) -> std::path::PathBuf {
+        let cargo_toml = worktree_root.join("Cargo.toml");
+        if cargo_toml.exists() {
+            if let Ok(toml_content) = fs::read_to_string(&cargo_toml) {
+                if toml_content.contains("[workspace]") {
+                    let crates_dir = worktree_root.join("crates");
+                    if crates_dir.is_dir() {
+                        if let Ok(entries) = fs::read_dir(&crates_dir) {
+                            let mut crates = Vec::new();
+                            for entry in entries.flatten() {
+                                let p = entry.path();
+                                if p.is_dir() {
+                                    let name = p
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .to_string();
+                                    crates.push((name, p));
+                                }
+                            }
+
+                            let q_lower = query.to_lowercase();
+                            // Check for matching crate name in query
+                            for (name, p) in &crates {
+                                let normalized_name = name.replace('-', "_");
+                                if q_lower.contains(&name.to_lowercase())
+                                    || q_lower.contains(&normalized_name)
+                                {
+                                    let lib = p.join("src").join("lib.rs");
+                                    if lib.exists() {
+                                        if let Ok(rel) = lib.strip_prefix(worktree_root) {
+                                            return rel.to_path_buf();
+                                        }
+                                    }
+                                    let main = p.join("src").join("main.rs");
+                                    if main.exists() {
+                                        if let Ok(rel) = main.strip_prefix(worktree_root) {
+                                            return rel.to_path_buf();
+                                        }
+                                    }
+                                }
+                            }
+
+                            // If query didn't match specific crate, pick first crate with src/lib.rs
+                            for (_name, p) in &crates {
+                                let lib = p.join("src").join("lib.rs");
+                                if lib.exists() {
+                                    if let Ok(rel) = lib.strip_prefix(worktree_root) {
+                                        return rel.to_path_buf();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if worktree_root.join("src/lib.rs").exists() {
+            std::path::PathBuf::from("src/lib.rs")
+        } else if worktree_root.join("src/main.rs").exists() {
+            std::path::PathBuf::from("src/main.rs")
+        } else {
+            std::path::PathBuf::from("src/lib.rs")
+        }
     }
 
     /// Execute the full autonomous resolution lifecycle with real sandbox test execution,
@@ -519,9 +652,24 @@ impl ForgeOrchestrator {
         let effective_patch = match patch_to_apply {
             Some(p) => p.to_string(),
             None => {
-                // Autonomous coding agent: fetch issue context and synthesize code patch
-                self.synthesize_solution_for_issue(&repo, issue_number, &worktree)
-                    .await?
+                // Autonomous coding agent: fetch issue context and synthesize code patch via real model
+                match self
+                    .synthesize_solution_for_issue(&repo, issue_number, job_id, &worktree)
+                    .await
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let mut jobs = self.active_jobs.lock().unwrap();
+                        if let Some(job) = jobs.get_mut(job_id) {
+                            job.checkpoint.transition(
+                                ForgeTaskState::Blocked,
+                                &format!("Model inference unavailable: {}", e),
+                            );
+                            let _ = self.checkpoint_store.save(&job.checkpoint);
+                        }
+                        return Err(format!("Autonomous synthesis blocked: {}", e));
+                    }
+                }
             }
         };
 
@@ -551,7 +699,7 @@ impl ForgeOrchestrator {
 
         self.check_interruption(job_id).await?;
 
-        // 4. Testing phase: execute real tests inside sandbox
+        // 4. Testing phase: execute real tests inside sandbox with bounded iterative repair
         {
             let mut jobs = self.active_jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(job_id) {
@@ -569,65 +717,101 @@ impl ForgeOrchestrator {
             message: "Executing quality gates in sandbox".into(),
         });
 
-        // Run real cargo test in the isolated Bubblewrap sandbox
-        let test_start = Instant::now();
-        let test_cmd_result = worktree.run_command("cargo", &["test"], 180);
-        let duration_ms = test_start.elapsed().as_millis() as u64;
-
-        // Write real logs to disk at logs/{job_id}/cargo_test.log
         let logs_dir = self.config.workspace_root.join("logs").join(job_id);
         let _ = fs::create_dir_all(&logs_dir);
         let log_path = logs_dir.join("cargo_test.log");
 
-        // Write real patch to disk at patches/{job_id}.patch
         let patches_dir = self.config.workspace_root.join("patches");
         let _ = fs::create_dir_all(&patches_dir);
         let patch_path = patches_dir.join(format!("{}.patch", job_id));
         let _ = fs::write(&patch_path, &diff);
 
+        let max_iterations = 3;
+        let mut iteration = 0;
         let mut test_records = Vec::new();
-        let tests_passed = match test_cmd_result {
-            Ok(ref output) => {
-                let passed = output.status == 0;
-                let status_msg = if passed {
-                    "passed (cargo test: ok)".to_string()
-                } else {
-                    format!(
+        let mut tests_passed = false;
+
+        while iteration < max_iterations && !tests_passed {
+            iteration += 1;
+            info!(
+                "Running sandbox quality gate iteration {}/{} for job {}",
+                iteration, max_iterations, job_id
+            );
+
+            // Run real cargo test in the isolated Bubblewrap sandbox
+            let test_start = Instant::now();
+            let test_cmd_result = worktree.run_command("cargo", &["test"], 180);
+            let duration_ms = test_start.elapsed().as_millis() as u64;
+
+            match test_cmd_result {
+                Ok(ref output) if output.status == 0 => {
+                    tests_passed = true;
+                    let status_msg = "passed (cargo test: ok)".to_string();
+                    let _ = fs::write(
+                        &log_path,
+                        format!("STDOUT:\n{}\n\nSTDERR:\n{}", output.stdout, output.stderr),
+                    );
+                    test_records.push(TestExecutionRecord {
+                        command: "cargo test".into(),
+                        status: status_msg,
+                        duration_ms,
+                        log_ref: format!("logs/{}/cargo_test.log", job_id),
+                    });
+                }
+                Ok(ref output) => {
+                    let status_msg = format!(
                         "failed (cargo test exit status: {}): {}",
                         output.status, output.stderr
-                    )
-                };
+                    );
+                    let _ = fs::write(
+                        &log_path,
+                        format!("STDOUT:\n{}\n\nSTDERR:\n{}", output.stdout, output.stderr),
+                    );
+                    test_records.push(TestExecutionRecord {
+                        command: "cargo test".into(),
+                        status: status_msg,
+                        duration_ms,
+                        log_ref: format!("logs/{}/cargo_test.log", job_id),
+                    });
 
-                let _ = fs::write(
-                    &log_path,
-                    format!("STDOUT:\n{}\n\nSTDERR:\n{}", output.stdout, output.stderr),
-                );
-
-                test_records.push(TestExecutionRecord {
-                    command: "cargo test".into(),
-                    status: status_msg,
-                    duration_ms,
-                    log_ref: format!("logs/{}/cargo_test.log", job_id),
-                });
-                passed
+                    // If iterations remain and patch was not explicitly pinned by caller, attempt repair
+                    if iteration < max_iterations && patch_to_apply.is_none() {
+                        warn!(
+                            "Tests failed on iteration {}; requesting iterative repair patch from model",
+                            iteration
+                        );
+                        if let Ok(repair_patch) = self
+                            .synthesize_repair_patch(&repo, issue_number, &worktree, &output.stderr)
+                            .await
+                        {
+                            if let Ok(()) = worktree.apply_patch(&repair_patch) {
+                                info!("Applied iterative repair patch on iteration {}", iteration);
+                                if let Ok(new_diff) = worktree.get_diff() {
+                                    let _ = fs::write(&patch_path, &new_diff);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(ref e) => {
+                    let _ = fs::write(&log_path, format!("Execution Error: {}", e));
+                    test_records.push(TestExecutionRecord {
+                        command: "cargo test".into(),
+                        status: format!("error: {}", e),
+                        duration_ms,
+                        log_ref: format!("logs/{}/cargo_test.log", job_id),
+                    });
+                    break;
+                }
             }
-            Err(ref e) => {
-                let _ = fs::write(&log_path, format!("Execution Error: {}", e));
-                test_records.push(TestExecutionRecord {
-                    command: "cargo test".into(),
-                    status: format!("error: {}", e),
-                    duration_ms,
-                    log_ref: format!("logs/{}/cargo_test.log", job_id),
-                });
-                false
-            }
-        };
+        }
 
         // If tests fail, do NOT synthesize success: mark Blocked and fail closed!
         if !tests_passed {
             let mut jobs = self.active_jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(job_id) {
                 job.checkpoint.test_history = test_records;
+                job.checkpoint.iteration = iteration;
                 job.checkpoint.transition(
                     ForgeTaskState::Blocked,
                     "Sandbox tests failed; changes unverified",
@@ -652,12 +836,13 @@ impl ForgeOrchestrator {
             }
         }
 
+        let total_test_duration_ms: u64 = test_records.iter().map(|r| r.duration_ms).sum();
         let review_req = ReviewRequest {
             job_id: job_id.to_string(),
             issue_id: format!("{}#{}", repo, issue_number),
             base_commit: base_commit.clone(),
             diff_patch: diff.clone(),
-            test_manifest: format!("cargo test passed ({}ms)", duration_ms),
+            test_manifest: format!("cargo test passed ({}ms)", total_test_duration_ms),
         };
 
         let review_result = self.review_broker.review(&review_req).await;

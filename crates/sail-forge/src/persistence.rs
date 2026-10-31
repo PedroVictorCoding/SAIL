@@ -33,6 +33,10 @@ pub struct TaskCheckpoint {
     pub review_result: Option<ReviewResult>,
     pub completed_idempotency_keys: Vec<String>,
     pub final_report: Option<ForgeJobReport>,
+    #[serde(default)]
+    pub issue_title: Option<String>,
+    #[serde(default)]
+    pub issue_body: Option<String>,
 }
 
 impl TaskCheckpoint {
@@ -67,6 +71,8 @@ impl TaskCheckpoint {
             review_result: None,
             completed_idempotency_keys: Vec::new(),
             final_report: None,
+            issue_title: None,
+            issue_body: None,
         }
     }
 

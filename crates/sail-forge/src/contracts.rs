@@ -94,7 +94,7 @@ impl Default for ReviewPolicyConfig {
 }
 
 /// Request to enqueue an issue for autonomous resolution (`forge:issue_enqueue`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IssueEnqueueRequest {
     pub repo: String,
     pub issue_number: u64,
@@ -104,6 +104,10 @@ pub struct IssueEnqueueRequest {
     pub review_policy: Option<ReviewPolicyConfig>,
     #[serde(default)]
     pub budget: Option<ForgeBudgetConfig>,
+    #[serde(default)]
+    pub issue_title: Option<String>,
+    #[serde(default)]
+    pub issue_body: Option<String>,
 }
 
 /// Formulated plan for resolving an issue (`forge:issue_plan`).

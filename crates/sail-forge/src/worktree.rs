@@ -35,6 +35,8 @@ pub enum WorktreeError {
     },
     #[error("Patch application failed: {0}")]
     PatchError(String),
+    #[error("Bubblewrap sandbox unavailable: {0}")]
+    BwrapUnavailable(String),
 }
 
 /// Manages an isolated, disposable directory or git worktree for a single Forge task.
@@ -300,11 +302,28 @@ impl IsolatedWorktree {
             .prepare_command(binary, &args_vec, Some(&self.root_dir))
             .map_err(WorktreeError::Sandbox)?;
 
-        let bwrap_bin = std::env::var("SAIL_BWRAP_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/usr/bin/bwrap"));
+        let bwrap_bin = if let Ok(custom) = std::env::var("SAIL_BWRAP_BIN") {
+            PathBuf::from(custom)
+        } else if let Ok(path_var) = std::env::var("PATH") {
+            let mut found = None;
+            for dir in std::env::split_paths(&path_var) {
+                let candidate = dir.join("bwrap");
+                if candidate.is_file() {
+                    found = Some(candidate);
+                    break;
+                }
+            }
+            found.unwrap_or_else(|| PathBuf::from("/usr/bin/bwrap"))
+        } else {
+            PathBuf::from("/usr/bin/bwrap")
+        };
 
-        let use_bwrap = bwrap_bin.exists();
+        if !bwrap_bin.exists() {
+            return Err(WorktreeError::BwrapUnavailable(format!(
+                "Mandatory Bubblewrap sandbox binary not found at {:?}. Sandbox is required and fails closed.",
+                bwrap_bin
+            )));
+        }
 
         // Clean PATH including ~/.cargo/bin and standard system paths
         let clean_path = if let Ok(path) = std::env::var("PATH") {
@@ -338,56 +357,81 @@ impl IsolatedWorktree {
             }
         });
 
-        let mut cmd = if use_bwrap {
-            let mut b = Command::new(&bwrap_bin);
-            // Rootless Bubblewrap OS Sandbox
-            b.arg("--ro-bind").arg("/").arg("/");
-            b.arg("--tmpfs").arg("/tmp");
-            b.arg("--bind").arg(&self.root_dir).arg(&self.root_dir);
-            b.arg("--chdir").arg(&self.root_dir);
-            b.arg("--unshare-net");
-            b.arg("--unshare-pid");
-            b.arg("--proc").arg("/proc");
-            b.arg("--dev").arg("/dev");
-            b.arg("--die-with-parent");
+        let mut cmd = Command::new(&bwrap_bin);
+        // Minimal confidential allowlisted filesystem:
+        // System libraries and binaries are mounted read-only:
+        if Path::new("/usr").exists() {
+            cmd.arg("--ro-bind").arg("/usr").arg("/usr");
+        }
+        if Path::new("/lib").exists() {
+            cmd.arg("--ro-bind").arg("/lib").arg("/lib");
+        }
+        if Path::new("/lib64").exists() {
+            cmd.arg("--ro-bind").arg("/lib64").arg("/lib64");
+        }
+        if Path::new("/bin").exists() {
+            cmd.arg("--ro-bind").arg("/bin").arg("/bin");
+        }
+        cmd.arg("--ro-bind-try")
+            .arg("/etc/ld.so.cache")
+            .arg("/etc/ld.so.cache");
+        cmd.arg("--ro-bind-try")
+            .arg("/etc/ld.so.conf")
+            .arg("/etc/ld.so.conf");
+        cmd.arg("--ro-bind-try")
+            .arg("/etc/ld.so.conf.d")
+            .arg("/etc/ld.so.conf.d");
+        cmd.arg("--ro-bind-try")
+            .arg("/etc/alternatives")
+            .arg("/etc/alternatives");
+        cmd.arg("--ro-bind-try").arg("/etc/ssl").arg("/etc/ssl");
+        cmd.arg("--ro-bind-try").arg("/etc/pki").arg("/etc/pki");
 
-            b.arg("--setenv").arg("PATH").arg(&clean_path);
-            b.arg("--setenv").arg("HOME").arg(&self.root_dir);
-            if let Some(ref rustup) = rustup_home {
-                b.arg("--setenv").arg("RUSTUP_HOME").arg(rustup);
+        // Isolated user home: empty tmpfs for /tmp, and empty /home/main with ONLY cargo & rustup toolchain mounted read-only
+        cmd.arg("--tmpfs").arg("/tmp");
+        cmd.arg("--dir").arg("/home");
+        cmd.arg("--dir").arg("/home/main");
+        if let Some(ref cargo) = cargo_home {
+            let cargo_p = Path::new(cargo);
+            if cargo_p.exists() {
+                cmd.arg("--ro-bind").arg(cargo).arg(cargo);
             }
-            if let Some(ref cargo) = cargo_home {
-                b.arg("--setenv").arg("CARGO_HOME").arg(cargo);
+        }
+        if let Some(ref rustup) = rustup_home {
+            let rustup_p = Path::new(rustup);
+            if rustup_p.exists() {
+                cmd.arg("--ro-bind").arg(rustup).arg(rustup);
             }
-            b.arg("--setenv").arg("CARGO_NET_OFFLINE").arg("true");
-            b.arg("--setenv").arg("RUST_BACKTRACE").arg("1");
+        }
 
-            // Binary to run
-            b.arg(&sandboxed_cmd.binary_path);
-            for a in &sandboxed_cmd.args {
-                b.arg(a);
-            }
-            b
-        } else {
-            let mut h = Command::new(&sandboxed_cmd.binary_path);
-            h.args(&sandboxed_cmd.args);
-            h.current_dir(&self.root_dir);
-            h.env_clear();
-            h.env("PATH", &clean_path);
-            h.env("HOME", &self.root_dir);
-            if let Some(ref rustup) = rustup_home {
-                h.env("RUSTUP_HOME", rustup);
-            }
-            if let Some(ref cargo) = cargo_home {
-                h.env("CARGO_HOME", cargo);
-            }
-            h.env("CARGO_NET_OFFLINE", "true");
-            h.env("RUST_BACKTRACE", "1");
-            h.env("HTTP_PROXY", "http://0.0.0.0:0");
-            h.env("HTTPS_PROXY", "http://0.0.0.0:0");
-            h.env("ALL_PROXY", "http://0.0.0.0:0");
-            h
-        };
+        // Isolated worktree: root_dir is strictly the only directory writable outside tmpfs
+        cmd.arg("--bind").arg(&self.root_dir).arg(&self.root_dir);
+        cmd.arg("--chdir").arg(&self.root_dir);
+
+        // Security isolation flags
+        cmd.arg("--proc").arg("/proc");
+        cmd.arg("--dev").arg("/dev");
+        cmd.arg("--unshare-net");
+        cmd.arg("--unshare-pid");
+        cmd.arg("--die-with-parent");
+
+        // Environment variables
+        cmd.arg("--setenv").arg("PATH").arg(&clean_path);
+        cmd.arg("--setenv").arg("HOME").arg("/tmp");
+        if let Some(ref rustup) = rustup_home {
+            cmd.arg("--setenv").arg("RUSTUP_HOME").arg(rustup);
+        }
+        if let Some(ref cargo) = cargo_home {
+            cmd.arg("--setenv").arg("CARGO_HOME").arg(cargo);
+        }
+        cmd.arg("--setenv").arg("CARGO_NET_OFFLINE").arg("true");
+        cmd.arg("--setenv").arg("RUST_BACKTRACE").arg("1");
+
+        // Binary and arguments to execute
+        cmd.arg(&sandboxed_cmd.binary_path);
+        for a in &sandboxed_cmd.args {
+            cmd.arg(a);
+        }
 
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
