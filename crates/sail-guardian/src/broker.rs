@@ -118,24 +118,8 @@ impl GuardianExecutionBroker {
                 RiskLevel::Low => {
                     // Auto-approved low risk (e.g. os:status telemetry)
                 }
-                RiskLevel::Medium => {
-                    // Interactive session operations (proc:list, fs:query in workspace)
-                    if let Some(tid) = token_id {
-                        if let Err(e) = self.approval.consume_token(tid, caller, &capability) {
-                            let reason = format!("Token consumption failed: {e}");
-                            self.audit.record_with_correlation(
-                                caller,
-                                capability.clone(),
-                                DecisionOutcome::Denied,
-                                &reason,
-                                correlation_id,
-                            );
-                            return Err(ExecutionDenied::InvalidToken(e));
-                        }
-                    }
-                }
-                RiskLevel::High | RiskLevel::Critical => {
-                    // High/Critical MUST have a valid, unconsumed, unexpired token bound to this actor and capability
+                RiskLevel::Medium | RiskLevel::High | RiskLevel::Critical => {
+                    // Every non-low-risk operation requires an explicit grant or a bound token.
                     let tid = match token_id {
                         Some(id) => id,
                         None => {
@@ -144,7 +128,7 @@ impl GuardianExecutionBroker {
                                 capability.clone(),
                                 "Execution boundary gate check requires user approval",
                             );
-                            let reason = format!("Approval required for high-risk operation: {:?}", capability);
+                            let reason = format!("Approval required for operation: {:?}", capability);
                             self.audit.record_with_correlation(
                                 caller,
                                 capability.clone(),
