@@ -16,4 +16,5 @@ tracing.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 ring.workspace = true
+libc = "0.2"
 

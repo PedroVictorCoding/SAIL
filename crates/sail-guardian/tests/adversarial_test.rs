@@ -159,6 +159,197 @@ fn test_adversarial_sandbox_command_injection_and_interpreter_bypass() {
     assert!(sandbox.validate_command("cargo check").is_ok());
 }
 
+#[test]
+fn test_adversarial_sandbox_special_device_fifo_and_open_sandboxed_file() {
+    let harness = TestHarness::new();
+    let root = harness.tmp_path.join("workspace");
+    fs::create_dir_all(&root).unwrap();
+
+    let sandbox = SandboxPolicy::from_roots(vec![&root]);
+
+    // 1. Regular file opens successfully via open_sandboxed_file
+    let valid_file = root.join("valid_doc.txt");
+    fs::write(&valid_file, "legitimate file data").unwrap();
+    let file_handle = sandbox.open_sandboxed_file(&valid_file, false);
+    assert!(file_handle.is_ok(), "Opening valid workspace file must succeed");
+
+    // 2. FIFO special device file blocking
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        let fifo_path = root.join("test_fifo");
+        let c_fifo = CString::new(fifo_path.to_str().unwrap()).unwrap();
+        let res = unsafe { libc::mkfifo(c_fifo.as_ptr(), 0o644) };
+        if res == 0 {
+            let err = sandbox.validate_path(&fifo_path, false);
+            assert!(
+                matches!(err, Err(SandboxViolation::SpecialDeviceBlocked { .. })),
+                "FIFO device node must be blocked with SpecialDeviceBlocked, got: {:?}",
+                err
+            );
+            let open_res = sandbox.open_sandboxed_file(&fifo_path, false);
+            assert!(
+                matches!(open_res, Err(SandboxViolation::SpecialDeviceBlocked { .. })),
+                "Opening FIFO must be rejected with SpecialDeviceBlocked, got: {:?}",
+                open_res
+            );
+        }
+    }
+
+    // 3. Opening escaping file is rejected
+    let outside_file = harness.tmp_path.join("outside.txt");
+    fs::write(&outside_file, "outside data").unwrap();
+    let open_escape = sandbox.open_sandboxed_file(&outside_file, false);
+    assert!(
+        matches!(open_escape, Err(SandboxViolation::PathEscapesRoot { .. })),
+        "Opening file outside allowed roots must fail with PathEscapesRoot"
+    );
+}
+
+#[test]
+fn test_adversarial_sandbox_os_enforced_command_isolation_and_env_sanitization() {
+    let harness = TestHarness::new();
+    let workspace = harness.tmp_path.join("isolated_workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join("sample.txt"), "hello isolated world").unwrap();
+
+    let sandbox = SandboxPolicy::from_roots(vec![&workspace]);
+
+    // Set a dummy secret in the current process
+    unsafe {
+        std::env::set_var("SAIL_SECRET_TOKEN", "super_secret_credentials_12345");
+    }
+
+    // 1. Prepare an authorized command: "ls"
+    let cmd = sandbox
+        .prepare_command("ls", &["-la".to_string()], Some(&workspace))
+        .expect("ls must be allowed");
+    assert_eq!(cmd.binary, "ls");
+    assert_eq!(cmd.current_dir, fs::canonicalize(&workspace).unwrap());
+
+    // 2. Verify sanitized environment stripped secrets
+    assert!(!cmd.env.contains_key("SAIL_SECRET_TOKEN"));
+    assert!(!cmd.env.contains_key("AWS_SECRET_ACCESS_KEY"));
+    assert_eq!(cmd.env.get("TERM"), Some(&"dumb".to_string()));
+    assert_eq!(cmd.env.get("LANG"), Some(&"C.UTF-8".to_string()));
+
+    // 3. Execute isolated command
+    let output = sandbox.execute_command(&cmd).expect("Command execution failed");
+    assert_eq!(output.status, 0);
+    assert!(output.stdout.contains("sample.txt"));
+
+    // 4. Command injection attack with shell metacharacters in arguments is rejected
+    let injection_res = sandbox.prepare_command(
+        "ls",
+        &["sample.txt; touch /tmp/evil.txt".to_string()],
+        Some(&workspace),
+    );
+    assert!(matches!(
+        injection_res,
+        Err(SandboxViolation::ShellMetacharacterDetected { character: ';' })
+    ));
+
+    // 5. Subprocess escape via find -exec is rejected
+    let find_exec_res = sandbox.prepare_command(
+        "find",
+        &[".".to_string(), "-exec".to_string(), "id".to_string()],
+        Some(&workspace),
+    );
+    assert!(matches!(
+        find_exec_res,
+        Err(SandboxViolation::CommandArgumentDenied { .. })
+    ));
+
+    // 6. Subprocess escape via git config or git --exec-path is rejected
+    let git_config_res = sandbox.prepare_command(
+        "git",
+        &["config".to_string(), "core.editor".to_string(), "evil".to_string()],
+        Some(&workspace),
+    );
+    assert!(matches!(
+        git_config_res,
+        Err(SandboxViolation::CommandArgumentDenied { .. })
+    ));
+
+    let git_exec_res = sandbox.prepare_command(
+        "git",
+        &["--exec-path=/tmp".to_string(), "status".to_string()],
+        Some(&workspace),
+    );
+    assert!(matches!(
+        git_exec_res,
+        Err(SandboxViolation::CommandArgumentDenied { .. })
+    ));
+
+    // 7. Working directory outside allowed roots is strictly rejected
+    let outside_dir = PathBuf::from("/etc");
+    let workdir_violation = sandbox.prepare_command("ls", &[], Some(&outside_dir));
+    assert!(matches!(
+        workdir_violation,
+        Err(SandboxViolation::WorkingDirectoryViolation { .. })
+    ));
+}
+
+#[test]
+fn test_adversarial_denied_command_leaves_filesystem_unchanged() {
+    let harness = TestHarness::new();
+    let workspace = harness.tmp_path.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+
+    let target_probe = harness.tmp_path.join("should_not_exist.txt");
+    let sandbox = SandboxPolicy::from_roots(vec![&workspace]);
+
+    // Attacker attempts command injection to create file
+    let malicious_cmd = format!("ls; touch {}", target_probe.display());
+    let res = sandbox.validate_command(&malicious_cmd);
+    assert!(res.is_err(), "Malicious command must be denied");
+
+    // Attacker attempts interpreter bypass
+    let script_attack = format!("sh -c 'touch {}'", target_probe.display());
+    let res2 = sandbox.validate_command(&script_attack);
+    assert!(res2.is_err(), "Interpreter command must be denied");
+
+    // Target file MUST NOT exist on the filesystem
+    assert!(
+        !target_probe.exists(),
+        "Filesystem must remain completely unchanged when command is denied"
+    );
+}
+
+#[test]
+fn test_adversarial_sandbox_root_portability_and_proc_narrowing() {
+    let harness = TestHarness::new();
+    let custom_root = harness.tmp_path.join("custom_portable_root");
+    fs::create_dir_all(&custom_root).unwrap();
+    let sample = custom_root.join("portability_test.txt");
+    fs::write(&sample, "portable root content").unwrap();
+
+    // 1. Policy constructed with explicit portable roots (no hardcoded user paths)
+    let sandbox = SandboxPolicy::from_roots(vec![&custom_root]);
+    assert!(sandbox.is_path_allowed(&sample, false));
+
+    // Paths outside custom_root are denied
+    assert!(!sandbox.is_path_allowed(&PathBuf::from("/etc/passwd"), false));
+    assert!(!sandbox.is_path_allowed(&PathBuf::from("/root/secret.txt"), false));
+
+    // 2. Proc telemetry whitelist
+    assert!(sandbox.is_path_allowed(&PathBuf::from("/proc/uptime"), false));
+    assert!(sandbox.is_path_allowed(&PathBuf::from("/proc/loadavg"), false));
+    assert!(sandbox.is_path_allowed(&PathBuf::from("/proc/meminfo"), false));
+    assert!(sandbox.is_path_allowed(&PathBuf::from("/proc/cpuinfo"), false));
+    assert!(sandbox.is_path_allowed(&PathBuf::from("/proc/stat"), false));
+
+    // 3. Proc sensitive files strictly blocked
+    assert!(!sandbox.is_path_allowed(&PathBuf::from("/proc/sys/kernel/hostname"), false));
+    assert!(!sandbox.is_path_allowed(&PathBuf::from("/proc/self/environ"), false));
+    assert!(!sandbox.is_path_allowed(&PathBuf::from("/proc/kcore"), false));
+    assert!(!sandbox.is_path_allowed(&PathBuf::from("/proc/sched_debug"), false));
+
+    // 4. Any write to /proc is blocked
+    assert!(!sandbox.is_path_allowed(&PathBuf::from("/proc/uptime"), true));
+    assert!(!sandbox.is_path_allowed(&PathBuf::from("/proc/sys/vm/drop_caches"), true));
+}
+
 // ------------------------------------------------------------------------------------------------
 // [Issue #31]: Approvals, Single-Use Capability Tokens, Replay Protection & Revocation
 // ------------------------------------------------------------------------------------------------
