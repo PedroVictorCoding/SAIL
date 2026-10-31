@@ -351,3 +351,21 @@ async fn test_real_issue_in_nested_workspace_crate_solved_and_verified() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_flexible_job_identifier_matching() {
+    let job_id = "job-5-61c992ad";
+    let issue_number = 5;
+
+    assert!(ForgeOrchestrator::matches_job_identifier("5", job_id, issue_number));
+    assert!(ForgeOrchestrator::matches_job_identifier("#5", job_id, issue_number));
+    assert!(ForgeOrchestrator::matches_job_identifier("issue-5", job_id, issue_number));
+    assert!(ForgeOrchestrator::matches_job_identifier("issue#5", job_id, issue_number));
+    assert!(ForgeOrchestrator::matches_job_identifier("job-5", job_id, issue_number));
+    assert!(ForgeOrchestrator::matches_job_identifier("job-5-61c992ad", job_id, issue_number));
+    assert!(ForgeOrchestrator::matches_job_identifier("61c992ad", job_id, issue_number));
+
+    // Non-matches
+    assert!(!ForgeOrchestrator::matches_job_identifier("6", job_id, issue_number));
+    assert!(!ForgeOrchestrator::matches_job_identifier("job-9", job_id, issue_number));
+}
