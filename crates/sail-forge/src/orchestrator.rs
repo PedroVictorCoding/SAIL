@@ -249,6 +249,8 @@ impl ForgeOrchestrator {
             wall_time_secs: cp.wall_time_secs,
             review_status: cp.review_result.as_ref().map(|r| r.provider.clone()),
             events: cp.events.clone(),
+            patch: cp.patch.clone(),
+            target_file: cp.target_file.clone(),
         }
     }
 
