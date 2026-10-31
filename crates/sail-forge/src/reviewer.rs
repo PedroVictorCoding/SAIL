@@ -42,6 +42,8 @@ pub struct ReviewUsageLedger {
     pub issue_last_diff_hash: HashMap<String, String>,
     #[serde(default)]
     pub canonical_issue_reviews: HashMap<String, ReviewResult>,
+    #[serde(default)]
+    pub canonical_issue_attempts: HashMap<String, String>,
     pub consecutive_errors: usize,
 }
 
@@ -59,6 +61,7 @@ impl Default for ReviewUsageLedger {
             issue_review_counts: HashMap::new(),
             issue_last_diff_hash: HashMap::new(),
             canonical_issue_reviews: HashMap::new(),
+            canonical_issue_attempts: HashMap::new(),
             consecutive_errors: 0,
         }
     }
@@ -118,15 +121,23 @@ impl ReviewBroker {
     pub fn discover_codex_bin() -> PathBuf {
         if let Ok(p) = std::env::var("SAIL_CODEX_BIN") {
             let pb = PathBuf::from(p);
-            if pb.exists() {
+            if pb.is_file() {
                 return pb;
             }
         }
         let bundled = PathBuf::from(
             "/home/main/.vscode-server/extensions/openai.chatgpt-26.1021.22027-linux-x64/bin/linux-x86_64/codex",
         );
-        if bundled.exists() {
+        if bundled.is_file() {
             return bundled;
+        }
+        if let Ok(path_var) = std::env::var("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                let candidate = dir.join("codex");
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
         }
         PathBuf::from("codex")
     }
@@ -202,18 +213,25 @@ impl ReviewBroker {
         None
     }
 
-    fn persist_ledger(&self, ledger: &ReviewUsageLedger) {
+    pub fn persist_ledger(&self, ledger: &ReviewUsageLedger) {
         if let Some(path) = &self.ledger_path {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
             let tmp = path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
             if let Ok(json) = serde_json::to_string_pretty(ledger) {
-                if fs::write(&tmp, json).is_ok() {
+                if let Ok(mut file) = fs::File::create(&tmp) {
+                    use std::io::Write;
+                    let _ = file.write_all(json.as_bytes());
+                    let _ = file.sync_all();
                     let _ = fs::rename(&tmp, path);
                 }
             }
         }
+    }
+
+    pub fn persist_ledger_sync(&self, ledger: &ReviewUsageLedger) {
+        self.persist_ledger(ledger);
     }
 
     pub fn get_ledger(&self) -> ReviewUsageLedger {
@@ -293,6 +311,19 @@ impl ReviewBroker {
                 res.cached = true;
                 return res;
             }
+            if let Some(attempt) = ledger.canonical_issue_attempts.get(&canonical_key) {
+                warn!(
+                    "Canonical issue {} was already attempted ({}); strictly enforcing at most one process invocation across retries/reboots",
+                    canonical_key, attempt
+                );
+                let mut fallback = self.run_local_fallback(
+                    req,
+                    dedup_hash,
+                    "previously_attempted_canonical_issue",
+                );
+                fallback.cached = true;
+                return fallback;
+            }
         }
 
         // 3. Single-Flight Concurrency: If 20 simultaneous requests arrive for the SAME canonical issue,
@@ -351,6 +382,23 @@ impl ReviewBroker {
             }
         }
 
+        // Atomic Crash-Safe Reservation: Persist attempt state to durable ledger with fsync BEFORE invocation
+        {
+            let mut ledger = self.ledger.lock().unwrap();
+            let marker = format!("attempted:{}:{}", Utc::now().to_rfc3339(), dedup_hash);
+            ledger
+                .canonical_issue_attempts
+                .insert(canonical_key.clone(), marker);
+            ledger.requests_today += 1;
+            ledger.requests_this_week += 1;
+            let count = ledger
+                .issue_review_counts
+                .entry(canonical_key.clone())
+                .or_insert(0);
+            *count += 1;
+            self.persist_ledger(&ledger);
+        }
+
         // Execute ChatGPT-subscription authenticated official Codex review
         self.invocation_count.fetch_add(1, Ordering::SeqCst);
         let exec_result = self
@@ -368,16 +416,9 @@ impl ReviewBroker {
             }
         };
 
-        // Persist to durable ledger
+        // Persist final result to durable ledger
         {
             let mut ledger = self.ledger.lock().unwrap();
-            ledger.requests_today += 1;
-            ledger.requests_this_week += 1;
-            let count = ledger
-                .issue_review_counts
-                .entry(canonical_key.clone())
-                .or_insert(0);
-            *count += 1;
             ledger
                 .canonical_issue_reviews
                 .insert(canonical_key.clone(), result.clone());
@@ -448,7 +489,12 @@ impl ReviewBroker {
         let prompt = format!(
             "Review pull request changes for issue {}.\n\
             Test results:\n{}\n\n\
-            Unified diff:\n{}\n",
+            Unified diff:\n{}\n\n\
+            Provide structured review output with:\n\
+            VERDICT: APPROVED or CHANGES_REQUESTED\n\
+            REQUIREMENTS_COVERED: YES or NO\n\
+            CONFIDENCE: <0.0 to 1.0>\n\
+            SUMMARY: <review analysis>\n",
             req.issue_id, sanitized_manifest, sanitized_diff
         );
 
@@ -472,36 +518,59 @@ impl ReviewBroker {
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-        if !output.status.success() && stdout.trim().is_empty() {
+        if !output.status.success() {
             return Err(ReviewError::ProviderError(format!(
-                "Codex review exited with status {}: {}",
+                "Codex review exited with non-zero status {}: {}",
                 output.status, stderr
             )));
         }
 
-        let feedback = if !stdout.trim().is_empty() {
-            stdout
-        } else {
-            stderr
-        };
-        let has_critical_bug = feedback.to_lowercase().contains("critical")
-            || feedback.to_lowercase().contains("blocking issue");
+        let feedback = stdout.trim().to_string();
+        let upper = feedback.to_uppercase();
 
-        let passed = !has_critical_bug;
+        let explicit_approved = upper.contains("VERDICT: APPROVED")
+            || upper.contains("VERDICT: PASS")
+            || upper.contains("VERDICT: PASSED");
+        let changes_requested = upper.contains("CHANGES_REQUESTED")
+            || upper.contains("VERDICT: REJECT")
+            || upper.contains("VERDICT: REJECTED")
+            || upper.contains("CRITICAL")
+            || upper.contains("BLOCKING ISSUE");
+        let reqs_covered = upper.contains("REQUIREMENTS_COVERED: YES");
+
+        let mut confidence = 0.0f32;
+        for line in feedback.lines() {
+            if let Some(rest) = line.to_uppercase().strip_prefix("CONFIDENCE:") {
+                if let Ok(val) = rest.trim().parse::<f32>() {
+                    confidence = val.clamp(0.0, 1.0);
+                }
+            }
+        }
+
+        let passed = explicit_approved && !changes_requested;
+        let requirements_covered = passed && reqs_covered;
+        if passed && confidence == 0.0 {
+            confidence = 0.95;
+        }
+
+        let detected_bugs = if passed {
+            vec![]
+        } else {
+            vec![
+                "Structured review indicates issues, requested changes, or inconclusive approval"
+                    .into(),
+            ]
+        };
 
         Ok(ReviewResult {
             verdict: ReviewVerdict {
                 passed,
-                requirements_covered: passed,
+                requirements_covered,
                 untested_edge_cases: vec![],
-                detected_bugs: if passed {
-                    vec![]
-                } else {
-                    vec!["Potential issue detected in review".into()]
-                },
+                detected_bugs,
                 security_observations: vec!["Codex CLI subscription review completed".into()],
                 suggested_edits: vec![],
-                confidence_score: 0.95,
+                confidence_score: confidence,
                 raw_feedback: feedback,
             },
             cached: false,

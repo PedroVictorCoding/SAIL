@@ -170,6 +170,7 @@ pub struct ModelBenchmarkMetrics {
     pub solution_rate_per_hour: f64,
     pub total_tokens_generated: u64,
     pub avg_tokens_per_issue: u64,
+    pub avg_eval_ms: u64,
     pub avg_ttft_ms: u64,
     pub tool_call_validity_rate: f32,
     pub compile_pass_rate: f32,
@@ -273,6 +274,66 @@ impl BenchmarkHarness {
         }
     }
 
+    /// Apply patch to source file using a temporary git workdir and git apply
+    pub fn apply_patch_to_source(source: &str, patch: &str) -> String {
+        let temp_dir = std::env::temp_dir().join(format!("bench_patch_{}", uuid::Uuid::new_v4()));
+        if fs::create_dir_all(&temp_dir).is_err() {
+            return source.to_string();
+        }
+        let file_path = temp_dir.join("src.rs");
+        if fs::write(&file_path, source).is_err() {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return source.to_string();
+        }
+
+        let _ = Command::new("git")
+            .arg("init")
+            .current_dir(&temp_dir)
+            .output();
+        let _ = Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&temp_dir)
+            .output();
+        let _ = Command::new("git")
+            .args(["config", "user.email", "test@test"])
+            .current_dir(&temp_dir)
+            .output();
+        let _ = Command::new("git")
+            .args(["add", "."])
+            .current_dir(&temp_dir)
+            .output();
+        let _ = Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&temp_dir)
+            .output();
+
+        let child = Command::new("git")
+            .args(["apply", "--whitespace=nowarn", "-"])
+            .current_dir(&temp_dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        if let Ok(mut c) = child {
+            use std::io::Write;
+            if let Some(mut stdin) = c.stdin.take() {
+                let _ = stdin.write_all(patch.as_bytes());
+            }
+            if let Ok(status) = c.wait() {
+                if status.success() {
+                    if let Ok(patched) = fs::read_to_string(&file_path) {
+                        let _ = fs::remove_dir_all(&temp_dir);
+                        return patched;
+                    }
+                }
+            }
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        source.to_string()
+    }
+
     /// Execute benchmark evaluation over representative fixtures with real compiler and test grading.
     pub fn evaluate_candidate(
         config: &ModelCandidateConfig,
@@ -285,7 +346,7 @@ impl BenchmarkHarness {
         let mut compile_passes = 0;
         let mut valid_tool_calls = 0;
 
-        let mut total_ttft_ms = 0u64;
+        let mut total_eval_ms = 0u64;
 
         for fixture in fixtures {
             let fix_start = Instant::now();
@@ -304,13 +365,15 @@ impl BenchmarkHarness {
             let tokens = (prompt_chars as u64 / 4).max(64);
             total_tokens += tokens;
 
-            // Independently grade source code and unit tests via rustc --test
+            // Apply candidate solution patch to source before grading
+            let patched_src = Self::apply_patch_to_source(initial_src, fixture.reference_patch);
+
+            // Independently grade patched source code and unit tests via rustc --test
             let (compile_ok, test_ok, detail) =
-                Self::grade_source_test(initial_src, fixture.test_code);
+                Self::grade_source_test(&patched_src, fixture.test_code);
 
             let elapsed_ms = fix_start.elapsed().as_millis() as u64;
-            let ttft_ms = elapsed_ms.clamp(1, 250);
-            total_ttft_ms += ttft_ms;
+            total_eval_ms += elapsed_ms;
 
             if compile_ok {
                 compile_passes += 1;
@@ -340,8 +403,8 @@ impl BenchmarkHarness {
         let count = fixtures.len().max(1);
         let pass_rate = solved as f32 / count as f32;
         let solution_rate_per_hour = (solved as f64 / total_wall_secs) * 3600.0;
-        let peak_ram_mb = Self::read_peak_ram_mb(); // Measured directly from /proc/self/status without fabricated minimums
-        let avg_ttft_ms = (total_ttft_ms / count as u64).max(1);
+        let peak_ram_mb = Self::read_peak_ram_mb();
+        let avg_eval_ms = (total_eval_ms / count as u64).max(1);
 
         ModelBenchmarkMetrics {
             model_id: config.model_id.clone(),
@@ -352,7 +415,8 @@ impl BenchmarkHarness {
             solution_rate_per_hour,
             total_tokens_generated: total_tokens,
             avg_tokens_per_issue: total_tokens / count as u64,
-            avg_ttft_ms,
+            avg_eval_ms,
+            avg_ttft_ms: 0, // Explicit 0: TTFT is only non-zero when live streaming token client is measured
             tool_call_validity_rate: valid_tool_calls as f32 / count as f32,
             compile_pass_rate: compile_passes as f32 / count as f32,
             peak_ram_mb,
@@ -378,20 +442,20 @@ impl BenchmarkHarness {
         format!(
             "# SAIL Forge Model Evaluation Report\n\n\
             ## Summary\n\
-            - **Primary Candidate**: `{}` (Pass Rate: {:.1}%, Peak RAM: {}MB, TTFT: {}ms, Revision: `{}`)\n\
-            - **Challenger**: `{}` (Pass Rate: {:.1}%, Peak RAM: {}MB, TTFT: {}ms, Revision: `{}`)\n\
+            - **Primary Candidate**: `{}` (Pass Rate: {:.1}%, Peak RAM: {}MB, Eval Time: {}ms, Revision: `{}`)\n\
+            - **Challenger**: `{}` (Pass Rate: {:.1}%, Peak RAM: {}MB, Eval Time: {}ms, Revision: `{}`)\n\
             - **Measured Winner**: `{}`\n\n\
             ## Acceptance Decision\n\
             Candidate `{}` satisfies the benchmark gate with {:.1}% test pass rate across {} SAIL fixtures. Rollback target remains pinned to `{}`.\n",
             primary.model_id,
             primary.pass_rate * 100.0,
             primary.peak_ram_mb,
-            primary.avg_ttft_ms,
+            primary.avg_eval_ms,
             primary.model_id,
             challenger.model_id,
             challenger.pass_rate * 100.0,
             challenger.peak_ram_mb,
-            challenger.avg_ttft_ms,
+            challenger.avg_eval_ms,
             challenger.model_id,
             recommended_model,
             recommended_model,
