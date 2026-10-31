@@ -19,3 +19,5 @@ uuid.workspace = true
 chrono.workspace = true
 ring.workspace = true
 reqwest.workspace = true
+libc = "0.2"
+

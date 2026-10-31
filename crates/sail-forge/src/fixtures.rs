@@ -21,10 +21,9 @@ pub fn get_benchmark_fixtures() -> Vec<IssueFixture> {
             description: "The cache eviction logic fails to compile with E0502: cannot borrow self.items as mutable because it is also borrowed as immutable. Refactor to split borrows cleanly.",
             category: "compile_fix",
             difficulty: "easy",
-            initial_files: vec![
-                (
-                    "src/cache.rs",
-                    r##"pub struct Cache {
+            initial_files: vec![(
+                "src/cache.rs",
+                r##"pub struct Cache {
     pub items: Vec<(String, u64)>,
 }
 
@@ -40,8 +39,7 @@ impl Cache {
     }
 }
 "##,
-                ),
-            ],
+            )],
             reference_patch: r##"--- a/src/cache.rs
 +++ b/src/cache.rs
 @@ -10,3 +10,3 @@
@@ -64,7 +62,6 @@ fn test_cache_evict() {
 }
 "##,
         },
-
         // 2. Bugfix: off-by-one slice indexing boundary
         IssueFixture {
             id: 102,
@@ -72,10 +69,9 @@ fn test_cache_evict() {
             description: "When splitting tokens by maximum chunk limit, slices ending precisely at chunk boundary panic with index out of bounds.",
             category: "bugfix",
             difficulty: "easy",
-            initial_files: vec![
-                (
-                    "src/chunker.rs",
-                    r##"pub fn chunk_tokens(tokens: &[u32], chunk_size: usize) -> Vec<Vec<u32>> {
+            initial_files: vec![(
+                "src/chunker.rs",
+                r##"pub fn chunk_tokens(tokens: &[u32], chunk_size: usize) -> Vec<Vec<u32>> {
     let mut chunks = Vec::new();
     let mut start = 0;
     while start < tokens.len() {
@@ -86,8 +82,7 @@ fn test_cache_evict() {
     chunks
 }
 "##,
-                ),
-            ],
+            )],
             reference_patch: r##"--- a/src/chunker.rs
 +++ b/src/chunker.rs
 @@ -4,4 +4,4 @@
@@ -108,7 +103,6 @@ fn test_chunk_tokens_exact_boundary() {
 }
 "##,
         },
-
         // 3. Test addition: regression coverage for empty string input
         IssueFixture {
             id: 103,
@@ -116,15 +110,13 @@ fn test_chunk_tokens_exact_boundary() {
             description: "Tokenizer sanitizer lacks unit tests verifying zero-length input strings and multi-byte UTF-8 graphemes.",
             category: "tests",
             difficulty: "easy",
-            initial_files: vec![
-                (
-                    "src/sanitizer.rs",
-                    r##"pub fn sanitize_prompt(input: &str) -> String {
+            initial_files: vec![(
+                "src/sanitizer.rs",
+                r##"pub fn sanitize_prompt(input: &str) -> String {
     input.trim().replace('\0', "")
 }
 "##,
-                ),
-            ],
+            )],
             reference_patch: r##"--- a/src/sanitizer.rs
 +++ b/src/sanitizer.rs
 @@ -4,0 +5,10 @@
@@ -148,7 +140,6 @@ fn test_sanitizer_edge_cases() {
 }
 "##,
         },
-
         // 4. Protocol contract change: add backward-compatible optional field
         IssueFixture {
             id: 104,
@@ -156,10 +147,9 @@ fn test_sanitizer_edge_cases() {
             description: "Add priority and trace_id to InferenceRequest contract with default None for backward compatibility.",
             category: "protocol",
             difficulty: "medium",
-            initial_files: vec![
-                (
-                    "src/protocol.rs",
-                    r##"use serde::{Deserialize, Serialize};
+            initial_files: vec![(
+                "src/protocol.rs",
+                r##"use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InferenceRequest {
@@ -167,8 +157,7 @@ pub struct InferenceRequest {
     pub max_tokens: u32,
 }
 "##,
-                ),
-            ],
+            )],
             reference_patch: r##"--- a/src/protocol.rs
 +++ b/src/protocol.rs
 @@ -5,2 +5,6 @@
@@ -189,7 +178,6 @@ fn test_protocol_backward_compatibility() {
 }
 "##,
         },
-
         // 5. Small feature: CLI flag --dry-run and --format json
         IssueFixture {
             id: 105,
@@ -197,10 +185,9 @@ fn test_protocol_backward_compatibility() {
             description: "Add --dry-run and --format flags to the execution runner to enable safe preview without committing changes.",
             category: "feature",
             difficulty: "medium",
-            initial_files: vec![
-                (
-                    "src/cli.rs",
-                    r##"#[derive(Debug, Clone, PartialEq)]
+            initial_files: vec![(
+                "src/cli.rs",
+                r##"#[derive(Debug, Clone, PartialEq)]
 pub struct CliOptions {
     pub target: String,
     pub dry_run: bool,
@@ -225,8 +212,7 @@ impl CliOptions {
     }
 }
 "##,
-                ),
-            ],
+            )],
             reference_patch: r##"--- a/src/cli.rs
 +++ b/src/cli.rs
 @@ -17,2 +17,4 @@
@@ -246,7 +232,6 @@ fn test_cli_flags() {
 }
 "##,
         },
-
         // 6. Error handling: Replace panic/unwrap with structured Result
         IssueFixture {
             id: 106,
@@ -254,10 +239,9 @@ fn test_cli_flags() {
             description: "Function resample_pcm calls unwrap on unsupported sample rates, causing daemon panic. Return Result<Vec<f32>, ResampleError>.",
             category: "error_handling",
             difficulty: "easy",
-            initial_files: vec![
-                (
-                    "src/resample.rs",
-                    r##"#[derive(Debug, PartialEq, thiserror::Error)]
+            initial_files: vec![(
+                "src/resample.rs",
+                r##"#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum ResampleError {
     #[error("Unsupported rate {0}")]
     UnsupportedRate(u32),
@@ -278,8 +262,7 @@ pub fn resample_pcm(input: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f
     Ok(out)
 }
 "##,
-                ),
-            ],
+            )],
             reference_patch: r##"--- a/src/resample.rs
 +++ b/src/resample.rs
 @@ -8,2 +8,4 @@
@@ -296,7 +279,6 @@ fn test_resample_zero_rate_returns_err() {
 }
 "##,
         },
-
         // 7. Concurrency / async fix: Prevent mutex lock order inversion
         IssueFixture {
             id: 107,
@@ -304,10 +286,9 @@ fn test_resample_zero_rate_returns_err() {
             description: "Locking session_id before buffer in write while read locks buffer before session_id causes deadlock under load.",
             category: "concurrency",
             difficulty: "medium",
-            initial_files: vec![
-                (
-                    "src/duplex.rs",
-                    r##"use std::sync::Mutex;
+            initial_files: vec![(
+                "src/duplex.rs",
+                r##"use std::sync::Mutex;
 
 pub struct DuplexSession {
     pub session_id: Mutex<String>,
@@ -335,8 +316,7 @@ impl DuplexSession {
     }
 }
 "##,
-                ),
-            ],
+            )],
             reference_patch: r##"--- a/src/duplex.rs
 +++ b/src/duplex.rs
 @@ -19,2 +19,2 @@
@@ -352,7 +332,6 @@ fn test_duplex_session_concurrency() {
 }
 "##,
         },
-
         // 8. Refactoring: Clippy lint cleanup and redundant clone removal
         IssueFixture {
             id: 108,
@@ -360,10 +339,9 @@ fn test_duplex_session_concurrency() {
             description: "Remove unnecessary clone on non-mutated String and Vec references in EventEnvelope builder.",
             category: "refactoring",
             difficulty: "easy",
-            initial_files: vec![
-                (
-                    "src/envelope.rs",
-                    r##"#[derive(Debug, Clone, PartialEq)]
+            initial_files: vec![(
+                "src/envelope.rs",
+                r##"#[derive(Debug, Clone, PartialEq)]
 pub struct EventEnvelope {
     pub topic: String,
     pub payload: String,
@@ -382,8 +360,7 @@ impl EventEnvelope {
     }
 }
 "##,
-                ),
-            ],
+            )],
             reference_patch: r##"--- a/src/envelope.rs
 +++ b/src/envelope.rs
 @@ -14,2 +14,2 @@
