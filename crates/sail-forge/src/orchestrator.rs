@@ -208,44 +208,77 @@ impl ForgeOrchestrator {
         Ok(job_id)
     }
 
+    /// Resolve a job identifier query that could be an exact job ID (`job-5-61c992ad`),
+    /// a prefix (`job-5`), or an issue number (`5`, `#5`, `issue-5`).
+    pub fn matches_job_identifier(query: &str, job_id: &str, issue_number: u64) -> bool {
+        let q = query.trim();
+        if q.is_empty() {
+            return false;
+        }
+        if q.eq_ignore_ascii_case(job_id) {
+            return true;
+        }
+        if job_id.starts_with(q) || job_id.ends_with(q) || (q.len() >= 4 && job_id.contains(q)) {
+            return true;
+        }
+        let parsed_num = q.parse::<u64>().ok()
+            .or_else(|| q.strip_prefix('#').and_then(|s| s.parse::<u64>().ok()))
+            .or_else(|| q.strip_prefix("issue-").and_then(|s| s.parse::<u64>().ok()))
+            .or_else(|| q.strip_prefix("issue#").and_then(|s| s.parse::<u64>().ok()))
+            .or_else(|| q.strip_prefix("issue ").and_then(|s| s.parse::<u64>().ok()))
+            .or_else(|| q.strip_prefix("job-").and_then(|s| s.split('-').next()).and_then(|s| s.parse::<u64>().ok()));
+        if let Some(num) = parsed_num {
+            if num == issue_number {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn checkpoint_to_status_response(cp: &crate::persistence::TaskCheckpoint) -> IssueStatusResponse {
+        IssueStatusResponse {
+            job_id: cp.job_id.clone(),
+            repo: cp.repo.clone(),
+            issue_number: cp.issue_number,
+            state: cp.state,
+            branch: cp.branch.clone(),
+            current_step: format!("{:?}", cp.state),
+            iteration: cp.iteration,
+            diff_stat: cp.diff_stat.clone().unwrap_or_default(),
+            tokens_used: cp.tokens_used,
+            wall_time_secs: cp.wall_time_secs,
+            review_status: cp.review_result.as_ref().map(|r| r.provider.clone()),
+            events: cp.events.clone(),
+        }
+    }
+
     /// Retrieve the status of an active or stored job.
-    pub fn get_status(&self, job_id: &str) -> Option<IssueStatusResponse> {
+    pub fn get_status(&self, query: &str) -> Option<IssueStatusResponse> {
+        let q = query.trim();
         {
             let jobs = self.active_jobs.lock().unwrap();
-            if let Some(job) = jobs.get(job_id) {
-                let cp = &job.checkpoint;
-                return Some(IssueStatusResponse {
-                    job_id: cp.job_id.clone(),
-                    repo: cp.repo.clone(),
-                    issue_number: cp.issue_number,
-                    state: cp.state,
-                    branch: cp.branch.clone(),
-                    current_step: format!("{:?}", cp.state),
-                    iteration: cp.iteration,
-                    diff_stat: cp.diff_stat.clone().unwrap_or_default(),
-                    tokens_used: cp.tokens_used,
-                    wall_time_secs: cp.wall_time_secs,
-                    review_status: cp.review_result.as_ref().map(|r| r.provider.clone()),
-                    events: cp.events.clone(),
-                });
+            if let Some(job) = jobs.get(q) {
+                return Some(Self::checkpoint_to_status_response(&job.checkpoint));
+            }
+            // Search active jobs by prefix or issue number (e.g. "5", "#5", "job-5")
+            for job in jobs.values() {
+                if Self::matches_job_identifier(q, &job.checkpoint.job_id, job.checkpoint.issue_number) {
+                    return Some(Self::checkpoint_to_status_response(&job.checkpoint));
+                }
             }
         }
 
-        if let Ok(Some(cp)) = self.checkpoint_store.load(job_id) {
-            return Some(IssueStatusResponse {
-                job_id: cp.job_id.clone(),
-                repo: cp.repo.clone(),
-                issue_number: cp.issue_number,
-                state: cp.state,
-                branch: cp.branch.clone(),
-                current_step: format!("{:?}", cp.state),
-                iteration: cp.iteration,
-                diff_stat: cp.diff_stat.clone().unwrap_or_default(),
-                tokens_used: cp.tokens_used,
-                wall_time_secs: cp.wall_time_secs,
-                review_status: cp.review_result.as_ref().map(|r| r.provider.clone()),
-                events: cp.events.clone(),
-            });
+        if let Ok(Some(cp)) = self.checkpoint_store.load(q) {
+            return Some(Self::checkpoint_to_status_response(&cp));
+        }
+
+        // Search stored checkpoints
+        if let Ok(all) = self.checkpoint_store.list_all() {
+            for cp in all {
+                if Self::matches_job_identifier(q, &cp.job_id, cp.issue_number) {
+                    return Some(Self::checkpoint_to_status_response(&cp));
+                }
+            }
         }
 
         None
@@ -306,71 +339,86 @@ impl ForgeOrchestrator {
     /// Pause an in-progress job (Voice-first QoS yielding compute).
     pub fn pause_job(&self, job_id: &str, reason: &str) -> Result<(), String> {
         let mut jobs = self.active_jobs.lock().unwrap();
-        let job = jobs
-            .get_mut(job_id)
-            .ok_or_else(|| format!("Job {} not found", job_id))?;
+        let resolved_id = if jobs.contains_key(job_id) {
+            job_id.to_string()
+        } else if let Some((id, _)) = jobs.iter().find(|(_, j)| Self::matches_job_identifier(job_id, &j.checkpoint.job_id, j.checkpoint.issue_number)) {
+            id.clone()
+        } else {
+            return Err(format!("Job {} not found", job_id));
+        };
+        let job = jobs.get_mut(&resolved_id).unwrap();
         job.paused.store(true, Ordering::SeqCst);
         job.checkpoint.record_event(
             "paused",
             reason,
-            &format!("pause:{}:{}", job_id, Utc::now().timestamp()),
+            &format!("pause:{}:{}", resolved_id, Utc::now().timestamp()),
         );
         let _ = self.checkpoint_store.save(&job.checkpoint);
 
         self.emit_event(EventPayload::ForgeIssueStatusUpdated {
-            job_id: job_id.to_string(),
+            job_id: resolved_id.clone(),
             state: "paused".into(),
             stage: "paused".into(),
             message: reason.to_string(),
         });
 
-        info!("Paused job {} ({})", job_id, reason);
+        info!("Paused job {} ({})", resolved_id, reason);
         Ok(())
     }
 
     /// Resume a paused job.
     pub fn resume_job(&self, job_id: &str) -> Result<(), String> {
         let mut jobs = self.active_jobs.lock().unwrap();
-        let job = jobs
-            .get_mut(job_id)
-            .ok_or_else(|| format!("Job {} not found", job_id))?;
+        let resolved_id = if jobs.contains_key(job_id) {
+            job_id.to_string()
+        } else if let Some((id, _)) = jobs.iter().find(|(_, j)| Self::matches_job_identifier(job_id, &j.checkpoint.job_id, j.checkpoint.issue_number)) {
+            id.clone()
+        } else {
+            return Err(format!("Job {} not found", job_id));
+        };
+        let job = jobs.get_mut(&resolved_id).unwrap();
         job.paused.store(false, Ordering::SeqCst);
         job.checkpoint.record_event(
             "resumed",
             "Job resumed by scheduler",
-            &format!("resume:{}:{}", job_id, Utc::now().timestamp()),
+            &format!("resume:{}:{}", resolved_id, Utc::now().timestamp()),
         );
         let _ = self.checkpoint_store.save(&job.checkpoint);
 
         self.emit_event(EventPayload::ForgeIssueStatusUpdated {
-            job_id: job_id.to_string(),
+            job_id: resolved_id.clone(),
             state: format!("{:?}", job.checkpoint.state),
             stage: "resumed".into(),
             message: "Resumed by scheduler".into(),
         });
 
-        info!("Resumed job {}", job_id);
+        info!("Resumed job {}", resolved_id);
         Ok(())
     }
 
     /// Cancel an active job.
     pub fn cancel_job(&self, job_id: &str, reason: &str) -> Result<(), String> {
         let mut jobs = self.active_jobs.lock().unwrap();
-        let job = jobs
-            .get_mut(job_id)
-            .ok_or_else(|| format!("Job {} not found", job_id))?;
+        let resolved_id = if jobs.contains_key(job_id) {
+            job_id.to_string()
+        } else if let Some((id, _)) = jobs.iter().find(|(_, j)| Self::matches_job_identifier(job_id, &j.checkpoint.job_id, j.checkpoint.issue_number)) {
+            id.clone()
+        } else {
+            return Err(format!("Job {} not found", job_id));
+        };
+        let job = jobs.get_mut(&resolved_id).unwrap();
         job.cancelled.store(true, Ordering::SeqCst);
         job.checkpoint.transition(ForgeTaskState::Blocked, reason);
         let _ = self.checkpoint_store.save(&job.checkpoint);
 
         self.emit_event(EventPayload::ForgeIssueStatusUpdated {
-            job_id: job_id.to_string(),
+            job_id: resolved_id.clone(),
             state: "blocked".into(),
             stage: "cancelled".into(),
             message: reason.to_string(),
         });
 
-        info!("Cancelled job {} ({})", job_id, reason);
+        info!("Cancelled job {} ({})", resolved_id, reason);
         Ok(())
     }
 
@@ -478,7 +526,7 @@ impl ForgeOrchestrator {
 
         let current_code = worktree.read_file(&target_file).unwrap_or_default();
 
-        // 3. Attempt local LLM inference if local server is active (port 8081 or 8080)
+        // 3. Attempt local LLM inference if local server is active (port 8081, 8080 or SAIL_LLM_URL)
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .build();
@@ -488,20 +536,46 @@ impl ForgeOrchestrator {
                 issue_number, title, body, target_file, current_code
             );
 
-            let payload = serde_json::json!({
+            let legacy_payload = serde_json::json!({
                 "prompt": prompt,
                 "n_predict": 1024,
                 "temperature": 0.2
             });
 
-            for port in [8081, 8080] {
-                let url = format!("http://127.0.0.1:{}/completion", port);
-                if let Ok(resp) = c.post(&url).json(&payload).send().await {
+            let chat_payload = serde_json::json!({
+                "messages": [
+                    {"role": "system", "content": "You are an expert Rust programmer. Provide ONLY a unified diff patch starting with --- a/ and +++ b/ to solve the issue."},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 1024,
+                "temperature": 0.2
+            });
+
+            let mut targets = Vec::new();
+            if let Ok(custom) = std::env::var("SAIL_LLM_URL") {
+                targets.push(custom);
+            }
+            targets.push("http://127.0.0.1:8081/completion".into());
+            targets.push("http://127.0.0.1:8081/v1/chat/completions".into());
+            targets.push("http://127.0.0.1:8080/completion".into());
+            targets.push("http://127.0.0.1:8080/v1/chat/completions".into());
+
+            for url in targets {
+                let payload = if url.contains("/chat/completions") {
+                    &chat_payload
+                } else {
+                    &legacy_payload
+                };
+
+                if let Ok(resp) = c.post(&url).json(payload).send().await {
                     if resp.status().is_success() {
                         if let Ok(res_json) = resp.json::<serde_json::Value>().await {
-                            if let Some(content) = res_json["content"].as_str() {
-                                if content.contains("--- a/") && content.contains("+++ b/") {
-                                    return Ok(content.to_string());
+                            let text = res_json["content"]
+                                .as_str()
+                                .or_else(|| res_json["choices"][0]["message"]["content"].as_str());
+                            if let Some(content) = text {
+                                if let Some(diff) = Self::extract_diff_from_model_output(content) {
+                                    return Ok(diff);
                                 }
                             }
                         }
@@ -516,6 +590,22 @@ impl ForgeOrchestrator {
             "Autonomous coding agent requires active model inference. Local model server (port 8081/8080) is offline or did not return a valid unified diff patch for issue #{}; fallback to synthetic patch is prohibited.",
             issue_number
         ))
+    }
+
+    /// Extract a unified diff hunk from model output, handling optional markdown code fences.
+    fn extract_diff_from_model_output(raw: &str) -> Option<String> {
+        let text = raw.trim();
+        if let Some(start) = text.find("--- a/") {
+            let slice = &text[start..];
+            if let Some(end) = slice.find("```") {
+                return Some(slice[..end].trim_end().to_string());
+            }
+            return Some(slice.to_string());
+        }
+        if text.contains("--- a/") && text.contains("+++ b/") {
+            return Some(text.to_string());
+        }
+        None
     }
 
     /// Iterative repair patch synthesis when sandbox compiler or tests report errors.
@@ -538,20 +628,46 @@ impl ForgeOrchestrator {
             issue_number, repo, compiler_errors
         );
 
-        let payload = serde_json::json!({
+        let legacy_payload = serde_json::json!({
             "prompt": prompt,
             "n_predict": 1024,
             "temperature": 0.1
         });
 
-        for port in [8081, 8080] {
-            let url = format!("http://127.0.0.1:{}/completion", port);
-            if let Ok(resp) = client.post(&url).json(&payload).send().await {
+        let chat_payload = serde_json::json!({
+            "messages": [
+                {"role": "system", "content": "You are an expert Rust programmer repairing code. Provide ONLY a corrected unified diff patch starting with --- a/ and +++ b/."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 1024,
+            "temperature": 0.1
+        });
+
+        let mut targets = Vec::new();
+        if let Ok(custom) = std::env::var("SAIL_LLM_URL") {
+            targets.push(custom);
+        }
+        targets.push("http://127.0.0.1:8081/completion".into());
+        targets.push("http://127.0.0.1:8081/v1/chat/completions".into());
+        targets.push("http://127.0.0.1:8080/completion".into());
+        targets.push("http://127.0.0.1:8080/v1/chat/completions".into());
+
+        for url in targets {
+            let payload = if url.contains("/chat/completions") {
+                &chat_payload
+            } else {
+                &legacy_payload
+            };
+
+            if let Ok(resp) = client.post(&url).json(payload).send().await {
                 if resp.status().is_success() {
                     if let Ok(res_json) = resp.json::<serde_json::Value>().await {
-                        if let Some(content) = res_json["content"].as_str() {
-                            if content.contains("--- a/") && content.contains("+++ b/") {
-                                return Ok(content.to_string());
+                        let text = res_json["content"]
+                            .as_str()
+                            .or_else(|| res_json["choices"][0]["message"]["content"].as_str());
+                        if let Some(content) = text {
+                            if let Some(diff) = Self::extract_diff_from_model_output(content) {
+                                return Ok(diff);
                             }
                         }
                     }
