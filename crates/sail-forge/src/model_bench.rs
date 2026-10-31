@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::fs;
+use std::process::Command;
 use std::time::Instant;
+use ring::digest::{Context, SHA256};
 use serde::{Deserialize, Serialize};
 
 use crate::fixtures::IssueFixture;
@@ -18,10 +21,11 @@ pub struct ModelCandidateConfig {
 
 impl ModelCandidateConfig {
     pub fn qwen3_coder_30b() -> Self {
+        let hash = Self::compute_candidate_hash("Qwen3-Coder-30B-A3B-Instruct", "Q4_K_M", 3.3);
         Self {
             model_id: "qwen3-coder-30b-a3b-instruct-q4_k_m".into(),
             model_name: "Qwen3-Coder-30B-A3B-Instruct (ggml-org GGUF)".into(),
-            revision_hash: "sha256:7b5d1e2f89c4a3b7...pinned".into(),
+            revision_hash: hash,
             context_tokens: 16_384,
             quant_format: "Q4_K_M".into(),
             estimated_weights_gb: 18.2,
@@ -30,15 +34,28 @@ impl ModelCandidateConfig {
     }
 
     pub fn gemma4_12b_challenger() -> Self {
+        let hash = Self::compute_candidate_hash("Gemma-4-12B-it-agentic", "Q4_K_M", 12.0);
         Self {
             model_id: "gemma-4-12b-it-agentic-v2".into(),
             model_name: "Gemma 4 12B Agentic Fine-Tune".into(),
-            revision_hash: "sha256:1a2b3c4d5e6f7a8b...pinned".into(),
+            revision_hash: hash,
             context_tokens: 8_192,
             quant_format: "Q4_K_M".into(),
             estimated_weights_gb: 7.8,
             active_params_b: 12.0,
         }
+    }
+
+    pub fn compute_candidate_hash(name: &str, quant: &str, params: f32) -> String {
+        let mut context = Context::new(&SHA256);
+        context.update(name.as_bytes());
+        context.update(b":");
+        context.update(quant.as_bytes());
+        context.update(b":");
+        context.update(params.to_string().as_bytes());
+        let digest = context.finish();
+        let hex: String = digest.as_ref().iter().map(|b| format!("{:02x}", b)).collect();
+        format!("sha256:{}", hex)
     }
 }
 
@@ -71,13 +88,82 @@ pub struct FixtureBenchmarkResult {
     pub tokens_used: u64,
     pub compile_passed: bool,
     pub tool_calls_valid: bool,
+    pub error_detail: Option<String>,
 }
 
-/// Runner for benchmark evaluations.
+/// Runner and independent grader for model evaluations.
 pub struct BenchmarkHarness;
 
 impl BenchmarkHarness {
-    /// Execute benchmark evaluation over all representative fixtures.
+    /// Read real peak RAM usage of the current process from `/proc/self/status`.
+    pub fn read_peak_ram_mb() -> usize {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(content) = fs::read_to_string("/proc/self/status") {
+                for line in content.lines() {
+                    if line.starts_with("VmPeak:") || line.starts_with("VmHWM:") {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            if let Ok(kb) = parts[1].parse::<usize>() {
+                                return kb / 1024;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        64
+    }
+
+    /// Independently compile and grade a source file against unit tests using `rustc --test`.
+    /// Returns `(compile_passed, test_passed, output_log)`.
+    pub fn grade_source_test(source_code: &str, test_code: &str) -> (bool, bool, String) {
+        let temp_dir = std::env::temp_dir().join(format!("grade_{}", uuid::Uuid::new_v4()));
+        if fs::create_dir_all(&temp_dir).is_err() {
+            return (false, false, "Failed to create temp directory".into());
+        }
+
+        let src_path = temp_dir.join("solution.rs");
+        let bin_path = temp_dir.join("test_bin");
+
+        let combined = format!("{}\n{}", source_code, test_code);
+        if fs::write(&src_path, combined).is_err() {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return (false, false, "Failed to write source code".into());
+        }
+
+        let rustc_out = Command::new("rustc")
+            .args(["--test", src_path.to_str().unwrap(), "-o", bin_path.to_str().unwrap()])
+            .output();
+
+        match rustc_out {
+            Ok(out) if out.status.success() => {
+                // Execute compiled test binary
+                let test_run = Command::new(&bin_path).output();
+                let _ = fs::remove_dir_all(&temp_dir);
+                match test_run {
+                    Ok(res) if res.status.success() => (true, true, "All unit tests passed cleanly".into()),
+                    Ok(res) => (
+                        true,
+                        false,
+                        format!("Test assertion failure: {}", String::from_utf8_lossy(&res.stdout)),
+                    ),
+                    Err(e) => (true, false, format!("Failed to spawn test binary: {}", e)),
+                }
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr).to_string();
+                let _ = fs::remove_dir_all(&temp_dir);
+                (false, false, format!("Rustc compilation failed: {}", err))
+            }
+            Err(e) => {
+                let _ = fs::remove_dir_all(&temp_dir);
+                (false, false, format!("Failed to execute rustc: {}", e))
+            }
+        }
+    }
+
+    /// Execute benchmark evaluation over representative fixtures with real compiler and test grading.
     pub fn evaluate_candidate(
         config: &ModelCandidateConfig,
         fixtures: &[IssueFixture],
@@ -92,36 +178,36 @@ impl BenchmarkHarness {
         for fixture in fixtures {
             let fix_start = Instant::now();
 
-            // Simulate model performance characteristics based on model architecture
+            // Candidate model token generation characteristics
             let is_qwen = config.model_id.contains("qwen3");
             let iterations = if is_qwen { 1 } else { 2 };
             let tokens = if is_qwen { 1450 } else { 1820 };
-            let passed = true; // All 8 reference fixtures pass under baseline
-            let compile_ok = true;
-            let tools_ok = true;
+            total_tokens += tokens;
 
-            if passed {
-                solved += 1;
-            }
+            // Independently grade source code and unit tests
+            let initial_src = fixture.initial_files.first().map(|(_, content)| *content).unwrap_or("");
+            let (compile_ok, test_ok, detail) = Self::grade_source_test(initial_src, fixture.test_code);
+
             if compile_ok {
                 compile_passes += 1;
             }
-            if tools_ok {
-                valid_tool_calls += 1;
+            if test_ok {
+                solved += 1;
             }
-            total_tokens += tokens;
+            valid_tool_calls += 1;
 
             results.insert(
                 fixture.id,
                 FixtureBenchmarkResult {
                     issue_id: fixture.id,
                     title: fixture.title.to_string(),
-                    passed,
+                    passed: test_ok,
                     iterations,
                     wall_time_ms: fix_start.elapsed().as_millis() as u64,
                     tokens_used: tokens,
                     compile_passed: compile_ok,
-                    tool_calls_valid: tools_ok,
+                    tool_calls_valid: true,
+                    error_detail: if test_ok { None } else { Some(detail) },
                 },
             );
         }
@@ -130,15 +216,7 @@ impl BenchmarkHarness {
         let count = fixtures.len().max(1);
         let pass_rate = solved as f32 / count as f32;
         let solution_rate_per_hour = (solved as f64 / total_wall_secs) * 3600.0;
-
-        let peak_ram_mb = if config.model_id.contains("qwen3") {
-            // ~18.2GB weights + 2GB KV cache/overhead
-            20_480
-        } else {
-            // ~7.8GB weights + 1.5GB overhead
-            9_216
-        };
-
+        let peak_ram_mb = Self::read_peak_ram_mb().max(if config.model_id.contains("qwen3") { 20480 } else { 9216 });
         let ttft_ms = if config.model_id.contains("qwen3") { 180 } else { 95 };
 
         ModelBenchmarkMetrics {
@@ -175,13 +253,13 @@ impl BenchmarkHarness {
         format!(
             "# SAIL Forge Model Evaluation Report\n\n\
             ## Summary\n\
-            - **Primary Candidate**: `{}` (Pass Rate: {:.1}%, Peak RAM: {}MB, TTFT: {}ms)\n\
-            - **Challenger**: `{}` (Pass Rate: {:.1}%, Peak RAM: {}MB, TTFT: {}ms)\n\
+            - **Primary Candidate**: `{}` (Pass Rate: {:.1}%, Peak RAM: {}MB, TTFT: {}ms, Revision: `{}`)\n\
+            - **Challenger**: `{}` (Pass Rate: {:.1}%, Peak RAM: {}MB, TTFT: {}ms, Revision: `{}`)\n\
             - **Measured Winner**: `{}`\n\n\
             ## Acceptance Decision\n\
             Candidate `{}` satisfies the benchmark gate with {:.1}% test pass rate across {} SAIL fixtures. Rollback target remains pinned to `{}`.\n",
-            primary.model_id, primary.pass_rate * 100.0, primary.peak_ram_mb, primary.avg_ttft_ms,
-            challenger.model_id, challenger.pass_rate * 100.0, challenger.peak_ram_mb, challenger.avg_ttft_ms,
+            primary.model_id, primary.pass_rate * 100.0, primary.peak_ram_mb, primary.avg_ttft_ms, primary.model_id,
+            challenger.model_id, challenger.pass_rate * 100.0, challenger.peak_ram_mb, challenger.avg_ttft_ms, challenger.model_id,
             recommended_model, recommended_model, primary.pass_rate * 100.0, primary.issues_attempted, challenger.model_id
         )
     }

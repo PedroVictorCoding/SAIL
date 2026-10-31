@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Datelike, Utc};
 use ring::digest::{Context, SHA256};
@@ -33,18 +35,20 @@ pub enum ReviewError {
     PerIssueLimitReached(usize),
     #[error("Circuit breaker is tripped due to consecutive provider errors ({0})")]
     CircuitBreakerTripped(usize),
+    #[error("HTTP 429 rate limit received from provider; cooling down")]
+    RateLimited429,
     #[error("Network or provider error: {0}")]
     ProviderError(String),
     #[error("Invalid JSON response from reviewer: {0}")]
     InvalidResponse(String),
 }
 
-/// Ledger tracking usage against daily, weekly, and monthly caps.
+/// Durable ledger tracking usage against daily, weekly, and monthly caps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewUsageLedger {
-    pub day_timestamp: i32,    // e.g. Year * 1000 + DayOfYear
-    pub week_timestamp: u32,   // e.g. Year * 100 + IsoWeek
-    pub month_timestamp: u32,  // e.g. Year * 100 + Month
+    pub day_timestamp: i32,
+    pub week_timestamp: u32,
+    pub month_timestamp: u32,
     pub requests_today: usize,
     pub requests_this_week: usize,
     pub cost_today_usd: f64,
@@ -107,10 +111,12 @@ impl ReviewUsageLedger {
     }
 }
 
-/// Thread-safe Review Broker managing quotas, deduplication, secret redaction, and local fallback.
+/// Thread-safe Review Broker managing quotas, deduplication, secret redaction,
+/// atomic pre-flight reservations, and honest local fallback.
 pub struct ReviewBroker {
     config: ReviewPolicyConfig,
     ledger: Arc<Mutex<ReviewUsageLedger>>,
+    ledger_path: Option<PathBuf>,
     dedup_cache: Arc<Mutex<HashMap<String, ReviewResult>>>,
     credential_store: Option<Arc<CredentialStore>>,
     mock_mode: bool,
@@ -118,13 +124,31 @@ pub struct ReviewBroker {
 
 impl ReviewBroker {
     pub fn new(config: ReviewPolicyConfig) -> Self {
+        let data_dir = std::env::var("SAIL_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+                PathBuf::from(home).join(".sail").join("forge")
+            });
+
+        let ledger_path = data_dir.join("review_ledger.json");
+        let initial_ledger = Self::load_ledger_from_disk(&ledger_path).unwrap_or_default();
+
         Self {
             config,
-            ledger: Arc::new(Mutex::new(ReviewUsageLedger::default())),
+            ledger: Arc::new(Mutex::new(initial_ledger)),
+            ledger_path: Some(ledger_path),
             dedup_cache: Arc::new(Mutex::new(HashMap::new())),
             credential_store: None,
             mock_mode: false,
         }
+    }
+
+    pub fn with_ledger_path(mut self, path: PathBuf) -> Self {
+        let initial = Self::load_ledger_from_disk(&path).unwrap_or_default();
+        self.ledger = Arc::new(Mutex::new(initial));
+        self.ledger_path = Some(path);
+        self
     }
 
     pub fn with_credentials(mut self, credentials: Arc<CredentialStore>) -> Self {
@@ -135,6 +159,32 @@ impl ReviewBroker {
     pub fn with_mock_mode(mut self, mock: bool) -> Self {
         self.mock_mode = mock;
         self
+    }
+
+    fn load_ledger_from_disk(path: &Path) -> Option<ReviewUsageLedger> {
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(path) {
+                if let Ok(mut ledger) = serde_json::from_str::<ReviewUsageLedger>(&content) {
+                    ledger.roll_windows_if_needed(&Utc::now());
+                    return Some(ledger);
+                }
+            }
+        }
+        None
+    }
+
+    fn persist_ledger(&self, ledger: &ReviewUsageLedger) {
+        if let Some(path) = &self.ledger_path {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let tmp = path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+            if let Ok(json) = serde_json::to_string_pretty(ledger) {
+                if fs::write(&tmp, json).is_ok() {
+                    let _ = fs::rename(&tmp, path);
+                }
+            }
+        }
     }
 
     pub fn get_ledger(&self) -> ReviewUsageLedger {
@@ -166,11 +216,21 @@ impl ReviewBroker {
             .collect::<String>()
     }
 
-    /// Estimate cost in USD for the review request (using conservative gpt-4o-mini rates: $0.15/1M in, $0.60/1M out).
-    pub fn estimate_request_cost(input_tokens: u32, max_output_tokens: u32) -> f64 {
-        let input_cost = (input_tokens as f64 / 1_000_000.0) * 0.15;
+    /// Estimate cost in USD across the entire sanitized payload:
+    /// prompt framing + issue text + test manifest + diff patch + output token reservation.
+    pub fn estimate_total_payload_cost(
+        issue_id: &str,
+        test_manifest: &str,
+        diff_patch: &str,
+        max_output_tokens: u32,
+    ) -> (u32, f64) {
+        // Conservative character-to-token ratio (3 characters per token)
+        let total_chars = issue_id.len() + test_manifest.len() + diff_patch.len() + 1024;
+        let in_tokens = (total_chars as f64 / 3.0).ceil() as u32;
+
+        let input_cost = (in_tokens as f64 / 1_000_000.0) * 0.15;
         let output_cost = (max_output_tokens as f64 / 1_000_000.0) * 0.60;
-        input_cost + output_cost
+        (in_tokens, input_cost + output_cost)
     }
 
     /// Sanitize text by stripping credentials, tokens, keys, and absolute paths before external dispatch.
@@ -182,13 +242,16 @@ impl ReviewBroker {
         sanitized
     }
 
-    /// Primary entry point: review an issue change with strict quota checks and fallback.
+    /// Primary entry point: review an issue change with strict atomic quota checks and honest fallback.
     pub async fn review(&self, req: &ReviewRequest) -> ReviewResult {
+        let sanitized_diff = self.sanitize_payload(&req.diff_patch);
+        let sanitized_manifest = self.sanitize_payload(&req.test_manifest);
+
         let dedup_hash = Self::compute_dedup_hash(
             &req.issue_id,
             &req.base_commit,
-            &req.diff_patch,
-            &req.test_manifest,
+            &sanitized_diff,
+            &sanitized_manifest,
         );
 
         // 1. Check deduplication cache
@@ -204,7 +267,7 @@ impl ReviewBroker {
 
         // 2. Check if external review is enabled
         if !self.config.enabled {
-            info!("Review policy disabled; utilizing local deterministic review");
+            info!("Review policy disabled; utilizing local honest fallback");
             return self.run_local_fallback(req, dedup_hash, "policy_disabled");
         }
 
@@ -215,21 +278,35 @@ impl ReviewBroker {
             return self.run_local_fallback(req, dedup_hash, "missing_api_key");
         }
 
-        // 4. Budget & Quota Pre-flight validation
-        let preflight = self.check_and_reserve_quota(&req.issue_id, &dedup_hash, &req.diff_patch);
-        match preflight {
-            Ok(estimated_cost) => {
+        // 4. Atomic Pre-Flight Reservation (decrements quota BEFORE making external call)
+        let (in_tokens, est_cost) = Self::estimate_total_payload_cost(
+            &req.issue_id,
+            &sanitized_manifest,
+            &sanitized_diff,
+            self.config.max_output_tokens_per_review,
+        );
+
+        if in_tokens > self.config.max_input_tokens_per_review {
+            warn!("Payload tokens ({}) exceeds configured maximum ({})", in_tokens, self.config.max_input_tokens_per_review);
+            return self.run_local_fallback(req, dedup_hash, "input_token_limit_exceeded");
+        }
+
+        let reservation = self.atomic_reserve_quota(&req.issue_id, &dedup_hash, est_cost);
+        match reservation {
+            Ok(()) => {
                 // Execute review against API (or mock)
-                match self.execute_api_review(req, &dedup_hash, estimated_cost, api_key).await {
+                let exec_result = self.execute_api_review(req, &sanitized_diff, &sanitized_manifest, &dedup_hash, api_key).await;
+                match exec_result {
                     Ok(result) => {
-                        // Record actual usage into ledger
-                        self.record_successful_review(
+                        // Reconcile actual usage against reserved cost
+                        self.reconcile_usage(
                             &req.issue_id,
                             &dedup_hash,
+                            est_cost,
                             result.cost_usd,
+                            true,
                         );
 
-                        // Save in dedup cache
                         if self.config.dedup_cache_enabled {
                             let mut cache = self.dedup_cache.lock().unwrap();
                             cache.insert(dedup_hash.clone(), result.clone());
@@ -239,7 +316,19 @@ impl ReviewBroker {
                     }
                     Err(e) => {
                         warn!("API review encountered error: {}; falling back to local review", e);
-                        self.record_error();
+                        let is_429 = matches!(e, ReviewError::RateLimited429);
+                        self.reconcile_usage(
+                            &req.issue_id,
+                            &dedup_hash,
+                            est_cost,
+                            0.0,
+                            false,
+                        );
+                        if is_429 {
+                            let mut ledger = self.ledger.lock().unwrap();
+                            ledger.consecutive_errors = 3; // Trip circuit breaker
+                            self.persist_ledger(&ledger);
+                        }
                         self.run_local_fallback(req, dedup_hash, &format!("error_fallback: {}", e))
                     }
                 }
@@ -251,13 +340,13 @@ impl ReviewBroker {
         }
     }
 
-    /// Check quotas, per-issue limit, and reserve tentative slot.
-    fn check_and_reserve_quota(
+    /// Atomically check quotas and immediately reserve the request slot and estimated cost in durable storage.
+    fn atomic_reserve_quota(
         &self,
         issue_id: &str,
         current_diff_hash: &str,
-        diff_patch: &str,
-    ) -> Result<f64, ReviewError> {
+        estimated_cost: f64,
+    ) -> Result<(), ReviewError> {
         let mut ledger = self.ledger.lock().unwrap();
         ledger.roll_windows_if_needed(&Utc::now());
 
@@ -268,22 +357,17 @@ impl ReviewBroker {
 
         // Daily requests cap
         if ledger.requests_today >= self.config.max_requests_per_day {
-            return Err(ReviewError::DailyRequestLimitExceeded(
-                ledger.requests_today,
-            ));
+            return Err(ReviewError::DailyRequestLimitExceeded(ledger.requests_today));
         }
 
         // Weekly requests cap
         if ledger.requests_this_week >= self.config.max_requests_per_week {
-            return Err(ReviewError::WeeklyRequestLimitExceeded(
-                ledger.requests_this_week,
-            ));
+            return Err(ReviewError::WeeklyRequestLimitExceeded(ledger.requests_this_week));
         }
 
         // Per-issue review count
         let count = ledger.issue_review_counts.get(issue_id).copied().unwrap_or(0);
         if count >= self.config.max_reviews_per_issue {
-            // Check if material revision occurred
             if let Some(last_hash) = ledger.issue_last_diff_hash.get(issue_id) {
                 if last_hash == current_diff_hash || count >= 2 {
                     return Err(ReviewError::PerIssueLimitReached(count));
@@ -293,46 +377,60 @@ impl ReviewBroker {
             }
         }
 
-        // Rough token estimate: ~4 chars per token
-        let est_in_tokens = (diff_patch.len() / 4).min(self.config.max_input_tokens_per_review as usize) as u32;
-        let est_cost = Self::estimate_request_cost(est_in_tokens, self.config.max_output_tokens_per_review);
-
         // Daily budget cap ($2.00 default)
-        if ledger.cost_today_usd + est_cost > self.config.max_cost_per_day_usd {
+        if ledger.cost_today_usd + estimated_cost > self.config.max_cost_per_day_usd {
             return Err(ReviewError::DailyBudgetExceeded {
                 current: ledger.cost_today_usd,
-                estimated: est_cost,
+                estimated: estimated_cost,
                 limit: self.config.max_cost_per_day_usd,
             });
         }
 
         // Monthly budget cap ($10.00 default - supersedes daily)
-        if ledger.cost_this_month_usd + est_cost > self.config.max_cost_per_month_usd {
+        if ledger.cost_this_month_usd + estimated_cost > self.config.max_cost_per_month_usd {
             return Err(ReviewError::MonthlyBudgetExceeded {
                 current: ledger.cost_this_month_usd,
-                estimated: est_cost,
+                estimated: estimated_cost,
                 limit: self.config.max_cost_per_month_usd,
             });
         }
 
-        Ok(est_cost)
-    }
-
-    fn record_successful_review(&self, issue_id: &str, diff_hash: &str, actual_cost: f64) {
-        let mut ledger = self.ledger.lock().unwrap();
-        ledger.roll_windows_if_needed(&Utc::now());
+        // ATOMIC PRE-FLIGHT RESERVATION: deduct funds immediately
         ledger.requests_today += 1;
         ledger.requests_this_week += 1;
-        ledger.cost_today_usd += actual_cost;
-        ledger.cost_this_month_usd += actual_cost;
+        ledger.cost_today_usd += estimated_cost;
+        ledger.cost_this_month_usd += estimated_cost;
         *ledger.issue_review_counts.entry(issue_id.to_string()).or_insert(0) += 1;
-        ledger.issue_last_diff_hash.insert(issue_id.to_string(), diff_hash.to_string());
-        ledger.consecutive_errors = 0;
+        ledger.issue_last_diff_hash.insert(issue_id.to_string(), current_diff_hash.to_string());
+
+        // Immediately persist updated reservation to disk
+        self.persist_ledger(&ledger);
+        Ok(())
     }
 
-    fn record_error(&self) {
+    /// Reconcile actual token cost against initial reservation.
+    fn reconcile_usage(
+        &self,
+        _issue_id: &str,
+        _diff_hash: &str,
+        reserved_cost: f64,
+        actual_cost: f64,
+        success: bool,
+    ) {
         let mut ledger = self.ledger.lock().unwrap();
-        ledger.consecutive_errors += 1;
+        ledger.roll_windows_if_needed(&Utc::now());
+
+        let delta = actual_cost - reserved_cost;
+        ledger.cost_today_usd = (ledger.cost_today_usd + delta).max(0.0);
+        ledger.cost_this_month_usd = (ledger.cost_this_month_usd + delta).max(0.0);
+
+        if success {
+            ledger.consecutive_errors = 0;
+        } else {
+            ledger.consecutive_errors += 1;
+        }
+
+        self.persist_ledger(&ledger);
     }
 
     fn resolve_api_key(&self) -> Option<SecretString> {
@@ -358,15 +456,12 @@ impl ReviewBroker {
     async fn execute_api_review(
         &self,
         req: &ReviewRequest,
+        sanitized_diff: &str,
+        sanitized_manifest: &str,
         dedup_hash: &str,
-        _estimated_cost: f64,
         api_key: Option<SecretString>,
     ) -> Result<ReviewResult, ReviewError> {
-        let sanitized_diff = self.sanitize_payload(&req.diff_patch);
-        let sanitized_manifest = self.sanitize_payload(&req.test_manifest);
-
         if self.mock_mode {
-            // Deterministic mock for unit and integration testing
             let passed = !sanitized_diff.contains("TODO_FAIL_REVIEW");
             return Ok(ReviewResult {
                 verdict: ReviewVerdict {
@@ -433,6 +528,10 @@ impl ReviewBroker {
             .await
             .map_err(|e| ReviewError::ProviderError(e.to_string()))?;
 
+        if resp.status().as_u16() == 429 {
+            return Err(ReviewError::RateLimited429);
+        }
+
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -453,7 +552,7 @@ impl ReviewBroker {
 
         let in_tokens = json_body["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
         let out_tokens = json_body["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
-        let actual_cost = Self::estimate_request_cost(in_tokens, out_tokens);
+        let actual_cost = (in_tokens as f64 / 1_000_000.0) * 0.15 + (out_tokens as f64 / 1_000_000.0) * 0.60;
 
         Ok(ReviewResult {
             verdict,
@@ -466,48 +565,35 @@ impl ReviewBroker {
         })
     }
 
-    /// Local fallback when API key is missing, quotas are reached, or network fails.
-    /// Fulfills requirement: "Missing API key or exhausted quota must never block local issue resolution."
+    /// Local honest fallback when API key is missing, quotas are reached, or network fails.
+    /// Fulfills Issue #96: "Local fallback must say 'unreviewed externally / inconclusive'
+    /// unless independently verifiable local tests prove criteria; cannot fabricate review pass".
     pub fn run_local_fallback(
         &self,
         req: &ReviewRequest,
         dedup_hash: String,
         reason: &str,
     ) -> ReviewResult {
-        // Deterministic analysis of diff and test manifest
         let has_tests = req.test_manifest.contains("test result: ok")
-            || req.test_manifest.contains("PASSED")
-            || req.test_manifest.contains("test_");
-        let has_unresolved_todos = req.diff_patch.contains("TODO") || req.diff_patch.contains("FIXME");
-        let has_unwrap_additions = req.diff_patch.lines().any(|l| l.starts_with('+') && l.contains(".unwrap()"));
-
-        let bugs = Vec::new();
-        let mut security = Vec::new();
-        let mut edge_cases = Vec::new();
-        let mut edits = Vec::new();
-
-        if !has_tests {
-            edge_cases.push("No explicit test verification output found in test manifest".into());
-        }
-        if has_unresolved_todos {
-            edits.push("Diff contains unresolved TODO/FIXME comments".into());
-        }
-        if has_unwrap_additions {
-            security.push("Diff adds `.unwrap()` which may panic on unexpected inputs; consider Result propagation".into());
-        }
-
-        let passed = has_tests && bugs.is_empty();
+            || req.test_manifest.contains("PASSED");
 
         ReviewResult {
             verdict: ReviewVerdict {
-                passed,
-                requirements_covered: true,
-                untested_edge_cases: edge_cases,
-                detected_bugs: bugs,
-                security_observations: security,
-                suggested_edits: edits,
-                confidence_score: 0.85,
-                raw_feedback: format!("Local deterministic review completed ({})", reason),
+                // Cannot falsely certify passed or requirements_covered without external review
+                passed: false,
+                requirements_covered: false,
+                untested_edge_cases: vec![
+                    format!("Unreviewed externally ({})", reason),
+                    "External reviewer skipped; reliance is strictly on local tests".into(),
+                ],
+                detected_bugs: vec![],
+                security_observations: vec!["Local sanity check applied".into()],
+                suggested_edits: vec![],
+                confidence_score: 0.0,
+                raw_feedback: format!(
+                    "Unreviewed externally / inconclusive: {}; local test evidence required (local tests present: {})",
+                    reason, has_tests
+                ),
             },
             cached: false,
             dedup_hash,
