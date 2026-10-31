@@ -1,28 +1,34 @@
 pub mod approval;
 pub mod audit;
+pub mod authority;
 pub mod broker;
 pub mod capability;
+pub mod confined;
 pub mod credentials;
 pub mod policy;
 pub mod sandbox;
 
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 use tracing::{info, warn};
 
 pub use approval::{
-    ActiveDeviceIndicator, ApprovalBroker, ApprovalError, ApprovalSession, CapabilityToken,
-    TokenConsumptionError,
+    ApprovalBroker, ApprovalError, ApprovalSession, CapabilityToken, TokenConsumptionError,
 };
 pub use audit::{AuditIntegrityError, AuditLedger, AuditReceipt, DecisionOutcome, GENESIS_HASH};
-pub use broker::{clear_global_broker, global_broker, register_global_broker, ExecutionDenied, GuardianExecutionBroker};
-pub use capability::{Capability, DeviceCapability, FsCapability, RiskLevel, SystemCapability, ToolCapability};
+pub use broker::{
+    ExecutionDenied, GuardianExecutionBroker, clear_global_broker, global_broker,
+    register_global_broker,
+};
+pub use capability::{
+    Capability, DeviceCapability, FsCapability, RiskLevel, SystemCapability, ToolCapability,
+};
 pub use credentials::{
-    redact_credential_patterns, CredentialError, CredentialHandle, CredentialScope,
-    CredentialStore, ScopedResource, SecretString, VaultStatus,
+    CredentialError, CredentialHandle, CredentialScope, CredentialStore, ScopedResource,
+    SecretString, VaultStatus,
 };
 pub use policy::{AuthorizationDecision, PolicyEngine};
-pub use sandbox::{CommandOutput, SandboxedCommand, SandboxPolicy, SandboxViolation};
+pub use sandbox::{SandboxPolicy, SandboxViolation};
 
 use sail_common::{
     bus::EventBus,
@@ -46,10 +52,17 @@ impl GuardianSubsystem {
         let policy = Arc::new(PolicyEngine::new());
         let audit = Arc::new(AuditLedger::new());
         let approval = Arc::new(ApprovalBroker::new());
-        let credentials = Arc::new(CredentialStore::new());
+        let credentials = Arc::new(match std::env::var_os("SAIL_VAULT_DIR") {
+            Some(directory) => CredentialStore::open_persistent(std::path::Path::new(&directory))
+                .expect("configured credential vault unavailable; refusing insecure fallback"),
+            None => CredentialStore::new(),
+        });
+        let redaction_store = credentials.clone();
+        sail_common::diagnostics::register_redactor(Arc::new(move |text| {
+            redaction_store.redact_text(text)
+        }));
         let sandbox = Arc::new(SandboxPolicy::new());
-        // Default interactive session camera consent for Dialogue
-        policy.grant_capability(SubsystemId::Dialogue, Capability::Device(DeviceCapability::Camera));
+        // Device consent is established explicitly by a trusted session, never at boot.
 
         let broker = Arc::new(GuardianExecutionBroker::new(
             policy.clone(),
@@ -126,7 +139,9 @@ impl Subsystem for GuardianSubsystem {
 
     async fn init(&mut self, bus: &EventBus) -> Result<()> {
         self.bus = Some(bus.clone());
-        info!("SAIL Guardian initialized (access control, capability grants, sandbox policy & tamper-evident audit ledger)");
+        info!(
+            "SAIL Guardian initialized (access control, capability grants, sandbox policy & tamper-evident audit ledger)"
+        );
         Ok(())
     }
 
@@ -168,10 +183,18 @@ impl Subsystem for GuardianSubsystem {
 
                 // Map string to capability enum
                 let cap = match cap_str.as_str() {
-                    "tool:os:status" => Capability::Tool(ToolCapability::KernelTool("os:status".into())),
-                    "tool:proc:list" => Capability::Tool(ToolCapability::KernelTool("proc:list".into())),
-                    "tool:fs:query" => Capability::Tool(ToolCapability::KernelTool("fs:query".into())),
-                    "tool:vision:frame" => Capability::Tool(ToolCapability::KernelTool("vision:frame".into())),
+                    "tool:os:status" => {
+                        Capability::Tool(ToolCapability::KernelTool("os:status".into()))
+                    }
+                    "tool:proc:list" => {
+                        Capability::Tool(ToolCapability::KernelTool("proc:list".into()))
+                    }
+                    "tool:fs:query" => {
+                        Capability::Tool(ToolCapability::KernelTool("fs:query".into()))
+                    }
+                    "tool:vision:frame" => {
+                        Capability::Tool(ToolCapability::KernelTool("vision:frame".into()))
+                    }
                     "device:camera" => Capability::Device(DeviceCapability::Camera),
                     "device:mic" => Capability::Device(DeviceCapability::Microphone),
                     _ => Capability::Tool(ToolCapability::CliCommand(cap_str.clone())),
@@ -212,7 +235,10 @@ impl Subsystem for GuardianSubsystem {
                         .with_target(*requester);
                         let _ = bus.publish(denied);
                     }
-                    AuthorizationDecision::RequiresUserApproval { session_id, rationale } => {
+                    AuthorizationDecision::RequiresUserApproval {
+                        session_id,
+                        rationale,
+                    } => {
                         info!(session_id = %session_id, rationale = %rationale, "User approval prompted");
                         let prompt = SailEvent::new(
                             self.id(),
@@ -226,76 +252,11 @@ impl Subsystem for GuardianSubsystem {
                     }
                 }
             }
-            EventPayload::UserApprovalResolved { request_id, approved } => {
-                // Reject forged approval events from untrusted subsystems
-                if !ApprovalBroker::is_authorized_approval_source(event.source) {
-                    warn!(
-                        source = %event.source,
-                        request_id = %request_id,
-                        "Rejecting forged user approval resolution from untrusted client"
-                    );
-                    let receipt = self.audit.record(
-                        event.source,
-                        Capability::System(SystemCapability::ProcessKill),
-                        DecisionOutcome::Denied,
-                        format!("Unauthorized approval resolution attempt from untrusted client {:?}", event.source),
-                    );
-                    let receipt_event = SailEvent::new(
-                        self.id(),
-                        EventPayload::AuditReceiptCreated {
-                            receipt_id: receipt.receipt_id.to_string(),
-                            hash: receipt.hash,
-                            action: "user:approval".into(),
-                            decision: "denied".into(),
-                        },
-                    );
-                    let _ = bus.publish(receipt_event);
-                    return Ok(());
-                }
-
-                if let Ok(session_uuid) = uuid::Uuid::parse_str(request_id) {
-                    match self.approval.resolve_session_authenticated(session_uuid, *approved, event.source) {
-                        Ok(token) => {
-                            info!(session_id = %session_uuid, token_id = %token.token_id, "User approval granted, issued capability token");
-                            let receipt = self.audit.record(
-                                token.bound_actor,
-                                token.bound_capability.clone(),
-                                DecisionOutcome::Granted,
-                                format!("User interactive approval granted token {}", token.token_id),
-                            );
-
-                            let receipt_event = SailEvent::new(
-                                self.id(),
-                                EventPayload::AuditReceiptCreated {
-                                    receipt_id: receipt.receipt_id.to_string(),
-                                    hash: receipt.hash,
-                                    action: format!("{:?}", token.bound_capability),
-                                    decision: "granted".into(),
-                                },
-                            );
-                            let _ = bus.publish(receipt_event);
-                        }
-                        Err(err) => {
-                            warn!(session_id = %session_uuid, error = %err, "User approval failed or denied");
-                            let receipt = self.audit.record(
-                                event.source,
-                                Capability::Tool(ToolCapability::KernelTool("user:approval".into())),
-                                DecisionOutcome::Denied,
-                                format!("User approval session {session_uuid} failed or denied: {err}"),
-                            );
-                            let receipt_event = SailEvent::new(
-                                self.id(),
-                                EventPayload::AuditReceiptCreated {
-                                    receipt_id: receipt.receipt_id.to_string(),
-                                    hash: receipt.hash,
-                                    action: format!("session_{}", session_uuid),
-                                    decision: "denied".into(),
-                                },
-                            );
-                            let _ = bus.publish(receipt_event);
-                        }
-                    }
-                }
+            EventPayload::UserApprovalResolved { .. } => {
+                // EventBus source IDs are not authenticated identities. Only a trusted
+                // owner transport may resolve ApprovalBroker sessions directly.
+                warn!("Ignored unauthenticated approval event");
+                self.audit.record_with_correlation(event.source,Capability::Tool(ToolCapability::KernelTool("approval:resolve".into())),DecisionOutcome::Denied,"Unauthorized approval resolution attempt: event source is not an authenticated owner",event.correlation_id);
             }
             _ => {}
         }
@@ -308,4 +269,3 @@ impl Subsystem for GuardianSubsystem {
         Ok(())
     }
 }
-

@@ -95,6 +95,13 @@ The assistant presents local tool results as a short summary. Open **Show detail
 
 Voice tools currently provide read-only inspection. They do not execute arbitrary shell commands, edit files, or install software. Filesystem inspection is limited to the configured workspace root.
 
+Process inspection, filesystem queries and image tools now require an exact, short-lived owner approval. Configure a securely generated `SAIL_APPROVAL_TOKEN` (at least 32 bytes) in the server's protected environment before startup. In **Settings → Owner approvals**, enter the same token, review the actor, exact resource and expiry, then choose **Approve and retry once**. The token is not saved in browser storage. If owner authentication is not configured, these operations fail closed; ordinary conversation and low-risk OS telemetry continue.
+
+A remembered process/file request can be retried in its original conversation. A new question or another browser connection cannot reuse its grant. The retry returns the local tool result; automatic continuation of the earlier model reasoning is not yet implemented. **Deny / revoke** invalidates the request and any issued token. For image tools, use the Local tools card to keep the selected frame associated with its request.
+
+`SAIL_TOOL_ROOT` sets the permitted data workspace at startup. Symlinks, hardlinked files, special files, cross-mount paths and private stores inside the root are rejected. `SAIL_VAULT_DIR` optionally enables the encrypted credential vault; it must be a private owner-owned directory and an invalid configured vault stops startup. See [Guardian execution](Docs/ARCHITECTURE/Guardian_Execution.md) for deployment and limitations of the separately provisioned command service.
+
+
 ### Ask for a diagram or structured explanation
 
 > Show the voice pipeline as a Mermaid diagram, then briefly explain each stage.
@@ -255,3 +262,29 @@ resolve screen/camera context when possible; otherwise SAIL asks which source
 you mean. Permission denial or cancellation never submits an imageless request.
 The original request and captured image are sent together to the local model.
 Existing uploaded images are analyzed directly without requesting device capture.
+
+
+### Authorize and continue a tool operation
+
+Configure `SAIL_APPROVAL_TOKEN` (at least 32 bytes) in the protected daemon service
+configuration. When a process query or command needs approval, open Settings →
+Owner approvals, enter that owner token, and review the exact arguments, actor,
+risk and task correlation. **Approve and continue** resumes the waiting request;
+you do not need to repeat the question. Deny/revoke or Interrupt cancels it.
+Approvals expire after 60 seconds. No operation starts using a grant that expired
+while waiting for an execution slot. The owner token stays in page memory.
+
+Ask “What time is it?”, “List three processes”, or “Inspect the workspace root”.
+Time and OS telemetry need no elevated grant; other observations are explicitly
+approved. The result returns to the model for its answer and appears on Canvas.
+Large outputs expose **Open full output** instead of expanding model context.
+They are available only within the originating session/turn and expire.
+
+For command requests, an administrator must install and validate the dedicated
+runner service described in `Docs/ARCHITECTURE/Guardian_Execution.md` and
+`deploy/runner/`. Configure the daemon's `SAIL_RUNNER_SOCKET` and
+`SAIL_RUNNER_UID` to match that service. A request such as “Run /bin/echo with
+argument hello in the sandbox” requires exact owner approval and runs without
+network or host workspace mounts. Missing service/configuration produces an
+explicit failure; it never executes the command on the daemon host. This flow
+does not provide host administration or reviewed filesystem artifact export.

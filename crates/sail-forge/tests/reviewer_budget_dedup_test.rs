@@ -253,16 +253,24 @@ async fn test_honest_local_fallback_does_not_falsely_certify_success() {
 #[tokio::test]
 async fn test_secrets_redacted_before_review_dispatch() {
     let cred_store = Arc::new(CredentialStore::new());
-    cred_store.set_secret(
-        SubsystemId::Forge,
-        "openai_api_key",
-        "sk-proj-test1234567890abcdef",
-    );
-    cred_store.set_secret(
-        SubsystemId::Bridge,
-        "github_token",
-        "ghp_super_secret_github_token",
-    );
+    cred_store
+        .store_credential(
+            SubsystemId::Bridge,
+            "openai_api_key",
+            "sk-proj-test1234567890abcdef",
+            "*",
+            chrono::Duration::days(1),
+        )
+        .unwrap();
+    cred_store
+        .store_credential(
+            SubsystemId::Bridge,
+            "github_token",
+            "ghp_super_secret_github_token",
+            "*",
+            chrono::Duration::days(1),
+        )
+        .unwrap();
 
     let config = ReviewPolicyConfig::default();
     let broker = ReviewBroker::new(config).with_credentials(cred_store);

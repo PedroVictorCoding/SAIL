@@ -65,6 +65,9 @@ flowchart TB
 - **SAIL Guardian**: Access control, capability grants (`devices`, `files`, `system`, `tools`), sandbox policy, interactive user approvals, and tamper-evident SHA-256 audit receipts.
 - **SAIL Bridge**: Host OS integration, sandboxed command execution, browser/application connectors, and peripheral communication.
 
+Guardian execution hardening, owner approvals, the optional dedicated command service and the typed tool scheduler are documented in [Guardian execution](Docs/ARCHITECTURE/Guardian_Execution.md). The command service requires administrator provisioning and target-host validation before activation.
+
+
 ## Local Model Service
 
 SAIL Mind provides versioned Rust inference contracts, shared model routing and budgets, cancellation, capability detection, and supervised local CPU/Vulkan execution. See the [Mind guide](Docs/ARCHITECTURE/Local_Inference.md) and [inference v1 contracts](Docs/PROTOCOL/Inference_V1.md). Run `cargo run -p sail-core --bin saild -- mind-status` to inspect the running daemon.

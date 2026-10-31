@@ -10,6 +10,7 @@ use tracing::warn;
 #[derive(Debug, Clone)]
 pub struct SandboxPolicy {
     allowed_roots: Vec<PathBuf>,
+    confined_roots: Vec<std::sync::Arc<crate::confined::ConfinedRoot>>,
     read_only_roots: Vec<PathBuf>,
     allowed_proc_paths: Vec<PathBuf>,
     allowed_executables: Vec<String>,
@@ -82,7 +83,11 @@ mod linux_openat2 {
     #[allow(dead_code)]
     pub const RESOLVE_CACHED: u64 = 0x20;
 
-    pub unsafe fn sys_openat2(dfd: RawFd, filename: *const libc::c_char, how: &OpenHow) -> libc::c_int {
+    pub unsafe fn sys_openat2(
+        dfd: RawFd,
+        filename: *const libc::c_char,
+        how: &OpenHow,
+    ) -> libc::c_int {
         unsafe {
             libc::syscall(
                 libc::SYS_openat2,
@@ -105,44 +110,19 @@ impl SandboxPolicy {
     ///
     /// Avoids any hardcoded user paths for full OS portability.
     pub fn new() -> Self {
-        let mut allowed = Vec::new();
-
-        if let Some(ws) = detect_workspace_root() {
-            allowed.push(ws);
-        }
-
-        if let Ok(val) = std::env::var("SAIL_TOOL_ROOT") {
-            let p = PathBuf::from(val.trim());
-            if !val.trim().is_empty() {
-                allowed.push(p);
-            }
-        }
-
-        if let Ok(cwd) = std::env::current_dir() {
-            allowed.push(cwd);
-        }
-
-        if let Ok(home) = std::env::var("HOME") {
-            let sail_dir = PathBuf::from(home).join(".sail");
-            allowed.push(sail_dir);
-        }
-
-        allowed.push(std::env::temp_dir().join("sail"));
-        allowed.push(PathBuf::from("/tmp/sail"));
-
-        // Deduplicate and canonicalize roots where possible
-        let mut canonical_roots = Vec::new();
-        for r in allowed.drain(..) {
-            if let Ok(c) = fs::canonicalize(&r) {
-                if !canonical_roots.contains(&c) {
-                    canonical_roots.push(c);
-                }
-            } else if !canonical_roots.contains(&r) {
-                canonical_roots.push(r);
-            }
-        }
-
+        let configured = std::env::var_os("SAIL_TOOL_ROOT")
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok());
+        let canonical_roots: Vec<PathBuf> = configured
+            .into_iter()
+            .filter_map(|p| fs::canonicalize(p).ok())
+            .collect();
         Self {
+            confined_roots: canonical_roots
+                .iter()
+                .filter_map(|p| crate::confined::ConfinedRoot::new(p).ok())
+                .map(std::sync::Arc::new)
+                .collect(),
             allowed_roots: canonical_roots,
             read_only_roots: Vec::new(),
             allowed_proc_paths: vec![
@@ -192,6 +172,11 @@ impl SandboxPolicy {
         }
 
         Self {
+            confined_roots: canonical_roots
+                .iter()
+                .filter_map(|p| crate::confined::ConfinedRoot::new(p).ok())
+                .map(std::sync::Arc::new)
+                .collect(),
             allowed_roots: canonical_roots,
             read_only_roots: Vec::new(),
             allowed_proc_paths: vec![
@@ -226,6 +211,9 @@ impl SandboxPolicy {
         let r = root.into();
         let canonical = fs::canonicalize(&r).unwrap_or(r);
         if !self.allowed_roots.contains(&canonical) {
+            if let Ok(root) = crate::confined::ConfinedRoot::new(&canonical) {
+                self.confined_roots.push(std::sync::Arc::new(root));
+            }
             self.allowed_roots.push(canonical);
         }
         self
@@ -240,6 +228,49 @@ impl SandboxPolicy {
         self
     }
 
+    /// Return the actual descriptor used by the read operation; validation alone
+    /// never grants permission to reopen a caller-controlled pathname.
+    pub fn open_read(
+        &self,
+        target: &Path,
+    ) -> Result<crate::confined::ConfinedFile, SandboxViolation> {
+        for root in &self.confined_roots {
+            if target.is_absolute() && !target.starts_with(root.path()) {
+                continue;
+            }
+            return root
+                .open(target)
+                .map_err(|_| SandboxViolation::SensitivePathBlocked {
+                    path: target.into(),
+                });
+        }
+        Err(SandboxViolation::PathEscapesRoot {
+            path: target.into(),
+            target: target.into(),
+        })
+    }
+    pub fn write_file(&self, path: &Path, content: &[u8]) -> Result<usize, SandboxViolation> {
+        for root in &self.confined_roots {
+            if path.is_absolute() && !path.starts_with(root.path()) {
+                continue;
+            }
+            let absolute = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                root.path().join(path)
+            };
+            if self.read_only_roots.iter().any(|r| absolute.starts_with(r)) {
+                return Err(SandboxViolation::WriteToReadOnlyRoot { path: absolute });
+            }
+            return root
+                .atomic_write(path, content)
+                .map_err(|_| SandboxViolation::SensitivePathBlocked { path: absolute });
+        }
+        Err(SandboxViolation::PathEscapesRoot {
+            path: path.into(),
+            target: path.into(),
+        })
+    }
     pub fn allowed_roots(&self) -> &[PathBuf] {
         &self.allowed_roots
     }
@@ -248,7 +279,11 @@ impl SandboxPolicy {
     /// Canonicalizes the path, resolves symlinks, denies path traversal escapes,
     /// verifies real targets stay beneath an allowed root, rejects special device nodes,
     /// and uses openat2 handle-based verification when available.
-    pub fn validate_path(&self, target: &Path, is_write: bool) -> Result<PathBuf, SandboxViolation> {
+    pub fn validate_path(
+        &self,
+        target: &Path,
+        is_write: bool,
+    ) -> Result<PathBuf, SandboxViolation> {
         // 1. Check for null bytes or illegal empty path
         if target.as_os_str().is_empty() {
             return Err(SandboxViolation::PathEscapesRoot {
@@ -300,9 +335,10 @@ impl SandboxPolicy {
 
         // 3. Resolve path canonicalization
         let canonical_target = if target.exists() {
-            let canonical = fs::canonicalize(target).map_err(|_| SandboxViolation::PathDoesNotExist {
-                path: target.to_path_buf(),
-            })?;
+            let canonical =
+                fs::canonicalize(target).map_err(|_| SandboxViolation::PathDoesNotExist {
+                    path: target.to_path_buf(),
+                })?;
 
             // Check file type: reject special devices (block, char, fifo, socket)
             #[cfg(unix)]
@@ -420,13 +456,15 @@ impl SandboxPolicy {
                                     | linux_openat2::RESOLVE_NO_MAGICLINKS,
                             };
 
-                            let res = unsafe { linux_openat2::sys_openat2(dfd, rel_c.as_ptr(), &how) };
+                            let res =
+                                unsafe { linux_openat2::sys_openat2(dfd, rel_c.as_ptr(), &how) };
                             unsafe { libc::close(dfd) };
 
                             if res >= 0 {
                                 unsafe { libc::close(res) };
                             } else {
-                                let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                                let err =
+                                    std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
                                 if err == libc::EXDEV || err == libc::ELOOP {
                                     return Err(SandboxViolation::PathEscapesRoot {
                                         path: target.to_path_buf(),
@@ -452,7 +490,11 @@ impl SandboxPolicy {
 
     /// Safely opens a file beneath an allowed root, verifying descriptor mode
     /// and rejecting special devices or path escapes.
-    pub fn open_sandboxed_file(&self, target: &Path, is_write: bool) -> Result<fs::File, SandboxViolation> {
+    pub fn open_sandboxed_file(
+        &self,
+        target: &Path,
+        is_write: bool,
+    ) -> Result<fs::File, SandboxViolation> {
         let canonical = self.validate_path(target, is_write)?;
 
         #[cfg(unix)]
@@ -468,9 +510,11 @@ impl SandboxPolicy {
             }
             opts.custom_flags(libc::O_CLOEXEC);
 
-            let file = opts.open(&canonical).map_err(|_| SandboxViolation::PathDoesNotExist {
-                path: target.to_path_buf(),
-            })?;
+            let file = opts
+                .open(&canonical)
+                .map_err(|_| SandboxViolation::PathDoesNotExist {
+                    path: target.to_path_buf(),
+                })?;
 
             // Descriptor check via fstat
             let fd = file.as_raw_fd();
@@ -478,7 +522,11 @@ impl SandboxPolicy {
             let res = unsafe { libc::fstat(fd, &mut stat_buf) };
             if res == 0 {
                 let mode = stat_buf.st_mode & libc::S_IFMT;
-                if mode == libc::S_IFBLK || mode == libc::S_IFCHR || mode == libc::S_IFIFO || mode == libc::S_IFSOCK {
+                if mode == libc::S_IFBLK
+                    || mode == libc::S_IFCHR
+                    || mode == libc::S_IFIFO
+                    || mode == libc::S_IFSOCK
+                {
                     return Err(SandboxViolation::SpecialDeviceBlocked {
                         path: target.to_path_buf(),
                     });
@@ -496,9 +544,10 @@ impl SandboxPolicy {
             } else {
                 opts.read(true);
             }
-            opts.open(&canonical).map_err(|_| SandboxViolation::PathDoesNotExist {
-                path: target.to_path_buf(),
-            })
+            opts.open(&canonical)
+                .map_err(|_| SandboxViolation::PathDoesNotExist {
+                    path: target.to_path_buf(),
+                })
         }
     }
 
@@ -530,7 +579,9 @@ impl SandboxPolicy {
             .to_string();
 
         // Reject arbitrary interpreter execution
-        let interpreters = ["bash", "sh", "zsh", "python", "python3", "perl", "ruby", "node", "php"];
+        let interpreters = [
+            "bash", "sh", "zsh", "python", "python3", "perl", "ruby", "node", "php",
+        ];
         if interpreters.contains(&binary_name.as_str()) {
             return Err(SandboxViolation::InterpreterExecutionDenied {
                 interpreter: binary_name,
@@ -545,7 +596,9 @@ impl SandboxPolicy {
         }
 
         // 2. Reject shell injection metacharacters
-        let forbidden_metachars = [';', '&', '|', '>', '<', '$', '`', '\n', '\r', '\0', '(', ')'];
+        let forbidden_metachars = [
+            ';', '&', '|', '>', '<', '$', '`', '\n', '\r', '\0', '(', ')',
+        ];
         for arg in args {
             for c in arg.chars() {
                 if forbidden_metachars.contains(&c) {
@@ -575,7 +628,9 @@ impl SandboxPolicy {
                 {
                     return Err(SandboxViolation::CommandArgumentDenied {
                         arg: arg.clone(),
-                        reason: "Arbitrary execution or config alteration via git option is prohibited".into(),
+                        reason:
+                            "Arbitrary execution or config alteration via git option is prohibited"
+                                .into(),
                     });
                 }
             }
@@ -591,11 +646,11 @@ impl SandboxPolicy {
 
         // 4. Working directory constraint
         let current_dir = match workdir {
-            Some(dir) => self
-                .validate_path(dir, false)
-                .map_err(|_| SandboxViolation::WorkingDirectoryViolation {
+            Some(dir) => self.validate_path(dir, false).map_err(|_| {
+                SandboxViolation::WorkingDirectoryViolation {
                     dir: dir.to_path_buf(),
-                })?,
+                }
+            })?,
             None => {
                 if let Some(first_root) = self.allowed_roots.first() {
                     first_root.clone()
@@ -606,8 +661,8 @@ impl SandboxPolicy {
         };
 
         // 5. Binary resolution from safe system directories
-        let resolved_binary_path = resolve_safe_binary(&binary_name)
-            .unwrap_or_else(|| PathBuf::from(&binary_name));
+        let resolved_binary_path =
+            resolve_safe_binary(&binary_name).unwrap_or_else(|| PathBuf::from(&binary_name));
 
         // 6. Sanitized minimal environment (strip secrets and arbitrary library preloads)
         let mut env = BTreeMap::new();
@@ -638,7 +693,10 @@ impl SandboxPolicy {
 
     /// Execute a verified SandboxedCommand directly with argv (never invoking a shell),
     /// isolated working directory, new process group, and sanitized environment.
-    pub fn execute_command(&self, cmd: &SandboxedCommand) -> Result<CommandOutput, SandboxViolation> {
+    pub fn execute_command(
+        &self,
+        cmd: &SandboxedCommand,
+    ) -> Result<CommandOutput, SandboxViolation> {
         let mut process = std::process::Command::new(&cmd.binary_path);
         process.args(&cmd.args);
         process.current_dir(&cmd.current_dir);
@@ -653,9 +711,11 @@ impl SandboxPolicy {
             process.process_group(0);
         }
 
-        let output = process.output().map_err(|e| SandboxViolation::ExecutionFailed {
-            reason: format!("Failed to spawn {}: {}", cmd.binary, e),
-        })?;
+        let output = process
+            .output()
+            .map_err(|e| SandboxViolation::ExecutionFailed {
+                reason: format!("Failed to spawn {}: {}", cmd.binary, e),
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -669,37 +729,16 @@ impl SandboxPolicy {
     }
 
     /// Legacy string-based command validation: tokenizes command and runs prepare_command.
-    pub fn validate_command(&self, raw_cmd: &str) -> Result<(String, Vec<String>), SandboxViolation> {
-        let trimmed = raw_cmd.trim();
-        if trimmed.is_empty() {
-            return Err(SandboxViolation::CommandNotAllowed {
-                binary: String::new(),
-            });
-        }
-
-        // 1. Reject shell injection metacharacters before tokenization
-        let forbidden_metachars = [';', '&', '|', '>', '<', '$', '`', '\n', '\r', '\0'];
-        for c in trimmed.chars() {
-            if forbidden_metachars.contains(&c) {
-                return Err(SandboxViolation::ShellMetacharacterDetected { character: c });
-            }
-        }
-
-        // 2. Tokenize into binary and arguments (handling standard quotes safely)
-        let tokens = tokenize_command(trimmed);
-        if tokens.is_empty() {
-            return Err(SandboxViolation::CommandNotAllowed {
-                binary: String::new(),
-            });
-        }
-
-        let binary_input = &tokens[0];
-        let args = tokens[1..].to_vec();
-
-        let sandboxed = self.prepare_command(binary_input, &args, None)?;
-        Ok((sandboxed.binary, sandboxed.args))
+    /// A shell string is never an execution permission. Forge uses the separate
+    /// typed namespace-bound prepare_command API; user commands use sail-runner.
+    pub fn validate_command(
+        &self,
+        raw_cmd: &str,
+    ) -> Result<(String, Vec<String>), SandboxViolation> {
+        Err(SandboxViolation::CommandNotAllowed {
+            binary: raw_cmd.into(),
+        })
     }
-
     pub fn is_command_safe(&self, cmd: &str) -> bool {
         self.validate_command(cmd).is_ok()
     }
@@ -728,7 +767,10 @@ impl SandboxPolicy {
 
         // Safe process stats: /proc/<pid>/stat, /proc/<pid>/cmdline, /proc/<pid>/status
         let comps: Vec<_> = path.components().collect();
-        if comps.len() == 4 && comps[0] == Component::RootDir && comps[1] == Component::Normal("proc".as_ref()) {
+        if comps.len() == 4
+            && comps[0] == Component::RootDir
+            && comps[1] == Component::Normal("proc".as_ref())
+        {
             let pid_part = comps[2].as_os_str().to_string_lossy();
             let file_part = comps[3].as_os_str().to_string_lossy();
 
@@ -751,45 +793,6 @@ impl Default for SandboxPolicy {
 }
 
 /// Dynamically locate the workspace root from environment, manifest, or filesystem ancestry
-fn detect_workspace_root() -> Option<PathBuf> {
-    if let Ok(val) = std::env::var("SAIL_WORKSPACE_ROOT") {
-        let p = PathBuf::from(val.trim());
-        if !val.trim().is_empty() {
-            return Some(p);
-        }
-    }
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let p = PathBuf::from(manifest_dir);
-        let mut curr = Some(p.as_path());
-        while let Some(dir) = curr {
-            if dir.join(".git").exists()
-                || (dir.join("Cargo.toml").exists()
-                    && fs::read_to_string(dir.join("Cargo.toml"))
-                        .map(|c| c.contains("[workspace]"))
-                        .unwrap_or(false))
-            {
-                return Some(dir.to_path_buf());
-            }
-            curr = dir.parent();
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        let mut curr = Some(cwd.as_path());
-        while let Some(dir) = curr {
-            if dir.join(".git").exists()
-                || (dir.join("Cargo.toml").exists()
-                    && fs::read_to_string(dir.join("Cargo.toml"))
-                        .map(|c| c.contains("[workspace]"))
-                        .unwrap_or(false))
-            {
-                return Some(dir.to_path_buf());
-            }
-            curr = dir.parent();
-        }
-    }
-    None
-}
-
 /// Resolves binary name to canonical system binary path to prevent PATH hijacking
 fn resolve_safe_binary(binary_name: &str) -> Option<PathBuf> {
     let search_dirs = [
@@ -804,43 +807,13 @@ fn resolve_safe_binary(binary_name: &str) -> Option<PathBuf> {
         }
     }
     if let Ok(home) = std::env::var("HOME") {
-        let cargo_bin = PathBuf::from(home).join(".cargo").join("bin").join(binary_name);
+        let cargo_bin = PathBuf::from(home)
+            .join(".cargo")
+            .join("bin")
+            .join(binary_name);
         if cargo_bin.is_file() {
             return Some(cargo_bin);
         }
     }
     None
-}
-
-/// Simple whitespace and quote-aware command tokenizer without shell expansion
-fn tokenize_command(cmd: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-
-    for c in cmd.chars() {
-        match c {
-            '\'' if !in_double_quote => {
-                in_single_quote = !in_single_quote;
-            }
-            '"' if !in_single_quote => {
-                in_double_quote = !in_double_quote;
-            }
-            c if c.is_whitespace() && !in_single_quote && !in_double_quote => {
-                if !current.is_empty() {
-                    tokens.push(std::mem::take(&mut current));
-                }
-            }
-            c => {
-                current.push(c);
-            }
-        }
-    }
-
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-
-    tokens
 }

@@ -10,6 +10,10 @@ use sail_common::types::SubsystemId;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ExecutionDenied {
+    #[error(
+        "Filesystem operations require descriptor-bound access; host shell execution is unavailable"
+    )]
+    DescriptorRequired,
     #[error("Guardian execution broker is uninitialized or unavailable (fail-closed)")]
     GuardianUnavailable,
     #[error("Execution requires explicit user approval and valid capability token: {rationale}")]
@@ -75,6 +79,65 @@ impl GuardianExecutionBroker {
     where
         F: FnOnce() -> R,
     {
+        if matches!(
+            capability,
+            Capability::Filesystem(_) | Capability::Tool(ToolCapability::CliCommand(_))
+        ) {
+            self.audit.record_with_correlation(
+                caller,
+                capability,
+                DecisionOutcome::Denied,
+                "Use a descriptor-bound file operation or isolated command runner",
+                correlation_id,
+            );
+            return Err(ExecutionDenied::DescriptorRequired);
+        }
+        self.authorize_inner(caller, capability, token_id, correlation_id, execute_fn)
+    }
+
+    pub fn authorize_read<F, R>(
+        &self,
+        caller: SubsystemId,
+        path: &std::path::Path,
+        token_id: Option<Uuid>,
+        correlation_id: Option<Uuid>,
+        execute_fn: F,
+    ) -> Result<R, ExecutionDenied>
+    where
+        F: FnOnce(crate::confined::ConfinedFile) -> R,
+    {
+        let file = match self.sandbox.open_read(path) {
+            Ok(file) => file,
+            Err(error) => {
+                self.audit.record_with_correlation(
+                    caller,
+                    Capability::Filesystem(FsCapability::Read { path: path.into() }),
+                    DecisionOutcome::Denied,
+                    format!("Descriptor sandbox denied: {error}"),
+                    correlation_id,
+                );
+                return Err(error.into());
+            }
+        };
+        let capability = Capability::Filesystem(FsCapability::Read {
+            path: file.path().to_path_buf(),
+        });
+        self.authorize_inner(caller, capability, token_id, correlation_id, || {
+            execute_fn(file)
+        })
+    }
+
+    fn authorize_inner<F, R>(
+        &self,
+        caller: SubsystemId,
+        capability: Capability,
+        token_id: Option<Uuid>,
+        correlation_id: Option<Uuid>,
+        execute_fn: F,
+    ) -> Result<R, ExecutionDenied>
+    where
+        F: FnOnce() -> R,
+    {
         // 1. Sandbox validation at the execution boundary
         if let Capability::Filesystem(fs_cap) = &capability {
             let (path, is_write) = match fs_cap {
@@ -111,7 +174,10 @@ impl GuardianExecutionBroker {
         }
 
         // 2. Risk evaluation and CapabilityToken consumption
-        if self.policy.is_explicitly_granted(caller, &capability) {
+        if self
+            .policy
+            .is_explicitly_granted_for(caller, &capability, correlation_id)
+        {
             // Explicitly granted capability (e.g. active device consent)
         } else {
             match capability.risk_level() {
@@ -119,16 +185,20 @@ impl GuardianExecutionBroker {
                     // Auto-approved low risk (e.g. os:status telemetry)
                 }
                 RiskLevel::Medium | RiskLevel::High | RiskLevel::Critical => {
-                    // Every non-low-risk operation requires an explicit grant or a bound token.
+                    // High/Critical MUST have a valid, unconsumed, unexpired token bound to this actor and capability
                     let tid = match token_id {
                         Some(id) => id,
                         None => {
-                            let session = self.approval.create_session(
+                            let session = self.approval.create_session_for(
+                                correlation_id,
                                 caller,
                                 capability.clone(),
                                 "Execution boundary gate check requires user approval",
                             );
-                            let reason = format!("Approval required for operation: {:?}", capability);
+                            let reason = format!(
+                                "Approval required for high-risk operation: {:?}",
+                                capability
+                            );
                             self.audit.record_with_correlation(
                                 caller,
                                 capability.clone(),
@@ -143,7 +213,10 @@ impl GuardianExecutionBroker {
                         }
                     };
 
-                    if let Err(e) = self.approval.consume_token(tid, caller, &capability) {
+                    if let Err(e) =
+                        self.approval
+                            .consume_token_for(tid, caller, &capability, correlation_id)
+                    {
                         let reason = format!("Token consumption rejected: {e}");
                         self.audit.record_with_correlation(
                             caller,
@@ -166,7 +239,7 @@ impl GuardianExecutionBroker {
             caller,
             capability,
             DecisionOutcome::Granted,
-            "Execution authorized and completed at Guardian boundary",
+            "Authorization accepted at Guardian execution boundary",
             correlation_id,
         );
 

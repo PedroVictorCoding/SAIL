@@ -486,3 +486,5 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
   background: #11141e;
 }
 
+
+.card-modal:not([open]) { display:none; }
