@@ -207,9 +207,10 @@ impl ApprovalBroker {
     pub fn is_revoked(&self, token_id: Uuid) -> bool {
         let state = self.state.read().unwrap();
         state.revoked_tokens.contains(&token_id)
-            || state.tokens.get(&token_id).is_some_and(|token| {
-                state.revoked_sessions.contains(&token.session_id)
-            })
+            || state
+                .tokens
+                .get(&token_id)
+                .is_some_and(|token| state.revoked_sessions.contains(&token.session_id))
     }
 
     pub fn list_pending(&self) -> Vec<ApprovalSession> {
@@ -269,9 +270,11 @@ mod tests {
             }
         }
         assert!(broker.state.read().unwrap().consumed_tokens.is_empty());
-        assert!(broker
-            .consume_token(token.token_id, SubsystemId::Bridge, &capability())
-            .is_ok());
+        assert!(
+            broker
+                .consume_token(token.token_id, SubsystemId::Bridge, &capability())
+                .is_ok()
+        );
         assert_eq!(
             broker.consume_token(token.token_id, SubsystemId::Bridge, &capability()),
             Err(TokenConsumptionError::TokenReplayed(token.token_id))
@@ -310,9 +313,11 @@ mod tests {
             broker.consume_token(revoked.token_id, SubsystemId::Bridge, &capability()),
             Err(TokenConsumptionError::Revoked(revoked.token_id))
         );
-        assert!(broker
-            .consume_token(valid.token_id, SubsystemId::Bridge, &capability())
-            .is_ok());
+        assert!(
+            broker
+                .consume_token(valid.token_id, SubsystemId::Bridge, &capability())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -425,8 +430,9 @@ mod tests {
             broker.revoke_session(token.session_id);
             let result = consumer.join().unwrap();
             // Consumption may win before revocation; revocation cannot undo completed work.
-            assert!(result.is_ok()
-                || result == Err(TokenConsumptionError::Revoked(token.token_id)));
+            assert!(
+                result.is_ok() || result == Err(TokenConsumptionError::Revoked(token.token_id))
+            );
             assert!(broker.is_revoked(token.token_id));
             assert_eq!(
                 broker.consume_token(token.token_id, SubsystemId::Bridge, &capability()),
