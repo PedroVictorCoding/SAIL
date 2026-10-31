@@ -10,7 +10,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::{info, warn};
 
-pub use approval::{ApprovalBroker, ApprovalError, ApprovalSession, CapabilityToken, TokenConsumptionError};
+pub use approval::{
+    ActiveDeviceIndicator, ApprovalBroker, ApprovalError, ApprovalSession, CapabilityToken,
+    TokenConsumptionError,
+};
 pub use audit::{AuditIntegrityError, AuditLedger, AuditReceipt, DecisionOutcome, GENESIS_HASH};
 pub use broker::{clear_global_broker, global_broker, register_global_broker, ExecutionDenied, GuardianExecutionBroker};
 pub use capability::{Capability, DeviceCapability, FsCapability, RiskLevel, SystemCapability, ToolCapability};
@@ -224,8 +227,34 @@ impl Subsystem for GuardianSubsystem {
                 }
             }
             EventPayload::UserApprovalResolved { request_id, approved } => {
+                // Reject forged approval events from untrusted subsystems
+                if !ApprovalBroker::is_authorized_approval_source(event.source) {
+                    warn!(
+                        source = %event.source,
+                        request_id = %request_id,
+                        "Rejecting forged user approval resolution from untrusted client"
+                    );
+                    let receipt = self.audit.record(
+                        event.source,
+                        Capability::System(SystemCapability::ProcessKill),
+                        DecisionOutcome::Denied,
+                        format!("Unauthorized approval resolution attempt from untrusted client {:?}", event.source),
+                    );
+                    let receipt_event = SailEvent::new(
+                        self.id(),
+                        EventPayload::AuditReceiptCreated {
+                            receipt_id: receipt.receipt_id.to_string(),
+                            hash: receipt.hash,
+                            action: "user:approval".into(),
+                            decision: "denied".into(),
+                        },
+                    );
+                    let _ = bus.publish(receipt_event);
+                    return Ok(());
+                }
+
                 if let Ok(session_uuid) = uuid::Uuid::parse_str(request_id) {
-                    match self.approval.resolve_session(session_uuid, *approved) {
+                    match self.approval.resolve_session_authenticated(session_uuid, *approved, event.source) {
                         Ok(token) => {
                             info!(session_id = %session_uuid, token_id = %token.token_id, "User approval granted, issued capability token");
                             let receipt = self.audit.record(
@@ -248,11 +277,17 @@ impl Subsystem for GuardianSubsystem {
                         }
                         Err(err) => {
                             warn!(session_id = %session_uuid, error = %err, "User approval failed or denied");
+                            let receipt = self.audit.record(
+                                event.source,
+                                Capability::Tool(ToolCapability::KernelTool("user:approval".into())),
+                                DecisionOutcome::Denied,
+                                format!("User approval session {session_uuid} failed or denied: {err}"),
+                            );
                             let receipt_event = SailEvent::new(
                                 self.id(),
                                 EventPayload::AuditReceiptCreated {
-                                    receipt_id: uuid::Uuid::new_v4().to_string(),
-                                    hash: String::new(),
+                                    receipt_id: receipt.receipt_id.to_string(),
+                                    hash: receipt.hash,
                                     action: format!("session_{}", session_uuid),
                                     decision: "denied".into(),
                                 },

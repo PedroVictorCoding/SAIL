@@ -3,12 +3,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use sail_common::types::SubsystemId;
+use sail_common::{
+    bus::EventBus,
+    traits::Subsystem,
+    types::{EventPayload, SailEvent, SubsystemId},
+};
 use sail_guardian::{
     clear_global_broker, global_broker, ApprovalBroker,
-    AuditIntegrityError, AuditLedger, Capability, CredentialError, CredentialHandle,
-    CredentialStore, DecisionOutcome, ExecutionDenied, FsCapability, GuardianExecutionBroker,
-    PolicyEngine, SandboxPolicy, SandboxViolation, SecretString,
+    ApprovalError, AuditIntegrityError, AuditLedger, Capability, CredentialError, CredentialHandle,
+    CredentialStore, DecisionOutcome, DeviceCapability, ExecutionDenied, FsCapability, GuardianExecutionBroker,
+    GuardianSubsystem, PolicyEngine, SandboxPolicy, SandboxViolation, SecretString,
     SystemCapability, ToolCapability, VaultStatus,
 };
 
@@ -420,6 +424,168 @@ fn test_adversarial_revocation_takes_immediate_effect() {
         matches!(res, Err(sail_guardian::TokenConsumptionError::Revoked(tid)) if tid == token.token_id),
         "Revoked token must be rejected"
     );
+}
+
+#[test]
+fn test_adversarial_fake_approval_resolution_from_untrusted_clients_is_denied() {
+    let broker = ApprovalBroker::new();
+    let cap = Capability::Device(DeviceCapability::Camera);
+    let session = broker.create_session(SubsystemId::Bridge, cap, "Camera access request");
+
+    // 1. Untrusted subsystems (Agents, Dialogue, Mind, Flow, Bridge) attempt to resolve the session
+    let untrusted_resolvers = [
+        SubsystemId::Agents,
+        SubsystemId::Dialogue,
+        SubsystemId::Mind,
+        SubsystemId::Flow,
+        SubsystemId::Bridge,
+    ];
+
+    for untrusted in untrusted_resolvers {
+        let fake_res = broker.resolve_session_authenticated(session.session_id, true, untrusted);
+        assert_eq!(
+            fake_res,
+            Err(ApprovalError::UnauthorizedResolver(untrusted)),
+            "Untrusted resolver {untrusted:?} must be denied from resolving approval sessions"
+        );
+    }
+
+    // 2. Only trusted interactive Core daemon can authenticate and resolve
+    let valid_res =
+        broker.resolve_session_authenticated(session.session_id, true, SubsystemId::Core);
+    assert!(
+        valid_res.is_ok(),
+        "Core UI daemon must successfully resolve approved session"
+    );
+}
+
+#[tokio::test]
+async fn test_adversarial_fake_approval_event_on_bus_is_rejected_and_audited() {
+    let bus = EventBus::new();
+    let mut guardian = GuardianSubsystem::new();
+    guardian.init(&bus).await.unwrap();
+    guardian.start().await.unwrap();
+
+    // Create a pending approval session
+    let cap = Capability::Tool(ToolCapability::CliCommand("sudo systemctl restart".into()));
+    let session =
+        guardian
+            .approval()
+            .create_session(SubsystemId::Bridge, cap, "Admin restart");
+
+    // Untrusted actor (Agents) attempts to publish a fake UserApprovalResolved event
+    let fake_event = SailEvent::new(
+        SubsystemId::Agents,
+        EventPayload::UserApprovalResolved {
+            request_id: session.session_id.to_string(),
+            approved: true,
+        },
+    );
+
+    guardian.handle_event(&fake_event).await.unwrap();
+
+    // Session MUST still be pending and not resolved
+    let pending = guardian.approval().list_pending();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].session_id, session.session_id);
+
+    // Audit log must record the fake resolution attempt as Denied
+    let audit_list = guardian.audit().list(10);
+    assert!(
+        audit_list.iter().any(|r| r.outcome == DecisionOutcome::Denied
+            && r.reason
+                .contains("Unauthorized approval resolution attempt")),
+        "Fake approval attempt must be recorded as Denied in audit ledger"
+    );
+}
+
+#[test]
+fn test_adversarial_device_activity_indicators_and_immediate_stop_semantics() {
+    let broker = ApprovalBroker::new();
+
+    // 1. Initially no active devices
+    assert!(broker.active_device_indicators().is_empty());
+    assert!(!broker.is_device_active(DeviceCapability::Camera));
+    assert!(!broker.is_device_active(DeviceCapability::Microphone));
+
+    // 2. Register active camera and microphone capture
+    let cam_indicator = broker
+        .register_device_activity(DeviceCapability::Camera, SubsystemId::Dialogue)
+        .expect("Register camera activity failed");
+    assert_eq!(cam_indicator.device, DeviceCapability::Camera);
+    assert!(cam_indicator.is_active);
+
+    let mic_indicator = broker
+        .register_device_activity(DeviceCapability::Microphone, SubsystemId::Dialogue)
+        .expect("Register mic activity failed");
+    assert_eq!(mic_indicator.device, DeviceCapability::Microphone);
+    assert!(mic_indicator.is_active);
+
+    assert_eq!(broker.active_device_indicators().len(), 2);
+    assert!(broker.is_device_active(DeviceCapability::Camera));
+    assert!(broker.is_device_active(DeviceCapability::Microphone));
+
+    // 3. Issue capability token for camera
+    let cam_cap = Capability::Device(DeviceCapability::Camera);
+    let session = broker.create_session(SubsystemId::Dialogue, cam_cap.clone(), "Video turn");
+    let token = broker.resolve_session(session.session_id, true).unwrap();
+    assert!(!broker.is_revoked(token.token_id));
+
+    // 4. Immediate stop semantics on camera
+    broker.stop_device(DeviceCapability::Camera);
+    assert!(!broker.is_device_active(DeviceCapability::Camera));
+    assert!(broker.is_device_active(DeviceCapability::Microphone)); // mic is unaffected
+    assert_eq!(broker.active_device_indicators().len(), 1);
+
+    // Token for camera must be revoked immediately
+    assert!(broker.is_revoked(token.token_id));
+    assert_eq!(
+        broker.consume_token(token.token_id, SubsystemId::Dialogue, &cam_cap),
+        Err(sail_guardian::TokenConsumptionError::Revoked(
+            token.token_id
+        ))
+    );
+
+    // 5. Emergency stop halts all devices immediately
+    broker.emergency_stop_all_devices();
+    assert!(broker.active_device_indicators().is_empty());
+    assert!(!broker.is_device_active(DeviceCapability::Microphone));
+}
+
+#[tokio::test]
+async fn test_adversarial_denied_or_expired_approval_never_records_granted_execution() {
+    let bus = EventBus::new();
+    let mut guardian = GuardianSubsystem::new();
+    guardian.init(&bus).await.unwrap();
+    guardian.start().await.unwrap();
+
+    let cap = Capability::Tool(ToolCapability::KernelTool("danger:format".into()));
+    let session = guardian
+        .approval()
+        .create_session(SubsystemId::Bridge, cap.clone(), "Format storage");
+
+    // Core daemon sends UserApprovalResolved with approved: false
+    let deny_event = SailEvent::new(
+        SubsystemId::Core,
+        EventPayload::UserApprovalResolved {
+            request_id: session.session_id.to_string(),
+            approved: false,
+        },
+    );
+
+    guardian.handle_event(&deny_event).await.unwrap();
+
+    // Session is removed from pending
+    assert!(guardian.approval().list_pending().is_empty());
+
+    // Audit ledger MUST record Denied outcome, NEVER Granted
+    let audit_entries = guardian.audit().list(10);
+    assert!(audit_entries
+        .iter()
+        .all(|r| r.outcome != DecisionOutcome::Granted));
+    assert!(audit_entries
+        .iter()
+        .any(|r| r.outcome == DecisionOutcome::Denied));
 }
 
 // ------------------------------------------------------------------------------------------------
