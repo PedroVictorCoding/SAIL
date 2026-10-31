@@ -14,7 +14,10 @@ pub use approval::{ApprovalBroker, ApprovalError, ApprovalSession, CapabilityTok
 pub use audit::{AuditIntegrityError, AuditLedger, AuditReceipt, DecisionOutcome, GENESIS_HASH};
 pub use broker::{clear_global_broker, global_broker, register_global_broker, ExecutionDenied, GuardianExecutionBroker};
 pub use capability::{Capability, DeviceCapability, FsCapability, RiskLevel, SystemCapability, ToolCapability};
-pub use credentials::{CredentialError, CredentialHandle, CredentialStore};
+pub use credentials::{
+    redact_credential_patterns, CredentialError, CredentialHandle, CredentialScope,
+    CredentialStore, ScopedResource, SecretString, VaultStatus,
+};
 pub use policy::{AuthorizationDecision, PolicyEngine};
 pub use sandbox::{CommandOutput, SandboxedCommand, SandboxPolicy, SandboxViolation};
 

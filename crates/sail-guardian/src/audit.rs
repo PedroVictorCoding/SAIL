@@ -230,6 +230,20 @@ impl AuditLedger {
         let receipt_id = Uuid::new_v4();
         let timestamp = Utc::now();
         let reason_str = reason.into();
+        let clean_reason = crate::credentials::redact_credential_patterns(&reason_str);
+        let clean_capability = match capability {
+            Capability::Tool(crate::capability::ToolCapability::CliCommand(cmd)) => {
+                Capability::Tool(crate::capability::ToolCapability::CliCommand(
+                    crate::credentials::redact_credential_patterns(&cmd),
+                ))
+            }
+            Capability::Tool(crate::capability::ToolCapability::KernelTool(cmd)) => {
+                Capability::Tool(crate::capability::ToolCapability::KernelTool(
+                    crate::credentials::redact_credential_patterns(&cmd),
+                ))
+            }
+            other => other,
+        };
 
         // Lock file mutex first to serialize concurrent disk writes and prevent chain forks
         let mut file_guard = self.log_file.lock().unwrap();
@@ -248,9 +262,9 @@ impl AuditLedger {
             correlation_id,
             timestamp,
             requester,
-            &capability,
+            &clean_capability,
             outcome,
-            &reason_str,
+            &clean_reason,
         );
 
         *last_hash_guard = current_hash.clone();
@@ -261,9 +275,9 @@ impl AuditLedger {
             correlation_id,
             timestamp,
             requester,
-            capability,
+            capability: clean_capability,
             outcome,
-            reason: reason_str,
+            reason: clean_reason,
             prev_hash,
             hash: current_hash,
         };
