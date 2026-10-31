@@ -1,4 +1,8 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use std::fs;
+use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -10,21 +14,51 @@ use sail_forge::persistence::TaskCheckpointStore;
 use sail_forge::reviewer::ReviewBroker;
 use sail_guardian::sandbox::SandboxPolicy;
 
+fn setup_test_git_repo(path: &Path) {
+    fs::create_dir_all(path.join("src")).unwrap();
+    fs::write(
+        path.join("Cargo.toml"),
+        "[package]\nname = \"test_pkg\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::write(path.join("src/lib.rs"), "pub fn compute() -> i32 { 42 }\n#[test]\nfn test_compute() { assert_eq!(compute(), 42); }\n").unwrap();
+    let _ = Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(path)
+        .output();
+    let _ = Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(path)
+        .output();
+    let _ = Command::new("git")
+        .args(["config", "user.email", "test@test.local"])
+        .current_dir(path)
+        .output();
+    let _ = Command::new("git")
+        .args(["add", "."])
+        .current_dir(path)
+        .output();
+    let _ = Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(path)
+        .output();
+}
+
 #[tokio::test]
 async fn test_full_autonomous_issue_resolution_lifecycle() {
     let temp_dir = std::env::temp_dir().join(format!("test_orch_lifecycle_{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_dir).unwrap();
+    setup_test_git_repo(&temp_dir);
 
-    let checkpoint_store = Arc::new(TaskCheckpointStore::new(temp_dir.clone()));
-    let review_broker = Arc::new(
-        ReviewBroker::new(ReviewPolicyConfig::default()).with_mock_mode(true),
-    );
+    let checkpoint_store = Arc::new(TaskCheckpointStore::new(temp_dir.join("checkpoints")));
+    let review_broker =
+        Arc::new(ReviewBroker::new(ReviewPolicyConfig::default()).with_mock_mode(true));
     let sandbox = Arc::new(SandboxPolicy::new());
 
     let mut config = OrchestratorConfig::default();
     config.workspace_root = temp_dir.clone();
 
-    let orchestrator = ForgeOrchestrator::new(config, checkpoint_store.clone(), review_broker, sandbox);
+    let orchestrator =
+        ForgeOrchestrator::new(config, checkpoint_store.clone(), review_broker, sandbox);
 
     // 1. Enqueue approved issue
     let enqueue_req = IssueEnqueueRequest {
@@ -39,14 +73,34 @@ async fn test_full_autonomous_issue_resolution_lifecycle() {
     let status = orchestrator.get_status(&job_id).expect("Job must exist");
     assert_eq!(status.state, ForgeTaskState::Queued);
 
-    // 2. Run full lifecycle
-    let patch = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,2 @@\n+// Fixed by SAIL Forge autonomous local agent\n";
-    let report = orchestrator.run_job_lifecycle(&job_id, Some(patch)).await.unwrap();
+    // 2. Run full lifecycle with a valid patch
+    let patch = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,3 @@\n pub fn compute() -> i32 { 42 }\n+// Verified by Forge autonomous agent\n";
+    let report = orchestrator
+        .run_job_lifecycle(&job_id, Some(patch))
+        .await
+        .unwrap();
 
-    assert_eq!(report.issue, "PedroVictorCoding/SAIL/#90");
+    assert_eq!(report.issue, "PedroVictorCoding/SAIL#90");
     assert_eq!(report.status, ForgeTaskState::Completed);
     assert!(report.review_result.is_some());
     assert!(!report.tests.is_empty());
+    assert!(report.tests[0].status.contains("passed"));
+    assert_eq!(report.tests[0].command, "cargo test");
+
+    // Verify logs and patches written to disk
+    assert!(
+        temp_dir
+            .join("logs")
+            .join(&job_id)
+            .join("cargo_test.log")
+            .exists()
+    );
+    assert!(
+        temp_dir
+            .join("patches")
+            .join(format!("{}.patch", job_id))
+            .exists()
+    );
 
     // 3. Prepare draft PR
     let pr_req = PrDraftRequest {
@@ -57,11 +111,50 @@ async fn test_full_autonomous_issue_resolution_lifecycle() {
     };
 
     let pr_result = orchestrator.prepare_pr_draft(pr_req).unwrap();
-    assert_eq!(pr_result.branch, format!("agent/forge-issue-90"));
+    assert_eq!(pr_result.branch, "agent/forge-issue-90");
     assert_eq!(pr_result.base_branch, "main");
     assert!(pr_result.policy_approved);
-    // Remote PR opening remains user-controlled; never auto-closes issue
     assert_eq!(pr_result.pr_url, None);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_deliberately_failing_patch_is_recorded_as_failed_and_prevents_success() {
+    let temp_dir = std::env::temp_dir().join(format!("test_orch_fail_{}", Uuid::new_v4()));
+    setup_test_git_repo(&temp_dir);
+
+    let checkpoint_store = Arc::new(TaskCheckpointStore::new(temp_dir.join("checkpoints")));
+    let review_broker =
+        Arc::new(ReviewBroker::new(ReviewPolicyConfig::default()).with_mock_mode(true));
+    let sandbox = Arc::new(SandboxPolicy::new());
+
+    let mut config = OrchestratorConfig::default();
+    config.workspace_root = temp_dir.clone();
+
+    let orchestrator =
+        ForgeOrchestrator::new(config, checkpoint_store.clone(), review_broker, sandbox);
+
+    let enqueue_req = IssueEnqueueRequest {
+        repo: "PedroVictorCoding/SAIL".into(),
+        issue_number: 99,
+        priority: None,
+        review_policy: None,
+        budget: None,
+    };
+    let job_id = orchestrator.enqueue_issue(enqueue_req).unwrap();
+
+    // Broken patch causing compile failure
+    let broken_patch = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-pub fn compute() -> i32 { 42 }\n+pub fn compute() -> i32 { syntax error broken code }\n";
+    let res = orchestrator
+        .run_job_lifecycle(&job_id, Some(broken_patch))
+        .await;
+
+    // Per Issue #93 acceptance criteria: failing test is recorded as failed and prevents success
+    assert!(res.is_err(), "Must not report Completed when tests fail");
+
+    let status = orchestrator.get_status(&job_id).unwrap();
+    assert_eq!(status.state, ForgeTaskState::Blocked);
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -73,7 +166,12 @@ fn test_unauthorized_repo_rejected_by_policy() {
     let review_broker = Arc::new(ReviewBroker::new(ReviewPolicyConfig::default()));
     let sandbox = Arc::new(SandboxPolicy::new());
 
-    let orchestrator = ForgeOrchestrator::new(OrchestratorConfig::default(), checkpoint_store, review_broker, sandbox);
+    let orchestrator = ForgeOrchestrator::new(
+        OrchestratorConfig::default(),
+        checkpoint_store,
+        review_broker,
+        sandbox,
+    );
 
     let evil_req = IssueEnqueueRequest {
         repo: "malicious-org/target-repo".into(),
@@ -85,7 +183,10 @@ fn test_unauthorized_repo_rejected_by_policy() {
 
     let res = orchestrator.enqueue_issue(evil_req);
     assert!(res.is_err());
-    assert!(res.unwrap_err().contains("not in the approved Forge allowlist"));
+    assert!(
+        res.unwrap_err()
+            .contains("not in the approved Forge allowlist")
+    );
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -97,7 +198,12 @@ async fn test_pause_and_resume_for_voice_qos() {
     let review_broker = Arc::new(ReviewBroker::new(ReviewPolicyConfig::default()));
     let sandbox = Arc::new(SandboxPolicy::new());
 
-    let orchestrator = ForgeOrchestrator::new(OrchestratorConfig::default(), checkpoint_store, review_broker, sandbox);
+    let orchestrator = ForgeOrchestrator::new(
+        OrchestratorConfig::default(),
+        checkpoint_store,
+        review_broker,
+        sandbox,
+    );
 
     let req = IssueEnqueueRequest {
         repo: "PedroVictorCoding/SAIL".into(),
@@ -108,17 +214,70 @@ async fn test_pause_and_resume_for_voice_qos() {
     };
     let job_id = orchestrator.enqueue_issue(req).unwrap();
 
-    // Pause for foreground Voice/Dialogue session
-    orchestrator.pause_job(&job_id, "Voice-first Dialogue session active").unwrap();
+    orchestrator
+        .pause_job(&job_id, "Voice-first Dialogue session active")
+        .unwrap();
     let status_paused = orchestrator.get_status(&job_id).unwrap();
     let last_event = status_paused.events.last().unwrap();
     assert_eq!(last_event.stage, "paused");
 
-    // Resume when dialogue is done
     orchestrator.resume_job(&job_id).unwrap();
     let status_resumed = orchestrator.get_status(&job_id).unwrap();
     let last_resumed_event = status_resumed.events.last().unwrap();
     assert_eq!(last_resumed_event.stage, "resumed");
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_autonomous_agent_resolves_issue_without_injected_patch_and_verifies_nonempty_diff() {
+    let temp_dir = std::env::temp_dir().join(format!("test_orch_autonomous_{}", Uuid::new_v4()));
+    setup_test_git_repo(&temp_dir);
+
+    let checkpoint_store = Arc::new(TaskCheckpointStore::new(temp_dir.join("checkpoints")));
+    let review_broker =
+        Arc::new(ReviewBroker::new(ReviewPolicyConfig::default()).with_mock_mode(true));
+    let sandbox = Arc::new(SandboxPolicy::new());
+
+    let mut config = OrchestratorConfig::default();
+    config.workspace_root = temp_dir.clone();
+
+    let orchestrator =
+        ForgeOrchestrator::new(config, checkpoint_store.clone(), review_broker, sandbox);
+
+    let enqueue_req = IssueEnqueueRequest {
+        repo: "PedroVictorCoding/SAIL".into(),
+        issue_number: 93,
+        priority: Some("P0".into()),
+        review_policy: None,
+        budget: None,
+    };
+
+    let job_id = orchestrator.enqueue_issue(enqueue_req).unwrap();
+
+    // Call run_job_lifecycle with patch_to_apply: None to exercise the real autonomous agent
+    let report = orchestrator
+        .run_job_lifecycle(&job_id, None)
+        .await
+        .expect("Autonomous agent must solve issue");
+
+    assert_eq!(report.issue, "PedroVictorCoding/SAIL#93");
+    assert_eq!(report.status, ForgeTaskState::Completed);
+    assert!(report.review_result.is_some());
+    assert!(!report.tests.is_empty());
+    assert!(report.tests[0].status.contains("passed"));
+
+    // Verify verified patch file and real test logs were persisted to disk
+    let patch_path = temp_dir.join("patches").join(format!("{}.patch", job_id));
+    assert!(patch_path.exists());
+    let patch_content = fs::read_to_string(patch_path).unwrap();
+    assert!(
+        !patch_content.trim().is_empty(),
+        "Diff patch must be non-empty"
+    );
+
+    let log_path = temp_dir.join("logs").join(&job_id).join("cargo_test.log");
+    assert!(log_path.exists());
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
