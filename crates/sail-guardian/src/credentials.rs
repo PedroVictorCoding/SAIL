@@ -1,23 +1,26 @@
 use chrono::{DateTime, Duration, Utc};
-use ring::aead::{Aad, BoundKey, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey, AES_256_GCM, NONCE_LEN};
+use ring::aead::{
+    AES_256_GCM, Aad, BoundKey, NONCE_LEN, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey,
+};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
-use tracing::{info, warn};
+use std::sync::{Mutex, RwLock};
+use tracing::info;
 use uuid::Uuid;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::Zeroizing;
 
 use sail_common::types::SubsystemId;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CredentialError {
+    #[error("Unknown or modified credential handle")]
+    InvalidHandle,
+    #[error("Only trusted Bridge connectors may hold credentials")]
+    UntrustedConnector,
     #[error("Credential for {0:?}:{1} not found")]
     NotFound(SubsystemId, String),
     #[error("Access denied: caller {actual:?} is not owner {expected:?}")]
@@ -25,18 +28,13 @@ pub enum CredentialError {
         actual: SubsystemId,
         expected: SubsystemId,
     },
-    #[error("Access denied: untrusted subsystem {0:?} cannot request raw credential material")]
-    UntrustedCaller(SubsystemId),
     #[error("Credential handle {0} has expired")]
     Expired(Uuid),
     #[error("Credential handle {0} has been revoked")]
     Revoked(Uuid),
     #[error("Requested scope '{requested}' is outside allowed scope '{allowed}'")]
-    ScopeMismatch {
-        requested: String,
-        allowed: String,
-    },
-    #[error("Vault is locked; explicit unlock required")]
+    ScopeMismatch { requested: String, allowed: String },
+    #[error("Vault is locked")]
     VaultLocked,
     #[error("Vault cryptographic error: {0}")]
     CryptoError(String),
@@ -44,65 +42,27 @@ pub enum CredentialError {
     IoError(String),
 }
 
-/// Zeroizing wrapper for sensitive secrets to ensure memory is securely wiped when dropped.
-/// Formats as `[REDACTED_SECRET]` under Debug and Display to prevent accidental leakage into logs.
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct SecretString(String);
-
+/// Formatting-safe zeroizing secret buffer for trusted connector internals.
+#[derive(Clone)]
+pub struct SecretString(Zeroizing<String>);
 impl SecretString {
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(Zeroizing::new(value.into()))
     }
-
     pub fn expose_secret(&self) -> &str {
-        &self.0
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
+        self.0.as_str()
     }
 }
-
 impl std::fmt::Debug for SecretString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[REDACTED_SECRET]")
+        f.write_str("[REDACTED_SECRET]")
     }
 }
-
 impl std::fmt::Display for SecretString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[REDACTED_SECRET]")
+        f.write_str("[REDACTED_SECRET]")
     }
 }
-
-impl Serialize for SecretString {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for SecretString {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        String::deserialize(deserializer).map(SecretString)
-    }
-}
-
-/// Internal zeroizing wrapper for 256-bit vault keys
-#[derive(Zeroize, ZeroizeOnDrop)]
-struct VaultKey([u8; 32]);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VaultStatus {
-    Unlocked,
-    Locked,
-}
-
 /// Structured credential scope to isolate connector access by resource, account and operation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScopedResource {
@@ -112,7 +72,11 @@ pub struct ScopedResource {
 }
 
 impl ScopedResource {
-    pub fn new(resource: impl Into<String>, account: Option<String>, operation: impl Into<String>) -> Self {
+    pub fn new(
+        resource: impl Into<String>,
+        account: Option<String>,
+        operation: impl Into<String>,
+    ) -> Self {
         Self {
             resource: resource.into(),
             account,
@@ -141,12 +105,17 @@ impl ScopedResource {
         }
     }
 
-    pub fn permits(&self, target_resource: &str, target_account: Option<&str>, target_op: &str) -> bool {
+    pub fn permits(
+        &self,
+        target_resource: &str,
+        target_account: Option<&str>,
+        target_op: &str,
+    ) -> bool {
         if self.resource != "*" && self.resource != target_resource {
             return false;
         }
-        if let (Some(own_acc), Some(req_acc)) = (&self.account, target_account) {
-            if own_acc != "*" && own_acc != req_acc {
+        if let Some(account) = &self.account {
+            if account != "*" && target_account != Some(account.as_str()) {
                 return false;
             }
         }
@@ -169,11 +138,11 @@ pub struct CredentialHandle {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct StoredRecord {
     pub owner: SubsystemId,
     pub key: String,
-    pub secret: SecretString,
+    pub secret: Zeroizing<String>,
     pub scope: String,
     pub created_at: DateTime<Utc>,
 }
@@ -192,180 +161,173 @@ impl NonceSequence for OneNonce {
 pub struct CredentialStore {
     secrets: RwLock<HashMap<(SubsystemId, String), StoredRecord>>,
     handles: RwLock<HashMap<Uuid, CredentialHandle>>,
-    revoked_handles: RwLock<HashSet<Uuid>>,
     vault_path: Option<PathBuf>,
-    encryption_key: RwLock<Option<VaultKey>>,
-    is_locked: RwLock<bool>,
+    encryption_key: RwLock<Option<Zeroizing<[u8; 32]>>>,
+    operation: Mutex<()>,
 }
 
-/// Identifies subsystems that must NEVER be allowed to directly query or receive credentials.
-fn is_untrusted_caller(subsystem: SubsystemId) -> bool {
-    matches!(
-        subsystem,
-        SubsystemId::Dialogue | SubsystemId::Agents | SubsystemId::Mind | SubsystemId::Canvas
-    )
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VaultStatus {
+    Locked,
+    Unlocked,
 }
-
 impl CredentialStore {
+    pub fn status(&self) -> VaultStatus {
+        if self.is_locked() {
+            VaultStatus::Locked
+        } else {
+            VaultStatus::Unlocked
+        }
+    }
+    pub fn is_locked(&self) -> bool {
+        self.encryption_key.read().unwrap().is_none()
+    }
+    pub fn lock(&self) {
+        let _operation = self.operation.lock().unwrap();
+        self.handles.write().unwrap().clear();
+        self.secrets.write().unwrap().clear();
+        *self.encryption_key.write().unwrap() = None;
+    }
+    pub fn open_persistent_locked(path: &Path) -> Result<Self, CredentialError> {
+        let store = Self::open_persistent(path)?;
+        store.lock();
+        Ok(store)
+    }
+    pub fn unlock(&self, master_key: &[u8]) -> Result<(), CredentialError> {
+        let _operation = self.operation.lock().unwrap();
+        if master_key.len() != 32 {
+            return Err(CredentialError::CryptoError(
+                "Master key must be 32 bytes".into(),
+            ));
+        }
+        self.handles.write().unwrap().clear();
+        self.secrets.write().unwrap().clear();
+        let mut key = Zeroizing::new([0u8; 32]);
+        key.copy_from_slice(master_key);
+        *self.encryption_key.write().unwrap() = Some(key);
+        if let Some(path) = &self.vault_path {
+            if let Err(error) = self.load_from_disk(path) {
+                *self.encryption_key.write().unwrap() = None;
+                self.secrets.write().unwrap().clear();
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
     pub fn new() -> Self {
+        // Ephemeral in-memory key if no vault path specified
         let rng = SystemRandom::new();
         let mut key = [0u8; 32];
-        let _ = rng.fill(&mut key);
+        rng.fill(&mut key).expect("secure randomness unavailable");
 
         Self {
             secrets: RwLock::new(HashMap::new()),
             handles: RwLock::new(HashMap::new()),
-            revoked_handles: RwLock::new(HashSet::new()),
             vault_path: None,
-            encryption_key: RwLock::new(Some(VaultKey(key))),
-            is_locked: RwLock::new(false),
+            encryption_key: RwLock::new(Some(Zeroizing::new(key))),
+            operation: Mutex::new(()),
         }
     }
 
     /// Open or initialize an encrypted persistent credential vault backed by AES-256-GCM.
-    /// Sets strict OS file permissions (0700 dir, 0600 key and enc files).
     pub fn open_persistent(vault_dir: &Path) -> Result<Self, CredentialError> {
-        Self::open_persistent_internal(vault_dir, false)
-    }
-
-    /// Open persistent vault in locked state, requiring explicit unlock before access.
-    pub fn open_persistent_locked(vault_dir: &Path) -> Result<Self, CredentialError> {
-        Self::open_persistent_internal(vault_dir, true)
-    }
-
-    fn open_persistent_internal(vault_dir: &Path, start_locked: bool) -> Result<Self, CredentialError> {
-        let _ = fs::create_dir_all(vault_dir);
-        #[cfg(unix)]
-        let _ = fs::set_permissions(vault_dir, fs::Permissions::from_mode(0o700));
-
+        if !vault_dir.exists() {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(vault_dir)
+                .map_err(|e| CredentialError::IoError(e.to_string()))?;
+        }
+        let directory =
+            fs::symlink_metadata(vault_dir).map_err(|e| CredentialError::IoError(e.to_string()))?;
+        if !directory.is_dir()
+            || directory.uid() != unsafe { libc::geteuid() }
+            || directory.mode() & 0o077 != 0
+        {
+            return Err(CredentialError::IoError(
+                "Vault directory must be owner-only (0700), owned by daemon user and not a symlink"
+                    .into(),
+            ));
+        }
         let key_path = vault_dir.join("vault.key");
         let enc_path = vault_dir.join("vault.enc");
-
         let mut key = [0u8; 32];
-        if key_path.exists() {
-            let key_bytes = fs::read(&key_path)
-                .map_err(|e| CredentialError::IoError(format!("Failed to read vault key: {e}")))?;
-            if key_bytes.len() != 32 {
-                return Err(CredentialError::CryptoError("Invalid key length".into()));
-            }
-            key.copy_from_slice(&key_bytes);
-        } else {
-            let rng = SystemRandom::new();
-            rng.fill(&mut key)
-                .map_err(|_| CredentialError::CryptoError("Failed to generate random vault key".into()))?;
-
-            #[cfg(unix)]
-            {
-                let mut opts = fs::OpenOptions::new();
-                opts.write(true).create(true).truncate(true).mode(0o600);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&key_path)
+        {
+            Ok(mut file) => {
                 use std::io::Write;
-                let mut f = opts
-                    .open(&key_path)
-                    .map_err(|e| CredentialError::IoError(format!("Failed to persist vault key: {e}")))?;
-                f.write_all(&key)
-                    .map_err(|e| CredentialError::IoError(format!("Failed to write vault key: {e}")))?;
+                SystemRandom::new()
+                    .fill(&mut key)
+                    .map_err(|_| CredentialError::CryptoError("RNG failed".into()))?;
+                file.write_all(&key)
+                    .and_then(|()| file.sync_all())
+                    .map_err(|e| CredentialError::IoError(e.to_string()))?;
             }
-            #[cfg(not(unix))]
-            {
-                fs::write(&key_path, &key)
-                    .map_err(|e| CredentialError::IoError(format!("Failed to persist vault key: {e}")))?;
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                use std::io::Read;
+                let mut file = secure_open(&key_path)?;
+                if file
+                    .metadata()
+                    .map_err(|e| CredentialError::IoError(e.to_string()))?
+                    .len()
+                    != 32
+                {
+                    return Err(CredentialError::CryptoError("Invalid key length".into()));
+                }
+                file.read_exact(&mut key)
+                    .map_err(|e| CredentialError::IoError(e.to_string()))?;
             }
+            Err(error) => return Err(CredentialError::IoError(error.to_string())),
         }
-
-        #[cfg(unix)]
-        let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
-
         let store = Self {
             secrets: RwLock::new(HashMap::new()),
             handles: RwLock::new(HashMap::new()),
-            revoked_handles: RwLock::new(HashSet::new()),
             vault_path: Some(enc_path.clone()),
-            encryption_key: RwLock::new(if start_locked { None } else { Some(VaultKey(key)) }),
-            is_locked: RwLock::new(start_locked),
+            encryption_key: RwLock::new(Some(Zeroizing::new(key))),
+            operation: Mutex::new(()),
         };
 
-        if !start_locked && enc_path.exists() {
+        if fs::symlink_metadata(&enc_path).is_ok() {
             store.load_from_disk(&enc_path)?;
         }
 
         Ok(store)
     }
 
-    pub fn status(&self) -> VaultStatus {
-        if *self.is_locked.read().unwrap() {
-            VaultStatus::Locked
-        } else {
-            VaultStatus::Unlocked
-        }
-    }
-
-    pub fn is_locked(&self) -> bool {
-        *self.is_locked.read().unwrap()
-    }
-
-    /// Lock vault: securely wipes memory containing plaintext secrets and encryption keys.
-    pub fn lock(&self) {
-        let mut locked = self.is_locked.write().unwrap();
-        *locked = true;
-
-        let mut secrets = self.secrets.write().unwrap();
-        secrets.clear();
-
-        let mut key_guard = self.encryption_key.write().unwrap();
-        *key_guard = None;
-
-        info!("Credential vault has been locked; memory wiped");
-    }
-
-    /// Explicitly unlock vault with the 32-byte master key.
-    pub fn unlock(&self, master_key: &[u8]) -> Result<(), CredentialError> {
-        if master_key.len() != 32 {
-            return Err(CredentialError::CryptoError("Master key must be exactly 32 bytes".into()));
-        }
-
-        let mut key_arr = [0u8; 32];
-        key_arr.copy_from_slice(master_key);
-
-        if let Some(path) = &self.vault_path {
-            if path.exists() {
-                let encrypted = fs::read(path)
-                    .map_err(|e| CredentialError::IoError(format!("Read error: {e}")))?;
-                let records = Self::decrypt_records_with_key(&key_arr, &encrypted)?;
-                let mut guard = self.secrets.write().unwrap();
-                *guard = records;
-            }
-        }
-
-        let mut key_guard = self.encryption_key.write().unwrap();
-        *key_guard = Some(VaultKey(key_arr));
-
-        let mut locked = self.is_locked.write().unwrap();
-        *locked = false;
-
-        info!("Credential vault successfully unlocked");
-        Ok(())
-    }
-
-    fn encrypt_records_with_key(
-        key: &[u8; 32],
+    fn encrypt_records(
+        &self,
         records: &HashMap<(SubsystemId, String), StoredRecord>,
     ) -> Result<Vec<u8>, CredentialError> {
         let list: Vec<&StoredRecord> = records.values().collect();
-        let serialized = serde_json::to_vec(&list)
-            .map_err(|e| CredentialError::CryptoError(e.to_string()))?;
+        let serialized = Zeroizing::new(
+            serde_json::to_vec(&list).map_err(|e| CredentialError::CryptoError(e.to_string()))?,
+        );
 
         let rng = SystemRandom::new();
         let mut nonce_bytes = [0u8; NONCE_LEN];
         rng.fill(&mut nonce_bytes)
             .map_err(|_| CredentialError::CryptoError("RNG failed".into()))?;
 
-        let unbound = UnboundKey::new(&AES_256_GCM, key)
-            .map_err(|_| CredentialError::CryptoError("Key init failed".into()))?;
+        let unbound = UnboundKey::new(
+            &AES_256_GCM,
+            self.encryption_key
+                .read()
+                .unwrap()
+                .as_ref()
+                .ok_or(CredentialError::VaultLocked)?
+                .as_ref(),
+        )
+        .map_err(|_| CredentialError::CryptoError("Key init failed".into()))?;
         let mut sealing_key = SealingKey::new(unbound, OneNonce(Some(nonce_bytes)));
 
         let mut in_out = serialized;
         sealing_key
-            .seal_in_place_append_tag(Aad::empty(), &mut in_out)
+            .seal_in_place_append_tag(Aad::empty(), &mut *in_out)
             .map_err(|_| CredentialError::CryptoError("Encryption failed".into()))?;
 
         let mut output = Vec::with_capacity(NONCE_LEN + in_out.len());
@@ -375,8 +337,8 @@ impl CredentialStore {
         Ok(output)
     }
 
-    fn decrypt_records_with_key(
-        key: &[u8; 32],
+    fn decrypt_records(
+        &self,
         ciphertext: &[u8],
     ) -> Result<HashMap<(SubsystemId, String), StoredRecord>, CredentialError> {
         if ciphertext.len() < NONCE_LEN + 16 {
@@ -387,11 +349,19 @@ impl CredentialStore {
         let mut nonce_arr = [0u8; NONCE_LEN];
         nonce_arr.copy_from_slice(nonce_bytes);
 
-        let unbound = UnboundKey::new(&AES_256_GCM, key)
-            .map_err(|_| CredentialError::CryptoError("Key init failed".into()))?;
+        let unbound = UnboundKey::new(
+            &AES_256_GCM,
+            self.encryption_key
+                .read()
+                .unwrap()
+                .as_ref()
+                .ok_or(CredentialError::VaultLocked)?
+                .as_ref(),
+        )
+        .map_err(|_| CredentialError::CryptoError("Key init failed".into()))?;
         let mut opening_key = OpeningKey::new(unbound, OneNonce(Some(nonce_arr)));
 
-        let mut in_out = payload.to_vec();
+        let mut in_out = Zeroizing::new(payload.to_vec());
         let decrypted = opening_key
             .open_in_place(Aad::empty(), &mut in_out)
             .map_err(|_| CredentialError::CryptoError("Decryption failed or invalid tag".into()))?;
@@ -408,55 +378,42 @@ impl CredentialStore {
     }
 
     fn persist_to_disk(&self) -> Result<(), CredentialError> {
-        if self.is_locked() {
-            return Err(CredentialError::VaultLocked);
-        }
-
         if let Some(path) = &self.vault_path {
-            let key_guard = self.encryption_key.read().unwrap();
-            let key = key_guard
-                .as_ref()
-                .ok_or(CredentialError::VaultLocked)?;
-
             let guard = self.secrets.read().unwrap();
-            let encrypted = Self::encrypt_records_with_key(&key.0, &guard)?;
-            let tmp_path = path.with_extension("tmp");
-
-            #[cfg(unix)]
-            {
-                let mut opts = fs::OpenOptions::new();
-                opts.write(true).create(true).truncate(true).mode(0o600);
-                use std::io::Write;
-                let mut f = opts
-                    .open(&tmp_path)
-                    .map_err(|e| CredentialError::IoError(format!("Write error: {e}")))?;
-                f.write_all(&encrypted)
-                    .map_err(|e| CredentialError::IoError(format!("Write error: {e}")))?;
+            let encrypted = self.encrypt_records(&guard)?;
+            use std::io::Write;
+            let tmp_path = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
+            let result = (|| {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                    .open(&tmp_path)?;
+                file.write_all(&encrypted)?;
+                file.sync_all()?;
+                fs::rename(&tmp_path, path)?;
+                std::fs::File::open(path.parent().unwrap())?.sync_all()
+            })();
+            if let Err(error) = result {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(CredentialError::IoError(error.to_string()));
             }
-            #[cfg(not(unix))]
-            {
-                fs::write(&tmp_path, encrypted)
-                    .map_err(|e| CredentialError::IoError(format!("Write error: {e}")))?;
-            }
-
-            fs::rename(&tmp_path, path)
-                .map_err(|e| CredentialError::IoError(format!("Rename error: {e}")))?;
-
-            #[cfg(unix)]
-            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
         }
         Ok(())
     }
 
     fn load_from_disk(&self, path: &Path) -> Result<(), CredentialError> {
-        let key_guard = self.encryption_key.read().unwrap();
-        let key = key_guard
-            .as_ref()
-            .ok_or(CredentialError::VaultLocked)?;
-
-        let encrypted = fs::read(path)
-            .map_err(|e| CredentialError::IoError(format!("Read error: {e}")))?;
-        let records = Self::decrypt_records_with_key(&key.0, &encrypted)?;
+        let mut encrypted = Vec::new();
+        use std::io::Read;
+        secure_open(path)?
+            .take(16 * 1024 * 1024 + 1)
+            .read_to_end(&mut encrypted)
+            .map_err(|e| CredentialError::IoError(e.to_string()))?;
+        if encrypted.len() > 16 * 1024 * 1024 {
+            return Err(CredentialError::IoError("Vault exceeds size limit".into()));
+        }
+        let records = self.decrypt_records(&encrypted)?;
         let mut guard = self.secrets.write().unwrap();
         *guard = records;
         info!("CredentialStore successfully loaded and verified encrypted vault");
@@ -472,28 +429,43 @@ impl CredentialStore {
         scope: impl Into<String>,
         ttl: Duration,
     ) -> Result<CredentialHandle, CredentialError> {
+        let _operation = self.operation.lock().unwrap();
         if self.is_locked() {
             return Err(CredentialError::VaultLocked);
         }
-
+        if owner != SubsystemId::Bridge {
+            return Err(CredentialError::UntrustedConnector);
+        }
         let key_str = key.into();
         let scope_str = scope.into();
+        if scope_str.is_empty() || ttl <= Duration::zero() {
+            return Err(CredentialError::InvalidHandle);
+        }
         let now = Utc::now();
 
+        self.invalidate_handles(owner, &key_str);
         let record = StoredRecord {
             owner,
             key: key_str.clone(),
-            secret: SecretString::new(secret),
+            secret: Zeroizing::new(secret.into()),
             scope: scope_str.clone(),
             created_at: now,
         };
 
-        {
+        let previous = self
+            .secrets
+            .write()
+            .unwrap()
+            .insert((owner, key_str.clone()), record);
+        if let Err(error) = self.persist_to_disk() {
             let mut guard = self.secrets.write().unwrap();
-            guard.insert((owner, key_str.clone()), record);
+            if let Some(previous) = previous {
+                guard.insert((owner, key_str.clone()), previous);
+            } else {
+                guard.remove(&(owner, key_str.clone()));
+            }
+            return Err(error);
         }
-
-        self.persist_to_disk()?;
 
         let handle = CredentialHandle {
             handle_id: Uuid::new_v4(),
@@ -505,50 +477,30 @@ impl CredentialStore {
 
         {
             let mut guard = self.handles.write().unwrap();
+            guard.retain(|_, handle| handle.expires_at > Utc::now());
+            if guard.len() >= 4096 {
+                return Err(CredentialError::IoError("credential handle limit".into()));
+            }
             guard.insert(handle.handle_id, handle.clone());
         }
 
         Ok(handle)
     }
 
-    /// Legacy convenience wrapper
-    pub fn set_secret(&self, owner: SubsystemId, key: impl Into<String>, secret: impl Into<String>) {
-        let _ = self.store_credential(owner, key, secret, "*", Duration::days(365));
-    }
-
-    /// Retrieve legacy secret directly. Untrusted subsystems (Dialogue, Agents, Mind, Canvas)
-    /// are strictly forbidden from receiving raw secrets.
-    pub fn get_secret(&self, requester: SubsystemId, key: &str) -> Option<String> {
-        if is_untrusted_caller(requester) {
-            warn!(requester = ?requester, key, "Untrusted subsystem denied raw credential access");
-            return None;
-        }
-        if self.is_locked() {
-            return None;
-        }
-        let guard = self.secrets.read().unwrap();
-        guard
-            .get(&(requester, key.to_string()))
-            .map(|r| r.secret.expose_secret().to_string())
-    }
-
     /// Request an opaque scoped handle for an existing credential.
-    /// Rejects requests from untrusted model/agent subsystems.
     pub fn get_handle(
         &self,
         requester: SubsystemId,
         key: &str,
         requested_scope: &str,
     ) -> Result<CredentialHandle, CredentialError> {
-        if is_untrusted_caller(requester) {
-            warn!(requester = ?requester, key, "Untrusted subsystem denied credential handle");
-            return Err(CredentialError::UntrustedCaller(requester));
-        }
-
+        let _operation = self.operation.lock().unwrap();
         if self.is_locked() {
             return Err(CredentialError::VaultLocked);
         }
-
+        if requester != SubsystemId::Bridge {
+            return Err(CredentialError::UntrustedConnector);
+        }
         let guard = self.secrets.read().unwrap();
         let record = guard
             .get(&(requester, key.to_string()))
@@ -561,13 +513,7 @@ impl CredentialStore {
             });
         }
 
-        let parsed_allowed = ScopedResource::parse(&record.scope);
-        let parsed_requested = ScopedResource::parse(requested_scope);
-        if !parsed_allowed.permits(
-            &parsed_requested.resource,
-            parsed_requested.account.as_deref(),
-            &parsed_requested.operation,
-        ) {
+        if requested_scope.is_empty() || (record.scope != "*" && record.scope != requested_scope) {
             return Err(CredentialError::ScopeMismatch {
                 requested: requested_scope.into(),
                 allowed: record.scope.clone(),
@@ -583,6 +529,10 @@ impl CredentialStore {
         };
 
         let mut handles_guard = self.handles.write().unwrap();
+        handles_guard.retain(|_, handle| handle.expires_at > Utc::now());
+        if handles_guard.len() >= 4096 {
+            return Err(CredentialError::IoError("credential handle limit".into()));
+        }
         handles_guard.insert(handle.handle_id, handle.clone());
 
         Ok(handle)
@@ -599,18 +549,17 @@ impl CredentialStore {
     where
         F: FnOnce(&str) -> R,
     {
-        if is_untrusted_caller(caller) {
-            return Err(CredentialError::UntrustedCaller(caller));
-        }
-
+        let _operation = self.operation.lock().unwrap();
         if self.is_locked() {
             return Err(CredentialError::VaultLocked);
         }
-
-        if self.revoked_handles.read().unwrap().contains(&handle.handle_id) {
-            return Err(CredentialError::Revoked(handle.handle_id));
+        if caller != SubsystemId::Bridge {
+            return Err(CredentialError::UntrustedConnector);
         }
-
+        let handles = self.handles.read().unwrap();
+        if handles.get(&handle.handle_id) != Some(handle) {
+            return Err(CredentialError::InvalidHandle);
+        }
         if Utc::now() > handle.expires_at {
             return Err(CredentialError::Expired(handle.handle_id));
         }
@@ -627,10 +576,9 @@ impl CredentialStore {
             .get(&(handle.owner, handle.key.clone()))
             .ok_or_else(|| CredentialError::NotFound(handle.owner, handle.key.clone()))?;
 
-        Ok(action(record.secret.expose_secret()))
+        Ok(action(&record.secret))
     }
 
-    /// Execute closure ensuring handle's scope explicitly covers target resource, account and operation.
     pub fn execute_with_scoped_action<F, R>(
         &self,
         handle: &CredentialHandle,
@@ -657,105 +605,103 @@ impl CredentialStore {
         self.execute_with_secret(handle, caller, action)
     }
 
-    /// Rotate credential value, securely invalidating previous secret
+    /// Rotate credential value, invalidating previous secret
     pub fn rotate_credential(
         &self,
         owner: SubsystemId,
         key: &str,
         new_secret: impl Into<String>,
     ) -> Result<(), CredentialError> {
+        let _operation = self.operation.lock().unwrap();
         if self.is_locked() {
             return Err(CredentialError::VaultLocked);
         }
-
-        {
+        self.invalidate_handles(owner, key);
+        let previous = {
             let mut guard = self.secrets.write().unwrap();
             let record = guard
                 .get_mut(&(owner, key.to_string()))
-                .ok_or_else(|| CredentialError::NotFound(owner, key.to_string()))?;
-            record.secret = SecretString::new(new_secret);
+                .ok_or_else(|| CredentialError::NotFound(owner, key.into()))?;
+            std::mem::replace(&mut record.secret, Zeroizing::new(new_secret.into()))
+        };
+        if let Err(error) = self.persist_to_disk() {
+            self.secrets
+                .write()
+                .unwrap()
+                .get_mut(&(owner, key.to_string()))
+                .unwrap()
+                .secret = previous;
+            return Err(error);
         }
-        self.persist_to_disk()?;
         info!(owner = ?owner, key, "Credential rotated in vault");
         Ok(())
     }
 
     /// Revoke a credential and all associated handles
     pub fn revoke_credential(&self, owner: SubsystemId, key: &str) -> Result<(), CredentialError> {
+        let _operation = self.operation.lock().unwrap();
         if self.is_locked() {
             return Err(CredentialError::VaultLocked);
         }
-
-        {
-            let mut guard = self.secrets.write().unwrap();
-            guard.remove(&(owner, key.to_string()));
+        self.invalidate_handles(owner, key);
+        let previous = self
+            .secrets
+            .write()
+            .unwrap()
+            .remove(&(owner, key.to_string()));
+        if let Err(error) = self.persist_to_disk() {
+            if let Some(previous) = previous {
+                self.secrets
+                    .write()
+                    .unwrap()
+                    .insert((owner, key.to_string()), previous);
+            }
+            return Err(error);
         }
-        self.persist_to_disk()?;
         Ok(())
     }
 
     /// Revoke a specific active handle immediately
-    pub fn revoke_handle(&self, handle_id: Uuid) {
-        let mut guard = self.revoked_handles.write().unwrap();
-        guard.insert(handle_id);
+    fn invalidate_handles(&self, owner: SubsystemId, key: &str) {
+        self.handles
+            .write()
+            .unwrap()
+            .retain(|_, handle| handle.owner != owner || handle.key != key);
     }
 
-    /// Centralized structured log and trace redaction: scans text and replaces any known secret values
-    /// or credential patterns (Bearer, tokens, keys) with [REDACTED_SECRET].
+    pub fn revoke_handle(&self, handle_id: Uuid) {
+        let _operation = self.operation.lock().unwrap();
+        self.handles.write().unwrap().remove(&handle_id);
+    }
+
+    pub fn redact_value(&self, value: &serde_json::Value) -> serde_json::Value {
+        let sanitized = sail_common::diagnostics::redact_json(value);
+        match &sanitized {
+            serde_json::Value::String(text) => serde_json::Value::String(self.redact_text(text)),
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(|item| self.redact_value(item)).collect())
+            }
+            serde_json::Value::Object(fields) => serde_json::Value::Object(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), self.redact_value(v)))
+                    .collect(),
+            ),
+            value => value.clone(),
+        }
+    }
+    /// Centralized structured log and trace redaction: scans text and replaces any known secret values with [REDACTED]
     pub fn redact_text(&self, input: &str) -> String {
         let guard = self.secrets.read().unwrap();
         let mut redacted = input.to_string();
 
         for record in guard.values() {
-            let sec = record.secret.expose_secret();
-            if sec.len() >= 4 && redacted.contains(sec) {
-                redacted = redacted.replace(sec, "[REDACTED_SECRET]");
+            if !record.secret.is_empty() && redacted.contains(record.secret.as_str()) {
+                redacted = redacted.replace(record.secret.as_str(), "[REDACTED_SECRET]");
             }
         }
 
-        redacted = redact_credential_patterns(&redacted);
-        redacted
-    }
-
-    /// Redact secret values inside JSON objects or arrays
-    pub fn redact_value(&self, value: &serde_json::Value) -> serde_json::Value {
-        match value {
-            serde_json::Value::String(s) => serde_json::Value::String(self.redact_text(s)),
-            serde_json::Value::Array(arr) => {
-                serde_json::Value::Array(arr.iter().map(|v| self.redact_value(v)).collect())
-            }
-            serde_json::Value::Object(map) => {
-                let mut new_map = serde_json::Map::new();
-                for (k, v) in map {
-                    let sanitized_val = if k.to_lowercase().contains("secret")
-                        || k.to_lowercase().contains("token")
-                        || k.to_lowercase().contains("password")
-                        || k.to_lowercase().contains("key")
-                    {
-                        serde_json::Value::String("[REDACTED_SECRET]".into())
-                    } else {
-                        self.redact_value(v)
-                    };
-                    new_map.insert(k.clone(), sanitized_val);
-                }
-                serde_json::Value::Object(new_map)
-            }
-            other => other.clone(),
-        }
-    }
-
-    /// Legacy heuristic helper retained for backward compatibility
-    pub fn assert_no_credential_leakage(&self, prompt_text: &str) -> bool {
-        let lower = prompt_text.to_lowercase();
-        if lower.contains("print all credentials")
-            || lower.contains("dump secrets")
-            || lower.contains("export api keys")
-            || lower.contains("reveal authorization token")
-        {
-            warn!("Rejected untrusted prompt attempting to dump credential store");
-            return false;
-        }
-        true
+        redact_credential_patterns(&redacted)
     }
 }
 
@@ -765,44 +711,57 @@ impl Default for CredentialStore {
     }
 }
 
-/// Generic pattern-based redaction for bearer tokens and common credential tokens
+fn secure_open(path: &Path) -> Result<std::fs::File, CredentialError> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|e| CredentialError::IoError(e.to_string()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| CredentialError::IoError(e.to_string()))?;
+    if !metadata.is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o077 != 0
+        || metadata.nlink() != 1
+    {
+        return Err(CredentialError::IoError(
+            "Vault files must be private, regular, unlinked elsewhere and owner-owned".into(),
+        ));
+    }
+    Ok(file)
+}
+
+/// Preserve generic connector redaction independently of the registered vault.
 pub fn redact_credential_patterns(input: &str) -> String {
-    let mut sanitized = input.to_string();
-
-    let prefixes = [
-        "ghp_",
-        "github_pat_",
-        "sk_live_",
-        "sk_test_",
-        "xoxb-",
-        "xoxp-",
-    ];
-
-    for prefix in prefixes {
-        while let Some(start) = sanitized.find(prefix) {
-            let end_candidate = (start + 64).min(sanitized.len());
-            let token_end = sanitized[start..end_candidate]
-                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ';')
-                .map(|off| start + off)
-                .unwrap_or(end_candidate);
-
-            if token_end > start + prefix.len() {
-                sanitized.replace_range(start..token_end, "[REDACTED_SECRET]");
-            } else {
-                break;
-            }
+    let mut output = String::new();
+    let mut bearer = false;
+    for part in input.split_inclusive(char::is_whitespace) {
+        let token = part.trim_end_matches(char::is_whitespace);
+        let tail = &part[token.len()..];
+        let prefix = [
+            "ghp_",
+            "github_pat_",
+            "sk_live_",
+            "sk_test_",
+            "sk-proj-",
+            "xoxb-",
+            "xoxp-",
+        ]
+        .iter()
+        .filter_map(|p| token.find(p))
+        .min();
+        if bearer {
+            output.push_str("[REDACTED_SECRET]");
+            bearer = false;
+        } else if let Some(start) = prefix {
+            output.push_str(&token[..start]);
+            output.push_str("[REDACTED_SECRET]");
+        } else {
+            output.push_str(token);
+            bearer = token == "Bearer";
         }
+        output.push_str(tail);
     }
-
-    if let Some(idx) = sanitized.find("Bearer ") {
-        let rest = &sanitized[idx + 7..];
-        let token_len = rest
-            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
-            .unwrap_or(rest.len());
-        if token_len > 6 {
-            sanitized.replace_range(idx + 7..idx + 7 + token_len, "[REDACTED_SECRET]");
-        }
-    }
-
-    sanitized
+    output
 }

@@ -19,19 +19,25 @@ pub enum AuditIntegrityError {
     Io(String),
     #[error("Corrupt audit record at sequence {sequence}: {detail}")]
     CorruptEntry { sequence: u64, detail: String },
-    #[error("Broken hash chain at sequence {sequence}: expected prev_hash {expected}, found {actual}")]
+    #[error(
+        "Broken hash chain at sequence {sequence}: expected prev_hash {expected}, found {actual}"
+    )]
     BrokenHashChain {
         sequence: u64,
         expected: String,
         actual: String,
     },
-    #[error("Tampered audit entry at sequence {sequence}: computed hash {computed} does not match recorded {recorded}")]
+    #[error(
+        "Tampered audit entry at sequence {sequence}: computed hash {computed} does not match recorded {recorded}"
+    )]
     TamperedEntry {
         sequence: u64,
         computed: String,
         recorded: String,
     },
-    #[error("Sequence numbering broken at entry index {entry_idx}: expected {expected}, found {actual}")]
+    #[error(
+        "Sequence numbering broken at entry index {entry_idx}: expected {expected}, found {actual}"
+    )]
     SequenceBroken {
         entry_idx: usize,
         expected: u64,
@@ -97,8 +103,9 @@ impl AuditLedger {
             let reader = BufReader::new(file);
 
             for (idx, line_res) in reader.lines().enumerate() {
-                let line = line_res
-                    .map_err(|e| AuditIntegrityError::Io(format!("Failed to read audit line: {e}")))?;
+                let line = line_res.map_err(|e| {
+                    AuditIntegrityError::Io(format!("Failed to read audit line: {e}"))
+                })?;
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
@@ -166,7 +173,9 @@ impl AuditLedger {
             .create(true)
             .append(true)
             .open(log_path)
-            .map_err(|e| AuditIntegrityError::Io(format!("Failed to open log file for appending: {e}")))?;
+            .map_err(|e| {
+                AuditIntegrityError::Io(format!("Failed to open log file for appending: {e}"))
+            })?;
 
         Ok(Self {
             receipts: RwLock::new(receipts),
@@ -198,7 +207,11 @@ impl AuditLedger {
         }
         ctx.update(timestamp.to_rfc3339().as_bytes());
         ctx.update(requester.to_string().as_bytes());
-        ctx.update(serde_json::to_string(capability).unwrap_or_default().as_bytes());
+        ctx.update(
+            serde_json::to_string(capability)
+                .unwrap_or_default()
+                .as_bytes(),
+        );
         ctx.update(format!("{:?}", outcome).as_bytes());
         ctx.update(reason.as_bytes());
 
@@ -229,21 +242,16 @@ impl AuditLedger {
     ) -> AuditReceipt {
         let receipt_id = Uuid::new_v4();
         let timestamp = Utc::now();
-        let reason_str = reason.into();
-        let clean_reason = crate::credentials::redact_credential_patterns(&reason_str);
-        let clean_capability = match capability {
-            Capability::Tool(crate::capability::ToolCapability::CliCommand(cmd)) => {
-                Capability::Tool(crate::capability::ToolCapability::CliCommand(
-                    crate::credentials::redact_credential_patterns(&cmd),
+        let reason_str = sail_common::diagnostics::redact(&reason.into());
+        let capability = serde_json::to_value(&capability)
+            .ok()
+            .map(|value| sail_common::diagnostics::redact_json(&value))
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_else(|| {
+                Capability::Tool(crate::ToolCapability::KernelTool(
+                    "redacted-capability".into(),
                 ))
-            }
-            Capability::Tool(crate::capability::ToolCapability::KernelTool(cmd)) => {
-                Capability::Tool(crate::capability::ToolCapability::KernelTool(
-                    crate::credentials::redact_credential_patterns(&cmd),
-                ))
-            }
-            other => other,
-        };
+            });
 
         // Lock file mutex first to serialize concurrent disk writes and prevent chain forks
         let mut file_guard = self.log_file.lock().unwrap();
@@ -262,9 +270,9 @@ impl AuditLedger {
             correlation_id,
             timestamp,
             requester,
-            &clean_capability,
+            &capability,
             outcome,
-            &clean_reason,
+            &reason_str,
         );
 
         *last_hash_guard = current_hash.clone();
@@ -275,9 +283,9 @@ impl AuditLedger {
             correlation_id,
             timestamp,
             requester,
-            capability: clean_capability,
+            capability,
             outcome,
-            reason: clean_reason,
+            reason: reason_str,
             prev_hash,
             hash: current_hash,
         };

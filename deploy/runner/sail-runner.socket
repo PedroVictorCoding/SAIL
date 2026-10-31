@@ -1,0 +1,10 @@
+[Unit]
+Description=SAIL restricted command socket
+[Socket]
+ListenStream=/run/sail-runner/command.sock
+SocketUser=sail-runner
+SocketGroup=sail
+SocketMode=0660
+RemoveOnStop=yes
+[Install]
+WantedBy=sockets.target
