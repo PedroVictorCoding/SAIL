@@ -95,6 +95,13 @@ function openForgeEnqueueDialog() {
   const dialog = document.getElementById('forgeEnqueueDialog');
   if (dialog) dialog.showModal();
 }
+const cardModal = document.getElementById('cardModal');
+cardModal?.addEventListener('click', (e) => {
+  if (e.target === cardModal) cardModal.close();
+});
+document.getElementById('cardModalCloseBtn')?.addEventListener('click', () => {
+  cardModal?.close();
+});
 document.getElementById('canvasClearBtn').addEventListener('click', () => {
   const panel = document.getElementById('canvasPanel'); panel.replaceChildren();
   const empty = document.createElement('p'); empty.id = 'canvasEmptyState'; empty.className = 'canvas-empty';
