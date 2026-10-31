@@ -1,7 +1,7 @@
-use std::fs;
-use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 use tracing::info;
 use uuid::Uuid;
 
@@ -79,20 +79,27 @@ impl TaskCheckpoint {
             detail: detail.to_string(),
             idempotency_key: idempotency_key.to_string(),
         });
-        self.completed_idempotency_keys.push(idempotency_key.to_string());
+        self.completed_idempotency_keys
+            .push(idempotency_key.to_string());
         self.updated_at = Utc::now();
     }
 
     /// Check if an operation has already executed (idempotency).
     pub fn has_executed(&self, idempotency_key: &str) -> bool {
-        self.completed_idempotency_keys.iter().any(|k| k == idempotency_key)
+        self.completed_idempotency_keys
+            .iter()
+            .any(|k| k == idempotency_key)
     }
 
     /// Transition task state.
     pub fn transition(&mut self, new_state: ForgeTaskState, detail: &str) {
         let key = format!("transition:{:?}:{}", new_state, self.iteration);
         self.state = new_state;
-        self.record_event(&format!("state_transition -> {:?}", new_state), detail, &key);
+        self.record_event(
+            &format!("state_transition -> {:?}", new_state),
+            detail,
+            &key,
+        );
     }
 }
 
@@ -111,9 +118,7 @@ impl TaskCheckpointStore {
     pub fn default_store() -> Self {
         let dir = std::env::var("SAIL_FORGE_CHECKPOINT_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::temp_dir().join("sail_forge_checkpoints")
-            });
+            .unwrap_or_else(|_| std::env::temp_dir().join("sail_forge_checkpoints"));
         Self::new(dir)
     }
 
@@ -124,14 +129,19 @@ impl TaskCheckpointStore {
     /// Atomically persist checkpoint to disk using temp file rename.
     pub fn save(&self, checkpoint: &TaskCheckpoint) -> Result<(), std::io::Error> {
         let target = self.checkpoint_path(&checkpoint.job_id);
-        let tmp = self.base_dir.join(format!("{}.tmp.{}", checkpoint.job_id, Uuid::new_v4()));
+        let tmp = self
+            .base_dir
+            .join(format!("{}.tmp.{}", checkpoint.job_id, Uuid::new_v4()));
 
         let json = serde_json::to_string_pretty(checkpoint)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         fs::write(&tmp, json)?;
         fs::rename(&tmp, &target)?;
-        info!("Saved durable checkpoint for job {} (state: {:?})", checkpoint.job_id, checkpoint.state);
+        info!(
+            "Saved durable checkpoint for job {} (state: {:?})",
+            checkpoint.job_id, checkpoint.state
+        );
         Ok(())
     }
 

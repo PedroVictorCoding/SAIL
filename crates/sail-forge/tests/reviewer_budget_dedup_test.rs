@@ -2,25 +2,25 @@ use std::fs;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use sail_common::types::SubsystemId;
 use sail_forge::contracts::{ReviewPolicyConfig, ReviewRequest};
 use sail_forge::reviewer::ReviewBroker;
 use sail_guardian::credentials::CredentialStore;
-use sail_common::types::SubsystemId;
 
 #[tokio::test]
-async fn test_twenty_parallel_review_requests_cannot_breach_hard_quota() {
+async fn test_twenty_parallel_review_requests_for_same_issue_invokes_at_most_once() {
     let temp_ledger = std::env::temp_dir().join(format!("test_ledger_{}.json", Uuid::new_v4()));
     let config = ReviewPolicyConfig {
         enabled: true,
-        max_reviews_per_issue: 10,
-        max_requests_per_day: 3,  // Hard cap: exactly 3 requests per day
-        max_requests_per_week: 10,
+        max_reviews_per_issue: 1,
+        max_requests_per_day: 10,
+        max_requests_per_week: 20,
         max_cost_per_day_usd: 2.00,
         max_cost_per_month_usd: 10.00,
         max_input_tokens_per_review: 20_000,
         max_output_tokens_per_review: 4_000,
         model: "gpt-4o-mini".into(),
-        dedup_cache_enabled: false, // Force each request to evaluate quota
+        dedup_cache_enabled: true,
     };
 
     let broker = Arc::new(
@@ -29,47 +29,60 @@ async fn test_twenty_parallel_review_requests_cannot_breach_hard_quota() {
             .with_mock_mode(true),
     );
 
-    // Spawn 20 parallel concurrent tasks attempting review
+    // Spawn 20 parallel concurrent tasks attempting review for the EXACT SAME canonical issue
     let mut handles = Vec::new();
     for i in 0..20 {
         let b = broker.clone();
         let req = ReviewRequest {
             job_id: format!("job-race-{}", i),
-            issue_id: format!("repo/#{}", i),
+            issue_id: "PedroVictorCoding/SAIL/#90".into(),
             base_commit: "83b5762".into(),
-            diff_patch: format!("diff content {}", i),
+            diff_patch: "+++ b/src/lib.rs\n+// Verified solution".into(),
             test_manifest: "test result: ok".into(),
         };
-        handles.push(tokio::spawn(async move {
-            b.review(&req).await
-        }));
+        handles.push(tokio::spawn(async move { b.review(&req).await }));
     }
 
-    let mut mock_api_count = 0;
-    let mut quota_capped_count = 0;
-
+    let mut successful_results = 0;
     for h in handles {
         let res = h.await.unwrap();
-        if res.provider == "openai_mock" {
-            mock_api_count += 1;
-        } else if res.provider.contains("quota_capped") {
-            quota_capped_count += 1;
-        }
+        assert!(res.verdict.passed);
+        successful_results += 1;
     }
 
-    // Exactly 3 allowed, remaining 17 rejected by atomic pre-flight reservation
-    assert_eq!(mock_api_count, 3);
-    assert_eq!(quota_capped_count, 17);
+    // All 20 requests received review results cleanly
+    assert_eq!(successful_results, 20);
+
+    // Strict P0 #96 Contract: AT MOST ONE process invocation occurred across all 20 concurrent requests!
+    assert_eq!(
+        broker.invocation_count(),
+        1,
+        "Must invoke reviewer process at most once for the same issue"
+    );
 
     let ledger = broker.get_ledger();
-    assert_eq!(ledger.requests_today, 3);
+    assert_eq!(ledger.requests_today, 1);
+    assert_eq!(
+        ledger
+            .issue_review_counts
+            .get("PedroVictorCoding/SAIL#90")
+            .copied()
+            .unwrap_or(0),
+        1
+    );
+    assert!(
+        ledger
+            .canonical_issue_reviews
+            .contains_key("PedroVictorCoding/SAIL#90")
+    );
 
     let _ = fs::remove_file(&temp_ledger);
 }
 
 #[tokio::test]
 async fn test_ledger_persists_and_survives_broker_reboot() {
-    let temp_ledger = std::env::temp_dir().join(format!("test_reboot_ledger_{}.json", Uuid::new_v4()));
+    let temp_ledger =
+        std::env::temp_dir().join(format!("test_reboot_ledger_{}.json", Uuid::new_v4()));
     let config = ReviewPolicyConfig {
         enabled: true,
         max_reviews_per_issue: 2,
@@ -129,7 +142,7 @@ async fn test_ledger_persists_and_survives_broker_reboot() {
             test_manifest: "test ok".into(),
         };
         let res3 = reboot_broker.review(&req3).await;
-        assert_eq!(res3.provider, "openai_mock");
+        assert_eq!(res3.provider, "codex-cli:mock");
 
         // 4th review hits daily cap (max 3/day) and falls back
         let req4 = ReviewRequest {
@@ -140,7 +153,7 @@ async fn test_ledger_persists_and_survives_broker_reboot() {
             test_manifest: "test ok".into(),
         };
         let res4 = reboot_broker.review(&req4).await;
-        assert!(res4.provider.contains("quota_capped"));
+        assert!(res4.provider.contains("daily_request_limit_exceeded"));
     }
 
     let _ = fs::remove_file(&temp_ledger);
@@ -148,7 +161,8 @@ async fn test_ledger_persists_and_survives_broker_reboot() {
 
 #[tokio::test]
 async fn test_hash_deduplication_prevents_duplicate_queries() {
-    let temp_ledger = std::env::temp_dir().join(format!("test_dedup_ledger_{}.json", Uuid::new_v4()));
+    let temp_ledger =
+        std::env::temp_dir().join(format!("test_dedup_ledger_{}.json", Uuid::new_v4()));
     let config = ReviewPolicyConfig {
         enabled: true,
         max_reviews_per_issue: 2,
@@ -176,7 +190,7 @@ async fn test_hash_deduplication_prevents_duplicate_queries() {
 
     let res1 = broker.review(&req).await;
     assert!(!res1.cached);
-    assert_eq!(res1.provider, "openai_mock");
+    assert_eq!(res1.provider, "codex-cli:mock");
 
     let ledger1 = broker.get_ledger();
     assert_eq!(ledger1.requests_today, 1);
@@ -195,7 +209,8 @@ async fn test_hash_deduplication_prevents_duplicate_queries() {
 
 #[tokio::test]
 async fn test_honest_local_fallback_does_not_falsely_certify_success() {
-    let temp_ledger = std::env::temp_dir().join(format!("test_honest_fallback_{}.json", Uuid::new_v4()));
+    let temp_ledger =
+        std::env::temp_dir().join(format!("test_honest_fallback_{}.json", Uuid::new_v4()));
     let config = ReviewPolicyConfig {
         enabled: false, // Policy disabled to force local fallback
         max_reviews_per_issue: 1,
@@ -226,7 +241,11 @@ async fn test_honest_local_fallback_does_not_falsely_certify_success() {
     assert!(!res.verdict.passed);
     assert!(!res.verdict.requirements_covered);
     assert_eq!(res.verdict.confidence_score, 0.0);
-    assert!(res.verdict.raw_feedback.contains("Unreviewed externally / inconclusive"));
+    assert!(
+        res.verdict
+            .raw_feedback
+            .contains("Unreviewed externally / inconclusive")
+    );
 
     let _ = fs::remove_file(&temp_ledger);
 }
@@ -234,8 +253,16 @@ async fn test_honest_local_fallback_does_not_falsely_certify_success() {
 #[tokio::test]
 async fn test_secrets_redacted_before_review_dispatch() {
     let cred_store = Arc::new(CredentialStore::new());
-    cred_store.set_secret(SubsystemId::Forge, "openai_api_key", "sk-proj-test1234567890abcdef");
-    cred_store.set_secret(SubsystemId::Bridge, "github_token", "ghp_super_secret_github_token");
+    cred_store.set_secret(
+        SubsystemId::Forge,
+        "openai_api_key",
+        "sk-proj-test1234567890abcdef",
+    );
+    cred_store.set_secret(
+        SubsystemId::Bridge,
+        "github_token",
+        "ghp_super_secret_github_token",
+    );
 
     let config = ReviewPolicyConfig::default();
     let broker = ReviewBroker::new(config).with_credentials(cred_store);

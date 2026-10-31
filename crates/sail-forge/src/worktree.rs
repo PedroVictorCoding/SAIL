@@ -65,7 +65,9 @@ impl IsolatedWorktree {
         fs::create_dir_all(&root_dir)?;
 
         let canonical_root = root_dir.canonicalize().unwrap_or_else(|_| root_dir.clone());
-        let canonical_repo = repo_root.canonicalize().unwrap_or_else(|_| repo_root.to_path_buf());
+        let canonical_repo = repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| repo_root.to_path_buf());
 
         if canonical_root.starts_with(&canonical_repo) && canonical_root == canonical_repo {
             return Err(WorktreeError::ProductionPathCollision(canonical_repo));
@@ -74,8 +76,7 @@ impl IsolatedWorktree {
         // Construct a scoped sandbox policy that only allows write access inside canonical_root,
         // and treats the production repo strictly as read-only.
         let scoped_policy = Arc::new(
-            SandboxPolicy::from_roots([&canonical_root])
-                .with_read_only_root(&canonical_repo)
+            SandboxPolicy::from_roots([&canonical_root]).with_read_only_root(&canonical_repo),
         );
 
         let branch = format!("agent/forge-{}", job_id);
@@ -100,7 +101,11 @@ impl IsolatedWorktree {
 
     /// Check whether a relative path safely resolves strictly beneath the isolated worktree.
     /// Denies path traversal (..), absolute paths, and symlinks that resolve outside the worktree.
-    pub fn resolve_safe_path(&self, rel_path: &Path, is_write: bool) -> Result<PathBuf, WorktreeError> {
+    pub fn resolve_safe_path(
+        &self,
+        rel_path: &Path,
+        is_write: bool,
+    ) -> Result<PathBuf, WorktreeError> {
         if rel_path.is_absolute() {
             return Err(WorktreeError::PathTraversal {
                 path: rel_path.to_path_buf(),
@@ -278,8 +283,9 @@ impl IsolatedWorktree {
         }
     }
 
-    /// Run a command inside the isolated worktree with Guardian sandbox validation,
-    /// strict timeout enforcement, process group termination, and bounded output quotas.
+    /// Run a command inside the isolated worktree with Bubblewrap OS sandbox namespace isolation,
+    /// Guardian policy validation, strict timeout enforcement, process group termination,
+    /// and non-blocking concurrent output draining to prevent pipe deadlocks.
     pub fn run_command(
         &self,
         binary: &str,
@@ -294,42 +300,94 @@ impl IsolatedWorktree {
             .prepare_command(binary, &args_vec, Some(&self.root_dir))
             .map_err(WorktreeError::Sandbox)?;
 
-        // 2. Launch process with strict sandbox environment
-        let mut cmd = Command::new(&sandboxed_cmd.binary_path);
-        cmd.args(&sandboxed_cmd.args);
-        cmd.current_dir(&self.root_dir);
-        cmd.env_clear();
+        let bwrap_bin = std::env::var("SAIL_BWRAP_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/usr/bin/bwrap"));
 
-        // Clean PATH
-        cmd.env("PATH", std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()));
-        cmd.env("HOME", &self.root_dir);
+        let use_bwrap = bwrap_bin.exists();
 
-        // Inherit toolchain root paths so rustc/cargo can resolve the installed toolchain
-        if let Ok(rustup) = std::env::var("RUSTUP_HOME") {
-            cmd.env("RUSTUP_HOME", rustup);
-        } else if let Ok(home) = std::env::var("HOME") {
-            let p = PathBuf::from(&home).join(".rustup");
-            if p.exists() {
-                cmd.env("RUSTUP_HOME", p);
+        // Clean PATH including ~/.cargo/bin and standard system paths
+        let clean_path = if let Ok(path) = std::env::var("PATH") {
+            if path.contains(".cargo/bin") {
+                path
+            } else {
+                format!(
+                    "{}:/home/main/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+                    path
+                )
             }
-        }
+        } else {
+            "/home/main/.cargo/bin:/usr/local/bin:/usr/bin:/bin".to_string()
+        };
 
-        if let Ok(cargo_home) = std::env::var("CARGO_HOME") {
-            cmd.env("CARGO_HOME", cargo_home);
-        } else if let Ok(home) = std::env::var("HOME") {
-            let p = PathBuf::from(&home).join(".cargo");
+        let rustup_home = std::env::var("RUSTUP_HOME").ok().or_else(|| {
+            let p = PathBuf::from("/home/main/.rustup");
             if p.exists() {
-                cmd.env("CARGO_HOME", p);
+                Some(p.to_string_lossy().to_string())
+            } else {
+                None
             }
-        }
+        });
 
-        cmd.env("RUST_BACKTRACE", "1");
+        let cargo_home = std::env::var("CARGO_HOME").ok().or_else(|| {
+            let p = PathBuf::from("/home/main/.cargo");
+            if p.exists() {
+                Some(p.to_string_lossy().to_string())
+            } else {
+                None
+            }
+        });
 
-        // Network isolation defaults: prevent dependency fetches and network leaks
-        cmd.env("CARGO_NET_OFFLINE", "true");
-        cmd.env("HTTP_PROXY", "http://0.0.0.0:0");
-        cmd.env("HTTPS_PROXY", "http://0.0.0.0:0");
-        cmd.env("ALL_PROXY", "http://0.0.0.0:0");
+        let mut cmd = if use_bwrap {
+            let mut b = Command::new(&bwrap_bin);
+            // Rootless Bubblewrap OS Sandbox
+            b.arg("--ro-bind").arg("/").arg("/");
+            b.arg("--tmpfs").arg("/tmp");
+            b.arg("--bind").arg(&self.root_dir).arg(&self.root_dir);
+            b.arg("--chdir").arg(&self.root_dir);
+            b.arg("--unshare-net");
+            b.arg("--unshare-pid");
+            b.arg("--proc").arg("/proc");
+            b.arg("--dev").arg("/dev");
+            b.arg("--die-with-parent");
+
+            b.arg("--setenv").arg("PATH").arg(&clean_path);
+            b.arg("--setenv").arg("HOME").arg(&self.root_dir);
+            if let Some(ref rustup) = rustup_home {
+                b.arg("--setenv").arg("RUSTUP_HOME").arg(rustup);
+            }
+            if let Some(ref cargo) = cargo_home {
+                b.arg("--setenv").arg("CARGO_HOME").arg(cargo);
+            }
+            b.arg("--setenv").arg("CARGO_NET_OFFLINE").arg("true");
+            b.arg("--setenv").arg("RUST_BACKTRACE").arg("1");
+
+            // Binary to run
+            b.arg(&sandboxed_cmd.binary_path);
+            for a in &sandboxed_cmd.args {
+                b.arg(a);
+            }
+            b
+        } else {
+            let mut h = Command::new(&sandboxed_cmd.binary_path);
+            h.args(&sandboxed_cmd.args);
+            h.current_dir(&self.root_dir);
+            h.env_clear();
+            h.env("PATH", &clean_path);
+            h.env("HOME", &self.root_dir);
+            if let Some(ref rustup) = rustup_home {
+                h.env("RUSTUP_HOME", rustup);
+            }
+            if let Some(ref cargo) = cargo_home {
+                h.env("CARGO_HOME", cargo);
+            }
+            h.env("CARGO_NET_OFFLINE", "true");
+            h.env("RUST_BACKTRACE", "1");
+            h.env("HTTP_PROXY", "http://0.0.0.0:0");
+            h.env("HTTPS_PROXY", "http://0.0.0.0:0");
+            h.env("ALL_PROXY", "http://0.0.0.0:0");
+            h
+        };
 
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
@@ -341,31 +399,64 @@ impl IsolatedWorktree {
         }
 
         let mut child = cmd.spawn()?;
+
+        let max_output_bytes = 512 * 1024; // 512KB output cap
+        let mut stdout_pipe = child.stdout.take().expect("stdout must be piped");
+        let mut stderr_pipe = child.stderr.take().expect("stderr must be piped");
+
+        // Concurrently drain stdout in background thread to prevent pipe buffer deadlock
+        let stdout_handle = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stdout_pipe
+                .by_ref()
+                .take(max_output_bytes as u64)
+                .read_to_end(&mut buf);
+            let mut scratch = [0u8; 8192];
+            let mut excess = false;
+            while let Ok(n) = stdout_pipe.read(&mut scratch) {
+                if n == 0 {
+                    break;
+                }
+                excess = true;
+            }
+            (buf, excess)
+        });
+
+        // Concurrently drain stderr in background thread to prevent pipe buffer deadlock
+        let stderr_handle = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr_pipe
+                .by_ref()
+                .take(max_output_bytes as u64)
+                .read_to_end(&mut buf);
+            let mut scratch = [0u8; 8192];
+            let mut excess = false;
+            while let Ok(n) = stderr_pipe.read(&mut scratch) {
+                if n == 0 {
+                    break;
+                }
+                excess = true;
+            }
+            (buf, excess)
+        });
+
         let start = Instant::now();
         let timeout = Duration::from_secs(timeout_secs.max(1));
 
-        // Poll child with strict timeout
+        // Poll child with timeout; streams are drained concurrently so child never blocks on stdout/stderr
         loop {
             match child.try_wait()? {
                 Some(status) => {
-                    let mut stdout_buf = Vec::new();
-                    let mut stderr_buf = Vec::new();
-                    let max_output_bytes = 512 * 1024; // 512KB output cap
-
-                    if let Some(mut out) = child.stdout.take() {
-                        let _ = out.by_ref().take(max_output_bytes as u64).read_to_end(&mut stdout_buf);
-                    }
-                    if let Some(mut err) = child.stderr.take() {
-                        let _ = err.by_ref().take(max_output_bytes as u64).read_to_end(&mut stderr_buf);
-                    }
+                    let (stdout_buf, stdout_excess) = stdout_handle.join().unwrap_or_default();
+                    let (stderr_buf, stderr_excess) = stderr_handle.join().unwrap_or_default();
 
                     let mut stdout = String::from_utf8_lossy(&stdout_buf).to_string();
                     let mut stderr = String::from_utf8_lossy(&stderr_buf).to_string();
 
-                    if stdout_buf.len() >= max_output_bytes {
+                    if stdout_excess || stdout_buf.len() >= max_output_bytes {
                         stdout.push_str("\n[output truncated: exceeded 512KB sandbox limit]");
                     }
-                    if stderr_buf.len() >= max_output_bytes {
+                    if stderr_excess || stderr_buf.len() >= max_output_bytes {
                         stderr.push_str("\n[output truncated: exceeded 512KB sandbox limit]");
                     }
 
@@ -377,7 +468,10 @@ impl IsolatedWorktree {
                 }
                 None => {
                     if start.elapsed() >= timeout {
-                        warn!("Command {} timed out after {}s; killing process group", binary, timeout_secs);
+                        warn!(
+                            "Command {} timed out after {}s; killing process group",
+                            binary, timeout_secs
+                        );
                         #[cfg(unix)]
                         {
                             let pid = child.id() as i32;
@@ -387,12 +481,14 @@ impl IsolatedWorktree {
                         }
                         let _ = child.kill();
                         let _ = child.wait();
+                        let _ = stdout_handle.join();
+                        let _ = stderr_handle.join();
                         return Err(WorktreeError::CommandTimeout {
                             binary: binary.to_string(),
                             timeout_secs,
                         });
                     }
-                    std::thread::sleep(Duration::from_millis(25));
+                    std::thread::sleep(Duration::from_millis(20));
                 }
             }
         }

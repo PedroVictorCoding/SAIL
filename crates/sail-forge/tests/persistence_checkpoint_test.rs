@@ -20,7 +20,11 @@ fn test_durable_checkpoint_save_and_reload() {
         ReviewPolicyConfig::default(),
     );
 
-    cp.record_event("planning", "Analyzing repository AST and issue requirements", "key:step1");
+    cp.record_event(
+        "planning",
+        "Analyzing repository AST and issue requirements",
+        "key:step1",
+    );
     cp.transition(ForgeTaskState::Planning, "Moved to planning");
 
     store.save(&cp).unwrap();
@@ -59,7 +63,8 @@ fn test_idempotency_keys_prevent_duplicate_operations() {
 
 #[test]
 fn test_daemon_restart_recovery_lists_uncompleted_tasks() {
-    let temp_dir = std::env::temp_dir().join(format!("test_checkpoints_restart_{}", Uuid::new_v4()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("test_checkpoints_restart_{}", Uuid::new_v4()));
     let store = TaskCheckpointStore::new(temp_dir.clone());
 
     // Task 1: in progress (Coding)
@@ -93,11 +98,13 @@ fn test_daemon_restart_recovery_lists_uncompleted_tasks() {
     let all = reboot_store.list_all().unwrap();
 
     assert_eq!(all.len(), 2);
-    let active = all.iter().filter(|c| c.state != ForgeTaskState::Completed).collect::<Vec<_>>();
+    let active = all
+        .iter()
+        .filter(|c| c.state != ForgeTaskState::Completed)
+        .collect::<Vec<_>>();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].job_id, "job-active-1");
     assert_eq!(active[0].state, ForgeTaskState::Coding);
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
-

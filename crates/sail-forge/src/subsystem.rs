@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 use tracing::{error, info};
 
 use sail_common::{
@@ -47,7 +47,11 @@ impl Subsystem for ForgeSubsystem {
         info!("SAIL Forge Subsystem starting; recovering durable task checkpoints...");
         if let Ok(recovered_ids) = self.orchestrator.recover_from_checkpoints() {
             if !recovered_ids.is_empty() {
-                info!("SAIL Forge recovered {} tasks across daemon restart: {:?}", recovered_ids.len(), recovered_ids);
+                info!(
+                    "SAIL Forge recovered {} tasks across daemon restart: {:?}",
+                    recovered_ids.len(),
+                    recovered_ids
+                );
                 for job_id in recovered_ids {
                     let orch = self.orchestrator.clone();
                     tokio::spawn(async move {
@@ -64,8 +68,16 @@ impl Subsystem for ForgeSubsystem {
 
     async fn handle_event(&self, event: &SailEvent) -> Result<()> {
         match &event.payload {
-            EventPayload::ForgeIssueEnqueued { job_id, repo: _, issue_number: _, priority: _ } => {
-                info!("Forge received ForgeIssueEnqueued event for job {}; dispatching worker", job_id);
+            EventPayload::ForgeIssueEnqueued {
+                job_id,
+                repo: _,
+                issue_number: _,
+                priority: _,
+            } => {
+                info!(
+                    "Forge received ForgeIssueEnqueued event for job {}; dispatching worker",
+                    job_id
+                );
                 let orch = self.orchestrator.clone();
                 let jid = job_id.clone();
                 tokio::spawn(async move {
@@ -75,7 +87,10 @@ impl Subsystem for ForgeSubsystem {
                 });
             }
             EventPayload::SystemShutdown { reason } => {
-                info!("Forge Subsystem received SystemShutdown ({}): active state persisted to disk", reason);
+                info!(
+                    "Forge Subsystem received SystemShutdown ({}): active state persisted to disk",
+                    reason
+                );
             }
             _ => {}
         }

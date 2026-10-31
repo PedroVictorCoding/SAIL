@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity, clippy::collapsible_if, clippy::manual_strip)]
+
 pub mod contracts;
 pub mod fixtures;
 pub mod model_bench;
@@ -8,7 +10,7 @@ pub mod subsystem;
 pub mod worktree;
 
 pub use contracts::*;
-pub use fixtures::{get_benchmark_fixtures, IssueFixture};
+pub use fixtures::{IssueFixture, get_benchmark_fixtures};
 pub use model_bench::{
     BenchmarkHarness, FixtureBenchmarkResult, ModelBenchmarkMetrics, ModelCandidateConfig,
 };
@@ -17,4 +19,3 @@ pub use persistence::{TaskCheckpoint, TaskCheckpointStore};
 pub use reviewer::{ReviewBroker, ReviewError, ReviewUsageLedger};
 pub use subsystem::ForgeSubsystem;
 pub use worktree::{IsolatedWorktree, WorktreeError};
-

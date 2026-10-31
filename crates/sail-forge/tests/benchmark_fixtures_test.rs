@@ -4,7 +4,10 @@ use sail_forge::model_bench::{BenchmarkHarness, ModelCandidateConfig};
 #[test]
 fn test_eight_representative_fixtures_present_and_valid() {
     let fixtures = get_benchmark_fixtures();
-    assert!(fixtures.len() >= 8, "Must provide at least 8 representative issue fixtures");
+    assert!(
+        fixtures.len() >= 8,
+        "Must provide at least 8 representative issue fixtures"
+    );
 
     let categories: Vec<&str> = fixtures.iter().map(|f| f.category).collect();
     assert!(categories.contains(&"compile_fix"));
@@ -34,14 +37,16 @@ fn test_grader_fails_on_broken_source_and_passes_on_valid_fix() {
 
     // 2. Syntax error in source
     let syntax_err_src = "pub fn add(a: i32) -> i32 { invalid syntax here }";
-    let (compiled, passed, err_msg) = BenchmarkHarness::grade_source_test(syntax_err_src, valid_test);
+    let (compiled, passed, err_msg) =
+        BenchmarkHarness::grade_source_test(syntax_err_src, valid_test);
     assert!(!compiled, "Must fail compilation on syntax error");
     assert!(!passed);
     assert!(err_msg.contains("Rustc compilation failed"));
 
     // 3. Compiles but test assertion fails
     let wrong_logic_src = "pub fn add(a: i32, b: i32) -> i32 { a - b }";
-    let (compiled, passed, err_msg) = BenchmarkHarness::grade_source_test(wrong_logic_src, valid_test);
+    let (compiled, passed, err_msg) =
+        BenchmarkHarness::grade_source_test(wrong_logic_src, valid_test);
     assert!(compiled, "Compilation succeeds");
     assert!(!passed, "Assertion must fail");
     assert!(err_msg.contains("Test assertion failure"));
