@@ -14,7 +14,10 @@ pub use fixtures::{IssueFixture, get_benchmark_fixtures};
 pub use model_bench::{
     BenchmarkHarness, FixtureBenchmarkResult, ModelBenchmarkMetrics, ModelCandidateConfig,
 };
-pub use orchestrator::{ActiveJob, ForgeOrchestrator, OrchestratorConfig};
+pub use orchestrator::{
+    ActiveJob, ForgeOrchestrator, OrchestratorConfig, clear_global_orchestrator,
+    global_orchestrator, register_global_orchestrator,
+};
 pub use persistence::{TaskCheckpoint, TaskCheckpointStore};
 pub use reviewer::{ReviewBroker, ReviewError, ReviewUsageLedger};
 pub use subsystem::ForgeSubsystem;

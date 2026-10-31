@@ -19,6 +19,7 @@ pub struct ForgeSubsystem {
 
 impl ForgeSubsystem {
     pub fn new(orchestrator: Arc<ForgeOrchestrator>) -> Self {
+        crate::orchestrator::register_global_orchestrator(orchestrator.clone());
         Self {
             bus: None,
             orchestrator,

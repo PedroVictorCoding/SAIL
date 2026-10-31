@@ -215,15 +215,22 @@ impl Subsystem for AgentsSubsystem {
     }
 }
 
-/// Voice tools are read-only, explicitly named capabilities; arbitrary commands are denied.
+/// Assistant and voice operations are explicitly authorized capabilities; arbitrary commands are denied.
 pub fn authorize_voice_operation(tool: &str) -> sail_common::error::Result<&'static str> {
     match tool {
         "os:status" | "os_status" => Ok("os:status"),
         "proc:list" | "proc_list" => Ok("proc:list"),
         "fs:query" | "fs_query" => Ok("fs:query"),
+        "fs:read" | "fs_read" => Ok("fs:read"),
+        "fs:write" | "fs_write" => Ok("fs:write"),
         "vision:frame" | "vision_frame" => Ok("vision:frame"),
+        "forge:enqueue" | "forge_enqueue" => Ok("forge:enqueue"),
+        "forge:status" | "forge_status" => Ok("forge:status"),
+        "forge:list" | "forge_list" => Ok("forge:list"),
+        "forge:cancel" | "forge_cancel" => Ok("forge:cancel"),
+        "github:issues" | "github_issues" => Ok("github:issues"),
         _ => Err(sail_common::error::SailError::ToolExecution(format!(
-            "Voice operation {tool} is not authorized"
+            "Operation {tool} is not authorized"
         ))),
     }
 }
