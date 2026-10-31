@@ -1,13 +1,18 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+static GUARDIAN_FIXTURE: Mutex<()> = Mutex::new(());
 use sail_common::types::SubsystemId;
 use sail_dialogue::{KernelToolCall, LocalKernelToolBroker};
-use sail_forge::{ForgeOrchestrator, OrchestratorConfig, ReviewBroker, ReviewPolicyConfig, TaskCheckpointStore};
+use sail_forge::{
+    ForgeOrchestrator, OrchestratorConfig, ReviewBroker, ReviewPolicyConfig, TaskCheckpointStore,
+};
 use sail_guardian::GuardianSubsystem;
 
 #[test]
 fn test_forge_tools_enqueue_and_status() {
+    let _fixture = GUARDIAN_FIXTURE.lock().unwrap();
     let guardian = GuardianSubsystem::new();
-    let checkpoint_dir = std::env::temp_dir().join(format!("sail-checkpoint-{}", uuid::Uuid::new_v4()));
+    let checkpoint_dir =
+        std::env::temp_dir().join(format!("sail-checkpoint-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&checkpoint_dir).unwrap();
     let checkpoint_store = Arc::new(TaskCheckpointStore::new(checkpoint_dir));
     let review_broker = Arc::new(ReviewBroker::new(ReviewPolicyConfig::default()));
@@ -31,20 +36,28 @@ fn test_forge_tools_enqueue_and_status() {
     let enqueue_denied = LocalKernelToolBroker::execute(&enqueue_call);
     assert!(!enqueue_denied.success);
     assert_eq!(enqueue_denied.output["approval_required"], true);
-    let session_id: uuid::Uuid = enqueue_denied.output["session_id"].as_str().unwrap().parse().unwrap();
-    let broker = sail_guardian::global_broker().unwrap();
-    let token = broker
-        .approval()
-        .resolve_session_authenticated(session_id, true, SubsystemId::Core)
+    let session_id: uuid::Uuid = enqueue_denied.output["session_id"]
+        .as_str()
+        .unwrap()
+        .parse()
         .unwrap();
+    let broker = sail_guardian::global_broker().unwrap();
+    let token = broker.approval().resolve_session(session_id, true).unwrap();
 
     let enqueue_res = LocalKernelToolBroker::execute_guarded(
         SubsystemId::Dialogue,
         &enqueue_call,
         Some(token.token_id),
     );
-    assert!(enqueue_res.success, "forge:enqueue should succeed: {:?}", enqueue_res.output);
-    let job_id = enqueue_res.output["job_id"].as_str().expect("job_id present").to_string();
+    assert!(
+        enqueue_res.success,
+        "forge:enqueue should succeed: {:?}",
+        enqueue_res.output
+    );
+    let job_id = enqueue_res.output["job_id"]
+        .as_str()
+        .expect("job_id present")
+        .to_string();
     assert!(job_id.starts_with("job-90-"));
 
     // 2. Query status via kernel tool (Low risk telemetry succeeds immediately)
@@ -55,7 +68,11 @@ fn test_forge_tools_enqueue_and_status() {
         }),
     };
     let status_res = LocalKernelToolBroker::execute(&status_call);
-    assert!(status_res.success, "forge:status should succeed: {:?}", status_res.output);
+    assert!(
+        status_res.success,
+        "forge:status should succeed: {:?}",
+        status_res.output
+    );
     assert_eq!(status_res.output["job_id"], job_id);
 
     // 3. List all jobs via kernel tool
@@ -64,13 +81,19 @@ fn test_forge_tools_enqueue_and_status() {
         params: serde_json::json!({}),
     };
     let list_res = LocalKernelToolBroker::execute(&list_call);
-    assert!(list_res.success, "forge:list should succeed: {:?}", list_res.output);
+    assert!(
+        list_res.success,
+        "forge:list should succeed: {:?}",
+        list_res.output
+    );
     assert!(list_res.output["count"].as_u64().unwrap() >= 1);
 }
 
 #[test]
 fn test_filesystem_read_write_guardian_approval_lifecycle() {
-    let temp_workspace = std::env::temp_dir().join(format!("sail-workspace-{}", uuid::Uuid::new_v4()));
+    let _fixture = GUARDIAN_FIXTURE.lock().unwrap();
+    let temp_workspace =
+        std::env::temp_dir().join(format!("sail-workspace-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&temp_workspace).unwrap();
     let workspace_path = temp_workspace.to_str().unwrap().to_string();
     unsafe {
@@ -96,12 +119,12 @@ fn test_filesystem_read_write_guardian_approval_lifecycle() {
     let session_id_str = write_denied.output["session_id"].as_str().unwrap();
     let session_uuid: uuid::Uuid = session_id_str.parse().unwrap();
 
-    // 2. Resolve approval as Core daemon (interactive user approval simulation)
+    // 2. Trusted in-process fixture resolves approval; HTTP owner authentication has separate end-to-end coverage.
     let broker = sail_guardian::global_broker().unwrap();
     let token = broker
         .approval()
-        .resolve_session_authenticated(session_uuid, true, SubsystemId::Core)
-        .expect("Core resolver can authenticate and resolve approval");
+        .resolve_session(session_uuid, true)
+        .expect("Trusted fixture resolves approval");
 
     // 3. Re-execute guarded tool with the issued capability token
     let write_approved = LocalKernelToolBroker::execute_guarded(
@@ -109,7 +132,11 @@ fn test_filesystem_read_write_guardian_approval_lifecycle() {
         &write_call,
         Some(token.token_id),
     );
-    assert!(write_approved.success, "Write should succeed with token: {:?}", write_approved.output);
+    assert!(
+        write_approved.success,
+        "Write should succeed with token: {:?}",
+        write_approved.output
+    );
     assert_eq!(write_approved.output["bytes_written"], test_content.len());
 
     // 4. fs:read without token triggers approval
@@ -122,11 +149,15 @@ fn test_filesystem_read_write_guardian_approval_lifecycle() {
     let read_denied = LocalKernelToolBroker::execute(&read_call);
     assert!(!read_denied.success);
     assert_eq!(read_denied.output["approval_required"], true);
-    let read_session_uuid: uuid::Uuid = read_denied.output["session_id"].as_str().unwrap().parse().unwrap();
+    let read_session_uuid: uuid::Uuid = read_denied.output["session_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
 
     let read_token = broker
         .approval()
-        .resolve_session_authenticated(read_session_uuid, true, SubsystemId::Core)
+        .resolve_session(read_session_uuid, true)
         .unwrap();
 
     let read_approved = LocalKernelToolBroker::execute_guarded(
@@ -134,7 +165,11 @@ fn test_filesystem_read_write_guardian_approval_lifecycle() {
         &read_call,
         Some(read_token.token_id),
     );
-    assert!(read_approved.success, "Read should succeed with token: {:?}", read_approved.output);
+    assert!(
+        read_approved.success,
+        "Read should succeed with token: {:?}",
+        read_approved.output
+    );
     assert_eq!(read_approved.output["content"], test_content);
 
     // 5. Path traversal attempt outside workspace root is blocked by sandbox policy
@@ -146,5 +181,87 @@ fn test_filesystem_read_write_guardian_approval_lifecycle() {
         let bad_res = LocalKernelToolBroker::execute(&bad_call);
         assert!(!bad_res.success);
         assert_eq!(bad_res.output["error_code"], "outside_workspace");
+    }
+}
+
+#[test]
+fn test_github_issues_priority_sorting() {
+    let _fixture = GUARDIAN_FIXTURE.lock().unwrap();
+    let _guardian = GuardianSubsystem::new();
+    // 1. Verify priority extraction logic
+    let cases = [
+        (
+            "[P0 · SECURITY/BILLING] #92 Make OpenAI review quotas persistent",
+            0,
+            "P0",
+        ),
+        ("[P0 · FORGE/CONTINUITY] #92 Wire actual queue", 0, "P0"),
+        ("[P1 · HEALTH/ANDROID] SAIL Noop", 1, "P1"),
+        ("[Guardian · P1] Durable tamper-evident audit", 1, "P1"),
+        ("[P2 · LIFE] SAIL Constraint Solver", 2, "P2"),
+        ("[P3 · LIFE/POSSESSIONS] Possessions", 3, "P3"),
+        ("[P4] Lab experiments", 4, "P4"),
+        ("No priority in title", 99, "P?"),
+    ];
+
+    for (title, expected_rank, expected_label) in cases {
+        let (rank, label) = LocalKernelToolBroker::extract_issue_priority(title, &[]);
+        assert_eq!(rank, expected_rank, "Failed rank for: {title}");
+        assert_eq!(label, expected_label, "Failed label for: {title}");
+    }
+
+    // Verify label fallback
+    let critical_label = vec![serde_json::json!({"name": "critical"})];
+    let (rank, label) =
+        LocalKernelToolBroker::extract_issue_priority("Generic bug", &critical_label);
+    assert_eq!(rank, 0);
+    assert_eq!(label, "P0");
+
+    let p2_label = vec![serde_json::json!({"name": "priority: p2"})];
+    let (rank, label) = LocalKernelToolBroker::extract_issue_priority("Feature request", &p2_label);
+    assert_eq!(rank, 2);
+    assert_eq!(label, "P2");
+
+    // 2. Test guarded execution of github:issues via broker
+    let issues_call = KernelToolCall {
+        tool: "github:issues".into(),
+        params: serde_json::json!({ "limit": 10 }),
+    };
+    let broker = sail_guardian::global_broker().unwrap();
+    let denied = LocalKernelToolBroker::execute(&issues_call);
+    assert!(!denied.success);
+    assert_eq!(denied.output["approval_required"], true);
+
+    let session_uuid: uuid::Uuid = denied.output["session_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let token = broker
+        .approval()
+        .resolve_session(session_uuid, true)
+        .unwrap();
+
+    let res = LocalKernelToolBroker::execute_guarded(
+        SubsystemId::Dialogue,
+        &issues_call,
+        Some(token.token_id),
+    );
+
+    // If gh CLI is installed and succeeds, verify priority sort invariants
+    if res.success {
+        assert_eq!(res.output["sorted_by"], "priority");
+        let issues = res.output["issues"].as_array().expect("issues array");
+        let mut prev_rank = 0u64;
+        for iss in issues {
+            let rank = iss["priority_rank"].as_u64().unwrap_or(99);
+            assert!(
+                rank >= prev_rank,
+                "Issues should be sorted in ascending priority rank (P0 <= P1 <= P2...): got {} after {}",
+                rank,
+                prev_rank
+            );
+            prev_rank = rank;
+        }
     }
 }

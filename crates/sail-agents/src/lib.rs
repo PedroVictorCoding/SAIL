@@ -1,3 +1,4 @@
+pub mod tools;
 use async_trait::async_trait;
 use tracing::info;
 
@@ -67,7 +68,7 @@ impl Subsystem for AgentsSubsystem {
                 info!(
                     session_id = %session_id,
                     speaker = %speaker,
-                    content = %content,
+                    content_bytes = content.len(),
                     is_final = %is_final,
                     "SAIL Agents processing user dialogue turn"
                 );

@@ -11,6 +11,7 @@ members = [
     "crates/sail-discovery",
     "crates/sail-flow",
     "crates/sail-guardian",
+    "crates/sail-runner",
     "crates/sail-forge",
     "crates/sail-core",
 ]

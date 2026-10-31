@@ -13,3 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+sail-agents.workspace = true
+sail-guardian.workspace = true
+tokio-util.workspace = true

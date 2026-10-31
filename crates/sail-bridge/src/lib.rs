@@ -10,11 +10,20 @@ use sail_common::{
 
 pub struct BridgeSubsystem {
     bus: Option<EventBus>,
+    registry: std::sync::Arc<sail_agents::tools::ToolRegistry>,
+    scheduler: Option<std::sync::Arc<sail_agents::tools::ToolScheduler>>,
 }
 
 impl BridgeSubsystem {
     pub fn new() -> Self {
-        Self { bus: None }
+        let registry = std::sync::Arc::new(sail_agents::tools::ToolRegistry::default());
+        sail_agents::tools::register_builtin_time(&registry)
+            .expect("valid built-in time descriptor");
+        Self {
+            bus: None,
+            registry,
+            scheduler: None,
+        }
     }
 }
 
@@ -32,6 +41,13 @@ impl Subsystem for BridgeSubsystem {
 
     async fn init(&mut self, bus: &EventBus) -> Result<()> {
         self.bus = Some(bus.clone());
+        let guardian = sail_guardian::global_broker()
+            .map_err(|error| sail_common::error::SailError::ToolExecution(error.to_string()))?;
+        self.scheduler = Some(std::sync::Arc::new(sail_agents::tools::ToolScheduler::new(
+            self.registry.clone(),
+            guardian,
+            4,
+        )));
         info!("SAIL Bridge initialized with OS & connector adapters");
         Ok(())
     }
@@ -60,17 +76,32 @@ impl Subsystem for BridgeSubsystem {
             info!(
                 execution_id = %execution_id,
                 tool = %tool,
-                args = %args,
+                argument_bytes = args.to_string().len(),
                 "SAIL Bridge executing tool"
             );
 
-            if let Some(bus) = &self.bus {
+            if let (Some(bus), Some(scheduler)) = (&self.bus, &self.scheduler) {
+                let observation = scheduler
+                    .execute(
+                        sail_agents::tools::ToolContext {
+                            request_id: uuid::Uuid::parse_str(execution_id).unwrap_or(event.id),
+                            correlation_id: event.correlation_id.unwrap_or(event.id),
+                            actor: event.source,
+                            cancel: tokio_util::sync::CancellationToken::new(),
+                        },
+                        tool,
+                        args.clone(),
+                        None,
+                        true,
+                    )
+                    .await;
                 let response = SailEvent::new(
                     self.id(),
                     EventPayload::ToolResult {
                         execution_id: execution_id.clone(),
-                        success: true,
-                        output: format!("Execution of '{tool}' succeeded with arguments {args}"),
+                        success: observation.success,
+                        output: serde_json::to_string(&observation)
+                            .unwrap_or_else(|_| "observation serialization failed".into()),
                     },
                 )
                 .with_target(event.source);

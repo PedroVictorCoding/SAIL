@@ -41,36 +41,31 @@ impl LocalKernelToolBroker {
     /// Convert a local tool invocation into a strongly-typed Guardian Capability
     pub fn tool_to_capability(call: &KernelToolCall) -> sail_guardian::Capability {
         match call.tool.as_str() {
-            "os:status" => sail_guardian::Capability::System(sail_guardian::SystemCapability::OsTelemetry),
-            "proc:list" => sail_guardian::Capability::System(sail_guardian::SystemCapability::ProcessInspect),
+            "os:status" => {
+                sail_guardian::Capability::System(sail_guardian::SystemCapability::OsTelemetry)
+            }
+            "proc:list" | "forge:enqueue" | "forge:cancel" | "github:issues" => {
+                sail_guardian::capability::bound_tool_invocation(&call.tool, &call.params)
+            }
             "fs:query" | "fs:read" => {
-                let path_str = call.params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-                let configured = std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into());
-                let candidate = std::path::Path::new(path_str);
-                let resolved = if candidate.is_absolute() {
-                    candidate.to_path_buf()
-                } else {
-                    std::path::Path::new(&configured).join(candidate)
-                };
+                let path_str = call
+                    .params
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".");
                 sail_guardian::Capability::Filesystem(sail_guardian::FsCapability::Read {
-                    path: resolved,
+                    path: std::path::PathBuf::from(path_str),
                 })
             }
             "fs:write" => {
-                let path_str = call.params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-                let configured = std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into());
-                let candidate = std::path::Path::new(path_str);
-                let resolved = if candidate.is_absolute() {
-                    candidate.to_path_buf()
-                } else {
-                    std::path::Path::new(&configured).join(candidate)
-                };
-                sail_guardian::Capability::Filesystem(sail_guardian::FsCapability::Write {
-                    path: resolved,
-                })
+                sail_guardian::capability::bound_tool_invocation("fs:write", &call.params)
             }
-            "vision:frame" => sail_guardian::Capability::Device(sail_guardian::DeviceCapability::Camera),
-            cmd => sail_guardian::Capability::Tool(sail_guardian::ToolCapability::KernelTool(cmd.to_string())),
+            "vision:frame" => {
+                sail_guardian::capability::bound_tool_invocation("vision:frame", &call.params)
+            }
+            cmd => sail_guardian::Capability::Tool(sail_guardian::ToolCapability::KernelTool(
+                cmd.to_string(),
+            )),
         }
     }
 
@@ -80,6 +75,14 @@ impl LocalKernelToolBroker {
         caller: sail_common::types::SubsystemId,
         call: &KernelToolCall,
         token: Option<uuid::Uuid>,
+    ) -> KernelToolResult {
+        Self::execute_guarded_for(caller, call, token, None)
+    }
+    pub fn execute_guarded_for(
+        caller: sail_common::types::SubsystemId,
+        call: &KernelToolCall,
+        token: Option<uuid::Uuid>,
+        correlation: Option<uuid::Uuid>,
     ) -> KernelToolResult {
         let broker = match sail_guardian::global_broker() {
             Ok(b) => b,
@@ -96,26 +99,40 @@ impl LocalKernelToolBroker {
         };
 
         let cap = Self::tool_to_capability(call);
-        match broker.authorize_and_execute(caller, cap, token, None, || Self::execute_raw(call)) {
+        let execution = if call.tool == "fs:query" || call.tool == "fs:read" {
+            let path = call
+                .params
+                .get("path")
+                .and_then(|value| value.as_str())
+                .unwrap_or(".");
+            broker.authorize_read(caller, Path::new(path), token, correlation, |file| {
+                if call.tool == "fs:read" {
+                    Self::tool_fs_read(file)
+                } else {
+                    Self::tool_fs_query(file)
+                }
+            })
+        } else {
+            broker
+                .authorize_and_execute(caller, cap, token, correlation, || Self::execute_raw(call))
+        };
+        match execution {
             Ok(res) => res,
             Err(denied) => {
-                if let sail_guardian::ExecutionDenied::ApprovalRequired { session_id, rationale } = &denied {
-                    return KernelToolResult {
-                        tool: call.tool.clone(),
-                        success: false,
-                        output: serde_json::json!({
-                            "error": format!("Execution requires user approval: {rationale}"),
-                            "error_code": "permission_denied",
-                            "approval_required": true,
-                            "session_id": session_id.to_string(),
-                            "rationale": rationale,
-                            "tool": call.tool,
-                            "params": call.params,
-                            "workspace_root": std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into()),
-                            "denied": true,
-                        }),
-                    };
-                }
+                let approval_session = match &denied {
+                    sail_guardian::ExecutionDenied::ApprovalRequired { session_id, .. } => {
+                        Some(*session_id)
+                    }
+                    _ => None,
+                };
+                let approval_action = if approval_session.is_some()
+                    && ["proc:list", "fs:query"].contains(&call.tool.as_str())
+                    && serde_json::to_vec(&call.params).is_ok_and(|bytes| bytes.len() <= 8192)
+                {
+                    Some(serde_json::json!({"tool":call.tool,"params":call.params}))
+                } else {
+                    None
+                };
                 let error_code = match &denied {
                     sail_guardian::ExecutionDenied::SandboxViolation(
                         sail_guardian::SandboxViolation::PathEscapesRoot { .. }
@@ -136,6 +153,10 @@ impl LocalKernelToolBroker {
                         "error_code": error_code,
                         "workspace_root": std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into()),
                         "denied": true,
+                        "approval_session":approval_session,
+                        "approval_required":approval_session.is_some(),
+                        "session_id":approval_session,
+                        "approval_action":approval_action,
                     }),
                 }
             }
@@ -147,13 +168,36 @@ impl LocalKernelToolBroker {
         Self::execute_guarded(sail_common::types::SubsystemId::Dialogue, call, None)
     }
 
+    /// Crate-internal adapter entry; the scheduler already consumed the exact
+    /// invocation grant. Filesystem effects still operate on confined descriptors.
+    pub(crate) fn execute_scheduled(call: &KernelToolCall) -> KernelToolResult {
+        if call.tool == "fs:query" || call.tool == "fs:read" {
+            let path = call.params["path"].as_str().unwrap_or(".");
+            return match sail_guardian::global_broker().and_then(|broker| {
+                broker
+                    .sandbox()
+                    .open_read(Path::new(path))
+                    .map_err(Into::into)
+            }) {
+                Ok(file) => {
+                    if call.tool == "fs:read" {
+                        Self::tool_fs_read(file)
+                    } else {
+                        Self::tool_fs_query(file)
+                    }
+                }
+                Err(error) => Self::error("fs:query", &error.to_string()),
+            };
+        }
+        Self::execute_raw(call)
+    }
     /// Internal raw execution: only invoked by GuardianExecutionBroker after authorization
-    pub fn execute_raw(call: &KernelToolCall) -> KernelToolResult {
+    fn execute_raw(call: &KernelToolCall) -> KernelToolResult {
         match call.tool.as_str() {
             "os:status" => Self::tool_os_status(),
             "proc:list" => Self::tool_proc_list(&call.params),
-            "fs:query" => Self::tool_fs_query(&call.params),
-            "fs:read" => Self::tool_fs_read(&call.params),
+            "fs:query" => Self::error("fs:query", "Descriptor access required"),
+            "fs:read" => Self::error("fs:read", "Descriptor access required"),
             "fs:write" => Self::tool_fs_write(&call.params),
             "vision:frame" => Self::tool_vision_frame(&call.params),
             "forge:enqueue" => Self::tool_forge_enqueue(&call.params),
@@ -277,70 +321,28 @@ impl LocalKernelToolBroker {
     }
 
     /// fs:query — Query local file system paths, directory entries, sizes
-    fn tool_fs_query(params: &serde_json::Value) -> KernelToolResult {
-        let requested = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let configured = std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into());
-        let root = match fs::canonicalize(&configured) {
-            Ok(p) => p,
-            Err(e) => {
-                return KernelToolResult {
-                    tool: "fs:query".into(),
-                    success: false,
-                    output: serde_json::json!({"error":"The configured workspace root is unavailable","error_code":"invalid_workspace_root","workspace_root":configured,"detail":e.to_string()}),
-                };
-            }
-        };
-        let candidate = Path::new(requested);
-        let candidate = if candidate.is_absolute() {
-            candidate.to_path_buf()
-        } else {
-            root.join(candidate)
-        };
-        let failure = |code: &str, message: String| KernelToolResult {
-            tool: "fs:query".into(),
-            success: false,
-            output: serde_json::json!({"error":message,"error_code":code,"requested_path":requested,"workspace_root":root,"hint":"Use a workspace-relative path, such as . or README.md. Do not retry an outside path."}),
-        };
-        let path = match fs::canonicalize(&candidate) {
-            Ok(p) => p,
-            Err(e) => {
-                return failure(
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        "not_found"
-                    } else {
-                        "path_unavailable"
-                    },
-                    format!("Cannot resolve requested path: {e}"),
+    fn tool_fs_query(file: sail_guardian::confined::ConfinedFile) -> KernelToolResult {
+        let result = (|| -> std::io::Result<serde_json::Value> {
+            let metadata = file.metadata()?;
+            if metadata.is_file() {
+                return Ok(
+                    serde_json::json!({"type":"file","path":file.path(),"size_bytes":metadata.len()}),
                 );
             }
-        };
-        if !path.starts_with(&root) {
-            return failure(
-                "outside_workspace",
-                "Path is outside the authorized workspace".into(),
-            );
-        }
-        tracing::debug!(requested_path=requested,resolved_path=%path.display(),workspace_root=%root.display(),"Filesystem query passed workspace boundary check");
-        let metadata = match fs::metadata(&path) {
-            Ok(m) => m,
-            Err(e) => return failure("metadata_unavailable", e.to_string()),
-        };
-        if metadata.is_file() {
-            return KernelToolResult {
+            let entries: Vec<_> = file
+                .entries(20)?
+                .into_iter()
+                .map(|(name, is_dir)| serde_json::json!({"name":name,"is_dir":is_dir}))
+                .collect();
+            Ok(serde_json::json!({"type":"directory","path":file.path(),"entries":entries}))
+        })();
+        match result {
+            Ok(output) => KernelToolResult {
                 tool: "fs:query".into(),
                 success: true,
-                output: serde_json::json!({"type":"file","path":path,"size_bytes":metadata.len()}),
-            };
-        }
-        let directory = match fs::read_dir(&path) {
-            Ok(d) => d,
-            Err(e) => return failure("directory_unavailable", e.to_string()),
-        };
-        let entries:Vec<_>=directory.filter_map(|entry|entry.ok()).take(20).map(|entry|serde_json::json!({"name":entry.file_name().to_string_lossy(),"is_dir":entry.file_type().is_ok_and(|t|t.is_dir())})).collect();
-        KernelToolResult {
-            tool: "fs:query".into(),
-            success: true,
-            output: serde_json::json!({"type":"directory","path":path,"entries":entries}),
+                output,
+            },
+            Err(error) => Self::error("fs:query", &error.to_string()),
         }
     }
 
@@ -390,97 +392,37 @@ impl LocalKernelToolBroker {
     }
 
     /// fs:read — Read the text contents of a file within the authorized workspace
-    fn tool_fs_read(params: &serde_json::Value) -> KernelToolResult {
-        let requested = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let configured = std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into());
-        let root = match fs::canonicalize(&configured) {
-            Ok(p) => p,
-            Err(e) => {
-                return Self::error("fs:read", &format!("Configured workspace root unavailable: {e}"));
-            }
-        };
-        let candidate = Path::new(requested);
-        let candidate = if candidate.is_absolute() {
-            candidate.to_path_buf()
-        } else {
-            root.join(candidate)
-        };
-        let path = match fs::canonicalize(&candidate) {
-            Ok(p) => p,
-            Err(e) => {
-                return Self::error("fs:read", &format!("Cannot resolve path: {e}"));
-            }
-        };
-        if !path.starts_with(&root) {
-            return Self::error("fs:read", "Path is outside the authorized workspace");
-        }
-        match fs::read_to_string(&path) {
-            Ok(content) => KernelToolResult {
-                tool: "fs:read".into(),
-                success: true,
-                output: serde_json::json!({
-                    "path": path.display().to_string(),
-                    "content": content,
-                    "bytes": content.len(),
-                }),
+    fn tool_fs_read(file: sail_guardian::confined::ConfinedFile) -> KernelToolResult {
+        match file.read_limited(65536) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(content) => KernelToolResult {
+                    tool: "fs:read".into(),
+                    success: true,
+                    output: serde_json::json!({"path":file.path(),"content":content}),
+                },
+                Err(_) => Self::error("fs:read", "File is not UTF-8 text"),
             },
-            Err(e) => Self::error("fs:read", &format!("Failed to read file: {e}")),
+            Err(error) => Self::error("fs:read", &error.to_string()),
         }
     }
-
     /// fs:write — Create or overwrite a file within the authorized workspace
     fn tool_fs_write(params: &serde_json::Value) -> KernelToolResult {
-        let requested = params.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        if requested.is_empty() {
-            return Self::error("fs:write", "Missing path parameter");
-        }
-        let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        let configured = std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into());
-        let root = match fs::canonicalize(&configured) {
-            Ok(p) => p,
-            Err(e) => {
-                return Self::error("fs:write", &format!("Configured workspace root unavailable: {e}"));
-            }
-        };
-        let candidate = Path::new(requested);
-        let target = if candidate.is_absolute() {
-            candidate.to_path_buf()
-        } else {
-            root.join(candidate)
-        };
-        let target_norm = if let Ok(canon) = fs::canonicalize(&target) {
-            canon
-        } else if let Some(parent) = target.parent() {
-            if let Ok(canon_parent) = fs::canonicalize(parent) {
-                canon_parent.join(target.file_name().unwrap_or_default())
-            } else {
-                target.clone()
-            }
-        } else {
-            target.clone()
-        };
-        if !target_norm.starts_with(&root) {
-            return Self::error("fs:write", "Target path is outside the authorized workspace");
-        }
-        if let Some(parent) = target_norm.parent()
-            && let Err(e) = fs::create_dir_all(parent)
-        {
-            return Self::error("fs:write", &format!("Failed to create parent directory: {e}"));
-        }
-        match fs::write(&target_norm, content) {
-            Ok(()) => KernelToolResult {
+        let path = Path::new(params["path"].as_str().unwrap_or(""));
+        let content = params["content"].as_str().unwrap_or("");
+        match sail_guardian::global_broker().and_then(|broker| {
+            broker
+                .sandbox()
+                .write_file(path, content.as_bytes())
+                .map_err(Into::into)
+        }) {
+            Ok(bytes) => KernelToolResult {
                 tool: "fs:write".into(),
                 success: true,
-                output: serde_json::json!({
-                    "path": target_norm.display().to_string(),
-                    "bytes_written": content.len(),
-                    "success": true,
-                }),
+                output: serde_json::json!({"path":path,"bytes_written":bytes}),
             },
-            Err(e) => Self::error("fs:write", &format!("Failed to write file: {e}")),
+            Err(error) => Self::error("fs:write", &error.to_string()),
         }
     }
-
     /// forge:enqueue — Enqueue an issue or task for autonomous resolution in Forge
     fn tool_forge_enqueue(params: &serde_json::Value) -> KernelToolResult {
         let orch = match sail_forge::global_orchestrator() {
@@ -492,7 +434,8 @@ impl LocalKernelToolBroker {
             .and_then(|v| v.as_u64())
             .or_else(|| {
                 params.get("issue").and_then(|v| {
-                    v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                    v.as_u64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
                 })
             })
             .unwrap_or_else(|| {
@@ -542,7 +485,10 @@ impl LocalKernelToolBroker {
                     "message": format!("Forge job {job_id} enqueued for issue #{issue_num}. Running autonomous resolution loop in background worktree."),
                 }),
             },
-            Err(e) => Self::error("forge:enqueue", &format!("Failed to enqueue Forge job: {e}")),
+            Err(e) => Self::error(
+                "forge:enqueue",
+                &format!("Failed to enqueue Forge job: {e}"),
+            ),
         }
     }
 
@@ -593,7 +539,10 @@ impl LocalKernelToolBroker {
             Err(e) => return Self::error("forge:cancel", &e),
         };
         let job_id = params.get("job_id").and_then(|v| v.as_str()).unwrap_or("");
-        let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("User requested cancellation");
+        let reason = params
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("User requested cancellation");
         match orch.cancel_job(job_id, reason) {
             Ok(()) => KernelToolResult {
                 tool: "forge:cancel".into(),
@@ -608,26 +557,138 @@ impl LocalKernelToolBroker {
         }
     }
 
-    /// github:issues — Fetch recent open issues from GitHub CLI
+    /// Extracts priority rank (0=P0, 1=P1, 2=P2, 3=P3, 4=P4, 99=unspecified) and label.
+    pub fn extract_issue_priority(title: &str, labels: &[serde_json::Value]) -> (u8, &'static str) {
+        let upper_title = title.to_ascii_uppercase();
+        for (rank, label) in [
+            (0u8, "P0"),
+            (1u8, "P1"),
+            (2u8, "P2"),
+            (3u8, "P3"),
+            (4u8, "P4"),
+        ] {
+            let patterns = [
+                format!("[{label}"),
+                format!("({label}"),
+                format!("{label}:"),
+                format!("{label} ·"),
+                format!("· {label}"),
+                format!(" {label} "),
+                format!("{label}]"),
+                format!("{label})"),
+            ];
+            if patterns.iter().any(|pat| upper_title.contains(pat)) {
+                return (rank, label);
+            }
+        }
+
+        for l in labels {
+            if let Some(name) = l.get("name").and_then(|v| v.as_str()) {
+                let upper_name = name.to_ascii_uppercase();
+                if upper_name.contains("P0")
+                    || upper_name.contains("CRITICAL")
+                    || upper_name.contains("BLOCKER")
+                {
+                    return (0, "P0");
+                }
+                if upper_name.contains("P1") || upper_name.contains("URGENT") {
+                    return (1, "P1");
+                }
+                if upper_name.contains("P2") {
+                    return (2, "P2");
+                }
+                if upper_name.contains("P3") {
+                    return (3, "P3");
+                }
+                if upper_name.contains("P4") {
+                    return (4, "P4");
+                }
+            }
+        }
+
+        (99, "P?")
+    }
+
+    /// github:issues — Fetch open issues from GitHub CLI sorted by priority (P0 -> P1 -> P2 -> P3 -> P4)
     fn tool_github_issues(params: &serde_json::Value) -> KernelToolResult {
         let limit = params
             .get("limit")
             .and_then(|v| v.as_u64())
             .unwrap_or(15)
-            .clamp(1, 50);
+            .clamp(1, 50) as usize;
+        let priority_filter = params
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_ascii_uppercase());
+
+        // Fetch a broad pool of open issues (up to 100) so high-priority issues aren't missed
         let output = std::process::Command::new("gh")
-            .args(["issue", "list", "--json", "number,title,state,labels", "--limit", &limit.to_string()])
+            .args([
+                "issue",
+                "list",
+                "--state",
+                "open",
+                "--json",
+                "number,title,state,labels",
+                "--limit",
+                "100",
+            ])
             .output();
+
         match output {
             Ok(out) if out.status.success() => {
-                if let Ok(issues) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                    let count = issues.as_array().map(|a| a.len()).unwrap_or(0);
+                if let Ok(raw_issues) =
+                    serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout)
+                {
+                    let mut scored_issues: Vec<(u8, i64, serde_json::Value)> = raw_issues
+                        .into_iter()
+                        .filter_map(|mut item| {
+                            let title = item
+                                .get("title")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default();
+                            let empty_vec = Vec::new();
+                            let labels = item
+                                .get("labels")
+                                .and_then(|v| v.as_array())
+                                .unwrap_or(&empty_vec);
+                            let (rank, prio_label) = Self::extract_issue_priority(title, labels);
+
+                            if let Some(ref filter) = priority_filter
+                                && prio_label != filter
+                                && format!("P{rank}") != *filter
+                            {
+                                return None;
+                            }
+
+                            if let Some(obj) = item.as_object_mut() {
+                                obj.insert("priority".into(), serde_json::json!(prio_label));
+                                obj.insert("priority_rank".into(), serde_json::json!(rank));
+                            }
+
+                            let number = item.get("number").and_then(|v| v.as_i64()).unwrap_or(0);
+                            // Sort by priority_rank ascending, then by issue number descending
+                            Some((rank, -number, item))
+                        })
+                        .collect();
+
+                    scored_issues.sort_by_key(|a| (a.0, a.1));
+
+                    let total_found = scored_issues.len();
+                    let final_issues: Vec<serde_json::Value> = scored_issues
+                        .into_iter()
+                        .take(limit)
+                        .map(|(_, _, item)| item)
+                        .collect();
+
                     KernelToolResult {
                         tool: "github:issues".into(),
                         success: true,
                         output: serde_json::json!({
-                            "count": count,
-                            "issues": issues,
+                            "count": final_issues.len(),
+                            "total_matched": total_found,
+                            "sorted_by": "priority",
+                            "issues": final_issues,
                         }),
                     }
                 } else {
@@ -684,17 +745,12 @@ impl VoiceVlm {
         allow_tools: bool,
         tx: tokio::sync::mpsc::Sender<String>,
     ) -> Result<serde_json::Value> {
-        self.runner
-            .stream_chat(
-                messages,
-                if allow_tools {
-                    tool_definitions()
-                } else {
-                    serde_json::json!([])
-                },
-                tx,
-            )
-            .await
+        let tools = if allow_tools {
+            selected_tool_definitions(&messages)
+        } else {
+            serde_json::json!([])
+        };
+        self.runner.stream_chat(messages, tools, tx).await
     }
 
     pub async fn reason_and_route(
@@ -715,14 +771,61 @@ impl VoiceVlm {
         Ok(result?["content"].as_str().unwrap_or_default().into())
     }
 }
+/// Keep the model service's schema and byte budget bounded as tool packs grow.
+pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::Value {
+    let query = messages
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "user")
+        .map(|m| m["content"].to_string().to_lowercase())
+        .unwrap_or_default();
+    let words: Vec<_> = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 2)
+        .collect();
+    let all = tool_definitions();
+    let mut ranked: Vec<_> = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(i, tool)| {
+            let text = format!(
+                "{} {}",
+                tool["function"]["name"], tool["function"]["description"]
+            )
+            .to_lowercase();
+            (
+                words.iter().filter(|word| text.contains(**word)).count(),
+                i,
+                tool.clone(),
+            )
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut bytes = 2;
+    let mut selected = Vec::new();
+    for (_, _, tool) in ranked {
+        let size = tool.to_string().len() + 1;
+        if selected.len() < 8 && bytes + size <= 16384 {
+            bytes += size;
+            selected.push(tool);
+        }
+    }
+    serde_json::Value::Array(selected)
+}
 pub fn tool_definitions() -> serde_json::Value {
     serde_json::json!([
         {"type":"function","function":{"name":"os_status","description":"Read local OS memory, uptime and load","parameters":{"type":"object","properties":{}}}},
         {"type":"function","function":{"name":"proc_list","description":"List local processes","parameters":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":100}}}}},
         {"type":"function","function":{"name":"fs_query","description":"Inspect a file or directory inside the authorized workspace. Use relative paths; dot (.) means the workspace root. Never probe outside paths or retry a denied query.","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}},
+        {"type":"function","function":{"name":"canvas_publish","description":"Display a diagram or structured visual beside the conversation","parameters":{"type":"object","properties":{"artifact_type":{"type":"string","enum":["mermaid","json","svg"]},"content":{"type":"string","maxLength":32700}},"required":["artifact_type","content"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"local_time","description":"Read the current local device UTC clock","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
+        {"type":"function","function":{"name":"command_execute","description":"Execute a command in the isolated no-network runner after exact owner approval. Never host shell execution. Runner may be unavailable.","parameters":{"type":"object","properties":{"executable":{"type":"string","maxLength":4096},"argv":{"type":"array","maxItems":128,"items":{"type":"string","maxLength":8192}}},"required":["executable","argv"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}},
         {"type":"function","function":{"name":"fs_read","description":"Read text contents of a file inside the authorized workspace.","parameters":{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Relative path to the file in the workspace"}}}}},
         {"type":"function","function":{"name":"fs_write","description":"Create or write a file inside the authorized workspace. Requires explicit user approval.","parameters":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string","description":"Relative path to write"},"content":{"type":"string","description":"File content to write"}}}}},
-        {"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}},
+        {"type":"function","function":{"name":"github_issues","description":"Retrieve open GitHub issues ordered by P0 to P4 priority, with optional priority filtering","parameters":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50},"priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}},"additionalProperties":false}}},
         {"type":"function","function":{"name":"forge_enqueue","description":"Enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting.","parameters":{"type":"object","properties":{"issue_number":{"type":"integer","description":"GitHub issue number to solve"},"repo":{"type":"string","description":"Repository name, defaults to PedroVictorCoding/SAIL"},"task":{"type":"string","description":"Optional description or instructions for the task"}}}}},
         {"type":"function","function":{"name":"forge_status","description":"Check the status, current step, test outcome, and diff of a Forge autonomous coding job.","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID returned from forge_enqueue"}}}}}
     ])
@@ -777,4 +880,23 @@ pub fn raw_vision_frame(frame: &VisionFrameInput) -> Result<VisionFrameInput> {
         format: "rgb".into(),
         data: image.into_rgb8().into_raw(),
     })
+}
+
+#[cfg(test)]
+mod schema_selection_tests {
+    #[test]
+    fn selection_keeps_forge_tools_within_mind_limits() {
+        let tools = super::selected_tool_definitions(&[
+            serde_json::json!({"role":"user","content":"Enqueue Forge to solve GitHub issue 90"}),
+        ]);
+        assert!(tools.as_array().unwrap().len() <= 8);
+        assert!(tools.to_string().len() <= 16384);
+        assert!(
+            tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["function"]["name"] == "forge_enqueue")
+        );
+    }
 }

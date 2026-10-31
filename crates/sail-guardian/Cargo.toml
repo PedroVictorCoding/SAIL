@@ -17,5 +17,4 @@ uuid.workspace = true
 chrono.workspace = true
 ring.workspace = true
 libc = "0.2"
-zeroize = { version = "1.8", features = ["derive", "zeroize_derive"] }
-
+zeroize = { version = "1.8", features = ["derive", "zeroize_derive", "serde"] }

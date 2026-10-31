@@ -82,16 +82,18 @@ impl ToolLoopGuard {
     fn key(name: &str, params: &Value) -> String {
         let canonical = sail_agents::authorize_voice_operation(name).unwrap_or(name);
         let normalized = match canonical {
-            "fs:query" | "fs:read" | "fs:write" => {
+            "fs:query" | "fs:read" => {
                 json!({"path":params.get("path").and_then(Value::as_str).unwrap_or(".")})
             }
             "proc:list" => {
                 json!({"limit":params.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1,100)})
             }
             "os:status" | "vision:frame" | "forge:list" => json!({}),
-            "forge:enqueue" => json!({"issue":params.get("issue_number")}),
+            "forge:enqueue" | "fs:write" => params.clone(),
             "forge:status" | "forge:cancel" => json!({"job_id":params.get("job_id")}),
-            "github:issues" => json!({"limit":params.get("limit")}),
+            "github:issues" => {
+                json!({"limit":params.get("limit"),"priority":params.get("priority")})
+            }
             _ => params.clone(),
         };
         format!("{canonical}:{normalized}")
@@ -200,7 +202,7 @@ pub fn tool_status_summary(messages: &[Value]) -> String {
                     output["count"].as_u64().unwrap_or(0)
                 ),
                 "github:issues" => format!(
-                    "{tool}: retrieved {} open GitHub issues.",
+                    "{tool}: retrieved {} open GitHub issues sorted by priority.",
                     output["count"].as_u64().unwrap_or(0)
                 ),
                 _ => format!("{tool}: operation completed."),

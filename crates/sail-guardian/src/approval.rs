@@ -1,11 +1,9 @@
-use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
-use uuid::Uuid;
-
 use crate::capability::{Capability, DeviceCapability, RiskLevel};
+use chrono::{DateTime, Duration, Utc};
 use sail_common::types::SubsystemId;
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Mutex};
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ApprovalError {
@@ -13,35 +11,55 @@ pub enum ApprovalError {
     NotFound(Uuid),
     #[error("Approval session {0} expired")]
     Expired(Uuid),
-    #[error("Approval session was explicitly denied by user")]
+    #[error("Approval explicitly denied")]
     Denied,
-    #[error("Approval session was revoked")]
+    #[error("Approval session revoked")]
     Revoked,
-    #[error("Resolver {0:?} is not authorized to resolve user approvals (untrusted client)")]
-    UnauthorizedResolver(SubsystemId),
-    #[error("Device {0:?} is not active or consent missing")]
-    DeviceConsentMissing(DeviceCapability),
+    #[error("Approval capacity exhausted")]
+    Capacity,
 }
-
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TokenConsumptionError {
     #[error("Capability token {0} not found")]
     TokenNotFound(Uuid),
-    #[error("Capability token {0} has expired")]
+    #[error("Capability token {0} expired")]
     Expired(Uuid),
-    #[error("Capability token {0} was revoked")]
+    #[error("Capability token {0} revoked")]
     Revoked(Uuid),
-    #[error("Capability token {0} was already consumed (replay detected)")]
+    #[error("Capability token {0} already consumed")]
     TokenReplayed(Uuid),
-    #[error("Caller {actual:?} does not match token bound actor {expected:?}")]
+    #[error("Caller {actual:?} does not match actor {expected:?}")]
     ActorMismatch {
         actual: SubsystemId,
         expected: SubsystemId,
     },
-    #[error("Requested capability does not match token bound capability")]
+    #[error("Capability parameters do not match approval")]
     CapabilityMismatch,
+    #[error("Task/session correlation does not match approval")]
+    CorrelationMismatch,
 }
-
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalSession {
+    pub session_id: Uuid,
+    pub requester: SubsystemId,
+    pub capability: Capability,
+    pub risk_level: RiskLevel,
+    pub rationale: String,
+    pub correlation_id: Option<Uuid>,
+    pub requested_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilityToken {
+    pub token_id: Uuid,
+    pub session_id: Uuid,
+    pub bound_actor: SubsystemId,
+    pub bound_capability: Capability,
+    pub correlation_id: Option<Uuid>,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub single_use: bool,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActiveDeviceIndicator {
     pub session_id: Uuid,
@@ -50,251 +68,177 @@ pub struct ActiveDeviceIndicator {
     pub started_at: DateTime<Utc>,
     pub is_active: bool,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ApprovalSession {
-    pub session_id: Uuid,
-    pub correlation_id: Option<Uuid>,
-    pub requester: SubsystemId,
-    pub capability: Capability,
-    pub risk_level: RiskLevel,
-    pub rationale: String,
-    pub resource: Option<String>,
-    pub requested_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
+#[derive(Clone, Copy)]
+enum TokenState {
+    Ready,
+    Consumed,
+    Revoked,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CapabilityToken {
-    pub token_id: Uuid,
-    pub session_id: Uuid,
-    pub correlation_id: Option<Uuid>,
-    pub bound_actor: SubsystemId,
-    pub bound_capability: Capability,
-    pub bound_resource: Option<String>,
-    pub issued_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub single_use: bool,
-}
-
 #[derive(Default)]
-struct ApprovalState {
+struct State {
     pending: HashMap<Uuid, ApprovalSession>,
-    tokens: HashMap<Uuid, CapabilityToken>,
-    consumed_tokens: HashSet<Uuid>,
-    revoked_sessions: HashSet<Uuid>,
-    revoked_tokens: HashSet<Uuid>,
+    tokens: HashMap<Uuid, (CapabilityToken, TokenState)>,
     active_devices: HashMap<DeviceCapability, ActiveDeviceIndicator>,
 }
-
+/// Trusted in-process authority. Network/event clients must authenticate before
+/// calling resolve_session. Approval events alone can never mint authority.
+#[derive(Default)]
 pub struct ApprovalBroker {
-    // One lock linearizes issuance, revocation, device indicators, and consumption.
-    state: RwLock<ApprovalState>,
-    timeout_duration: Duration,
-    token_ttl: Duration,
+    state: Mutex<State>,
 }
-
 impl ApprovalBroker {
     pub fn new() -> Self {
-        Self {
-            state: RwLock::new(ApprovalState::default()),
-            timeout_duration: Duration::seconds(60),
-            token_ttl: Duration::seconds(60),
-        }
+        Self::default()
     }
-
-    /// Checks if a subsystem identity is authorized to resolve interactive user approvals.
-    /// Only trusted interactive host UI / Core daemon is permitted. Untrusted agents are rejected.
-    pub fn is_authorized_approval_source(source: SubsystemId) -> bool {
-        matches!(source, SubsystemId::Core)
-    }
-
-    /// Register a new interactive approval session for high/critical risk operations
     pub fn create_session(
         &self,
         requester: SubsystemId,
         capability: Capability,
         rationale: impl Into<String>,
     ) -> ApprovalSession {
-        self.create_session_with_details(requester, capability, rationale, None, None)
+        self.create_session_for(None, requester, capability, rationale)
     }
-
-    /// Register an approval session with explicit resource and correlation IDs
-    pub fn create_session_with_details(
+    pub fn create_session_for(
         &self,
+        correlation_id: Option<Uuid>,
         requester: SubsystemId,
         capability: Capability,
         rationale: impl Into<String>,
-        resource: Option<String>,
-        correlation_id: Option<Uuid>,
     ) -> ApprovalSession {
-        let session_id = Uuid::new_v4();
         let now = Utc::now();
         let session = ApprovalSession {
-            session_id,
-            correlation_id,
+            session_id: Uuid::new_v4(),
             requester,
             risk_level: capability.risk_level(),
             capability,
             rationale: rationale.into(),
-            resource,
+            correlation_id,
             requested_at: now,
-            expires_at: now + self.timeout_duration,
+            expires_at: now + Duration::seconds(60),
         };
-
-        let mut state = self.state.write().unwrap();
-        state.pending.insert(session_id, session.clone());
+        let mut state = self.state.lock().unwrap();
+        state.pending.retain(|_, s| s.expires_at > now);
+        state.tokens.retain(|_, (t, _)| t.expires_at > now);
+        if state.pending.len() >= 1024 {
+            if let Some(oldest) = state
+                .pending
+                .values()
+                .min_by_key(|s| s.requested_at)
+                .map(|s| s.session_id)
+            {
+                state.pending.remove(&oldest);
+            }
+        }
+        state.pending.insert(session.session_id, session.clone());
         session
     }
-
-    /// Authenticated session resolution: ensures only authorized UI/admin clients can approve
-    pub fn resolve_session_authenticated(
-        &self,
-        session_id: Uuid,
-        approved: bool,
-        resolver: SubsystemId,
-    ) -> Result<CapabilityToken, ApprovalError> {
-        if !Self::is_authorized_approval_source(resolver) {
-            return Err(ApprovalError::UnauthorizedResolver(resolver));
-        }
-        self.resolve_session_internal(session_id, approved)
-    }
-
-    /// Resolve an approval session (defaults to internal/Core resolver)
     pub fn resolve_session(
         &self,
-        session_id: Uuid,
+        id: Uuid,
         approved: bool,
     ) -> Result<CapabilityToken, ApprovalError> {
-        self.resolve_session_internal(session_id, approved)
-    }
-
-    fn resolve_session_internal(
-        &self,
-        session_id: Uuid,
-        approved: bool,
-    ) -> Result<CapabilityToken, ApprovalError> {
-        let mut state = self.state.write().unwrap();
-        if state.revoked_sessions.contains(&session_id) {
-            return Err(ApprovalError::Revoked);
-        }
+        let mut state = self.state.lock().unwrap();
         let session = state
             .pending
-            .remove(&session_id)
-            .ok_or(ApprovalError::NotFound(session_id))?;
-
+            .remove(&id)
+            .ok_or(ApprovalError::NotFound(id))?;
         let now = Utc::now();
         if now >= session.expires_at {
-            return Err(ApprovalError::Expired(session_id));
+            return Err(ApprovalError::Expired(id));
         }
-
         if !approved {
             return Err(ApprovalError::Denied);
         }
-
-        let token_id = Uuid::new_v4();
+        state.tokens.retain(|_, (t, _)| t.expires_at > now);
+        if state.tokens.len() >= 4096 {
+            return Err(ApprovalError::Capacity);
+        }
         let token = CapabilityToken {
-            token_id,
-            session_id,
-            correlation_id: session.correlation_id,
+            token_id: Uuid::new_v4(),
+            session_id: id,
             bound_actor: session.requester,
             bound_capability: session.capability,
-            bound_resource: session.resource,
+            correlation_id: session.correlation_id,
             issued_at: now,
-            expires_at: now + self.token_ttl,
+            expires_at: now + Duration::seconds(60),
             single_use: true,
         };
-
-        state.tokens.insert(token_id, token.clone());
-
+        state
+            .tokens
+            .insert(token.token_id, (token.clone(), TokenState::Ready));
         Ok(token)
     }
-
-    /// Atomically consume a capability token at the tool execution boundary.
-    /// Guarantees single-use replay protection, bounds validation, actor verification, and expiry checking.
     pub fn consume_token(
         &self,
-        token_id: Uuid,
-        requester: SubsystemId,
-        target_cap: &Capability,
+        id: Uuid,
+        actor: SubsystemId,
+        capability: &Capability,
     ) -> Result<CapabilityToken, TokenConsumptionError> {
-        let mut state = self.state.write().unwrap();
-        if state.revoked_tokens.contains(&token_id) {
-            return Err(TokenConsumptionError::Revoked(token_id));
-        }
-        let token = state
+        self.consume_token_for(id, actor, capability, None)
+    }
+    pub fn consume_token_for(
+        &self,
+        id: Uuid,
+        actor: SubsystemId,
+        capability: &Capability,
+        correlation_id: Option<Uuid>,
+    ) -> Result<CapabilityToken, TokenConsumptionError> {
+        let mut state = self.state.lock().unwrap();
+        let (token, status) = state
             .tokens
-            .get(&token_id)
-            .cloned()
-            .ok_or(TokenConsumptionError::TokenNotFound(token_id))?;
-        if state.revoked_sessions.contains(&token.session_id) {
-            return Err(TokenConsumptionError::Revoked(token_id));
-        }
-        if state.consumed_tokens.contains(&token_id) {
-            return Err(TokenConsumptionError::TokenReplayed(token_id));
+            .get_mut(&id)
+            .ok_or(TokenConsumptionError::TokenNotFound(id))?;
+        match status {
+            TokenState::Revoked => return Err(TokenConsumptionError::Revoked(id)),
+            TokenState::Consumed => return Err(TokenConsumptionError::TokenReplayed(id)),
+            TokenState::Ready => {}
         }
         if Utc::now() >= token.expires_at {
-            return Err(TokenConsumptionError::Expired(token_id));
+            return Err(TokenConsumptionError::Expired(id));
         }
-        if token.bound_actor != requester {
+        if token.bound_actor != actor {
             return Err(TokenConsumptionError::ActorMismatch {
-                actual: requester,
+                actual: actor,
                 expected: token.bound_actor,
             });
         }
-        if token.bound_capability != *target_cap {
+        if token.bound_capability != *capability {
             return Err(TokenConsumptionError::CapabilityMismatch);
         }
-
-        // Invalid attempts cannot burn another caller's grant or grow replay state.
-        state.consumed_tokens.insert(token_id);
-        Ok(token)
+        if token.correlation_id != correlation_id {
+            return Err(TokenConsumptionError::CorrelationMismatch);
+        }
+        *status = TokenState::Consumed;
+        Ok(token.clone())
     }
-
-    /// Revoke a grant. Consumption that linearizes after this call fails closed.
-    /// Already authorized work requires cancellation at its execution layer.
-    pub fn revoke_grant(&self, token_id: Uuid) {
-        self.state.write().unwrap().revoked_tokens.insert(token_id);
+    pub fn revoke_grant(&self, id: Uuid) {
+        if let Some((_, status)) = self.state.lock().unwrap().tokens.get_mut(&id) {
+            *status = TokenState::Revoked;
+        }
     }
-
-    /// Revoke a session atomically with issuance and consumption of its tokens.
-    pub fn revoke_session(&self, session_id: Uuid) {
-        let mut state = self.state.write().unwrap();
-        state.revoked_sessions.insert(session_id);
-        state.pending.remove(&session_id);
+    pub fn revoke_session(&self, id: Uuid) {
+        let mut state = self.state.lock().unwrap();
+        state.pending.remove(&id);
+        for (token, status) in state.tokens.values_mut() {
+            if token.session_id == id {
+                *status = TokenState::Revoked;
+            }
+        }
     }
-
-    pub fn is_revoked(&self, token_id: Uuid) -> bool {
-        let state = self.state.read().unwrap();
-        state.revoked_tokens.contains(&token_id)
-            || state
-                .tokens
-                .get(&token_id)
-                .is_some_and(|token| state.revoked_sessions.contains(&token.session_id))
+    pub fn is_revoked(&self, id: Uuid) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .tokens
+            .get(&id)
+            .is_some_and(|(_, s)| matches!(s, TokenState::Revoked))
     }
-
-    pub fn list_pending(&self) -> Vec<ApprovalSession> {
-        let state = self.state.read().unwrap();
-        let now = Utc::now();
-        state
-            .pending
-            .values()
-            .filter(|s| now < s.expires_at)
-            .cloned()
-            .collect()
-    }
-
-    // --------------------------------------------------------------------------------------------
-    // Camera & Microphone Hardware Indicators and Immediate Stop Semantics
-    // --------------------------------------------------------------------------------------------
-
-    /// Register an active hardware device stream (camera, microphone) with visible indicator.
+    /// Trusted execution-side lookup; never exposed over the event bus.
     pub fn register_device_activity(
         &self,
         device: DeviceCapability,
         actor: SubsystemId,
     ) -> Result<ActiveDeviceIndicator, ApprovalError> {
-        let mut state = self.state.write().unwrap();
         let indicator = ActiveDeviceIndicator {
             session_id: Uuid::new_v4(),
             device: device.clone(),
@@ -302,272 +246,80 @@ impl ApprovalBroker {
             started_at: Utc::now(),
             is_active: true,
         };
-        state.active_devices.insert(device, indicator.clone());
+        self.state
+            .lock()
+            .unwrap()
+            .active_devices
+            .insert(device, indicator.clone());
         Ok(indicator)
     }
-
-    /// Retrieve all currently active hardware device indicators (for UI display)
     pub fn active_device_indicators(&self) -> Vec<ActiveDeviceIndicator> {
-        let state = self.state.read().unwrap();
-        state.active_devices.values().filter(|i| i.is_active).cloned().collect()
+        self.state
+            .lock()
+            .unwrap()
+            .active_devices
+            .values()
+            .cloned()
+            .collect()
     }
-
-    /// Check if a hardware device has an active stream
     pub fn is_device_active(&self, device: DeviceCapability) -> bool {
-        let state = self.state.read().unwrap();
-        state.active_devices.get(&device).map(|i| i.is_active).unwrap_or(false)
+        self.state
+            .lock()
+            .unwrap()
+            .active_devices
+            .contains_key(&device)
     }
-
-    /// Immediate stop semantics: mark device inactive and revoke all tokens bound to it.
     pub fn stop_device(&self, device: DeviceCapability) {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.lock().unwrap();
         state.active_devices.remove(&device);
-
-        // Revoke any tokens issued for this device
-        let target_cap = Capability::Device(device);
-        let matching_tokens: Vec<Uuid> = state
-            .tokens
-            .values()
-            .filter(|t| t.bound_capability == target_cap)
-            .map(|t| t.token_id)
-            .collect();
-
-        for tid in matching_tokens {
-            state.revoked_tokens.insert(tid);
+        for (token, status) in state.tokens.values_mut() {
+            if token.bound_capability == Capability::Device(device.clone()) {
+                *status = TokenState::Revoked;
+            }
         }
+        state
+            .pending
+            .retain(|_, session| session.capability != Capability::Device(device.clone()));
     }
-
-    /// Emergency stop semantics: immediately halt all active hardware device streams and revoke grants.
     pub fn emergency_stop_all_devices(&self) {
-        let mut state = self.state.write().unwrap();
-        state.active_devices.clear();
-
-        let device_tokens: Vec<Uuid> = state
-            .tokens
+        for device in [
+            DeviceCapability::Camera,
+            DeviceCapability::Microphone,
+            DeviceCapability::Speaker,
+            DeviceCapability::Display,
+        ] {
+            self.stop_device(device);
+        }
+    }
+    pub fn resolved_token(&self, session: Uuid) -> Result<Option<Uuid>, ApprovalError> {
+        let state = self.state.lock().unwrap();
+        if let Some(pending) = state.pending.get(&session) {
+            return if pending.expires_at > Utc::now() {
+                Ok(None)
+            } else {
+                Err(ApprovalError::Expired(session))
+            };
+        }
+        for (token, status) in state.tokens.values() {
+            if token.session_id == session {
+                return match status {
+                    TokenState::Ready if token.expires_at > Utc::now() => Ok(Some(token.token_id)),
+                    TokenState::Revoked => Err(ApprovalError::Revoked),
+                    _ => Err(ApprovalError::Expired(session)),
+                };
+            }
+        }
+        Err(ApprovalError::Denied)
+    }
+    pub fn list_pending(&self) -> Vec<ApprovalSession> {
+        let now = Utc::now();
+        self.state
+            .lock()
+            .unwrap()
+            .pending
             .values()
-            .filter(|t| matches!(t.bound_capability, Capability::Device(_)))
-            .map(|t| t.token_id)
-            .collect();
-
-        for tid in device_tokens {
-            state.revoked_tokens.insert(tid);
-        }
-    }
-}
-
-impl Default for ApprovalBroker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::capability::ToolCapability;
-    use std::sync::{Arc, Barrier};
-    use std::thread;
-
-    fn capability() -> Capability {
-        Capability::Tool(ToolCapability::KernelTool("vision:frame".into()))
-    }
-
-    fn issue(broker: &ApprovalBroker) -> CapabilityToken {
-        let session = broker.create_session(SubsystemId::Bridge, capability(), "Capture frame");
-        broker.resolve_session(session.session_id, true).unwrap()
-    }
-
-    #[test]
-    fn invalid_attempts_do_not_consume_or_allocate_replay_entries() {
-        let broker = ApprovalBroker::new();
-        let token = issue(&broker);
-        assert!(matches!(
-            broker.consume_token(token.token_id, SubsystemId::Agents, &capability()),
-            Err(TokenConsumptionError::ActorMismatch { .. })
-        ));
-        let other = Capability::Tool(ToolCapability::KernelTool("other:action".into()));
-        assert_eq!(
-            broker.consume_token(token.token_id, SubsystemId::Bridge, &other),
-            Err(TokenConsumptionError::CapabilityMismatch)
-        );
-        for _ in 0..32 {
-            let unknown = Uuid::new_v4();
-            for _ in 0..2 {
-                assert_eq!(
-                    broker.consume_token(unknown, SubsystemId::Bridge, &capability()),
-                    Err(TokenConsumptionError::TokenNotFound(unknown))
-                );
-            }
-        }
-        assert!(broker.state.read().unwrap().consumed_tokens.is_empty());
-        assert!(
-            broker
-                .consume_token(token.token_id, SubsystemId::Bridge, &capability())
-                .is_ok()
-        );
-        assert_eq!(
-            broker.consume_token(token.token_id, SubsystemId::Bridge, &capability()),
-            Err(TokenConsumptionError::TokenReplayed(token.token_id))
-        );
-    }
-
-    #[test]
-    fn session_revocation_removes_pending_and_invalidates_issued_tokens() {
-        let broker = ApprovalBroker::new();
-        let pending = broker.create_session(SubsystemId::Bridge, capability(), "Pending");
-        broker.revoke_session(pending.session_id);
-        assert!(broker.list_pending().is_empty());
-        assert_eq!(
-            broker.resolve_session(pending.session_id, true),
-            Err(ApprovalError::Revoked)
-        );
-
-        let token = issue(&broker);
-        broker.revoke_session(token.session_id);
-        assert!(broker.is_revoked(token.token_id));
-        assert_eq!(
-            broker.consume_token(token.token_id, SubsystemId::Bridge, &capability()),
-            Err(TokenConsumptionError::Revoked(token.token_id))
-        );
-    }
-
-    #[test]
-    fn grant_revocation_preserves_other_grants() {
-        let broker = ApprovalBroker::new();
-        let revoked = issue(&broker);
-        let valid = issue(&broker);
-        broker.revoke_grant(revoked.token_id);
-        assert!(broker.is_revoked(revoked.token_id));
-        assert!(!broker.is_revoked(valid.token_id));
-        assert_eq!(
-            broker.consume_token(revoked.token_id, SubsystemId::Bridge, &capability()),
-            Err(TokenConsumptionError::Revoked(revoked.token_id))
-        );
-        assert!(
-            broker
-                .consume_token(valid.token_id, SubsystemId::Bridge, &capability())
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn denied_and_expired_sessions_never_issue_tokens() {
-        let mut broker = ApprovalBroker::new();
-        let denied = broker.create_session(SubsystemId::Bridge, capability(), "Denied");
-        assert_eq!(
-            broker.resolve_session(denied.session_id, false),
-            Err(ApprovalError::Denied)
-        );
-        assert_eq!(
-            broker.resolve_session(denied.session_id, true),
-            Err(ApprovalError::NotFound(denied.session_id))
-        );
-        broker.timeout_duration = Duration::zero();
-        let expired = broker.create_session(SubsystemId::Bridge, capability(), "Expired");
-        assert!(broker.list_pending().is_empty());
-        assert_eq!(
-            broker.resolve_session(expired.session_id, true),
-            Err(ApprovalError::Expired(expired.session_id))
-        );
-        assert!(broker.state.read().unwrap().tokens.is_empty());
-    }
-
-    #[test]
-    fn expired_tokens_are_not_consumed() {
-        let mut broker = ApprovalBroker::new();
-        broker.token_ttl = Duration::zero();
-        let token = issue(&broker);
-        assert_eq!(
-            broker.consume_token(token.token_id, SubsystemId::Bridge, &capability()),
-            Err(TokenConsumptionError::Expired(token.token_id))
-        );
-        assert!(broker.state.read().unwrap().consumed_tokens.is_empty());
-    }
-
-    #[test]
-    fn concurrent_consumers_have_exactly_one_winner() {
-        let broker = Arc::new(ApprovalBroker::new());
-        let token = issue(&broker);
-        let barrier = Arc::new(Barrier::new(8));
-        let workers: Vec<_> = (0..8)
-            .map(|_| {
-                let broker = Arc::clone(&broker);
-                let barrier = Arc::clone(&barrier);
-                let token_id = token.token_id;
-                thread::spawn(move || {
-                    barrier.wait();
-                    broker.consume_token(token_id, SubsystemId::Bridge, &capability())
-                })
-            })
-            .collect();
-        let results: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
-        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
-        assert_eq!(
-            results
-                .iter()
-                .filter(|r| matches!(r, Err(TokenConsumptionError::TokenReplayed(_))))
-                .count(),
-            7
-        );
-    }
-
-    #[test]
-    fn concurrent_resolution_cannot_escape_session_revocation() {
-        for _ in 0..128 {
-            let broker = Arc::new(ApprovalBroker::new());
-            let session = broker.create_session(SubsystemId::Bridge, capability(), "Race");
-            let barrier = Arc::new(Barrier::new(2));
-            let resolver = {
-                let broker = Arc::clone(&broker);
-                let barrier = Arc::clone(&barrier);
-                thread::spawn(move || {
-                    barrier.wait();
-                    broker.resolve_session(session.session_id, true)
-                })
-            };
-            barrier.wait();
-            broker.revoke_session(session.session_id);
-            match resolver.join().unwrap() {
-                Ok(token) => {
-                    assert!(broker.is_revoked(token.token_id));
-                    assert_eq!(
-                        broker.consume_token(token.token_id, SubsystemId::Bridge, &capability()),
-                        Err(TokenConsumptionError::Revoked(token.token_id))
-                    );
-                }
-                Err(error) => assert_eq!(error, ApprovalError::Revoked),
-            }
-            assert!(broker.list_pending().is_empty());
-        }
-    }
-
-    #[test]
-    fn concurrent_consumption_and_revocation_leave_token_revoked() {
-        for _ in 0..128 {
-            let broker = Arc::new(ApprovalBroker::new());
-            let token = issue(&broker);
-            let barrier = Arc::new(Barrier::new(2));
-            let consumer = {
-                let broker = Arc::clone(&broker);
-                let barrier = Arc::clone(&barrier);
-                let token_id = token.token_id;
-                thread::spawn(move || {
-                    barrier.wait();
-                    broker.consume_token(token_id, SubsystemId::Bridge, &capability())
-                })
-            };
-            barrier.wait();
-            broker.revoke_session(token.session_id);
-            let result = consumer.join().unwrap();
-            // Consumption may win before revocation; revocation cannot undo completed work.
-            assert!(
-                result.is_ok() || result == Err(TokenConsumptionError::Revoked(token.token_id))
-            );
-            assert!(broker.is_revoked(token.token_id));
-            assert_eq!(
-                broker.consume_token(token.token_id, SubsystemId::Bridge, &capability()),
-                Err(TokenConsumptionError::Revoked(token.token_id))
-            );
-        }
+            .filter(|s| s.expires_at > now)
+            .cloned()
+            .collect()
     }
 }

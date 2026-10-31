@@ -97,6 +97,12 @@ fn missing_token_never_executes_medium_risk_operation() {
                 None,
                 || executed = true,
             );
+            if matches!(capability, Capability::Filesystem(_)) {
+                assert_eq!(result, Err(ExecutionDenied::DescriptorRequired));
+                assert!(!executed);
+                assert_eq!(fixture.audit.list(1)[0].outcome, DecisionOutcome::Denied);
+                continue;
+            }
             let Err(ExecutionDenied::ApprovalRequired { session_id, .. }) = result else {
                 panic!("Expected approval for {caller:?}: {capability:?}, got {result:?}");
             };
