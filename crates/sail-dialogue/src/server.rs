@@ -339,6 +339,9 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                     state,
                     stage,
                     message,
+                    diff,
+                    target_file,
+                    logs,
                 } => {
                     emit(
                         &tx_bus,
@@ -350,6 +353,9 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                             "state": state,
                             "stage": stage,
                             "message": message,
+                            "diff": diff,
+                            "target_file": target_file,
+                            "logs": logs,
                         }),
                     )
                     .await;
@@ -699,10 +705,10 @@ async fn execute_scheduled_tool(
     } else {
         json!({"error":observation.error,"request_id":observation.request_id})
     };
-    if observation.success {
-        if let Some(artifact) = canvas_artifact {
-            emit(tx, current, json!({"type":"canvas","artifact":artifact})).await;
-        }
+    if observation.success
+        && let Some(artifact) = canvas_artifact
+    {
+        emit(tx, current, json!({"type":"canvas","artifact":artifact})).await;
     }
     crate::KernelToolResult {
         tool: name,

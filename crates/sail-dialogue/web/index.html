@@ -87,6 +87,20 @@
           <div class="forge-active-job" id="forgeActiveJob" aria-live="polite">
             <p class="forge-empty" id="forgeEmptyState">No active Forge jobs. Ask SAIL or enqueue below.</p>
           </div>
+          <div class="forge-live-stream" id="forgeLiveStream" hidden>
+            <div class="forge-live-header">
+              <div class="forge-live-badge">
+                <span class="forge-live-dot"></span>
+                <span id="forgeLiveTitle">SAIL Live Code Stream</span>
+              </div>
+              <div class="forge-live-actions">
+                <span class="forge-live-file" id="forgeLiveFile" title="Target source file"></span>
+                <button type="button" class="card-expand-btn" id="forgeExpandDiffBtn" title="Expand Full Code Diff in Pop-up" aria-label="Expand Full Code Diff in Pop-up">⤢</button>
+              </div>
+            </div>
+            <pre class="forge-live-diff" id="forgeLiveDiff"><code>// Waiting for Forge coding phase...</code></pre>
+            <div class="forge-live-logs" id="forgeLiveLogs"></div>
+          </div>
           <div class="forge-actions">
             <button type="button" class="tool-action forge-action-btn" id="forgeQuickEnqueueBtn">
               <span aria-hidden="true">＋</span>Enqueue Issue / Task

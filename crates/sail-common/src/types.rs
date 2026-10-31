@@ -210,6 +210,12 @@ pub enum EventPayload {
         state: String,
         stage: String,
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diff: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_file: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logs: Option<Vec<String>>,
     },
     ForgeReviewCompleted {
         job_id: String,
