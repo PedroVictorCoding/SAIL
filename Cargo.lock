@@ -1404,6 +1404,7 @@ dependencies = [
  "sail-dialogue",
  "sail-discovery",
  "sail-flow",
+ "sail-forge",
  "sail-guardian",
  "sail-mind",
  "serde_json",
@@ -1464,6 +1465,25 @@ dependencies = [
  "sail-common",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "sail-forge"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "reqwest",
+ "ring",
+ "sail-common",
+ "sail-guardian",
+ "sail-protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "uuid",

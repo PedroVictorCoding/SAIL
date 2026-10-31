@@ -11,6 +11,7 @@ members = [
     "crates/sail-discovery",
     "crates/sail-flow",
     "crates/sail-guardian",
+    "crates/sail-forge",
     "crates/sail-core",
 ]
 resolver = "2"
@@ -52,3 +53,4 @@ sail-canvas = { path = "crates/sail-canvas" }
 sail-discovery = { path = "crates/sail-discovery" }
 sail-flow = { path = "crates/sail-flow" }
 sail-guardian = { path = "crates/sail-guardian" }
+sail-forge = { path = "crates/sail-forge" }
