@@ -139,7 +139,7 @@ function appendConversation(role, text) {
   node.append(label, content); document.getElementById('conversation').append(node); node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return node;
 }
 async function renderArtifact(artifact) {
-  if (!artifact || !['mermaid', 'json', 'image', 'svg'].includes(artifact.artifact_type)) return;
+  if (!artifact || typeof artifact.content !== 'string' || !['mermaid', 'json', 'image', 'svg'].includes(artifact.artifact_type)) return;
   const container = document.createElement('div'); container.className = 'artifact-card';
   document.getElementById('canvasPanel').append(container);
   document.getElementById('canvasEmptyState')?.remove();
@@ -172,7 +172,11 @@ async function renderArtifact(artifact) {
     const image = document.createElement('img'); image.src = artifact.content; image.alt = 'Conversation visual'; image.style.maxWidth = '100%'; container.append(image); return;
   }
   if (artifact.artifact_type === 'svg' && artifact.content.trim().startsWith('<svg')) {
-    container.innerHTML = artifact.content; return;
+    // SVG is untrusted model output. Image-document mode cannot run its scripts
+    // or event handlers in the owner approval page. Never insert it as page markup.
+    const image = document.createElement('img'); image.alt = 'Generated visual';
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(artifact.content)}`;
+    container.append(image); return;
   }
 }
 function renderToolResult(result) {

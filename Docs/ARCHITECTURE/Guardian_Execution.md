@@ -50,7 +50,8 @@ by revocation; cancellation must be supported by the adapter.
 Endpoints: GET `/api/guardian/approvals`, POST `/api/guardian/resolve`
 `{session_id, approved}`, POST `/api/guardian/revoke` `{session_id}`. All require
 Bearer owner authentication and return no-store responses. Do not put owner
-tokens into URLs, model context, Git or logs.
+tokens into URLs, model context, Git or logs. Generated SVG is rendered in an
+image document, never inserted as active markup into the owner page.
 
 ## Credential isolation (#32)
 
