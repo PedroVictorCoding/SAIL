@@ -254,7 +254,7 @@ function renderToolResult(result) {
   const summary = document.createElement('p'); summary.className = 'result-summary';
   if (Array.isArray(output?.processes)) summary.textContent = `${output.processes.length} ${output.processes.length === 1 ? 'process' : 'processes'} found`;
   else if (Array.isArray(output?.entries)) summary.textContent = `${output.entries.length} ${output.entries.length === 1 ? 'item' : 'items'} in ${String(output.path || 'the selected folder')}`;
-  else if (Array.isArray(output?.issues)) summary.textContent = `${output.count} GitHub issues retrieved`;
+  else if (Array.isArray(output?.issues)) summary.textContent = `${output.count} GitHub issues retrieved (sorted by priority)`;
   else if (output?.job_id) summary.textContent = `Forge job enqueued: ${output.job_id} (Issue #${output.issue_number || '—'})`;
   else if (output?.bytes_written) summary.textContent = `Wrote ${output.bytes_written} bytes to ${output.path}`;
   else if (output?.content) summary.textContent = `Read ${output.bytes || output.content.length} bytes from ${output.path}`;
@@ -287,7 +287,9 @@ function renderToolResult(result) {
       for (const issue of output.issues) {
         const item = document.createElement('div');
         item.className = 'forge-issue-item';
-        const label = document.createElement('span'); label.textContent = `#${issue.number} ${issue.title}`; item.append(label);
+        const priority=['P0','P1','P2','P3','P4'].includes(issue.priority) ? issue.priority : 'P?';
+        const pill=document.createElement('span');pill.className=`forge-priority-pill ${priority==='P?' ? 'punknown' : priority.toLowerCase()}`;pill.textContent=priority;
+        const label=document.createElement('span');label.textContent=`#${issue.number} ${issue.title}`;item.append(pill,label);
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'quiet-button mini-btn';

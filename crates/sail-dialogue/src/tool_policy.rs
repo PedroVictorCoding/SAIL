@@ -91,7 +91,9 @@ impl ToolLoopGuard {
             "os:status" | "vision:frame" | "forge:list" => json!({}),
             "forge:enqueue" | "fs:write" => params.clone(),
             "forge:status" | "forge:cancel" => json!({"job_id":params.get("job_id")}),
-            "github:issues" => json!({"limit":params.get("limit")}),
+            "github:issues" => {
+                json!({"limit":params.get("limit"),"priority":params.get("priority")})
+            }
             _ => params.clone(),
         };
         format!("{canonical}:{normalized}")
@@ -200,7 +202,7 @@ pub fn tool_status_summary(messages: &[Value]) -> String {
                     output["count"].as_u64().unwrap_or(0)
                 ),
                 "github:issues" => format!(
-                    "{tool}: retrieved {} open GitHub issues.",
+                    "{tool}: retrieved {} open GitHub issues sorted by priority.",
                     output["count"].as_u64().unwrap_or(0)
                 ),
                 _ => format!("{tool}: operation completed."),

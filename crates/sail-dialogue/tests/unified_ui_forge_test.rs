@@ -183,3 +183,85 @@ fn test_filesystem_read_write_guardian_approval_lifecycle() {
         assert_eq!(bad_res.output["error_code"], "outside_workspace");
     }
 }
+
+#[test]
+fn test_github_issues_priority_sorting() {
+    let _fixture = GUARDIAN_FIXTURE.lock().unwrap();
+    let _guardian = GuardianSubsystem::new();
+    // 1. Verify priority extraction logic
+    let cases = [
+        (
+            "[P0 · SECURITY/BILLING] #92 Make OpenAI review quotas persistent",
+            0,
+            "P0",
+        ),
+        ("[P0 · FORGE/CONTINUITY] #92 Wire actual queue", 0, "P0"),
+        ("[P1 · HEALTH/ANDROID] SAIL Noop", 1, "P1"),
+        ("[Guardian · P1] Durable tamper-evident audit", 1, "P1"),
+        ("[P2 · LIFE] SAIL Constraint Solver", 2, "P2"),
+        ("[P3 · LIFE/POSSESSIONS] Possessions", 3, "P3"),
+        ("[P4] Lab experiments", 4, "P4"),
+        ("No priority in title", 99, "P?"),
+    ];
+
+    for (title, expected_rank, expected_label) in cases {
+        let (rank, label) = LocalKernelToolBroker::extract_issue_priority(title, &[]);
+        assert_eq!(rank, expected_rank, "Failed rank for: {title}");
+        assert_eq!(label, expected_label, "Failed label for: {title}");
+    }
+
+    // Verify label fallback
+    let critical_label = vec![serde_json::json!({"name": "critical"})];
+    let (rank, label) =
+        LocalKernelToolBroker::extract_issue_priority("Generic bug", &critical_label);
+    assert_eq!(rank, 0);
+    assert_eq!(label, "P0");
+
+    let p2_label = vec![serde_json::json!({"name": "priority: p2"})];
+    let (rank, label) = LocalKernelToolBroker::extract_issue_priority("Feature request", &p2_label);
+    assert_eq!(rank, 2);
+    assert_eq!(label, "P2");
+
+    // 2. Test guarded execution of github:issues via broker
+    let issues_call = KernelToolCall {
+        tool: "github:issues".into(),
+        params: serde_json::json!({ "limit": 10 }),
+    };
+    let broker = sail_guardian::global_broker().unwrap();
+    let denied = LocalKernelToolBroker::execute(&issues_call);
+    assert!(!denied.success);
+    assert_eq!(denied.output["approval_required"], true);
+
+    let session_uuid: uuid::Uuid = denied.output["session_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let token = broker
+        .approval()
+        .resolve_session(session_uuid, true)
+        .unwrap();
+
+    let res = LocalKernelToolBroker::execute_guarded(
+        SubsystemId::Dialogue,
+        &issues_call,
+        Some(token.token_id),
+    );
+
+    // If gh CLI is installed and succeeds, verify priority sort invariants
+    if res.success {
+        assert_eq!(res.output["sorted_by"], "priority");
+        let issues = res.output["issues"].as_array().expect("issues array");
+        let mut prev_rank = 0u64;
+        for iss in issues {
+            let rank = iss["priority_rank"].as_u64().unwrap_or(99);
+            assert!(
+                rank >= prev_rank,
+                "Issues should be sorted in ascending priority rank (P0 <= P1 <= P2...): got {} after {}",
+                rank,
+                prev_rank
+            );
+            prev_rank = rank;
+        }
+    }
+}

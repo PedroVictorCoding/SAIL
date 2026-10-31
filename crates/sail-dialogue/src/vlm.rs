@@ -557,33 +557,138 @@ impl LocalKernelToolBroker {
         }
     }
 
-    /// github:issues — Fetch recent open issues from GitHub CLI
+    /// Extracts priority rank (0=P0, 1=P1, 2=P2, 3=P3, 4=P4, 99=unspecified) and label.
+    pub fn extract_issue_priority(title: &str, labels: &[serde_json::Value]) -> (u8, &'static str) {
+        let upper_title = title.to_ascii_uppercase();
+        for (rank, label) in [
+            (0u8, "P0"),
+            (1u8, "P1"),
+            (2u8, "P2"),
+            (3u8, "P3"),
+            (4u8, "P4"),
+        ] {
+            let patterns = [
+                format!("[{label}"),
+                format!("({label}"),
+                format!("{label}:"),
+                format!("{label} ·"),
+                format!("· {label}"),
+                format!(" {label} "),
+                format!("{label}]"),
+                format!("{label})"),
+            ];
+            if patterns.iter().any(|pat| upper_title.contains(pat)) {
+                return (rank, label);
+            }
+        }
+
+        for l in labels {
+            if let Some(name) = l.get("name").and_then(|v| v.as_str()) {
+                let upper_name = name.to_ascii_uppercase();
+                if upper_name.contains("P0")
+                    || upper_name.contains("CRITICAL")
+                    || upper_name.contains("BLOCKER")
+                {
+                    return (0, "P0");
+                }
+                if upper_name.contains("P1") || upper_name.contains("URGENT") {
+                    return (1, "P1");
+                }
+                if upper_name.contains("P2") {
+                    return (2, "P2");
+                }
+                if upper_name.contains("P3") {
+                    return (3, "P3");
+                }
+                if upper_name.contains("P4") {
+                    return (4, "P4");
+                }
+            }
+        }
+
+        (99, "P?")
+    }
+
+    /// github:issues — Fetch open issues from GitHub CLI sorted by priority (P0 -> P1 -> P2 -> P3 -> P4)
     fn tool_github_issues(params: &serde_json::Value) -> KernelToolResult {
         let limit = params
             .get("limit")
             .and_then(|v| v.as_u64())
             .unwrap_or(15)
-            .clamp(1, 50);
+            .clamp(1, 50) as usize;
+        let priority_filter = params
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_ascii_uppercase());
+
+        // Fetch a broad pool of open issues (up to 100) so high-priority issues aren't missed
         let output = std::process::Command::new("gh")
             .args([
                 "issue",
                 "list",
+                "--state",
+                "open",
                 "--json",
                 "number,title,state,labels",
                 "--limit",
-                &limit.to_string(),
+                "100",
             ])
             .output();
+
         match output {
             Ok(out) if out.status.success() => {
-                if let Ok(issues) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                    let count = issues.as_array().map(|a| a.len()).unwrap_or(0);
+                if let Ok(raw_issues) =
+                    serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout)
+                {
+                    let mut scored_issues: Vec<(u8, i64, serde_json::Value)> = raw_issues
+                        .into_iter()
+                        .filter_map(|mut item| {
+                            let title = item
+                                .get("title")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default();
+                            let empty_vec = Vec::new();
+                            let labels = item
+                                .get("labels")
+                                .and_then(|v| v.as_array())
+                                .unwrap_or(&empty_vec);
+                            let (rank, prio_label) = Self::extract_issue_priority(title, labels);
+
+                            if let Some(ref filter) = priority_filter
+                                && prio_label != filter
+                                && format!("P{rank}") != *filter
+                            {
+                                return None;
+                            }
+
+                            if let Some(obj) = item.as_object_mut() {
+                                obj.insert("priority".into(), serde_json::json!(prio_label));
+                                obj.insert("priority_rank".into(), serde_json::json!(rank));
+                            }
+
+                            let number = item.get("number").and_then(|v| v.as_i64()).unwrap_or(0);
+                            // Sort by priority_rank ascending, then by issue number descending
+                            Some((rank, -number, item))
+                        })
+                        .collect();
+
+                    scored_issues.sort_by_key(|a| (a.0, a.1));
+
+                    let total_found = scored_issues.len();
+                    let final_issues: Vec<serde_json::Value> = scored_issues
+                        .into_iter()
+                        .take(limit)
+                        .map(|(_, _, item)| item)
+                        .collect();
+
                     KernelToolResult {
                         tool: "github:issues".into(),
                         success: true,
                         output: serde_json::json!({
-                            "count": count,
-                            "issues": issues,
+                            "count": final_issues.len(),
+                            "total_matched": total_found,
+                            "sorted_by": "priority",
+                            "issues": final_issues,
                         }),
                     }
                 } else {
@@ -720,6 +825,7 @@ pub fn tool_definitions() -> serde_json::Value {
         {"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}},
         {"type":"function","function":{"name":"fs_read","description":"Read text contents of a file inside the authorized workspace.","parameters":{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Relative path to the file in the workspace"}}}}},
         {"type":"function","function":{"name":"fs_write","description":"Create or write a file inside the authorized workspace. Requires explicit user approval.","parameters":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string","description":"Relative path to write"},"content":{"type":"string","description":"File content to write"}}}}},
+        {"type":"function","function":{"name":"github_issues","description":"Retrieve open GitHub issues ordered by P0 to P4 priority, with optional priority filtering","parameters":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50},"priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}},"additionalProperties":false}}},
         {"type":"function","function":{"name":"forge_enqueue","description":"Enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting.","parameters":{"type":"object","properties":{"issue_number":{"type":"integer","description":"GitHub issue number to solve"},"repo":{"type":"string","description":"Repository name, defaults to PedroVictorCoding/SAIL"},"task":{"type":"string","description":"Optional description or instructions for the task"}}}}},
         {"type":"function","function":{"name":"forge_status","description":"Check the status, current step, test outcome, and diff of a Forge autonomous coding job.","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID returned from forge_enqueue"}}}}}
     ])
