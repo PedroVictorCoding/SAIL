@@ -26,7 +26,7 @@
       <button class="nav-item" id="spacesOpen" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#spaces"></use></svg></span><span>Spaces</span></button>
       <button class="nav-item" id="canvasNav" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#canvas"></use></svg></span><span>Canvas</span></button>
       <button class="nav-item unavailable-nav" data-space="Flow" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#flow"></use></svg></span><span>Flow</span></button>
-      <button class="nav-item unavailable-nav" data-space="Agents" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#agents"></use></svg></span><span>Agents</span></button>
+      <button class="nav-item" id="agentsNav" data-space="Agents" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#agents"></use></svg></span><span>Forge</span></button>
       <button class="nav-item nav-settings" id="settingsRail" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#settings"></use></svg></span><span>Settings</span></button>
     </nav>
 
@@ -56,17 +56,42 @@
         </article>
 
         <article class="workspace-card tools-card" id="toolsCard">
-          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">⌘</span><div><h3>Local tools</h3><p>Read-only actions on this device</p></div></div></header>
+          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">⌘</span><div><h3>Local tools</h3><p>Authorized workspace actions</p></div></div></header>
           <div class="tool-actions">
             <button type="button" class="tool-action" data-tool="proc:list"><span aria-hidden="true">▤</span>Processes</button>
             <button type="button" class="tool-action" data-tool="fs:query"><span aria-hidden="true">▱</span>Workspace files</button>
             <button type="button" class="tool-action" id="chooseVisionBtn"><span aria-hidden="true">▧</span>Analyze an image</button>
+            <button type="button" class="tool-action" id="listIssuesBtn" data-tool="github:issues"><span aria-hidden="true">⌥</span>GitHub issues</button>
+            <button type="button" class="tool-action" id="forgeQuickEnqueueToolBtn"><span aria-hidden="true">⚒</span>Enqueue Forge task</button>
           </div>
         </article>
 
         <article class="workspace-card canvas-card" id="canvasCard">
-          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">▧</span><div><h3>Canvas</h3><p>Visuals from this conversation</p></div></div><button class="card-action" id="canvasClearBtn" type="button" aria-label="Clear Canvas" title="Clear Canvas">×</button></header>
-          <div class="canvas-panel" id="canvasPanel" aria-label="Canvas output"><p class="canvas-empty" id="canvasEmptyState">Diagrams, images and structured results from this conversation appear here.</p></div>
+          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">▧</span><div><h3>Canvas</h3><p>Visuals & Guardian approvals</p></div></div><button class="card-action" id="canvasClearBtn" type="button" aria-label="Clear Canvas" title="Clear Canvas">×</button></header>
+          <div class="canvas-panel" id="canvasPanel" aria-label="Canvas output"><p class="canvas-empty" id="canvasEmptyState">Diagrams, images, structured results and Guardian approvals appear here.</p></div>
+        </article>
+
+        <article class="workspace-card forge-card" id="forgeCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">⚒</span><div><h3>Forge</h3><p>Autonomous coding agent</p></div></div>
+            <button class="card-action" id="forgeRefreshBtn" type="button" aria-label="Refresh Forge jobs" title="Refresh Forge jobs">↻</button>
+          </header>
+          <div class="forge-pipeline" id="forgePipeline" aria-label="Forge execution pipeline">
+            <span class="forge-chip" data-step="worktree">Worktree</span>
+            <span class="forge-chip" data-step="planning">Plan</span>
+            <span class="forge-chip" data-step="coding">Code</span>
+            <span class="forge-chip" data-step="testing">Sandbox test</span>
+            <span class="forge-chip" data-step="review">Review</span>
+            <span class="forge-chip" data-step="pr">PR draft</span>
+          </div>
+          <div class="forge-active-job" id="forgeActiveJob" aria-live="polite">
+            <p class="forge-empty" id="forgeEmptyState">No active Forge jobs. Ask SAIL or enqueue below.</p>
+          </div>
+          <div class="forge-actions">
+            <button type="button" class="tool-action forge-action-btn" id="forgeQuickEnqueueBtn">
+              <span aria-hidden="true">＋</span>Enqueue Issue / Task
+            </button>
+          </div>
         </article>
       </section>
     </section>
@@ -130,6 +155,25 @@
     <button class="quiet-button" id="captureScreenChoice" type="button">Take screenshot</button>
     <button class="quiet-button" id="captureCancel" type="button">Cancel</button>
   </div>
+</dialog>
+
+<dialog id="forgeEnqueueDialog" class="capture-dialog forge-dialog" aria-labelledby="forgeDialogTitle">
+  <h2 id="forgeDialogTitle">Enqueue Forge Task</h2>
+  <p>Dispatch an autonomous coding agent in an isolated worktree with automated testing and PR drafting.</p>
+  <form id="forgeEnqueueForm" method="dialog" style="display:grid; gap:12px; margin-top:14px;">
+    <div>
+      <label for="forgeIssueNumberInput" style="font-size:12px; color:var(--muted); display:block; margin-bottom:4px;">GitHub Issue # (optional)</label>
+      <input id="forgeIssueNumberInput" type="number" min="1" placeholder="e.g. 90" style="width:100%; height:40px; border:var(--border); border-radius:10px; background:#11151d; padding:0 12px; color:var(--text);">
+    </div>
+    <div>
+      <label for="forgeTaskInput" style="font-size:12px; color:var(--muted); display:block; margin-bottom:4px;">Task description / prompt</label>
+      <input id="forgeTaskInput" type="text" placeholder="e.g. make a simple hello world file in rust" required style="width:100%; height:40px; border:var(--border); border-radius:10px; background:#11151d; padding:0 12px; color:var(--text);">
+    </div>
+    <div class="capture-options" style="margin-top:8px;">
+      <button class="quiet-button" id="forgeSubmitBtn" type="submit" style="background:var(--ambient-one); color:#fff; border-color:transparent;">Start Forge Agent</button>
+      <button class="quiet-button" id="forgeCancelBtn" type="button">Cancel</button>
+    </div>
+  </form>
 </dialog>
 <script src="/mermaid.js" defer></script>
 <script src="/voice.js" defer></script>

@@ -74,9 +74,9 @@ impl Capability {
             },
             Capability::Tool(t) => match t {
                 ToolCapability::KernelTool(name) => match name.as_str() {
-                    "os:status" => RiskLevel::Low,
-                    "proc:list" | "fs:query" => RiskLevel::Medium,
-                    "vision:frame" => RiskLevel::High,
+                    "os:status" | "forge:status" | "forge:list" => RiskLevel::Low,
+                    "proc:list" | "fs:query" | "fs:read" | "github:issues" => RiskLevel::Medium,
+                    "vision:frame" | "fs:write" | "forge:enqueue" | "forge:cancel" => RiskLevel::High,
                     _ => RiskLevel::High,
                 },
                 ToolCapability::CliCommand(_) => RiskLevel::Critical,

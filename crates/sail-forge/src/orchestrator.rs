@@ -251,6 +251,58 @@ impl ForgeOrchestrator {
         None
     }
 
+    /// List all active and stored Forge jobs.
+    pub fn list_all_jobs(&self) -> Vec<IssueStatusResponse> {
+        let mut results = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        {
+            let jobs = self.active_jobs.lock().unwrap();
+            for (job_id, job) in jobs.iter() {
+                seen.insert(job_id.clone());
+                let cp = &job.checkpoint;
+                results.push(IssueStatusResponse {
+                    job_id: cp.job_id.clone(),
+                    repo: cp.repo.clone(),
+                    issue_number: cp.issue_number,
+                    state: cp.state,
+                    branch: cp.branch.clone(),
+                    current_step: format!("{:?}", cp.state),
+                    iteration: cp.iteration,
+                    diff_stat: cp.diff_stat.clone().unwrap_or_default(),
+                    tokens_used: cp.tokens_used,
+                    wall_time_secs: cp.wall_time_secs,
+                    review_status: cp.review_result.as_ref().map(|r| r.provider.clone()),
+                    events: cp.events.clone(),
+                });
+            }
+        }
+
+        if let Ok(checkpoints) = self.checkpoint_store.list_all() {
+            for cp in checkpoints {
+                if !seen.contains(&cp.job_id) {
+                    seen.insert(cp.job_id.clone());
+                    results.push(IssueStatusResponse {
+                        job_id: cp.job_id.clone(),
+                        repo: cp.repo.clone(),
+                        issue_number: cp.issue_number,
+                        state: cp.state,
+                        branch: cp.branch.clone(),
+                        current_step: format!("{:?}", cp.state),
+                        iteration: cp.iteration,
+                        diff_stat: cp.diff_stat.clone().unwrap_or_default(),
+                        tokens_used: cp.tokens_used,
+                        wall_time_secs: cp.wall_time_secs,
+                        review_status: cp.review_result.as_ref().map(|r| r.provider.clone()),
+                        events: cp.events.clone(),
+                    });
+                }
+            }
+        }
+
+        results
+    }
+
     /// Pause an in-progress job (Voice-first QoS yielding compute).
     pub fn pause_job(&self, job_id: &str, reason: &str) -> Result<(), String> {
         let mut jobs = self.active_jobs.lock().unwrap();
@@ -960,3 +1012,24 @@ impl ForgeOrchestrator {
         Ok(recovered_ids)
     }
 }
+
+static GLOBAL_ORCHESTRATOR: std::sync::RwLock<Option<Arc<ForgeOrchestrator>>> =
+    std::sync::RwLock::new(None);
+
+pub fn register_global_orchestrator(orch: Arc<ForgeOrchestrator>) {
+    let mut guard = GLOBAL_ORCHESTRATOR.write().unwrap();
+    *guard = Some(orch);
+}
+
+pub fn clear_global_orchestrator() {
+    let mut guard = GLOBAL_ORCHESTRATOR.write().unwrap();
+    *guard = None;
+}
+
+pub fn global_orchestrator() -> Result<Arc<ForgeOrchestrator>, String> {
+    let guard = GLOBAL_ORCHESTRATOR.read().unwrap();
+    guard
+        .clone()
+        .ok_or_else(|| "Forge orchestrator is uninitialized or unavailable".to_string())
+}
+

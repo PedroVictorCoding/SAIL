@@ -12,8 +12,8 @@ const spaces = [
   { id:'life', name:'Life', subtitle:'Personal space', available:false },
   { id:'entertainment', name:'Entertainment', subtitle:'Listen and read', available:false },
   { id:'mind', name:'Mind', subtitle:'Local models', available:true, action:() => document.getElementById('checkModelsBtn').click() },
-  { id:'agents', name:'Agents', subtitle:'Task execution', available:false },
-  { id:'guardian', name:'Guardian', subtitle:'Permissions', available:false },
+  { id:'agents', name:'Forge', subtitle:'Autonomous coding', available:true, action:() => document.getElementById('forgeCard')?.scrollIntoView({ behavior:'smooth', block:'center' }) },
+  { id:'guardian', name:'Guardian', subtitle:'Security approvals', available:true, action:() => document.getElementById('canvasCard')?.scrollIntoView({ behavior:'smooth', block:'center' }) },
   { id:'bridge', name:'Bridge', subtitle:'Device tools', available:false },
   { id:'discovery', name:'Discovery', subtitle:'Research', available:false },
   { id:'pulse', name:'Pulse', subtitle:'Goals and routines', available:false },
@@ -70,9 +70,31 @@ document.getElementById('settingsOpen').addEventListener('click', () => openShee
 document.getElementById('settingsRail').addEventListener('click', () => openSheet(contextSheet));
 document.getElementById('homeNav').addEventListener('click', () => document.getElementById('workspace').scrollTo({ top:0, behavior:'smooth' }));
 document.getElementById('canvasNav').addEventListener('click', () => document.getElementById('canvasCard').scrollIntoView({ behavior:'smooth', block:'center' }));
+document.getElementById('agentsNav')?.addEventListener('click', () => document.getElementById('forgeCard').scrollIntoView({ behavior:'smooth', block:'center' }));
 document.querySelectorAll('.unavailable-nav').forEach(button => button.addEventListener('click', () => showError(`${button.dataset.space} is not connected in this build.`)));
 document.getElementById('checkSystemBtn').addEventListener('click', () => runKernelTool('os:status'));
 document.getElementById('modelsRefreshBtn').addEventListener('click', () => checkModels());
+document.getElementById('listIssuesBtn')?.addEventListener('click', () => runKernelTool('github:issues'));
+document.getElementById('forgeQuickEnqueueToolBtn')?.addEventListener('click', () => openForgeEnqueueDialog());
+document.getElementById('forgeQuickEnqueueBtn')?.addEventListener('click', () => openForgeEnqueueDialog());
+document.getElementById('forgeRefreshBtn')?.addEventListener('click', () => sendAction('forge:list'));
+document.getElementById('forgeCancelBtn')?.addEventListener('click', () => document.getElementById('forgeEnqueueDialog')?.close());
+document.getElementById('forgeEnqueueForm')?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const issueVal = document.getElementById('forgeIssueNumberInput')?.value?.trim();
+  const taskVal = document.getElementById('forgeTaskInput')?.value?.trim();
+  if (!taskVal) return;
+  const payload = { task: taskVal };
+  if (issueVal) payload.issue_number = parseInt(issueVal, 10);
+  sendAction('forge:enqueue', payload);
+  document.getElementById('forgeEnqueueDialog')?.close();
+  document.getElementById('forgeTaskInput').value = '';
+  document.getElementById('forgeIssueNumberInput').value = '';
+});
+function openForgeEnqueueDialog() {
+  const dialog = document.getElementById('forgeEnqueueDialog');
+  if (dialog) dialog.showModal();
+}
 document.getElementById('canvasClearBtn').addEventListener('click', () => {
   const panel = document.getElementById('canvasPanel'); panel.replaceChildren();
   const empty = document.createElement('p'); empty.id = 'canvasEmptyState'; empty.className = 'canvas-empty';
