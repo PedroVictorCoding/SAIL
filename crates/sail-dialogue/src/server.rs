@@ -71,12 +71,12 @@ pub async fn run_dialogue_server_with_services(
         None => sail_mind::MindService::from_env()?,
     };
     let services = services.with_inference(inference.clone());
-    let owner_authority = std::env::var("SAIL_APPROVAL_TOKEN")
-        .ok()
-        .map(|token| sail_guardian::authority::ApprovalAuthority::new(&token))
-        .transpose()?;
-    let approval_routes =
-        crate::approval_http::router(owner_authority, sail_guardian::global_broker().ok());
+    let (owner_authority, active_token) = resolve_or_generate_owner_token();
+    let approval_routes = crate::approval_http::router_with_token(
+        owner_authority,
+        sail_guardian::global_broker().ok(),
+        active_token,
+    );
     let app = Router::new()
         .nest_service("/api/guardian", approval_routes)
         .route(
@@ -1433,6 +1433,72 @@ async fn queue_speech(chunks: Vec<String>, tx: &mpsc::Sender<String>) {
     }
 }
 
+fn resolve_or_generate_owner_token() -> (Option<sail_guardian::authority::ApprovalAuthority>, Option<String>) {
+    let raw_token = if let Ok(val) = std::env::var("SAIL_APPROVAL_TOKEN") {
+        let trimmed = val.trim().to_string();
+        if trimmed.len() >= 32 {
+            Some(trimmed)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let token = match raw_token {
+        Some(t) => t,
+        None => {
+            let token_path = std::path::Path::new(".local/sail_owner_token");
+            if let Ok(existing) = std::fs::read_to_string(token_path) {
+                let trimmed = existing.trim().to_string();
+                if trimmed.len() >= 32 {
+                    trimmed
+                } else {
+                    generate_and_persist_token(token_path)
+                }
+            } else {
+                generate_and_persist_token(token_path)
+            }
+        }
+    };
+
+    match sail_guardian::authority::ApprovalAuthority::new(&token) {
+        Ok(authority) => (Some(authority), Some(token)),
+        Err(err) => {
+            warn!("Failed to initialize owner approval authority: {err}");
+            (None, None)
+        }
+    }
+}
+
+fn generate_and_persist_token(token_path: &std::path::Path) -> String {
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    if let Some(parent) = token_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(token_path, &token) {
+        warn!(
+            "Could not persist auto-generated owner approval token to {}: {e}",
+            token_path.display()
+        );
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(token_path, std::fs::Permissions::from_mode(0o600));
+        }
+        info!(
+            "Auto-generated and persisted owner approval token in {}",
+            token_path.display()
+        );
+    }
+    token
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1711,5 +1777,14 @@ mod tests {
             events.iter().filter(|e| e["type"] == "tool_result").count(),
             3
         );
+    }
+    #[test]
+    fn owner_token_auto_generation_and_resolution() {
+        let (authority, token) = resolve_or_generate_owner_token();
+        assert!(authority.is_some());
+        assert!(token.is_some());
+        let tok = token.unwrap();
+        assert!(tok.len() >= 32);
+        assert!(authority.unwrap().authenticates(&tok));
     }
 }
