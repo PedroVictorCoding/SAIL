@@ -34,6 +34,9 @@ async fn test_event_bus_publish_and_filter() {
     );
     bus.publish(broadcast_event).expect("Failed to broadcast");
 
-    let dialogue_received = rx_dialogue.recv().await.expect("Dialogue should receive broadcast");
+    let dialogue_received = rx_dialogue
+        .recv()
+        .await
+        .expect("Dialogue should receive broadcast");
     assert_eq!(dialogue_received.source, SubsystemId::Core);
 }

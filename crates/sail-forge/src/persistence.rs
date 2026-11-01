@@ -39,6 +39,14 @@ pub struct TaskCheckpoint {
     pub issue_body: Option<String>,
     #[serde(default)]
     pub target_file: Option<String>,
+    #[serde(default)]
+    pub verification_status: Option<String>,
+    #[serde(default)]
+    pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub model_endpoint: Option<String>,
+    #[serde(default)]
+    pub modified_files: Option<Vec<String>>,
 }
 
 impl TaskCheckpoint {
@@ -76,6 +84,10 @@ impl TaskCheckpoint {
             issue_title: None,
             issue_body: None,
             target_file: None,
+            verification_status: None,
+            failure_reason: None,
+            model_endpoint: None,
+            modified_files: None,
         }
     }
 

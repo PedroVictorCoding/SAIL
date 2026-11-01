@@ -567,6 +567,9 @@ function handleForgeEvent(data) {
   const badge=document.createElement('span');badge.className=badgeClass;badge.textContent=`● ${state}`;heading.append(label,badge);jobCard.append(heading);
   const metadata=(label,value)=>{const line=document.createElement('div');line.className='forge-meta-line';const key=document.createElement('span');key.textContent=label;const text=document.createElement('strong');text.textContent=String(value);line.append(key,text);jobCard.append(line);};
   if(data.repo)metadata('Repo:',data.repo);
+  if(data.model_id||data.model)metadata('Model:',data.model_id||data.model);
+  if(data.iterations)metadata('Iterations:',data.iterations);
+  if(data.failure_reason)metadata('Reason:',data.failure_reason);
   if(data.task||data.summary||data.message){const text=document.createElement('div');text.className='forge-task-desc';text.textContent=String(data.task||data.summary||data.message);jobCard.append(text);}
   if(data.branch)metadata('Branch:',data.branch);
   if(data.passed!==undefined)metadata('Review verdict:',`${data.passed ? '✓ Passed' : 'Failed'} (${data.finding_count||0} findings)`);

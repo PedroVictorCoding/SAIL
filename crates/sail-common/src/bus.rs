@@ -37,10 +37,7 @@ impl EventBus {
         self.sender.subscribe()
     }
 
-    pub fn subscribe_filtered(
-        &self,
-        subsystem: SubsystemId,
-    ) -> FilteredReceiver {
+    pub fn subscribe_filtered(&self, subsystem: SubsystemId) -> FilteredReceiver {
         FilteredReceiver {
             receiver: self.sender.subscribe(),
             subsystem,

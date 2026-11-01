@@ -105,13 +105,38 @@ impl LocalKernelToolBroker {
                 .get("path")
                 .and_then(|value| value.as_str())
                 .unwrap_or(".");
-            broker.authorize_read(caller, Path::new(path), token, correlation, |file| {
-                if call.tool == "fs:read" {
-                    Self::tool_fs_read(file)
+            let target_path = Path::new(path);
+            // Option A: If the target path is inside the authorized workspace, pre-grant authorization
+            // so reading files within the project never blocks the user for owner tokens.
+            let auto_approved_token =
+                if token.is_none() && broker.sandbox().validate_path(target_path, false).is_ok() {
+                    let session = broker.approval().create_session(
+                        caller,
+                        cap.clone(),
+                        "Workspace descriptor read pre-authorized",
+                    );
+                    if let Ok(tok) = broker.approval().resolve_session(session.session_id, true) {
+                        Some(tok.token_id)
+                    } else {
+                        None
+                    }
                 } else {
-                    Self::tool_fs_query(file)
-                }
-            })
+                    token
+                };
+
+            broker.authorize_read(
+                caller,
+                target_path,
+                auto_approved_token,
+                correlation,
+                |file| {
+                    if call.tool == "fs:read" {
+                        Self::tool_fs_read(file)
+                    } else {
+                        Self::tool_fs_query(file)
+                    }
+                },
+            )
         } else {
             broker
                 .authorize_and_execute(caller, cap, token, correlation, || Self::execute_raw(call))

@@ -104,7 +104,10 @@ mod tests {
         let tone_len = 2400;
         assert_eq!(pcm.len(), expected_lead + tone_len + expected_tail);
         assert_eq!(&pcm[..expected_lead], &vec![0i16; expected_lead][..]);
-        assert_eq!(&pcm[expected_lead..expected_lead + 5], &[5000, 5000, 5000, 5000, 5000]);
+        assert_eq!(
+            &pcm[expected_lead..expected_lead + 5],
+            &[5000, 5000, 5000, 5000, 5000]
+        );
     }
 
     #[test]

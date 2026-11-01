@@ -54,8 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut guardian = GuardianSubsystem::new();
 
     let review_broker = Arc::new(
-        ReviewBroker::new(ReviewPolicyConfig::default())
-            .with_credentials(guardian.credentials()),
+        ReviewBroker::new(ReviewPolicyConfig::default()).with_credentials(guardian.credentials()),
     );
     let checkpoint_store = Arc::new(TaskCheckpointStore::default_store());
     let orchestrator = Arc::new(ForgeOrchestrator::new(
@@ -118,7 +117,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spawn_subsystem_worker(SubsystemId::Guardian, guardian_arc, &bus);
     spawn_subsystem_worker(SubsystemId::Forge, forge_arc, &bus);
 
-    info!("All 10 SAIL subsystems (including SAIL Guardian & SAIL Forge) bootstrapped and listening on the event bus");
+    info!(
+        "All 10 SAIL subsystems (including SAIL Guardian & SAIL Forge) bootstrapped and listening on the event bus"
+    );
 
     // Publish system ready event
     let ready_event = SailEvent::new(

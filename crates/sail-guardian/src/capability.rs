@@ -84,7 +84,9 @@ impl Capability {
                 ToolCapability::KernelTool(name) => match name.as_str() {
                     "os:status" | "forge:status" | "forge:list" => RiskLevel::Low,
                     "proc:list" | "fs:query" | "fs:read" | "github:issues" => RiskLevel::Medium,
-                    "vision:frame" | "fs:write" | "forge:enqueue" | "forge:cancel" => RiskLevel::High,
+                    "vision:frame" | "fs:write" | "forge:enqueue" | "forge:cancel" => {
+                        RiskLevel::High
+                    }
                     _ => RiskLevel::High,
                 },
                 ToolCapability::Invocation { tool, arguments }

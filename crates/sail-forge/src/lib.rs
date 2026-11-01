@@ -6,6 +6,7 @@ pub mod model_bench;
 pub mod orchestrator;
 pub mod persistence;
 pub mod reviewer;
+pub mod solver;
 pub mod subsystem;
 pub mod worktree;
 
@@ -20,5 +21,9 @@ pub use orchestrator::{
 };
 pub use persistence::{TaskCheckpoint, TaskCheckpointStore};
 pub use reviewer::{ReviewBroker, ReviewError, ReviewUsageLedger};
+pub use solver::{
+    IdentifiedModel, LocalSolverController, RepoToolCall, RepoToolResult, SolverOutcome,
+    execute_repo_tool, identify_local_model, is_meaningful_code_diff,
+};
 pub use subsystem::ForgeSubsystem;
 pub use worktree::{IsolatedWorktree, WorktreeError};

@@ -152,6 +152,14 @@ pub struct IssueStatusResponse {
     pub patch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_files: Option<Vec<String>>,
 }
 
 /// Request to pause an active task (`forge:issue_pause`).
@@ -244,6 +252,12 @@ pub struct TestExecutionRecord {
     pub status: String,
     pub duration_ms: u64,
     pub log_ref: String,
+    #[serde(default)]
+    pub exit_code: i32,
+    #[serde(default)]
+    pub stdout_log_path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub stderr_log_path: Option<std::path::PathBuf>,
 }
 
 /// Comprehensive report for an issue resolution attempt (`ForgeJobReport`).
