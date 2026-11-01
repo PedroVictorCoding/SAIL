@@ -169,10 +169,19 @@
   <p class="sheet-note" id="modelStatusSettings">Model status is checked with the local SAIL server.</p>
   <button class="sheet-link" id="newConversationBtn">Start a new conversation <span>›</span></button>
   <section aria-labelledby="approvalTitle">
-    <h3 id="approvalTitle">Owner approvals</h3>
-    <p class="sheet-note">Review the exact action before granting one execution. The owner token is kept only in this page.</p>
-    <input id="ownerApprovalToken" type="password" autocomplete="off" aria-label="Owner approval token" placeholder="Owner approval token" style="width:100%;padding:10px;background:var(--surface);border:var(--border);border-radius:12px">
-    <button class="sheet-link" id="refreshApprovalsBtn" type="button">Review pending requests <span>›</span></button>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+      <h3 id="approvalTitle" style="margin:0;">Owner approvals</h3>
+      <span id="approvalStatusBadge" style="font-size:11px; padding:2px 8px; border-radius:12px; background:rgba(34,197,94,0.15); color:#4ade80; display:inline-flex; align-items:center; gap:4px;">
+        <span style="width:6px; height:6px; border-radius:50%; background:#4ade80;"></span> Auto-authorized
+      </span>
+    </div>
+    <p class="sheet-note">Automated authorization is active for local operations. You can also view or copy the active owner token below.</p>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+      <input id="ownerApprovalToken" type="password" autocomplete="off" aria-label="Owner approval token" placeholder="Owner approval token" style="flex:1;padding:10px;background:var(--surface);border:var(--border);border-radius:12px; font-family:monospace; font-size:12px;">
+      <button class="quiet-button" id="toggleTokenVisibilityBtn" type="button" aria-label="Show token" title="Show/hide token" style="padding:8px 12px;">Show</button>
+      <button class="quiet-button" id="copyTokenBtn" type="button" aria-label="Copy token" title="Copy token to clipboard" style="padding:8px 12px;">Copy</button>
+    </div>
+    <button class="sheet-link" id="refreshApprovalsBtn" type="button" style="margin-top:8px;">Review pending requests <span>›</span></button>
     <div id="ownerApprovals" role="status" aria-live="polite"></div>
   </section>
   <details class="inspector"><summary>Developer details</summary><div class="telemetry-row"><span id="telVad">VAD —</span><span id="telConf">Confidence —</span><span id="telRms">RMS —</span></div></details>

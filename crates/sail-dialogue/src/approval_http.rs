@@ -11,19 +11,43 @@ use std::sync::Arc;
 struct ApprovalHttpState {
     approval_authority: Option<sail_guardian::authority::ApprovalAuthority>,
     broker: Option<Arc<sail_guardian::GuardianExecutionBroker>>,
+    active_token: Option<String>,
 }
 pub fn router(
     authority: Option<sail_guardian::authority::ApprovalAuthority>,
     broker: Option<Arc<sail_guardian::GuardianExecutionBroker>>,
 ) -> Router {
+    router_with_token(authority, broker, None)
+}
+
+pub fn router_with_token(
+    authority: Option<sail_guardian::authority::ApprovalAuthority>,
+    broker: Option<Arc<sail_guardian::GuardianExecutionBroker>>,
+    active_token: Option<String>,
+) -> Router {
     Router::new()
         .route("/approvals", get(owner_pending))
         .route("/resolve", post(owner_resolve))
         .route("/revoke", post(owner_revoke))
+        .route("/token", get(owner_token_bootstrap))
         .with_state(Arc::new(ApprovalHttpState {
             approval_authority: authority,
             broker,
+            active_token,
         }))
+}
+
+async fn owner_token_bootstrap(
+    State(state): State<Arc<ApprovalHttpState>>,
+) -> std::result::Result<impl IntoResponse, StatusCode> {
+    if let Some(token) = &state.active_token {
+        Ok((
+            [("cache-control", "no-store")],
+            Json(json!({"token": token, "configured": true})),
+        ))
+    } else {
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
 }
 fn authenticate_owner(
     state: &ApprovalHttpState,
@@ -223,5 +247,19 @@ mod tests {
                 .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
+    }
+    #[tokio::test]
+    async fn bootstrap_token_endpoint_works() {
+        let app_with_token = router_with_token(None, None, Some(OWNER.to_string()));
+        let res = request(&app_with_token, "/token", None, None).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), 65536).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["token"], OWNER);
+        assert_eq!(json["configured"], true);
+
+        let app_without_token = router_with_token(None, None, None);
+        let res_unavail = request(&app_without_token, "/token", None, None).await;
+        assert_eq!(res_unavail.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

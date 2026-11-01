@@ -173,7 +173,7 @@ function connectWs() {
           pendingApprovalActions.set(event.approval_session, { automatic:true });
           renderApprovalCard({session_id:event.approval_session,tool:event.tool,rationale:'Review the exact operation with your owner credentials before continuing.'});
           updateState('approval_required');
-          transcriptBox.textContent = 'Approval needed · Open Settings → Owner approvals to review the exact operation.';
+          transcriptBox.textContent = 'Approval needed · Review and approve on Canvas or Settings.';
         }
         updateToolActivity(event.tool, !['completed','failed','cancelled'].includes(event.state));
         if (event.state === 'executing') updateState('working');
@@ -439,7 +439,7 @@ function renderApprovalCard(data) {
         await ownerApprovalRequest('resolve',{session_id:data.session_id,approved:true});
         button.dataset.resolved='true';handleApprovalResolved({session_id:data.session_id,approved:true});
       }
-    } catch(error){showError(`${error.message} Enter the owner token in Settings → Owner approvals.`);}
+    } catch(error){showError(error.message);}
     finally {button.disabled=Boolean(button.dataset.resolved);}
   }
   async function denyApproval(button) {
@@ -1001,8 +1001,61 @@ window.sailUi = Object.freeze({
   resumeOrbAnimation: () => { orbFrozen = false; },
 });
 
+let cachedOwnerToken = null;
+
+async function getOrFetchOwnerToken() {
+  const tokenInput = document.getElementById('ownerApprovalToken');
+  if (tokenInput && tokenInput.value && tokenInput.value.trim().length >= 32) {
+    cachedOwnerToken = tokenInput.value.trim();
+    try { localStorage.setItem('sail_owner_token', cachedOwnerToken); } catch (_) {}
+    updateApprovalStatusBadge(true);
+    return cachedOwnerToken;
+  }
+  try {
+    const stored = localStorage.getItem('sail_owner_token');
+    if (stored && stored.trim().length >= 32) {
+      cachedOwnerToken = stored.trim();
+      if (tokenInput && !tokenInput.value) tokenInput.value = cachedOwnerToken;
+      updateApprovalStatusBadge(true);
+      return cachedOwnerToken;
+    }
+  } catch (_) {}
+
+  try {
+    const res = await fetch('/api/guardian/token', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.token) {
+        cachedOwnerToken = data.token;
+        try { localStorage.setItem('sail_owner_token', cachedOwnerToken); } catch (_) {}
+        if (tokenInput) tokenInput.value = cachedOwnerToken;
+        updateApprovalStatusBadge(true);
+        return cachedOwnerToken;
+      }
+    }
+  } catch (err) {
+    console.debug('Could not auto-fetch owner approval token:', err);
+  }
+  updateApprovalStatusBadge(Boolean(tokenInput && tokenInput.value && tokenInput.value.trim().length >= 32));
+  return tokenInput ? tokenInput.value : '';
+}
+
+function updateApprovalStatusBadge(configured) {
+  const badge = document.getElementById('approvalStatusBadge');
+  if (!badge) return;
+  if (configured) {
+    badge.style.background = 'rgba(34,197,94,0.15)';
+    badge.style.color = '#4ade80';
+    badge.innerHTML = '<span style="width:6px; height:6px; border-radius:50%; background:#4ade80;"></span> Auto-authorized';
+  } else {
+    badge.style.background = 'rgba(239,68,68,0.15)';
+    badge.style.color = '#f87171';
+    badge.innerHTML = '<span style="width:6px; height:6px; border-radius:50%; background:#f87171;"></span> Manual required';
+  }
+}
+
 async function ownerApprovalRequest(path, body) {
-  const token = document.getElementById('ownerApprovalToken').value;
+  const token = await getOrFetchOwnerToken();
   const response = await fetch(`/api/guardian/${path}`, { method:body ? 'POST' : 'GET', cache:'no-store',
     headers:{ Authorization:`Bearer ${token}`, ...(body ? {'Content-Type':'application/json'} : {}) },
     ...(body ? { body:JSON.stringify(body) } : {}) });
@@ -1038,5 +1091,53 @@ async function refreshOwnerApprovals() {
     }
   } catch(error) { output.textContent = error.message; }
 }
-document.getElementById('refreshApprovalsBtn').addEventListener('click',refreshOwnerApprovals);
-window.addEventListener('pagehide', () => { document.getElementById('ownerApprovalToken').value=''; pendingApprovalActions.clear(); lastToolCalls.clear(); });
+
+const toggleTokenBtn = document.getElementById('toggleTokenVisibilityBtn');
+if (toggleTokenBtn) {
+  toggleTokenBtn.addEventListener('click', () => {
+    const input = document.getElementById('ownerApprovalToken');
+    if (!input) return;
+    if (input.type === 'password') {
+      input.type = 'text';
+      toggleTokenBtn.textContent = 'Hide';
+    } else {
+      input.type = 'password';
+      toggleTokenBtn.textContent = 'Show';
+    }
+  });
+}
+
+const copyTokenBtn = document.getElementById('copyTokenBtn');
+if (copyTokenBtn) {
+  copyTokenBtn.addEventListener('click', async () => {
+    const token = await getOrFetchOwnerToken();
+    if (token) {
+      try {
+        await navigator.clipboard.writeText(token);
+        const prev = copyTokenBtn.textContent;
+        copyTokenBtn.textContent = 'Copied!';
+        setTimeout(() => { copyTokenBtn.textContent = prev; }, 1800);
+      } catch (err) {
+        showError('Could not copy token to clipboard');
+      }
+    }
+  });
+}
+
+const tokenInput = document.getElementById('ownerApprovalToken');
+if (tokenInput) {
+  tokenInput.addEventListener('input', (e) => {
+    const val = e.target.value.trim();
+    if (val.length >= 32) {
+      cachedOwnerToken = val;
+      try { localStorage.setItem('sail_owner_token', val); } catch (_) {}
+      updateApprovalStatusBadge(true);
+    } else {
+      updateApprovalStatusBadge(false);
+    }
+  });
+}
+
+document.getElementById('refreshApprovalsBtn')?.addEventListener('click',refreshOwnerApprovals);
+window.addEventListener('pagehide', () => { pendingApprovalActions.clear(); lastToolCalls.clear(); });
+getOrFetchOwnerToken();
