@@ -16,22 +16,24 @@ pub enum ForgeTaskState {
     Blocked,
 }
 
+impl ForgeTaskState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Planning => "planning",
+            Self::Coding => "coding",
+            Self::Testing => "testing",
+            Self::ReviewPending => "review_pending",
+            Self::AwaitingUser => "awaiting_user",
+            Self::Completed => "completed",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
 impl std::fmt::Display for ForgeTaskState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::Queued => "queued",
-                Self::Planning => "planning",
-                Self::Coding => "coding",
-                Self::Testing => "testing",
-                Self::ReviewPending => "review_pending",
-                Self::AwaitingUser => "awaiting_user",
-                Self::Completed => "completed",
-                Self::Blocked => "blocked",
-            }
-        )
+        write!(f, "{}", self.as_str())
     }
 }
 

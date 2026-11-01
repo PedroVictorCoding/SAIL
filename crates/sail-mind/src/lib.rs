@@ -116,7 +116,7 @@ impl Subsystem for MindSubsystem {
     }
 
     async fn start(&mut self) -> Result<()> {
-        info!("SAIL Mind inference subsystem started (Gemma 4 integration active)");
+        info!("SAIL Mind inference subsystem started (Qwen 3.6 integration active)");
 
         Ok(())
     }
@@ -131,7 +131,7 @@ impl Subsystem for MindSubsystem {
             info!(
                 request_id = %request_id,
                 prompt_len = prompt.len(),
-                "SAIL Mind generating response via Gemma 4"
+                "SAIL Mind generating response via local model (Qwen 3.6)"
             );
 
             let service = self

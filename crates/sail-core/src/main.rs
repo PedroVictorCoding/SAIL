@@ -41,7 +41,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize all 8 Subsystems
     let model_path =
-        std::env::var("SAIL_MODEL_PATH").unwrap_or("models/gemma4-v2-Q4_K_M.gguf".into());
+        std::env::var("SAIL_MODEL_PATH").unwrap_or_else(|_| {
+            let candidates = [
+                "models/Qwen3.6-35B-A3B-Q4_K_M.gguf",
+                "/home/main/SAIL/models/Qwen3.6-35B-A3B-Q4_K_M.gguf",
+                "models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+                "models/gemma4-v2-Q4_K_M.gguf",
+            ];
+            for cand in candidates {
+                if std::path::Path::new(cand).is_file() {
+                    return cand.into();
+                }
+            }
+            "models/Qwen3.6-35B-A3B-Q4_K_M.gguf".into()
+        });
     let mut mind = MindSubsystem::try_new(model_path)?;
     let model_service = mind.model_service()?;
     let mut arena = ArenaSubsystem::new();

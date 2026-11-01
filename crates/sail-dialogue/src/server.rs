@@ -971,7 +971,7 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
     emit(&tx,current,json!({"type":"response_finished","generation_ms":start.elapsed().as_millis(),"turn_id":current})).await;
     info!(
         response_chars = reply.chars().count(),
-        "Gemma response finished; waiting for remaining speech synthesis"
+        "Model response finished; waiting for remaining speech synthesis"
     );
     drop(speech_tx);
     // Wait for the final synthesized chunks before signalling completion.
@@ -1053,7 +1053,7 @@ async fn reason_turn(
             round,
             allow_tools,
             messages = messages.len(),
-            "Requesting streamed Gemma inference"
+            "Requesting streamed model inference"
         );
         let (delta_tx, mut delta_rx) = mpsc::channel::<String>(64);
         let request_messages = if allow_tools {
