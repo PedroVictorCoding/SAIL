@@ -33,6 +33,7 @@ const micBtn = document.getElementById('micBtn'), muteBtn = document.getElementB
 const errorBox = document.getElementById('error');
 let playbackGeneration = 0, nextAudioTime = 0, playbackQueue = Promise.resolve(), pendingAudio = 0;
 let responseNode, responseText = '', turnFinished = false, turnInProgress = false, artifactSerial = 0;
+let turnGenStart = 0, turnFirstTokenTime = 0, turnTokenCount = 0;
 let visionSelectionPending = false;
 const playingSources = new Set();
 let errorTimer, errorStateTimer;
@@ -127,12 +128,32 @@ function connectWs() {
         setCaptureHeld(false);
         cancelVisualCapture();
         stopPlayback(); turnFinished = false; turnInProgress = true; responseText = '';
+        turnGenStart = performance.now();
+        turnFirstTokenTime = 0;
+        turnTokenCount = 0;
         appendConversation('You', data.transcript);
-        responseNode = appendConversation('SAIL', ''); updateState('thinking'); break;
+        responseNode = appendConversation('SAIL', '');
+        updateState('thinking');
+        document.getElementById('sessionTokensPerSec').textContent = 'Calculating…';
+        document.getElementById('sessionTtft').textContent = 'Waiting…';
+        document.getElementById('sessionGenStats').textContent = '0 tokens';
+        break;
       case 'response_delta':
         responseText += data.text;
         if (!responseNode) responseNode = appendConversation('SAIL', '');
-        responseNode.lastChild.textContent = responseText; break;
+        responseNode.lastChild.textContent = responseText;
+        if (!turnTokenCount) updateState('generating');
+        if (data.token_count !== undefined) {
+          turnTokenCount = data.token_count;
+        } else {
+          turnTokenCount += Math.max(1, Math.round(data.text.length / 3.8));
+        }
+        updateGenMetrics(data);
+        break;
+      case 'response_finished':
+        updateGenMetrics(data);
+        updateState('speaking');
+        break;
       case 'audio_chunk': queueAudio(data); break;
       case 'turn_finished':
         setCaptureHeld(false);
@@ -141,6 +162,8 @@ function connectWs() {
         turnFinished = true;
         if (!pendingAudio && !playingSources.size) finishPlayback();
         if (data.latency_ms) setConnection(`Connected · local turn ${(data.latency_ms / 1000).toFixed(1)}s`, true);
+        updateGenMetrics(data);
+        updateState('idle');
         break;
       case 'interruption': cancelVisualCapture(); setCaptureHeld(false); turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
       case 'control': applyControl(data.control); break;
@@ -706,13 +729,57 @@ function updateState(state) {
   const changed = orbState !== state;
   orbState = state;
   const labels = { holding:'Ready to send', idle:'Ready', listening:'Listening', transcribing:'Understanding', thinking:'Thinking', speaking:'Speaking', working:'Working', seeing:'Seeing', watching:'Watching', interrupted:'Interrupted', disconnected:'Offline', approval_required:'Approval needed', error:'Attention' };
+  const detailedLabels = {
+    holding:'Ready to send', idle:'Ready', listening:'Listening…', transcribing:'Processing audio…',
+    thinking:'Processing / Thinking…', generating:'Generating tokens…', speaking:'Speaking response…',
+    working:'Executing tool…', seeing:'Analyzing image…', watching:'Analyzing video…',
+    interrupted:'Interrupted', disconnected:'Offline', approval_required:'Approval needed', error:'Attention needed'
+  };
   statusBadge.textContent = labels[state] || 'Ready'; document.getElementById('appShell').dataset.state = state;
   const palette = statePalette(paletteState(state));
   ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, [palette.primary,palette.secondary,palette.tertiary][index]));
   document.getElementById('sessionState').textContent = labels[state] || 'Ready';
+  const liveState = document.getElementById('sessionLiveState');
+  if (liveState) liveState.textContent = detailedLabels[state] || labels[state] || state || 'Ready';
   if (changed && reduceMotion.matches && !document.hidden) renderVisuals();
   syncActivityPill();
-  document.getElementById('interruptBtn').hidden = !['thinking','speaking','working','transcribing'].includes(state);
+  document.getElementById('interruptBtn').hidden = !['thinking','speaking','working','transcribing','generating'].includes(state);
+}
+function updateGenMetrics(data) {
+  if (data?.token_count !== undefined) {
+    turnTokenCount = data.token_count;
+  }
+  const ttftEl = document.getElementById('sessionTtft');
+  if (ttftEl) {
+    if (data?.ttft_ms !== undefined && data.ttft_ms !== null) {
+      ttftEl.textContent = `${data.ttft_ms} ms`;
+    } else if (!turnFirstTokenTime && turnGenStart) {
+      turnFirstTokenTime = performance.now();
+      ttftEl.textContent = `${Math.round(turnFirstTokenTime - turnGenStart)} ms`;
+    }
+  }
+
+  const speedEl = document.getElementById('sessionTokensPerSec');
+  if (speedEl) {
+    if (data?.tokens_per_sec !== undefined && data.tokens_per_sec > 0) {
+      speedEl.textContent = `${Number(data.tokens_per_sec).toFixed(1)} tok/s`;
+    } else if (turnFirstTokenTime && turnTokenCount > 0) {
+      const elapsedSec = (performance.now() - turnFirstTokenTime) / 1000;
+      if (elapsedSec > 0.05) {
+        speedEl.textContent = `${(turnTokenCount / elapsedSec).toFixed(1)} tok/s`;
+      }
+    }
+  }
+
+  const genStatsEl = document.getElementById('sessionGenStats');
+  if (genStatsEl) {
+    if (data?.generation_ms) {
+      genStatsEl.textContent = `${turnTokenCount} tok · ${(data.generation_ms / 1000).toFixed(1)}s`;
+    } else if (turnGenStart) {
+      const elapsedSec = ((performance.now() - turnGenStart) / 1000).toFixed(1);
+      genStatsEl.textContent = `${turnTokenCount} tok · ${elapsedSec}s`;
+    }
+  }
 }
 function setConnection(message, connected) {
   const pill = document.getElementById('connection'); pill.className = `connection-pill ${connected ? 'is-connected' : 'is-disconnected'}`;
