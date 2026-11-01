@@ -35,3 +35,4 @@ jobs:
 
       - name: Run workspace unit & integration tests
         run: cargo test --workspace --locked
+

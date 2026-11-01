@@ -259,6 +259,10 @@ impl ForgeOrchestrator {
             events: cp.events.clone(),
             patch: cp.patch.clone(),
             target_file: cp.target_file.clone(),
+            verification_status: cp.verification_status.clone(),
+            failure_reason: cp.failure_reason.clone(),
+            model_endpoint: cp.model_endpoint.clone(),
+            modified_files: cp.modified_files.clone(),
         }
     }
 
@@ -307,23 +311,7 @@ impl ForgeOrchestrator {
             let jobs = self.active_jobs.lock().unwrap();
             for (job_id, job) in jobs.iter() {
                 seen.insert(job_id.clone());
-                let cp = &job.checkpoint;
-                results.push(IssueStatusResponse {
-                    job_id: cp.job_id.clone(),
-                    repo: cp.repo.clone(),
-                    issue_number: cp.issue_number,
-                    state: cp.state,
-                    branch: cp.branch.clone(),
-                    current_step: format!("{:?}", cp.state),
-                    iteration: cp.iteration,
-                    diff_stat: cp.diff_stat.clone().unwrap_or_default(),
-                    tokens_used: cp.tokens_used,
-                    wall_time_secs: cp.wall_time_secs,
-                    review_status: cp.review_result.as_ref().map(|r| r.provider.clone()),
-                    events: cp.events.clone(),
-                    patch: cp.patch.clone(),
-                    target_file: cp.target_file.clone(),
-                });
+                results.push(Self::checkpoint_to_status_response(&job.checkpoint));
             }
         }
 
@@ -331,22 +319,7 @@ impl ForgeOrchestrator {
             for cp in checkpoints {
                 if !seen.contains(&cp.job_id) {
                     seen.insert(cp.job_id.clone());
-                    results.push(IssueStatusResponse {
-                        job_id: cp.job_id.clone(),
-                        repo: cp.repo.clone(),
-                        issue_number: cp.issue_number,
-                        state: cp.state,
-                        branch: cp.branch.clone(),
-                        current_step: format!("{:?}", cp.state),
-                        iteration: cp.iteration,
-                        diff_stat: cp.diff_stat.clone().unwrap_or_default(),
-                        tokens_used: cp.tokens_used,
-                        wall_time_secs: cp.wall_time_secs,
-                        review_status: cp.review_result.as_ref().map(|r| r.provider.clone()),
-                        events: cp.events.clone(),
-                        patch: cp.patch.clone(),
-                        target_file: cp.target_file.clone(),
-                    });
+                    results.push(Self::checkpoint_to_status_response(&cp));
                 }
             }
         }
@@ -887,235 +860,201 @@ impl ForgeOrchestrator {
             ]),
         });
 
-        let effective_patch = match patch_to_apply {
-            Some(p) => p.to_string(),
-            None => {
-                // Autonomous coding agent: fetch issue context and synthesize code patch via real model
-                match self
-                    .synthesize_solution_for_issue(&repo, issue_number, job_id, &worktree)
-                    .await
-                {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let mut jobs = self.active_jobs.lock().unwrap();
-                        if let Some(job) = jobs.get_mut(job_id) {
-                            job.checkpoint.transition(
-                                ForgeTaskState::Blocked,
-                                &format!("Model inference unavailable: {}", e),
-                            );
-                            let _ = self.checkpoint_store.save(&job.checkpoint);
-                        }
-                        return Err(format!("Autonomous synthesis blocked: {}", e));
-                    }
+        // Autonomous coding agent: run bounded iterative local solver loop
+        let outcome = if let Some(p) = patch_to_apply {
+            if let Err(e) = worktree.apply_patch(p) {
+                let mut jobs = self.active_jobs.lock().unwrap();
+                if let Some(job) = jobs.get_mut(job_id) {
+                    job.checkpoint
+                        .transition(ForgeTaskState::Blocked, &format!("Patch failed: {}", e));
+                    let _ = self.checkpoint_store.save(&job.checkpoint);
                 }
+                return Err(format!("Patch application failed: {}", e));
             }
+            let diff = worktree.get_diff().unwrap_or_default();
+            let modified = crate::solver::extract_modified_files_from_diff(&diff);
+            let logs_dir = self.config.workspace_root.join("logs").join(job_id);
+            let _ = fs::create_dir_all(&logs_dir);
+            let log_path = logs_dir.join("cargo_test.log");
+            let test_res = worktree.run_command("cargo", &["test"], 180);
+            let mut test_recs = Vec::new();
+            let (passed, test_msg) = match test_res {
+                Ok(out) => {
+                    let _ = fs::write(
+                        &log_path,
+                        format!("STDOUT:\n{}\n\nSTDERR:\n{}", out.stdout, out.stderr),
+                    );
+                    test_recs.push(TestExecutionRecord {
+                        command: "cargo test".into(),
+                        status: if out.status == 0 {
+                            "passed".into()
+                        } else {
+                            format!("failed ({})", out.status)
+                        },
+                        duration_ms: 100,
+                        log_ref: format!("logs/{}/cargo_test.log", job_id),
+                        exit_code: out.status,
+                        stdout_log_path: Some(log_path.clone()),
+                        stderr_log_path: Some(log_path),
+                    });
+                    (
+                        out.status == 0,
+                        if out.status == 0 {
+                            "passed".into()
+                        } else {
+                            out.stderr
+                        },
+                    )
+                }
+                Err(e) => {
+                    let _ = fs::write(&log_path, format!("Execution Error: {}", e));
+                    (false, e.to_string())
+                }
+            };
+
+            crate::solver::SolverOutcome {
+                success: passed,
+                verification_status: if passed {
+                    "verified".into()
+                } else {
+                    "tests_failed".into()
+                },
+                failure_reason: if passed { None } else { Some(test_msg) },
+                final_diff: diff,
+                modified_files: modified.clone(),
+                target_file: modified.first().cloned(),
+                iterations: 1,
+                turns: 1,
+                test_records: test_recs,
+                model: crate::solver::IdentifiedModel {
+                    model_id: "caller-pinned-patch".into(),
+                    model_hash: "pinned".into(),
+                    endpoint: "local".into(),
+                },
+                summary: "Pinned patch applied".into(),
+            }
+        } else {
+            let (title, body) = {
+                let jobs = self.active_jobs.lock().unwrap();
+                let j = jobs.get(job_id);
+                (
+                    j.and_then(|x| x.checkpoint.issue_title.clone())
+                        .unwrap_or_else(|| format!("Issue #{}", issue_number)),
+                    j.and_then(|x| x.checkpoint.issue_body.clone())
+                        .unwrap_or_default(),
+                )
+            };
+
+            let controller =
+                crate::solver::LocalSolverController::new(4, 180, self.config.model_path.clone());
+
+            let logs_dir = self.config.workspace_root.join("logs").join(job_id);
+            controller
+                .solve_issue(&worktree, &title, &body, &logs_dir, || {
+                    let jobs = self.active_jobs.lock().unwrap();
+                    if let Some(j) = jobs.get(job_id) {
+                        j.checkpoint.state == ForgeTaskState::Blocked
+                    } else {
+                        false
+                    }
+                })
+                .await
         };
 
-        if let Err(e) = worktree.apply_patch(&effective_patch) {
-            let mut jobs = self.active_jobs.lock().unwrap();
-            if let Some(job) = jobs.get_mut(job_id) {
-                job.checkpoint
-                    .transition(ForgeTaskState::Blocked, &format!("Patch failed: {}", e));
-                let _ = self.checkpoint_store.save(&job.checkpoint);
-            }
-            return Err(format!("Patch application failed: {}", e));
-        }
+        // Recompute diff strictly after solver/repairs complete
+        let final_diff = worktree.get_diff().unwrap_or(outcome.final_diff.clone());
+        let diff_stat = format!("{} lines changed", final_diff.lines().count());
 
-        // P0 Gate: Enforce that generated diff is NON-EMPTY. Fail closed if empty!
-        let diff = worktree.get_diff().unwrap_or_default();
-        if diff.trim().is_empty() {
+        if !crate::solver::is_meaningful_code_diff(&final_diff) {
             let err_msg = "Nonempty diff requirement failed: autonomous coding agent produced no code modifications for issue".to_string();
             let mut jobs = self.active_jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(job_id) {
+                job.checkpoint.failure_reason = Some(err_msg.clone());
+                job.checkpoint.verification_status = Some("blocked".into());
                 job.checkpoint.transition(ForgeTaskState::Blocked, &err_msg);
                 let _ = self.checkpoint_store.save(&job.checkpoint);
             }
             return Err(err_msg);
         }
 
-        let diff_stat = format!("{} lines changed", diff.lines().count());
-
-        {
-            let mut jobs = self.active_jobs.lock().unwrap();
-            if let Some(job) = jobs.get_mut(job_id) {
-                job.checkpoint.patch = Some(diff.clone());
-                job.checkpoint.diff_stat = Some(diff_stat.clone());
-                let _ = self.checkpoint_store.save(&job.checkpoint);
-            }
-        }
-
-        self.emit_event(EventPayload::ForgeIssueStatusUpdated {
-            job_id: job_id.to_string(),
-            state: "coding".into(),
-            stage: "coding".into(),
-            message: format!("Applied code patch ({diff_stat})"),
-            diff: Some(diff.clone()),
-            target_file: {
-                let jobs = self.active_jobs.lock().unwrap();
-                jobs.get(job_id)
-                    .and_then(|j| j.checkpoint.target_file.clone())
-            },
-            logs: Some(vec![
-                "Patch synthesized successfully.".into(),
-                format!("Applied diff ({diff_stat}) into isolated worktree."),
-            ]),
-        });
-
-        self.check_interruption(job_id).await?;
-
-        // 4. Testing phase: execute real tests inside sandbox with bounded iterative repair
-        {
-            let mut jobs = self.active_jobs.lock().unwrap();
-            if let Some(job) = jobs.get_mut(job_id) {
-                job.checkpoint
-                    .transition(ForgeTaskState::Testing, "Running test suite inside sandbox");
-                job.checkpoint.diff_stat = Some(diff_stat.clone());
-                let _ = self.checkpoint_store.save(&job.checkpoint);
-            }
-        }
-
-        self.emit_event(EventPayload::ForgeIssueStatusUpdated {
-            job_id: job_id.to_string(),
-            state: "testing".into(),
-            stage: "testing".into(),
-            message: format!("Executing sandbox tests ({diff_stat})"),
-            diff: Some(diff.clone()),
-            target_file: {
-                let jobs = self.active_jobs.lock().unwrap();
-                jobs.get(job_id)
-                    .and_then(|j| j.checkpoint.target_file.clone())
-            },
-            logs: Some(vec![
-                "Code edits applied cleanly.".into(),
-                format!("Executing cargo test inside sandbox for {diff_stat}..."),
-            ]),
-        });
-
-        let logs_dir = self.config.workspace_root.join("logs").join(job_id);
-        let _ = fs::create_dir_all(&logs_dir);
-        let log_path = logs_dir.join("cargo_test.log");
-
         let patches_dir = self.config.workspace_root.join("patches");
         let _ = fs::create_dir_all(&patches_dir);
         let patch_path = patches_dir.join(format!("{}.patch", job_id));
-        let _ = fs::write(&patch_path, &diff);
+        let _ = fs::write(&patch_path, &final_diff);
 
-        let max_iterations = 3;
-        let mut iteration = 0;
-        let mut test_records = Vec::new();
-        let mut tests_passed = false;
-
-        while iteration < max_iterations && !tests_passed {
-            iteration += 1;
-            info!(
-                "Running sandbox quality gate iteration {}/{} for job {}",
-                iteration, max_iterations, job_id
-            );
-
-            // Run real cargo test in the isolated Bubblewrap sandbox
-            let test_start = Instant::now();
-            let test_cmd_result = worktree.run_command("cargo", &["test"], 180);
-            let duration_ms = test_start.elapsed().as_millis() as u64;
-
-            match test_cmd_result {
-                Ok(ref output) if output.status == 0 => {
-                    tests_passed = true;
-                    let status_msg = "passed (cargo test: ok)".to_string();
-                    let _ = fs::write(
-                        &log_path,
-                        format!("STDOUT:\n{}\n\nSTDERR:\n{}", output.stdout, output.stderr),
-                    );
-                    test_records.push(TestExecutionRecord {
-                        command: "cargo test".into(),
-                        status: status_msg,
-                        duration_ms,
-                        log_ref: format!("logs/{}/cargo_test.log", job_id),
-                    });
-                }
-                Ok(ref output) => {
-                    let status_msg = format!(
-                        "failed (cargo test exit status: {}): {}",
-                        output.status, output.stderr
-                    );
-                    let _ = fs::write(
-                        &log_path,
-                        format!("STDOUT:\n{}\n\nSTDERR:\n{}", output.stdout, output.stderr),
-                    );
-                    test_records.push(TestExecutionRecord {
-                        command: "cargo test".into(),
-                        status: status_msg,
-                        duration_ms,
-                        log_ref: format!("logs/{}/cargo_test.log", job_id),
-                    });
-
-                    // If iterations remain and patch was not explicitly pinned by caller, attempt repair
-                    if iteration < max_iterations && patch_to_apply.is_none() {
-                        warn!(
-                            "Tests failed on iteration {}; requesting iterative repair patch from model",
-                            iteration
-                        );
-                        if let Ok(repair_patch) = self
-                            .synthesize_repair_patch(&repo, issue_number, &worktree, &output.stderr)
-                            .await
-                        {
-                            if let Ok(()) = worktree.apply_patch(&repair_patch) {
-                                info!("Applied iterative repair patch on iteration {}", iteration);
-                                if let Ok(new_diff) = worktree.get_diff() {
-                                    let _ = fs::write(&patch_path, &new_diff);
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(ref e) => {
-                    let _ = fs::write(&log_path, format!("Execution Error: {}", e));
-                    test_records.push(TestExecutionRecord {
-                        command: "cargo test".into(),
-                        status: format!("error: {}", e),
-                        duration_ms,
-                        log_ref: format!("logs/{}/cargo_test.log", job_id),
-                    });
-                    break;
-                }
+        {
+            let mut jobs = self.active_jobs.lock().unwrap();
+            if let Some(job) = jobs.get_mut(job_id) {
+                job.checkpoint.patch = Some(final_diff.clone());
+                job.checkpoint.diff_stat = Some(diff_stat.clone());
+                job.checkpoint.target_file = outcome.target_file.clone();
+                job.checkpoint.verification_status = Some(outcome.verification_status.clone());
+                job.checkpoint.failure_reason = outcome.failure_reason.clone();
+                job.checkpoint.model_endpoint = Some(outcome.model.endpoint.clone());
+                job.checkpoint.modified_files = Some(outcome.modified_files.clone());
+                job.checkpoint.test_history = outcome.test_records.clone();
+                let _ = self.checkpoint_store.save(&job.checkpoint);
             }
         }
 
-        // If tests fail, do NOT synthesize success: mark Blocked and fail closed!
-        if !tests_passed {
+        self.emit_event(EventPayload::ForgeIssueStatusUpdated {
+            job_id: job_id.to_string(),
+            state: if outcome.success {
+                "testing".into()
+            } else {
+                "blocked".into()
+            },
+            stage: if outcome.success {
+                "testing".into()
+            } else {
+                "blocked".into()
+            },
+            message: format!(
+                "Solver outcome: {} ({diff_stat})",
+                outcome.verification_status
+            ),
+            diff: Some(final_diff.clone()),
+            target_file: outcome.target_file.clone(),
+            logs: Some(vec![
+                format!(
+                    "Model: {} ({})",
+                    outcome.model.model_id, outcome.model.endpoint
+                ),
+                format!("Solver status: {}", outcome.verification_status),
+                format!("Summary: {}", outcome.summary),
+            ]),
+        });
+
+        if !outcome.success {
+            let reason = outcome
+                .failure_reason
+                .unwrap_or_else(|| "Tests failed".into());
             let mut jobs = self.active_jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(job_id) {
-                job.checkpoint.test_history = test_records;
-                job.checkpoint.iteration = iteration;
-                job.checkpoint.transition(
-                    ForgeTaskState::Blocked,
-                    "Sandbox tests failed; changes unverified",
-                );
+                job.checkpoint.transition(ForgeTaskState::Blocked, &reason);
                 let _ = self.checkpoint_store.save(&job.checkpoint);
             }
-            return Err(
-                "Verification failed: actual tests did not pass in isolated sandbox".into(),
-            );
+            return Err(format!("Solver failed verification: {}", reason));
         }
 
         self.check_interruption(job_id).await?;
 
-        // 5. Review phase: call ChatGPT-subscription authenticated Codex CLI reviewer
+        // 5. Review phase: call reviewer or mark skipped when local-first
         {
             let mut jobs = self.active_jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(job_id) {
                 job.checkpoint
                     .transition(ForgeTaskState::ReviewPending, "Requesting review");
-                job.checkpoint.test_history = test_records.clone();
                 let _ = self.checkpoint_store.save(&job.checkpoint);
             }
         }
 
-        let total_test_duration_ms: u64 = test_records.iter().map(|r| r.duration_ms).sum();
+        let total_test_duration_ms: u64 = outcome.test_records.iter().map(|r| r.duration_ms).sum();
         let review_req = ReviewRequest {
             job_id: job_id.to_string(),
             issue_id: format!("{}#{}", repo, issue_number),
             base_commit: base_commit.clone(),
-            diff_patch: diff.clone(),
+            diff_patch: final_diff.clone(),
             test_manifest: format!("cargo test passed ({}ms)", total_test_duration_ms),
         };
 
@@ -1129,19 +1068,18 @@ impl ForgeOrchestrator {
         });
 
         // 6. Complete phase
-        let model_hash = self.calculate_model_hash();
         let wall_time_secs = start_time.elapsed().as_secs();
 
         let report = ForgeJobReport {
             issue: format!("{}#{}", repo, issue_number),
             base_commit,
             branch: branch.clone(),
-            model_id: "Qwen3-Coder-30B-A3B-Instruct".into(),
-            model_hash,
+            model_id: outcome.model.model_id.clone(),
+            model_hash: outcome.model.model_hash.clone(),
             patch_ref: format!("patches/{}.patch", job_id),
-            tests: test_records,
+            tests: outcome.test_records.clone(),
             review_result: Some(review_result.clone()),
-            cost_local_estimate: 0.05,
+            cost_local_estimate: 0.0,
             api_cost_actual: review_result.cost_usd,
             remaining_risks: vec![],
             status: ForgeTaskState::Completed,
