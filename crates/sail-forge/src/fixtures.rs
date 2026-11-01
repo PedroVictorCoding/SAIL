@@ -378,3 +378,145 @@ fn test_envelope_matches() {
         },
     ]
 }
+
+/// Deterministic 2-file offline Rust crate fixture for Increment A smoke verification:
+/// - 2 source files (`src/lib.rs` and `src/pricing.rs`) with an initial failing unit test
+/// - 1 reference 2-file patch that fixes the bug and makes `cargo test --offline` pass
+/// - 1 deliberately broken patch that fails `cargo test --offline`
+/// - 1 malicious `build.rs` probe that attempts host/network/secret escapes inside Bubblewrap
+#[derive(Debug, Clone)]
+pub struct MultiFileSmokeFixture {
+    pub id: u64,
+    pub title: &'static str,
+    pub description: &'static str,
+    pub cargo_toml: &'static str,
+    pub initial_files: Vec<(&'static str, &'static str)>,
+    pub reference_patch: &'static str,
+    pub broken_patch: &'static str,
+    pub malicious_build_rs: &'static str,
+}
+
+pub fn get_multi_file_smoke_fixture() -> MultiFileSmokeFixture {
+    MultiFileSmokeFixture {
+        id: 12201,
+        title: "Apply basis-point fee discount across invoice line items and subtotal",
+        description: "Invoice::total_cents in src/lib.rs ignores Invoice::discount_bps when calling pricing::apply_discount_bps in src/pricing.rs, and pricing::apply_discount_bps rounds in the wrong direction by adding instead of subtracting the discount.",
+        cargo_toml: r#"[package]
+name = "smoke_invoice_fixture"
+version = "0.1.0"
+edition = "2021"
+"#,
+        initial_files: vec![
+            (
+                "src/pricing.rs",
+                r#"/// Apply a discount in basis points (100 bps = 1%) to a cent amount.
+pub fn apply_discount_bps(amount_cents: u64, discount_bps: u32) -> u64 {
+    let clamped_bps = discount_bps.min(10_000) as u64;
+    let discount = (amount_cents * clamped_bps) / 10_000;
+    amount_cents + discount
+}
+"#,
+            ),
+            (
+                "src/lib.rs",
+                r#"pub mod pricing;
+
+pub struct Invoice {
+    pub items_cents: Vec<u64>,
+    pub discount_bps: u32,
+}
+
+impl Invoice {
+    pub fn new(items_cents: Vec<u64>, discount_bps: u32) -> Self {
+        Self {
+            items_cents,
+            discount_bps,
+        }
+    }
+
+    pub fn subtotal_cents(&self) -> u64 {
+        self.items_cents.iter().copied().sum()
+    }
+
+    pub fn total_cents(&self) -> u64 {
+        let subtotal = self.subtotal_cents();
+        pricing::apply_discount_bps(subtotal, 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_invoice_discount_calculation() {
+        let inv = Invoice::new(vec![1200, 800], 1500); // $20.00 with 15% discount -> $17.00 (1700 cents)
+        assert_eq!(inv.subtotal_cents(), 2000);
+        assert_eq!(inv.total_cents(), 1700);
+    }
+}
+"#,
+            ),
+        ],
+        reference_patch: r#"--- a/src/pricing.rs
++++ b/src/pricing.rs
+@@ -2,5 +2,5 @@
+ pub fn apply_discount_bps(amount_cents: u64, discount_bps: u32) -> u64 {
+     let clamped_bps = discount_bps.min(10_000) as u64;
+     let discount = (amount_cents * clamped_bps) / 10_000;
+-    amount_cents + discount
++    amount_cents.saturating_sub(discount)
+ }
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -19,4 +19,4 @@
+     pub fn total_cents(&self) -> u64 {
+         let subtotal = self.subtotal_cents();
+-        pricing::apply_discount_bps(subtotal, 0)
++        pricing::apply_discount_bps(subtotal, self.discount_bps)
+     }
+"#,
+        broken_patch: r#"--- a/src/pricing.rs
++++ b/src/pricing.rs
+@@ -2,5 +2,5 @@
+ pub fn apply_discount_bps(amount_cents: u64, discount_bps: u32) -> u64 {
+     let clamped_bps = discount_bps.min(10_000) as u64;
+     let discount = (amount_cents * clamped_bps) / 10_000;
+-    amount_cents + discount
++    amount_cents.saturating_sub(discount * 2)
+ }
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -19,4 +19,4 @@
+     pub fn total_cents(&self) -> u64 {
+         let subtotal = self.subtotal_cents();
+-        pricing::apply_discount_bps(subtotal, 0)
++        pricing::apply_discount_bps(subtotal, self.discount_bps)
+     }
+"#,
+        malicious_build_rs: r#"use std::fs;
+use std::net::TcpStream;
+use std::time::Duration;
+
+fn main() {
+    // 1. Attempt to write outside worktree into /home/main
+    if fs::write("/home/main/pwned_by_build_rs", "escaped").is_ok() {
+        panic!("SANDBOX ESCAPE: wrote to /home/main/pwned_by_build_rs");
+    }
+    // 2. Attempt to read host SSH keys
+    if fs::read_to_string("/home/main/.ssh/id_rsa").is_ok() {
+        panic!("SANDBOX ESCAPE: read /home/main/.ssh/id_rsa");
+    }
+    // 3. Attempt outbound network connection
+    if TcpStream::connect_timeout(
+        &"1.1.1.1:80".parse().unwrap(),
+        Duration::from_millis(200),
+    )
+    .is_ok()
+    {
+        panic!("SANDBOX ESCAPE: outbound network connection succeeded");
+    }
+}
+"#,
+    }
+}

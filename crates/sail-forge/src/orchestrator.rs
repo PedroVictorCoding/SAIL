@@ -221,12 +221,18 @@ impl ForgeOrchestrator {
         if job_id.starts_with(q) || job_id.ends_with(q) || (q.len() >= 4 && job_id.contains(q)) {
             return true;
         }
-        let parsed_num = q.parse::<u64>().ok()
+        let parsed_num = q
+            .parse::<u64>()
+            .ok()
             .or_else(|| q.strip_prefix('#').and_then(|s| s.parse::<u64>().ok()))
             .or_else(|| q.strip_prefix("issue-").and_then(|s| s.parse::<u64>().ok()))
             .or_else(|| q.strip_prefix("issue#").and_then(|s| s.parse::<u64>().ok()))
             .or_else(|| q.strip_prefix("issue ").and_then(|s| s.parse::<u64>().ok()))
-            .or_else(|| q.strip_prefix("job-").and_then(|s| s.split('-').next()).and_then(|s| s.parse::<u64>().ok()));
+            .or_else(|| {
+                q.strip_prefix("job-")
+                    .and_then(|s| s.split('-').next())
+                    .and_then(|s| s.parse::<u64>().ok())
+            });
         if let Some(num) = parsed_num {
             if num == issue_number {
                 return true;
@@ -235,7 +241,9 @@ impl ForgeOrchestrator {
         false
     }
 
-    fn checkpoint_to_status_response(cp: &crate::persistence::TaskCheckpoint) -> IssueStatusResponse {
+    fn checkpoint_to_status_response(
+        cp: &crate::persistence::TaskCheckpoint,
+    ) -> IssueStatusResponse {
         IssueStatusResponse {
             job_id: cp.job_id.clone(),
             repo: cp.repo.clone(),
@@ -264,7 +272,11 @@ impl ForgeOrchestrator {
             }
             // Search active jobs by prefix or issue number (e.g. "5", "#5", "job-5")
             for job in jobs.values() {
-                if Self::matches_job_identifier(q, &job.checkpoint.job_id, job.checkpoint.issue_number) {
+                if Self::matches_job_identifier(
+                    q,
+                    &job.checkpoint.job_id,
+                    job.checkpoint.issue_number,
+                ) {
                     return Some(Self::checkpoint_to_status_response(&job.checkpoint));
                 }
             }
@@ -347,7 +359,9 @@ impl ForgeOrchestrator {
         let mut jobs = self.active_jobs.lock().unwrap();
         let resolved_id = if jobs.contains_key(job_id) {
             job_id.to_string()
-        } else if let Some((id, _)) = jobs.iter().find(|(_, j)| Self::matches_job_identifier(job_id, &j.checkpoint.job_id, j.checkpoint.issue_number)) {
+        } else if let Some((id, _)) = jobs.iter().find(|(_, j)| {
+            Self::matches_job_identifier(job_id, &j.checkpoint.job_id, j.checkpoint.issue_number)
+        }) {
             id.clone()
         } else {
             return Err(format!("Job {} not found", job_id));
@@ -380,7 +394,9 @@ impl ForgeOrchestrator {
         let mut jobs = self.active_jobs.lock().unwrap();
         let resolved_id = if jobs.contains_key(job_id) {
             job_id.to_string()
-        } else if let Some((id, _)) = jobs.iter().find(|(_, j)| Self::matches_job_identifier(job_id, &j.checkpoint.job_id, j.checkpoint.issue_number)) {
+        } else if let Some((id, _)) = jobs.iter().find(|(_, j)| {
+            Self::matches_job_identifier(job_id, &j.checkpoint.job_id, j.checkpoint.issue_number)
+        }) {
             id.clone()
         } else {
             return Err(format!("Job {} not found", job_id));
@@ -413,7 +429,9 @@ impl ForgeOrchestrator {
         let mut jobs = self.active_jobs.lock().unwrap();
         let resolved_id = if jobs.contains_key(job_id) {
             job_id.to_string()
-        } else if let Some((id, _)) = jobs.iter().find(|(_, j)| Self::matches_job_identifier(job_id, &j.checkpoint.job_id, j.checkpoint.issue_number)) {
+        } else if let Some((id, _)) = jobs.iter().find(|(_, j)| {
+            Self::matches_job_identifier(job_id, &j.checkpoint.job_id, j.checkpoint.issue_number)
+        }) {
             id.clone()
         } else {
             return Err(format!("Job {} not found", job_id));
@@ -860,7 +878,8 @@ impl ForgeOrchestrator {
             diff: None,
             target_file: {
                 let jobs = self.active_jobs.lock().unwrap();
-                jobs.get(job_id).and_then(|j| j.checkpoint.target_file.clone())
+                jobs.get(job_id)
+                    .and_then(|j| j.checkpoint.target_file.clone())
             },
             logs: Some(vec![
                 "Isolated worktree initialized successfully.".into(),
@@ -933,7 +952,8 @@ impl ForgeOrchestrator {
             diff: Some(diff.clone()),
             target_file: {
                 let jobs = self.active_jobs.lock().unwrap();
-                jobs.get(job_id).and_then(|j| j.checkpoint.target_file.clone())
+                jobs.get(job_id)
+                    .and_then(|j| j.checkpoint.target_file.clone())
             },
             logs: Some(vec![
                 "Patch synthesized successfully.".into(),
@@ -962,7 +982,8 @@ impl ForgeOrchestrator {
             diff: Some(diff.clone()),
             target_file: {
                 let jobs = self.active_jobs.lock().unwrap();
-                jobs.get(job_id).and_then(|j| j.checkpoint.target_file.clone())
+                jobs.get(job_id)
+                    .and_then(|j| j.checkpoint.target_file.clone())
             },
             logs: Some(vec![
                 "Code edits applied cleanly.".into(),

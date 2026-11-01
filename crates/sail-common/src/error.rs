@@ -5,10 +5,7 @@ pub type Result<T> = std::result::Result<T, SailError>;
 #[derive(Error, Debug)]
 pub enum SailError {
     #[error("Subsystem error [{subsystem}]: {message}")]
-    Subsystem {
-        subsystem: String,
-        message: String,
-    },
+    Subsystem { subsystem: String, message: String },
 
     #[error("Event bus channel closed or lagged: {0}")]
     Channel(String),

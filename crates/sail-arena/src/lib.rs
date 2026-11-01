@@ -66,10 +66,11 @@ impl Subsystem for ArenaSubsystem {
 
     async fn handle_event(&self, event: &SailEvent) -> Result<()> {
         if let EventPayload::MemoryRecordStored {
-                record_id,
-                collection,
-                summary,
-            } = &event.payload {
+            record_id,
+            collection,
+            summary,
+        } = &event.payload
+        {
             if let Ok(mut store) = self.memory_store.write() {
                 store.insert(record_id.clone(), format!("{collection}:{summary}"));
             }

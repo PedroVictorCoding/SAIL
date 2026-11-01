@@ -1,15 +1,15 @@
 pub mod approval_http;
-mod execution;
 pub mod control;
+mod execution;
 pub mod orb;
 pub mod pipeline;
 pub mod server;
 mod speech;
 pub mod stt;
 mod tool_policy;
-mod visual_capture;
 pub mod tts;
 pub mod vad;
+mod visual_capture;
 pub mod vlm;
 
 use async_trait::async_trait;

@@ -83,7 +83,7 @@ impl IsolatedWorktree {
 
         let branch = format!("agent/forge-{}", job_id);
 
-        let worktree = Self {
+        let mut worktree = Self {
             job_id: job_id.to_string(),
             root_dir: canonical_root,
             branch,
@@ -92,7 +92,8 @@ impl IsolatedWorktree {
             keep_on_drop: false,
         };
 
-        worktree.init_git_workspace(&canonical_repo, base_commit)?;
+        let pinned_sha = worktree.init_git_workspace(&canonical_repo, base_commit)?;
+        worktree.base_commit = pinned_sha;
         Ok(worktree)
     }
 
@@ -185,17 +186,35 @@ impl IsolatedWorktree {
 
     /// Apply unified diff patch strictly inside the worktree.
     pub fn apply_patch(&self, patch: &str) -> Result<(), WorktreeError> {
+        if patch.trim().is_empty() {
+            return Err(WorktreeError::PatchError(
+                "Refusing to apply empty patch".to_string(),
+            ));
+        }
+
         // First validate that patch headers do not contain forbidden traversal paths
+        let mut saw_target = false;
         for line in patch.lines() {
             if let Some(path_str) = line.strip_prefix("+++ b/") {
-                let p = Path::new(path_str);
+                let p = Path::new(path_str.trim());
                 self.resolve_safe_path(p, true)?;
+                saw_target = true;
+            } else if let Some(path_str) = line.strip_prefix("--- a/") {
+                let p = Path::new(path_str.trim());
+                self.resolve_safe_path(p, false)?;
             }
+        }
+
+        if !saw_target {
+            return Err(WorktreeError::PatchError(
+                "Patch does not contain any valid '+++ b/<path>' target headers".to_string(),
+            ));
         }
 
         let output = Command::new("git")
             .arg("apply")
             .arg("--verbose")
+            .arg("--recount")
             .arg("-")
             .current_dir(&self.root_dir)
             .stdin(Stdio::piped())
@@ -206,6 +225,9 @@ impl IsolatedWorktree {
                 use std::io::Write;
                 if let Some(mut stdin) = child.stdin.take() {
                     let _ = stdin.write_all(patch.as_bytes());
+                    if !patch.ends_with('\n') {
+                        let _ = stdin.write_all(b"\n");
+                    }
                 }
                 child.wait_with_output()
             });
@@ -218,48 +240,138 @@ impl IsolatedWorktree {
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 self.fallback_apply_patch(patch)
-                    .map_err(|e| WorktreeError::PatchError(format!("{}: {}", stderr, e)))
+                    .map_err(|e| WorktreeError::PatchError(format!("{}: {}", stderr.trim(), e)))
             }
             Err(e) => self
                 .fallback_apply_patch(patch)
-                .map_err(|_| WorktreeError::PatchError(e.to_string())),
+                .map_err(|fe| WorktreeError::PatchError(format!("{}: {}", e, fe))),
         }
     }
 
-    /// Simple line-based fallback patcher for standalone test fixtures.
+    /// Context-verified hunk patcher for unified diffs when `git apply` rejects minor header/line-number drift.
+    /// Never overwrites a file blindly; verifies that all removed/context lines match the existing file.
     fn fallback_apply_patch(&self, patch: &str) -> Result<(), WorktreeError> {
-        let mut current_file: Option<PathBuf> = None;
-        let mut new_content = String::new();
-        let mut in_file = false;
+        #[derive(Default)]
+        struct FilePatch {
+            old_is_dev_null: bool,
+            target_path: PathBuf,
+            hunks: Vec<Vec<String>>,
+        }
 
-        for line in patch.lines() {
-            if line.starts_with("+++ b/") {
-                if let Some(file) = current_file.take() {
-                    self.write_file(&file, &new_content)?;
+        let mut file_patches: Vec<FilePatch> = Vec::new();
+        let mut pending_old_dev_null = false;
+
+        for raw_line in patch.lines() {
+            if let Some(rest) = raw_line.strip_prefix("--- ") {
+                pending_old_dev_null = rest.trim() == "/dev/null";
+            } else if let Some(rest) = raw_line.strip_prefix("+++ b/") {
+                let target_path = PathBuf::from(rest.trim());
+                self.resolve_safe_path(&target_path, true)?;
+                file_patches.push(FilePatch {
+                    old_is_dev_null: pending_old_dev_null,
+                    target_path,
+                    hunks: Vec::new(),
+                });
+                pending_old_dev_null = false;
+            } else if raw_line.starts_with("@@ ") {
+                if let Some(fp) = file_patches.last_mut() {
+                    fp.hunks.push(Vec::new());
                 }
-                let path_str = &line[6..];
-                current_file = Some(PathBuf::from(path_str));
-                new_content.clear();
-                in_file = true;
-            } else if line.starts_with("--- ") {
-                // old file header
-            } else if line.starts_with("@@ ") {
-                // hunk header
-            } else if in_file {
-                if let Some(stripped) = line.strip_prefix('+') {
-                    new_content.push_str(stripped);
-                    new_content.push('\n');
-                } else if let Some(stripped) = line.strip_prefix(' ') {
-                    new_content.push_str(stripped);
-                    new_content.push('\n');
-                } else if line.starts_with('-') {
-                    // omitted from new content
+            } else if raw_line.starts_with("diff --git ") || raw_line.starts_with("index ") {
+                // metadata headers
+            } else if let Some(fp) = file_patches.last_mut() {
+                if raw_line.starts_with('+')
+                    || raw_line.starts_with('-')
+                    || raw_line.starts_with(' ')
+                {
+                    if fp.hunks.is_empty() {
+                        fp.hunks.push(Vec::new());
+                    }
+                    if let Some(hunk) = fp.hunks.last_mut() {
+                        hunk.push(raw_line.to_string());
+                    }
                 }
             }
         }
 
-        if let Some(file) = current_file {
-            self.write_file(&file, &new_content)?;
+        if file_patches.is_empty() {
+            return Err(WorktreeError::PatchError(
+                "No valid file patches found in unified diff".to_string(),
+            ));
+        }
+
+        // First compute all new file contents in memory so a multi-file patch is atomic
+        let mut staged_writes: Vec<(PathBuf, String)> = Vec::new();
+
+        for fp in file_patches {
+            let full_target = self.resolve_safe_path(&fp.target_path, true)?;
+            let existing = if full_target.exists() {
+                fs::read_to_string(&full_target)?
+            } else if fp.old_is_dev_null {
+                String::new()
+            } else {
+                return Err(WorktreeError::PatchError(format!(
+                    "Target file {:?} does not exist and patch is not a new-file diff",
+                    fp.target_path
+                )));
+            };
+
+            let mut file_lines: Vec<String> = existing.lines().map(|s| s.to_string()).collect();
+            let mut search_from = 0usize;
+
+            for hunk in &fp.hunks {
+                let mut old_block: Vec<String> = Vec::new();
+                let mut new_block: Vec<String> = Vec::new();
+                for hline in hunk {
+                    if let Some(added) = hline.strip_prefix('+') {
+                        new_block.push(added.to_string());
+                    } else if let Some(removed) = hline.strip_prefix('-') {
+                        old_block.push(removed.to_string());
+                    } else if let Some(ctx) = hline.strip_prefix(' ') {
+                        old_block.push(ctx.to_string());
+                        new_block.push(ctx.to_string());
+                    }
+                }
+
+                if old_block.is_empty() {
+                    if file_lines.is_empty() {
+                        file_lines = new_block;
+                    } else {
+                        return Err(WorktreeError::PatchError(format!(
+                            "Hunk with no context cannot be unambiguously applied to non-empty file {:?}",
+                            fp.target_path
+                        )));
+                    }
+                } else {
+                    let match_idx = (search_from
+                        ..=file_lines.len().saturating_sub(old_block.len()))
+                        .find(|&i| {
+                            file_lines.get(i..i + old_block.len()) == Some(old_block.as_slice())
+                        });
+
+                    if let Some(idx) = match_idx {
+                        let end_idx = idx + old_block.len();
+                        let new_len = new_block.len();
+                        file_lines.splice(idx..end_idx, new_block);
+                        search_from = idx + new_len;
+                    } else {
+                        return Err(WorktreeError::PatchError(format!(
+                            "Hunk context mismatch in {:?}",
+                            fp.target_path
+                        )));
+                    }
+                }
+            }
+
+            let mut updated = file_lines.join("\n");
+            if !updated.is_empty() {
+                updated.push('\n');
+            }
+            staged_writes.push((fp.target_path, updated));
+        }
+
+        for (rel_path, content) in staged_writes {
+            self.write_file(&rel_path, &content)?;
         }
 
         Ok(())
@@ -387,10 +499,10 @@ impl IsolatedWorktree {
         cmd.arg("--ro-bind-try").arg("/etc/ssl").arg("/etc/ssl");
         cmd.arg("--ro-bind-try").arg("/etc/pki").arg("/etc/pki");
 
-        // Isolated user home: empty tmpfs for /tmp, and empty /home/main with ONLY cargo & rustup toolchain mounted read-only
+        // Isolated user home: empty tmpfs for /tmp, and read-only tmpfs at /home/main with ONLY cargo & rustup toolchain mounted read-only
         cmd.arg("--tmpfs").arg("/tmp");
-        cmd.arg("--dir").arg("/home");
-        cmd.arg("--dir").arg("/home/main");
+        cmd.arg("--tmpfs").arg("/home");
+        cmd.arg("--tmpfs").arg("/home/main");
         if let Some(ref cargo) = cargo_home {
             let cargo_p = Path::new(cargo);
             if cargo_p.exists() {
@@ -403,6 +515,8 @@ impl IsolatedWorktree {
                 cmd.arg("--ro-bind").arg(rustup).arg(rustup);
             }
         }
+        cmd.arg("--remount-ro").arg("/home/main");
+        cmd.arg("--remount-ro").arg("/home");
 
         // Isolated worktree: root_dir is strictly the only directory writable outside tmpfs
         cmd.arg("--bind").arg(&self.root_dir).arg(&self.root_dir);
@@ -413,7 +527,9 @@ impl IsolatedWorktree {
         cmd.arg("--dev").arg("/dev");
         cmd.arg("--unshare-net");
         cmd.arg("--unshare-pid");
+        cmd.arg("--new-session");
         cmd.arg("--die-with-parent");
+        cmd.arg("--clearenv");
 
         // Environment variables
         cmd.arg("--setenv").arg("PATH").arg(&clean_path);
@@ -538,47 +654,112 @@ impl IsolatedWorktree {
         }
     }
 
-    /// Initialize git repository or worktree cleanly.
+    /// Initialize a completely standalone git repository clone at the pinned SHA.
+    /// Does NOT write into or link back to `repo_root/.git`.
     /// Fails closed if the base commit is invalid.
-    fn init_git_workspace(&self, repo_root: &Path, base_commit: &str) -> Result<(), WorktreeError> {
+    fn init_git_workspace(
+        &self,
+        repo_root: &Path,
+        base_commit: &str,
+    ) -> Result<String, WorktreeError> {
         let is_git = repo_root.join(".git").exists();
         if is_git {
-            // Verify base_commit ref exists in repo
-            let verify_status = Command::new("git")
+            // Resolve base_commit to an exact 40-char commit SHA in repo_root (read-only query)
+            let rev_out = Command::new("git")
                 .arg("rev-parse")
                 .arg("--verify")
-                .arg(base_commit)
+                .arg(format!("{}^{{commit}}", base_commit))
                 .current_dir(repo_root)
-                .stdout(Stdio::null())
+                .stdout(Stdio::piped())
                 .stderr(Stdio::null())
-                .status();
+                .output();
 
-            match verify_status {
-                Ok(st) if st.success() => {}
+            let pinned_sha = match rev_out {
+                Ok(out) if out.status.success() => {
+                    String::from_utf8_lossy(&out.stdout).trim().to_string()
+                }
                 _ => return Err(WorktreeError::InvalidBaseCommit(base_commit.to_string())),
+            };
+
+            if pinned_sha.is_empty() {
+                return Err(WorktreeError::InvalidBaseCommit(base_commit.to_string()));
             }
 
-            // Create worktree from the verified base_commit
-            let status = Command::new("git")
-                .arg("worktree")
-                .arg("add")
-                .arg("-b")
-                .arg(&self.branch)
+            // Ensure root_dir is empty before cloning into it
+            if self.root_dir.exists() {
+                if let Ok(entries) = fs::read_dir(&self.root_dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.is_dir() {
+                            let _ = fs::remove_dir_all(&p);
+                        } else {
+                            let _ = fs::remove_file(&p);
+                        }
+                    }
+                }
+            }
+
+            // Create a standalone local clone without hardlinks so `.git` is an independent directory
+            let clone_out = Command::new("git")
+                .arg("clone")
+                .arg("--local")
+                .arg("--no-hardlinks")
+                .arg("--no-checkout")
+                .arg(repo_root)
                 .arg(&self.root_dir)
-                .arg(base_commit)
-                .current_dir(repo_root)
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .output();
 
-            match status {
-                Ok(out) if out.status.success() => return Ok(()),
+            match clone_out {
+                Ok(out) if out.status.success() => {}
                 Ok(out) => {
                     let err = String::from_utf8_lossy(&out.stderr).to_string();
                     return Err(WorktreeError::WorktreeSetupFailed(err));
                 }
                 Err(e) => return Err(WorktreeError::WorktreeSetupFailed(e.to_string())),
             }
+
+            // Detach origin remote so nothing inside the worktree points back to the production repo
+            let _ = Command::new("git")
+                .arg("remote")
+                .arg("remove")
+                .arg("origin")
+                .current_dir(&self.root_dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+
+            // Checkout the isolated branch at the exact pinned SHA
+            let checkout_out = Command::new("git")
+                .arg("checkout")
+                .arg("-B")
+                .arg(&self.branch)
+                .arg(&pinned_sha)
+                .current_dir(&self.root_dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output();
+
+            match checkout_out {
+                Ok(out) if out.status.success() => {}
+                Ok(out) => {
+                    let err = String::from_utf8_lossy(&out.stderr).to_string();
+                    return Err(WorktreeError::WorktreeSetupFailed(err));
+                }
+                Err(e) => return Err(WorktreeError::WorktreeSetupFailed(e.to_string())),
+            }
+
+            let _ = Command::new("git")
+                .args(["config", "user.name", "SAIL Forge"])
+                .current_dir(&self.root_dir)
+                .status();
+            let _ = Command::new("git")
+                .args(["config", "user.email", "forge@sail.local"])
+                .current_dir(&self.root_dir)
+                .status();
+
+            return Ok(pinned_sha);
         }
 
         // If repo_root is not a git repo, fail closed unless explicit fixture mode
@@ -592,16 +773,6 @@ impl IsolatedWorktree {
 impl Drop for IsolatedWorktree {
     fn drop(&mut self) {
         if !self.keep_on_drop {
-            if self.root_dir.join(".git").is_file() {
-                let _ = Command::new("git")
-                    .arg("worktree")
-                    .arg("remove")
-                    .arg("--force")
-                    .arg(&self.root_dir)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
             let _ = fs::remove_dir_all(&self.root_dir);
         } else {
             warn!(

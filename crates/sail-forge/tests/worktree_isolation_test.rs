@@ -315,3 +315,156 @@ fn main() {
 
     let _ = fs::remove_dir_all(&temp_repo);
 }
+
+#[test]
+fn test_standalone_git_clone_does_not_link_to_production_git() {
+    let job_id = format!("test-standalone-git-{}", Uuid::new_v4());
+    let temp_repo = std::env::temp_dir().join(format!("sail-prod-git-{}", Uuid::new_v4()));
+    setup_test_git_repo(&temp_repo);
+
+    let policy = Arc::new(SandboxPolicy::new());
+    let worktree = IsolatedWorktree::create(&job_id, &temp_repo, "HEAD", policy).unwrap();
+
+    // 1. .git inside worktree MUST be a standalone directory, NOT a gitfile pointing to temp_repo/.git/worktrees
+    let dot_git = worktree.root_dir.join(".git");
+    assert!(
+        dot_git.is_dir(),
+        "Expected worktree .git to be a standalone directory, not a gitfile link"
+    );
+    assert!(
+        !temp_repo.join(".git/worktrees").exists(),
+        "Production repo .git/worktrees must not be created"
+    );
+
+    // 2. base_commit must be resolved to a pinned 40-char hex SHA
+    assert_eq!(
+        worktree.base_commit.len(),
+        40,
+        "Expected 40-char pinned SHA, got {}",
+        worktree.base_commit
+    );
+
+    // 3. Production repo must not have the agent/forge-* branch created in its refs
+    let prod_branches = std::process::Command::new("git")
+        .args(["branch", "--list", &worktree.branch])
+        .current_dir(&temp_repo)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&prod_branches.stdout)
+            .trim()
+            .is_empty(),
+        "Production repo must not have agent branch registered"
+    );
+
+    let _ = fs::remove_dir_all(&temp_repo);
+}
+
+#[test]
+fn test_multi_file_smoke_fixture_reference_and_broken_patches() {
+    let _guard = BWRAP_ENV_LOCK.lock().unwrap();
+    use sail_forge::fixtures::get_multi_file_smoke_fixture;
+
+    let fixture = get_multi_file_smoke_fixture();
+    let temp_repo = std::env::temp_dir().join(format!("sail-smoke-repo-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp_repo.join("src")).unwrap();
+    fs::write(temp_repo.join("Cargo.toml"), fixture.cargo_toml).unwrap();
+    for (rel_path, content) in &fixture.initial_files {
+        let full = temp_repo.join(rel_path);
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(full, content).unwrap();
+    }
+    fs::write(temp_repo.join("build.rs"), fixture.malicious_build_rs).unwrap();
+
+    let _ = std::process::Command::new("git")
+        .arg("init")
+        .current_dir(&temp_repo)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["config", "user.email", "test@sail.local"])
+        .current_dir(&temp_repo)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["config", "user.name", "SAIL Test"])
+        .current_dir(&temp_repo)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(&temp_repo)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["commit", "-m", "initial smoke fixture"])
+        .current_dir(&temp_repo)
+        .output();
+
+    // 1. Initial unmodified worktree must fail `cargo test --offline`
+    let policy = Arc::new(SandboxPolicy::new());
+    let wt_initial = IsolatedWorktree::create(
+        &format!("smoke-init-{}", Uuid::new_v4()),
+        &temp_repo,
+        "HEAD",
+        policy.clone(),
+    )
+    .unwrap();
+    let initial_test = wt_initial
+        .run_command("cargo", &["test", "--offline"], 60)
+        .unwrap();
+    assert_ne!(
+        initial_test.status, 0,
+        "Unpatched smoke fixture must fail unit test initially"
+    );
+
+    // 2. Context-mismatched patch must fail closed
+    let bad_ctx_patch = "--- a/src/pricing.rs\n+++ b/src/pricing.rs\n@@ -1,3 +1,3 @@\n-non_existent_line();\n+replacement_line();\n";
+    assert!(
+        wt_initial.apply_patch(bad_ctx_patch).is_err(),
+        "Context-mismatched patch must fail closed"
+    );
+
+    // 3. Deliberately broken patch must apply cleanly but fail `cargo test --offline`
+    let wt_broken = IsolatedWorktree::create(
+        &format!("smoke-broken-{}", Uuid::new_v4()),
+        &temp_repo,
+        "HEAD",
+        policy.clone(),
+    )
+    .unwrap();
+    wt_broken.apply_patch(fixture.broken_patch).unwrap();
+    let broken_test = wt_broken
+        .run_command("cargo", &["test", "--offline"], 60)
+        .unwrap();
+    assert_ne!(
+        broken_test.status, 0,
+        "Deliberately broken patch must fail cargo test"
+    );
+
+    // 4. Reference 2-file patch must apply cleanly and pass `cargo test --offline` inside Bubblewrap
+    let wt_fixed = IsolatedWorktree::create(
+        &format!("smoke-fixed-{}", Uuid::new_v4()),
+        &temp_repo,
+        "HEAD",
+        policy,
+    )
+    .unwrap();
+    wt_fixed.apply_patch(fixture.reference_patch).unwrap();
+
+    let diff = wt_fixed.get_diff().unwrap();
+    assert!(
+        diff.contains("src/pricing.rs") && diff.contains("src/lib.rs"),
+        "Diff must reflect both modified files: {}",
+        diff
+    );
+
+    let fixed_test = wt_fixed
+        .run_command("cargo", &["test", "--offline"], 60)
+        .unwrap();
+    assert_eq!(
+        fixed_test.status, 0,
+        "Reference 2-file patch must pass cargo test: stdout={}\nstderr={}",
+        fixed_test.stdout, fixed_test.stderr
+    );
+
+    let _ = fs::remove_dir_all(&temp_repo);
+}
