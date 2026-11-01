@@ -24,20 +24,40 @@ impl Default for LocalModelConfig {
             .unwrap_or("http://127.0.0.1:8081/v1/chat/completions".into());
         let managed = std::env::var("SAIL_LLM_URL").is_err();
         Self {
-            name: "gemma4".into(),
-            aliases: vec!["local".into(), "gemma-4".into(), "gemma4".into()],
+            name: "Qwen3.6-35B-A3B".into(),
+            aliases: vec![
+                "local".into(),
+                "qwen".into(),
+                "qwen3.6".into(),
+                "qwen3".into(),
+                "qwen3.6-35b".into(),
+                "gemma4".into(),
+                "gemma-4".into(),
+            ],
             model_path: std::env::var("SAIL_MODEL_PATH")
                 .map(PathBuf::from)
-                .unwrap_or("models/gemma4-v2-Q4_K_M.gguf".into()),
+                .unwrap_or_else(|_| {
+                    let candidates = [
+                        PathBuf::from("models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
+                        PathBuf::from("/home/main/SAIL/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
+                        PathBuf::from("models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
+                        PathBuf::from("/home/main/SAIL/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
+                        PathBuf::from("models/gemma4-v2-Q4_K_M.gguf"),
+                    ];
+                    for cand in candidates {
+                        if cand.is_file() {
+                            return cand;
+                        }
+                    }
+                    PathBuf::from("models/Qwen3.6-35B-A3B-Q4_K_M.gguf")
+                }),
             server_binary: std::env::var("SAIL_LLAMA_SERVER")
                 .map(PathBuf::from)
                 .unwrap_or("/home/main/llama.cpp/build/bin/llama-server".into()),
             endpoint,
-            projector: Some(
-                std::env::var("SAIL_MMPROJ")
-                    .map(PathBuf::from)
-                    .unwrap_or("models/voice/mmproj-gemma-4-12B-it-Q8_0.gguf".into()),
-            ),
+            projector: std::env::var("SAIL_MMPROJ")
+                .map(PathBuf::from)
+                .ok(),
             managed,
             compute: ComputeBackend::Cpu,
             device: "Vulkan0".into(),

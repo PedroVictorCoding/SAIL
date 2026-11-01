@@ -727,6 +727,7 @@ impl LocalSolverController {
         if let Ok(url) = std::env::var("SAIL_FORGE_LLM_URL") {
             if !url.trim().is_empty() {
                 urls.push(url);
+                return urls;
             }
         }
         if let Ok(url) = std::env::var("SAIL_LLM_URL") {

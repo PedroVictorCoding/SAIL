@@ -224,6 +224,9 @@ async fn test_pause_and_resume_for_voice_qos() {
 
 #[tokio::test]
 async fn test_offline_model_transitions_to_blocked_without_synthetic_patch() {
+    unsafe {
+        std::env::set_var("SAIL_FORGE_LLM_URL", "http://127.0.0.1:19999/v1/chat/completions");
+    }
     let temp_dir = std::env::temp_dir().join(format!("test_orch_offline_{}", Uuid::new_v4()));
     setup_test_git_repo(&temp_dir);
 
@@ -252,6 +255,10 @@ async fn test_offline_model_transitions_to_blocked_without_synthetic_patch() {
 
     // Call run_job_lifecycle with patch_to_apply: None when model is offline
     let res = orchestrator.run_job_lifecycle(&job_id, None).await;
+
+    unsafe {
+        std::env::remove_var("SAIL_FORGE_LLM_URL");
+    }
 
     // Must fail closed with error, transitioning to Blocked without synthetic fallback patch
     assert!(

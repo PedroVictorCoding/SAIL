@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sail_common::error::Result;
 
@@ -100,12 +100,34 @@ impl LocalKernelToolBroker {
 
         let cap = Self::tool_to_capability(call);
         let execution = if call.tool == "fs:query" || call.tool == "fs:read" {
-            let path = call
+            let raw_path = call
                 .params
                 .get("path")
                 .and_then(|value| value.as_str())
                 .unwrap_or(".");
-            let target_path = Path::new(path);
+            // Normalize path: if absolute path inside workspace root, make it relative to root
+            let workspace_root = std::env::var("SAIL_TOOL_ROOT")
+                .map(PathBuf::from)
+                .ok()
+                .or_else(|| std::env::current_dir().ok());
+            let normalized_path = if let Some(ref root) = workspace_root {
+                let p = Path::new(raw_path);
+                if let Ok(rel) = p.strip_prefix(root) {
+                    rel.to_path_buf()
+                } else if p == root {
+                    PathBuf::from(".")
+                } else {
+                    p.to_path_buf()
+                }
+            } else {
+                PathBuf::from(raw_path)
+            };
+            let normalized_path = if normalized_path.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                normalized_path
+            };
+            let target_path = &normalized_path;
             // Option A: If the target path is inside the authorized workspace, pre-grant authorization
             // so reading files within the project never blocks the user for owner tokens.
             let auto_approved_token =
@@ -532,7 +554,13 @@ impl LocalKernelToolBroker {
                 tool: "forge:status".into(),
                 success: true,
                 output: serde_json::json!({
-                    "job_id": job_id,
+                    "job_id": status.job_id.clone(),
+                    "issue_number": status.issue_number,
+                    "state": status.state.as_str(),
+                    "current_step": status.current_step.clone(),
+                    "diff_stat": status.diff_stat.clone(),
+                    "target_file": status.target_file.clone(),
+                    "patch": status.patch.clone(),
                     "status": status,
                 }),
             },
@@ -852,7 +880,7 @@ pub fn tool_definitions() -> serde_json::Value {
         {"type":"function","function":{"name":"fs_write","description":"Create or write a file inside the authorized workspace. Requires explicit user approval.","parameters":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string","description":"Relative path to write"},"content":{"type":"string","description":"File content to write"}}}}},
         {"type":"function","function":{"name":"github_issues","description":"Retrieve open GitHub issues ordered by P0 to P4 priority, with optional priority filtering","parameters":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50},"priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}},"additionalProperties":false}}},
         {"type":"function","function":{"name":"forge_enqueue","description":"Enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting.","parameters":{"type":"object","properties":{"issue_number":{"type":"integer","description":"GitHub issue number to solve"},"repo":{"type":"string","description":"Repository name, defaults to PedroVictorCoding/SAIL"},"task":{"type":"string","description":"Optional description or instructions for the task"}}}}},
-        {"type":"function","function":{"name":"forge_status","description":"Check the status, current step, test outcome, and diff of a Forge autonomous coding job.","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID returned from forge_enqueue"}}}}}
+        {"type":"function","function":{"name":"forge_status","description":"Check the status, current step, test outcome, and diff of a Forge autonomous coding job. Accepts exact job IDs (e.g. job-5-61c992ad), prefix (e.g. job-5), or issue numbers (e.g. 5 or #5).","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)"}}}}}
     ])
 }
 pub fn multimodal_content(

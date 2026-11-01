@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::Semaphore;
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 use sail_common::bus::EventBus;
