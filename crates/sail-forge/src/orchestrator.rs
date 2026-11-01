@@ -44,6 +44,8 @@ impl Default for OrchestratorConfig {
             .map(PathBuf::from)
             .or_else(|| {
                 let candidates = [
+                    PathBuf::from("/home/main/SAIL/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
+                    PathBuf::from("models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
                     PathBuf::from(
                         "/home/main/SAIL/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
                     ),

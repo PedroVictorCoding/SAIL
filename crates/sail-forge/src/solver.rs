@@ -906,14 +906,31 @@ Rules:
                                     }
                                 }
                             }
-                            if let Some(content) = json_val
+                            let msg_obj = json_val
                                 .get("choices")
                                 .and_then(|c| c.get(0))
-                                .and_then(|c| c.get("message"))
+                                .and_then(|c| c.get("message"));
+
+                            let content = msg_obj
                                 .and_then(|m| m.get("content"))
                                 .and_then(|c| c.as_str())
-                            {
-                                turn_response_text = Some(content.to_string());
+                                .unwrap_or_default();
+
+                            let reasoning = msg_obj
+                                .and_then(|m| m.get("reasoning_content"))
+                                .and_then(|r| r.as_str())
+                                .unwrap_or_default();
+
+                            let text = if !content.trim().is_empty() {
+                                content.to_string()
+                            } else if !reasoning.trim().is_empty() {
+                                reasoning.to_string()
+                            } else {
+                                String::new()
+                            };
+
+                            if !text.is_empty() {
+                                turn_response_text = Some(text);
                                 break;
                             }
                         }
