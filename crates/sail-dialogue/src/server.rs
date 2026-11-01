@@ -957,7 +957,7 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         }
         debug!(fragments,"Speech output queue drained");
     }.instrument(speech_span)));
-    let (reply, assistant) = reason_turn(
+    let (reply, assistant, stats) = reason_turn(
         &vlm,
         &mut messages,
         &prompt,
@@ -968,7 +968,20 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         Some(tool_correlation(&session, current)),
     )
     .await?;
-    emit(&tx,current,json!({"type":"response_finished","generation_ms":start.elapsed().as_millis(),"turn_id":current})).await;
+    emit(
+        &tx,
+        current,
+        json!({
+            "type": "response_finished",
+            "generation_ms": stats.generation_ms,
+            "turn_id": current,
+            "token_count": stats.token_count,
+            "tokens_per_sec": stats.tokens_per_sec,
+            "ttft_ms": stats.ttft_ms,
+            "state": "speaking",
+        }),
+    )
+    .await;
     info!(
         response_chars = reply.chars().count(),
         "Model response finished; waiting for remaining speech synthesis"
@@ -1021,9 +1034,34 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         response_chars = reply.chars().count(),
         "Voice turn complete; history stored and Canvas delivered"
     );
-    emit(&tx,current,json!({"type":"turn_finished","reply":reply,"latency_ms":start.elapsed().as_millis(),"first_audio_ms":(first_audio.load(Ordering::SeqCst)!=u64::MAX).then(||first_audio.load(Ordering::SeqCst)),"turn_id":current,"state":"idle"})).await;
+    emit(
+        &tx,
+        current,
+        json!({
+            "type": "turn_finished",
+            "reply": reply,
+            "latency_ms": start.elapsed().as_millis(),
+            "first_audio_ms": (first_audio.load(Ordering::SeqCst) != u64::MAX)
+                .then(|| first_audio.load(Ordering::SeqCst)),
+            "token_count": stats.token_count,
+            "tokens_per_sec": stats.tokens_per_sec,
+            "ttft_ms": stats.ttft_ms,
+            "generation_ms": stats.generation_ms,
+            "turn_id": current,
+            "state": "idle",
+        }),
+    )
+    .await;
     Ok(())
 }
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct GenerationStats {
+    pub token_count: usize,
+    pub tokens_per_sec: f64,
+    pub ttft_ms: Option<u64>,
+    pub generation_ms: u64,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn reason_turn(
     vlm: &VoiceVlm,
@@ -1034,10 +1072,13 @@ async fn reason_turn(
     current: u64,
     speech_tx: &mpsc::Sender<String>,
     correlation: Option<uuid::Uuid>,
-) -> Result<(String, Value)> {
+) -> Result<(String, Value, GenerationStats)> {
     let mut reply = String::new();
     let mut final_assistant = None;
     let mut guard = ToolLoopGuard::new(prompt);
+    let gen_start = Instant::now();
+    let mut first_token_instant: Option<Instant> = None;
+    let mut total_token_count = 0usize;
     for round in 0..=MAX_TOOL_ROUNDS {
         let allow_tools = guard.tools_enabled(round);
         if let Some(reason) = guard.reason(round) {
@@ -1071,14 +1112,35 @@ async fn reason_turn(
             tokio::select! {
                 delta=delta_rx.recv(), if deltas_open=>{
                     if let Some(delta)=delta{
+                        if first_token_instant.is_none() {
+                            first_token_instant = Some(Instant::now());
+                        }
+                        let est_tokens = (delta.chars().count() + 3) / 4;
+                        total_token_count += est_tokens.max(1);
+                        let ttft_ms = first_token_instant.map(|i| i.duration_since(gen_start).as_millis() as u64);
+                        let elapsed_sec = gen_start.elapsed().as_secs_f64();
+                        let tokens_per_sec = if elapsed_sec > 0.05 {
+                            total_token_count as f64 / elapsed_sec
+                        } else {
+                            0.0
+                        };
                         let safe=gate.push(&delta);round_text.push_str(&safe);
-                        publish_spoken_text(&safe,&mut reply,&mut chunker,tx,current,speech_tx,"model").await;
+                        publish_spoken_text_with_stats(&safe,&mut reply,&mut chunker,tx,current,speech_tx,"model", total_token_count, tokens_per_sec, ttft_ms).await;
                     }else{
                         deltas_open=false;
                         let tail = gate.finish();
                         if !tail.is_empty() {
                             round_text.push_str(&tail);
-                            publish_spoken_text(
+                            let est_tokens = (tail.chars().count() + 3) / 4;
+                            total_token_count += est_tokens.max(1);
+                            let ttft_ms = first_token_instant.map(|i| i.duration_since(gen_start).as_millis() as u64);
+                            let elapsed_sec = gen_start.elapsed().as_secs_f64();
+                            let tokens_per_sec = if elapsed_sec > 0.05 {
+                                total_token_count as f64 / elapsed_sec
+                            } else {
+                                0.0
+                            };
+                            publish_spoken_text_with_stats(
                                 &tail,
                                 &mut reply,
                                 &mut chunker,
@@ -1086,6 +1148,9 @@ async fn reason_turn(
                                 current,
                                 speech_tx,
                                 "model",
+                                total_token_count,
+                                tokens_per_sec,
+                                ttft_ms,
                             )
                             .await;
                         }
@@ -1102,8 +1167,20 @@ async fn reason_turn(
                         Err(e) => return Err(e),
                     };
                     while let Ok(delta)=delta_rx.try_recv(){
+                        if first_token_instant.is_none() {
+                            first_token_instant = Some(Instant::now());
+                        }
+                        let est_tokens = (delta.chars().count() + 3) / 4;
+                        total_token_count += est_tokens.max(1);
+                        let ttft_ms = first_token_instant.map(|i| i.duration_since(gen_start).as_millis() as u64);
+                        let elapsed_sec = gen_start.elapsed().as_secs_f64();
+                        let tokens_per_sec = if elapsed_sec > 0.05 {
+                            total_token_count as f64 / elapsed_sec
+                        } else {
+                            0.0
+                        };
                         let safe=gate.push(&delta);round_text.push_str(&safe);
-                        publish_spoken_text(&safe,&mut reply,&mut chunker,tx,current,speech_tx,"model").await;
+                        publish_spoken_text_with_stats(&safe,&mut reply,&mut chunker,tx,current,speech_tx,"model", total_token_count, tokens_per_sec, ttft_ms).await;
                     }
                     break assistant;
                 }
@@ -1275,7 +1352,23 @@ async fn reason_turn(
     }
     let assistant =
         final_assistant.ok_or_else(|| SailError::Inference("Missing assistant response".into()))?;
-    Ok((reply, assistant))
+    let gen_duration = gen_start.elapsed();
+    let gen_sec = gen_duration.as_secs_f64();
+    if total_token_count == 0 && !reply.is_empty() {
+        total_token_count = (reply.chars().count() + 3) / 4;
+    }
+    let final_tps = if gen_sec > 0.05 && total_token_count > 0 {
+        ((total_token_count as f64 / gen_sec) * 10.0).round() / 10.0
+    } else {
+        0.0
+    };
+    let stats = GenerationStats {
+        token_count: total_token_count,
+        tokens_per_sec: final_tps,
+        ttft_ms: first_token_instant.map(|i| i.duration_since(gen_start).as_millis() as u64),
+        generation_ms: gen_duration.as_millis() as u64,
+    };
+    Ok((reply, assistant, stats))
 }
 #[allow(clippy::too_many_arguments)]
 async fn publish_spoken_text(
@@ -1287,16 +1380,46 @@ async fn publish_spoken_text(
     speech_tx: &mpsc::Sender<String>,
     source: &str,
 ) {
+    publish_spoken_text_with_stats(
+        text, reply, chunker, tx, current, speech_tx, source, 0, 0.0, None,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn publish_spoken_text_with_stats(
+    text: &str,
+    reply: &mut String,
+    chunker: &mut SpeechChunker,
+    tx: &mpsc::Sender<Outbound>,
+    current: u64,
+    speech_tx: &mpsc::Sender<String>,
+    source: &str,
+    token_count: usize,
+    tokens_per_sec: f64,
+    ttft_ms: Option<u64>,
+) {
     if text.is_empty() {
         return;
     }
     reply.push_str(text);
-    emit(
-        tx,
-        current,
-        json!({"type":"response_delta","text":text,"turn_id":current,"source":source}),
-    )
-    .await;
+    let mut payload = json!({
+        "type": "response_delta",
+        "text": text,
+        "turn_id": current,
+        "source": source,
+        "state": "generating",
+    });
+    if token_count > 0 {
+        payload["token_count"] = json!(token_count);
+    }
+    if tokens_per_sec > 0.0 {
+        payload["tokens_per_sec"] = json!((tokens_per_sec * 10.0).round() / 10.0);
+    }
+    if let Some(ttft) = ttft_ms {
+        payload["ttft_ms"] = json!(ttft);
+    }
+    emit(tx, current, payload).await;
     queue_speech(chunker.push(text), speech_tx).await;
 }
 async fn queue_speech(chunks: Vec<String>, tx: &mpsc::Sender<String>) {
@@ -1383,7 +1506,7 @@ mod tests {
             json!({"role":"system","content":"Use only requested local tools"}),
             json!({"role":"user","content":prompt}),
         ];
-        let (reply, _) = reason_turn(
+        let (reply, _, _) = reason_turn(
             &vlm,
             &mut messages,
             prompt,
@@ -1465,7 +1588,7 @@ mod tests {
                 json!({"role":"system","content":"Answer naturally"}),
                 json!({"role":"user","content":prompt}),
             ];
-            let (reply, _) = tokio::time::timeout(
+            let (reply, _, _) = tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 reason_turn(&vlm, &mut messages, prompt, None, &tx, 1, &speech_tx, None),
             )

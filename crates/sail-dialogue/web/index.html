@@ -45,7 +45,17 @@
 
         <article class="workspace-card session-card" id="sessionCard">
           <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">◌</span><div><h3>Voice session</h3><p>Live browser session</p></div></div><span class="mini-state" id="sessionState">Ready</span></header>
-          <div class="session-lines"><div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div><div><span>Microphone</span><strong id="sessionMic">Off</strong></div><div><span>VAD confidence</span><strong id="sessionConfidence">—</strong></div><div><span>Input level</span><strong id="sessionRms">—</strong></div><div><span>Recorded</span><strong id="sessionDuration">0:00 / 3:00</strong></div></div>
+          <div class="session-lines">
+            <div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div>
+            <div><span>Microphone</span><strong id="sessionMic">Off</strong></div>
+            <div><span>State</span><strong id="sessionLiveState">Ready</strong></div>
+            <div><span>Generation speed</span><strong id="sessionTokensPerSec">—</strong></div>
+            <div><span>Time to first token</span><strong id="sessionTtft">—</strong></div>
+            <div><span>Live output</span><strong id="sessionGenStats">—</strong></div>
+            <div><span>VAD confidence</span><strong id="sessionConfidence">—</strong></div>
+            <div><span>Input level</span><strong id="sessionRms">—</strong></div>
+            <div><span>Recorded</span><strong id="sessionDuration">0:00 / 3:00</strong></div>
+          </div>
           <div class="session-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
         </article>
 
