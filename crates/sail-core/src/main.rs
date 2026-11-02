@@ -108,13 +108,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|v| v.parse::<u32>().ok())
             .filter(|n| (1..=3650).contains(n))
             .unwrap_or(30);
+        let maintenance_grant =
+            sail_guardian::memory::memory_grant(&sail_protocol::memory::MemoryPurpose::Maintenance)
+                .expect("maintenance memory grant is static");
         flow = flow.with_memory(sail_flow::memory::MemoryMaintenance::new(
             arena.store().clone(),
-            sail_arena::knowledge::Access::scoped(
-                &["voice", "bus"],
-                sail_arena::knowledge::Sensitivity::Private,
-            ),
-            vec!["voice".into(), "bus".into()],
+            sail_arena::knowledge::Access::from_grant(&maintenance_grant),
+            maintenance_grant.scopes.clone(),
             idle,
             days,
         ));

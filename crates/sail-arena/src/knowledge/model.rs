@@ -240,6 +240,19 @@ impl Access {
         }
     }
 
+    /// Enforce a Guardian-issued grant. An empty scope list sees nothing, never everything.
+    pub fn from_grant(grant: &sail_protocol::memory::MemoryGrant) -> Self {
+        use sail_protocol::memory::MemorySensitivity as S;
+        Self {
+            scopes: Some(grant.scopes.clone()),
+            max_sensitivity: match grant.max_sensitivity {
+                S::Normal => Sensitivity::Normal,
+                S::Private => Sensitivity::Private,
+                S::Sensitive => Sensitivity::Sensitive,
+            },
+        }
+    }
+
     pub fn allows(&self, scope: &str, sensitivity: Sensitivity) -> bool {
         sensitivity <= self.max_sensitivity
             && self

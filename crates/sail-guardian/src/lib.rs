@@ -5,6 +5,7 @@ pub mod broker;
 pub mod capability;
 pub mod confined;
 pub mod credentials;
+pub mod memory;
 pub mod policy;
 pub mod runtime;
 pub mod safety_review;

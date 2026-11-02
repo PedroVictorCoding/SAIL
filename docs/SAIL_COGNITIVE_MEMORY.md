@@ -1,7 +1,8 @@
 # SAIL Cognitive Memory — architecture audit and implementation plan
 
-**Status:** Phase 0 (audit) and Phase 1 (storage and contracts) are implemented. Phases 2–6
-are planned. Related issues: [#5](https://github.com/PedroVictorCoding/SAIL/issues/5)
+**Status:** Phases 0–5 are implemented. Phase 6 is partly implemented: Guardian memory grants
+and the Dialogue integration are in place; Forge and Agents integration and model-proposed
+change sets are next. Related issues: [#5](https://github.com/PedroVictorCoding/SAIL/issues/5)
 Arena, [#21](https://github.com/PedroVictorCoding/SAIL/issues/21) Persona and retrospective
 memory, [#52](https://github.com/PedroVictorCoding/SAIL/issues/52) conversation index,
 [#100](https://github.com/PedroVictorCoding/SAIL/issues/100) Evidence Ledger,
@@ -65,9 +66,9 @@ evidence is still there.
    integrity checks at startup will be scheduled from there. If a separate crate is
    wanted later, `store.rs` can be extracted to a `sail-storage` library without schema
    changes.
-2. **Dioxus Web/Android UI.** No Dioxus code exists. Phase 4 needs a decision: either build
-   the memory views in the existing web UI (`sail-dialogue/web`, following DESIGN.md), or
-   first migrate the frontend to Dioxus, which is a separate, much larger project.
+2. **Dioxus Web/Android UI.** No Dioxus code exists. **Decision (owner, 2026-11-02):** the
+   Dioxus migration happens once SAIL is stable and hardened. Until then, memory views live in
+   the existing web UI (`sail-dialogue/web`, following DESIGN.md).
 3. **Relationships table.** A relationship is a claim whose object is an entity.
    `kn_relationships` is a SQL **view** over `kn_claims`, so relationships share evidence,
    epistemic status, temporal validity, scope and deletion with every other claim instead
@@ -224,3 +225,39 @@ Expired transient claims are removed using deletion/tombstone rules; pins protec
 their subject's transient claims. Expiry, consolidation and queue batches are
 bounded to 256 records per tick. The owner overview exposes job summaries without
 source content. No scheduler latency or throughput benchmark is claimed.
+
+## Phase 6: scoped integration (Dialogue slice)
+
+`sail-protocol::memory` adds `MemoryPurpose`, `MemorySensitivity` and `MemoryGrant`.
+`sail_guardian::memory::memory_grant` is the only policy that maps a purpose to visible
+scopes; no prompt or model chooses them, and no grant reads `Sensitive` records.
+
+| Purpose | Scopes | Max sensitivity |
+|---|---|---|
+| Dialogue | `voice`, `bus`, `user`, `life` | Private |
+| Forge `{repo}` | `project:<owner/name>` (validated, lowercased) | Private |
+| Maintenance | `voice`, `bus` | Private |
+
+Arena enforces a grant with `Access::from_grant`; an empty scope list sees nothing.
+`ArenaSubsystem::knowledge_context` runs the Phase 3 search under that access and returns
+complete JSON records within a byte budget, or nothing. Retrieval errors are logged and
+never block a turn.
+
+On every turn, Dialogue appends the result to its system prompt as labelled untrusted data
+(`SAIL_MEMORY_CONTEXT_BYTES`, default 1500, range 1–16000). Core's background
+maintenance now takes its access from the Maintenance grant.
+
+`crates/sail-dialogue/tests/memory_acceptance_test.rs` is the master vision §4.6 test,
+run on an on-disk store through the production Dialogue helper:
+- An explicit turn becomes one claim, and its raw turn is released.
+- A later turn retrieves the fact, and unrelated turns are not memory.
+- Forge sees only its repository's facts, and Dialogue does not see them.
+- A correction supersedes the old value.
+- Deletion holds after a restart, and re-running consolidation cannot resurrect it.
+
+Not done yet:
+- **Forge integration.** Forge does not consume its grant yet.
+- **Agents integration.** Agents does not consume a grant yet.
+- **Model-proposed change sets** (vision §4.3). Consolidation still uses only the narrow
+  Phase 2 grammar, so ordinary conversation produces no knowledge.
+- **Embeddings in live retrieval.** Embeddings are not wired into it.
