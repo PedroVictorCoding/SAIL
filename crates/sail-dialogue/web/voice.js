@@ -202,6 +202,9 @@ function connectWs() {
       case 'forge_cancelled':
         handleForgeCancelled(data);
         break;
+      case 'safety_review_completed':
+        handleSafetyReviewCompleted(data);
+        break;
       case 'error': showError(data.message); break;
     }
   };
@@ -1443,3 +1446,165 @@ async function refreshLearnedRules() {
 }
 document.getElementById('refreshLearnedRulesBtn')?.addEventListener('click', refreshLearnedRules);
 refreshLearnedRules();
+
+// ============================================================================
+// Daily Safety Review of Learned Approval Rules & Web Notifications
+// ============================================================================
+async function fetchSafetyReview() {
+  try {
+    const data = await ownerApprovalRequest('safety/review');
+    renderSafetyReview(data);
+  } catch (error) {
+    console.warn('Could not fetch safety review:', error);
+  }
+}
+
+async function triggerSafetyReviewManual() {
+  const runBtn = document.getElementById('safetyReviewRunNowBtn');
+  const runSettingsBtn = document.getElementById('runSafetyReviewBtn');
+  if (runBtn) runBtn.disabled = true;
+  if (runSettingsBtn) runSettingsBtn.disabled = true;
+  try {
+    const data = await ownerApprovalRequest('safety/review/run');
+    renderSafetyReview(data);
+  } catch (error) {
+    showError(`Failed to run safety review: ${error.message}`);
+  } finally {
+    if (runBtn) runBtn.disabled = false;
+    if (runSettingsBtn) runSettingsBtn.disabled = false;
+  }
+}
+
+async function resolveSafetyFinding(findingId, action) {
+  try {
+    await ownerApprovalRequest('safety/findings/resolve', { finding_id: findingId, action });
+    await fetchSafetyReview();
+    await refreshLearnedRules();
+  } catch (error) {
+    showError(`Failed to apply action: ${error.message}`);
+  }
+}
+
+function handleSafetyReviewCompleted(data) {
+  fetchSafetyReview();
+  if (data.high_or_critical_count > 0) {
+    const dot = document.getElementById('safetyBadgeDot');
+    if (dot) dot.hidden = false;
+  }
+}
+
+function renderSafetyReview(data) {
+  const findings = data?.findings || [];
+  const lastRun = data?.last_run || data?.summary;
+
+  const dot = document.getElementById('safetyBadgeDot');
+  const unreadHighOrCrit = findings.filter(f => f.status === 'unread' && (f.severity === 'high' || f.severity === 'critical'));
+  if (dot) dot.hidden = unreadHighOrCrit.length === 0;
+
+  const statusBadge = document.getElementById('safetyReviewStatusBadge');
+  if (statusBadge) {
+    if (unreadHighOrCrit.length > 0) {
+      statusBadge.textContent = `${unreadHighOrCrit.length} Critical/High Risk Finding(s)`;
+      statusBadge.className = 'safety-status-badge has-findings';
+    } else if (findings.filter(f => f.status === 'unread').length > 0) {
+      statusBadge.textContent = 'Review Findings Present';
+      statusBadge.className = 'safety-status-badge';
+    } else {
+      statusBadge.textContent = 'Status: Clean';
+      statusBadge.className = 'safety-status-badge';
+    }
+  }
+
+  const lastRunEl = document.getElementById('safetyReviewLastRun');
+  if (lastRunEl && lastRun) {
+    const d = new Date(lastRun.completed_at);
+    lastRunEl.textContent = `Last run: ${d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })} (${lastRun.rules_evaluated} rules evaluated)`;
+  }
+
+  const summaryText = document.getElementById('safetyReviewSummaryText');
+  if (summaryText && lastRun) {
+    summaryText.textContent = `Last evaluated ${lastRun.rules_evaluated} rules: ${lastRun.findings_count} findings (${lastRun.high_or_critical_count} high/critical).`;
+  }
+
+  // Render into Activity tab list and Settings list
+  const containers = [
+    document.getElementById('safetyFindingsList'),
+    document.getElementById('safetyReviewFindingsContainer')
+  ];
+
+  containers.forEach(container => {
+    if (!container) return;
+    const activeFindings = findings.filter(f => f.status !== 'dismissed' && typeof f.status !== 'object');
+    if (activeFindings.length === 0) {
+      container.innerHTML = '<p class="canvas-empty">No safety findings detected. All learned rules conform to security invariants.</p>';
+      return;
+    }
+    container.replaceChildren();
+
+    for (const f of activeFindings) {
+      const card = document.createElement('div');
+      card.className = `safety-finding-card severity-${f.severity}`;
+
+      const top = document.createElement('div');
+      top.className = 'safety-finding-top';
+
+      const title = document.createElement('h5');
+      title.className = 'safety-finding-title';
+      title.textContent = f.title;
+
+      const pill = document.createElement('span');
+      pill.className = `safety-severity-pill ${f.severity}`;
+      pill.textContent = f.severity;
+
+      top.append(title, pill);
+
+      const reason = document.createElement('p');
+      reason.className = 'safety-finding-reason';
+      reason.textContent = f.reason;
+
+      const evidence = document.createElement('div');
+      evidence.className = 'safety-finding-evidence';
+      evidence.textContent = f.evidence.join(' · ');
+
+      const actions = document.createElement('div');
+      actions.className = 'safety-finding-actions';
+
+      if (f.recommended_action === 'revoke' || (typeof f.recommended_action === 'object' && f.recommended_action.narrow_scope)) {
+        const revokeBtn = document.createElement('button');
+        revokeBtn.className = 'safety-btn revoke-btn';
+        revokeBtn.textContent = 'Revoke Rule';
+        revokeBtn.addEventListener('click', () => resolveSafetyFinding(f.finding_id, 'revoke'));
+        actions.append(revokeBtn);
+      }
+
+      if (typeof f.recommended_action === 'object' && f.recommended_action.narrow_scope) {
+        const narrowBtn = document.createElement('button');
+        narrowBtn.className = 'safety-btn narrow-btn';
+        narrowBtn.textContent = 'Narrow Scope';
+        narrowBtn.addEventListener('click', () => resolveSafetyFinding(f.finding_id, 'narrow'));
+        actions.append(narrowBtn);
+      }
+
+      const keepBtn = document.createElement('button');
+      keepBtn.className = 'safety-btn keep-btn';
+      keepBtn.textContent = 'Keep';
+      keepBtn.addEventListener('click', () => resolveSafetyFinding(f.finding_id, 'keep'));
+      actions.append(keepBtn);
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.className = 'safety-btn';
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.addEventListener('click', () => resolveSafetyFinding(f.finding_id, 'dismiss'));
+      actions.append(dismissBtn);
+
+      card.append(top, reason, evidence, actions);
+      container.append(card);
+    }
+  });
+}
+
+document.getElementById('safetyReviewRunNowBtn')?.addEventListener('click', triggerSafetyReviewManual);
+document.getElementById('runSafetyReviewBtn')?.addEventListener('click', triggerSafetyReviewManual);
+document.getElementById('refreshSafetyReviewBtn')?.addEventListener('click', fetchSafetyReview);
+
+fetchSafetyReview();

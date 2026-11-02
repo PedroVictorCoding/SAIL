@@ -147,8 +147,9 @@
               <div class="card-tabs" role="tablist" aria-label="Tools tabs">
                 <button type="button" class="card-tab active" data-tab-card="toolsCard" data-tab-panel="toolsPanelMain"><span>Tools</span></button>
                 <button type="button" class="card-tab" data-tab-card="toolsCard" data-tab-panel="toolsPanelActivity"><span>Activity</span></button>
+                <button type="button" class="card-tab" data-tab-card="toolsCard" data-tab-panel="toolsPanelSafetyReview" id="tabSafetyReviewBtn"><span>Safety <i class="safety-badge-dot" id="safetyBadgeDot" hidden></i></span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="toolsCard" type="button" aria-label="Cycle tools view" title="Cycle view (Tools / Activity)">⇋</button>
+              <button class="card-action card-cycle-btn" data-cycle-card="toolsCard" type="button" aria-label="Cycle tools view" title="Cycle view (Tools / Activity / Safety)">⇋</button>
             </div>
           </header>
           <div class="card-tab-panel active" id="toolsPanelMain">
@@ -165,6 +166,21 @@
               <p class="canvas-empty" id="toolsActivityEmpty">No kernel actions executed yet this session.</p>
             </div>
             <p class="card-footnote">Chronological audit stream of authorized tool executions.</p>
+          </div>
+          <div class="card-tab-panel" id="toolsPanelSafetyReview" hidden>
+            <div class="safety-review-container">
+              <div class="safety-review-header">
+                <div class="safety-review-status-info">
+                  <span class="safety-status-badge" id="safetyReviewStatusBadge">Status: Clean</span>
+                  <small id="safetyReviewLastRun">Last review: Checking…</small>
+                </div>
+                <button type="button" class="feed-btn" id="safetyReviewRunNowBtn" title="Run safety review now">Run now</button>
+              </div>
+              <div class="safety-findings-list" id="safetyFindingsList" aria-live="polite">
+                <p class="canvas-empty" id="safetyFindingsEmpty">No safety findings detected. All learned rules conform to security invariants.</p>
+              </div>
+            </div>
+            <p class="card-footnote">Daily Flow reevaluates learned approval rules and reports security findings.</p>
           </div>
         </article>
 
@@ -532,6 +548,18 @@
             <button class="quiet-button" id="refreshApprovalsBtn" type="button" style="padding:3px 10px; font-size:11px;">Refresh</button>
           </div>
           <div id="ownerApprovals" role="status" aria-live="polite"></div>
+        </div>
+
+        <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <h4 style="margin:0; font-size:13px; font-weight:600;">Daily Safety Review & Findings</h4>
+            <div style="display:flex; gap:6px;">
+              <button class="quiet-button" id="refreshSafetyReviewBtn" type="button" style="padding:3px 10px; font-size:11px;">Refresh</button>
+              <button class="quiet-button" id="runSafetyReviewBtn" type="button" style="padding:3px 10px; font-size:11px; background:var(--accent); color:#fff; border-color:transparent;">Run review now</button>
+            </div>
+          </div>
+          <p class="sheet-note" id="safetyReviewSummaryText" style="margin-bottom:8px;">Flow reevaluates persisted approval rules daily for privilege drift and broad permissions.</p>
+          <div id="safetyReviewFindingsContainer" role="status" aria-live="polite" style="display:flex; flex-direction:column; gap:6px;"></div>
         </div>
 
         <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;">

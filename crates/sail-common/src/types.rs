@@ -236,4 +236,13 @@ pub enum EventPayload {
         pr_draft_ready: bool,
         summary: String,
     },
+
+    // Guardian Safety Review Events
+    SafetyReviewCompleted {
+        run_id: String,
+        trigger: String,
+        findings_count: usize,
+        high_or_critical_count: usize,
+        summary: String,
+    },
 }
