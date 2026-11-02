@@ -229,6 +229,7 @@ pub fn authorize_voice_operation(tool: &str) -> sail_common::error::Result<&'sta
         "forge:status" | "forge_status" => Ok("forge:status"),
         "forge:list" | "forge_list" => Ok("forge:list"),
         "forge:cancel" | "forge_cancel" => Ok("forge:cancel"),
+        "forge:clear" | "forge_clear" => Ok("forge:clear"),
         "github:issues" | "github_issues" => Ok("github:issues"),
         "web:read" | "web_read" => Ok("web:read"),
         _ => Err(sail_common::error::SailError::ToolExecution(format!(

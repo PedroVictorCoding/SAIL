@@ -163,6 +163,11 @@ pub fn scheduler(broker: Arc<sail_guardian::GuardianExecutionBroker>) -> Arc<Too
             ToolEffect::Mutating,
         ),
         (
+            "forge:clear",
+            json!({"job_id":{"type":"string","maxLength":128}}),
+            ToolEffect::Mutating,
+        ),
+        (
             "forge:status",
             json!({"job_id":{"type":"string","maxLength":128}}),
             ToolEffect::ReadOnly,

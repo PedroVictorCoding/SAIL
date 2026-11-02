@@ -202,6 +202,9 @@ function connectWs() {
       case 'forge_cancelled':
         handleForgeCancelled(data);
         break;
+      case 'forge_cleared':
+        handleForgeCleared(data);
+        break;
       case 'safety_review_completed':
         handleSafetyReviewCompleted(data);
         break;
@@ -879,6 +882,18 @@ function handleForgeCancelled(data) {
       badge.className = 'result-failure';
       badge.textContent = '● Cancelled';
     }
+  }
+}
+
+function handleForgeCleared(data) {
+  if (Array.isArray(data.cleared_jobs)) {
+    for (const id of data.cleared_jobs) {
+      document.getElementById(`forge-job-${id}`)?.remove();
+    }
+  }
+  const jobContainer = document.getElementById('forgeActiveJob');
+  if (jobContainer && jobContainer.children.length === 0) {
+    jobContainer.innerHTML = '<p class="forge-empty" id="forgeEmptyState">No active Forge jobs. Ask SAIL or enqueue below.</p>';
   }
 }
 async function ensureAudio() {

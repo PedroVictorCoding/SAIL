@@ -90,7 +90,9 @@ impl ToolLoopGuard {
             }
             "os:status" | "vision:frame" | "forge:list" => json!({}),
             "forge:enqueue" | "fs:write" => params.clone(),
-            "forge:status" | "forge:cancel" => json!({"job_id":params.get("job_id")}),
+            "forge:status" | "forge:cancel" | "forge:clear" => {
+                json!({"job_id":params.get("job_id")})
+            }
             "github:issues" => {
                 json!({"limit":params.get("limit"),"priority":params.get("priority")})
             }

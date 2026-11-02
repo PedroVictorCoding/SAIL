@@ -87,6 +87,34 @@ fn test_forge_tools_enqueue_and_status() {
         list_res.output
     );
     assert!(list_res.output["count"].as_u64().unwrap() >= 1);
+
+    // 4. Cancel and clear job via kernel tools
+    let cancel_call = KernelToolCall {
+        tool: "forge:cancel".into(),
+        params: serde_json::json!({
+            "job_id": job_id
+        }),
+    };
+    let cancel_res = LocalKernelToolBroker::execute(&cancel_call);
+    assert!(
+        cancel_res.success,
+        "forge:cancel should succeed: {:?}",
+        cancel_res.output
+    );
+
+    let clear_call = KernelToolCall {
+        tool: "forge:clear".into(),
+        params: serde_json::json!({
+            "job_id": job_id
+        }),
+    };
+    let clear_res = LocalKernelToolBroker::execute(&clear_call);
+    assert!(
+        clear_res.success,
+        "forge:clear should succeed: {:?}",
+        clear_res.output
+    );
+    assert_eq!(clear_res.output["count"].as_u64().unwrap(), 1);
 }
 
 #[test]
