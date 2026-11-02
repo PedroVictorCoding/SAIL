@@ -5,6 +5,10 @@ agent-assisted tool working anywhere in this repository, including documentation
 configuration, tests, and scripts. Read this file before making changes. More
 specific instructions may add requirements but must retain this branch/PR workflow.
 
+## Mandatory SAIL product vision
+
+Before planning or editing any feature, read [SAIL Master Vision](docs/SAIL_MASTER_VISION.md). It defines the authoritative intended product behavior, subsystem boundaries, memory philosophy, real-action verification, and local-first constraints from the SAIL design conversation. The code defines current implementation; do not mistake it for the whole product scope. If they conflict, document the intended migration rather than silently replacing the vision.
+
 ## UI design requirements
 
 Before creating or changing UI, read and follow [DESIGN.md](DESIGN.md). Its shared
