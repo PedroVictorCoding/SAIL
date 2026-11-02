@@ -228,6 +228,7 @@ fn test_github_issues_priority_sorting() {
         params: serde_json::json!({ "limit": 10 }),
     };
     let broker = sail_guardian::global_broker().unwrap();
+    broker.policy().clear_learned_rules();
     let denied = LocalKernelToolBroker::execute(&issues_call);
     assert!(!denied.success);
     assert_eq!(denied.output["approval_required"], true);
@@ -264,4 +265,52 @@ fn test_github_issues_priority_sorting() {
             prev_rank = rank;
         }
     }
+}
+
+#[test]
+fn test_github_issue_specific_view_and_learned_approval() {
+    let _fixture = GUARDIAN_FIXTURE.lock().unwrap();
+    let _guardian = GuardianSubsystem::new();
+    let broker = sail_guardian::global_broker().unwrap();
+    broker.policy().clear_learned_rules();
+
+    let issue_call = KernelToolCall {
+        tool: "github:issues".into(),
+        params: serde_json::json!({ "issue_number": 125 }),
+    };
+
+    // First attempt without grant: requires approval
+    let denied = LocalKernelToolBroker::execute(&issue_call);
+    assert!(!denied.success);
+    assert_eq!(denied.output["approval_required"], true);
+
+    // Learn approval so future invocations auto-approve
+    let cap = LocalKernelToolBroker::tool_to_capability(&issue_call);
+    let rule = broker.policy().learn_approval(
+        SubsystemId::Dialogue,
+        &cap,
+        "Always allow viewing GitHub issues".into(),
+    );
+
+    // Second attempt: auto-approves via learned approval rule without providing a token
+    let res = LocalKernelToolBroker::execute(&issue_call);
+    if res.success {
+        assert_eq!(res.output["found"], true);
+        assert_eq!(res.output["number"], 125);
+        assert!(
+            res.output["title"]
+                .as_str()
+                .unwrap()
+                .contains("Add concise cargo test failure summaries")
+        );
+        assert!(
+            res.output["body"]
+                .as_str()
+                .unwrap()
+                .contains("summarize_test_failure")
+        );
+    }
+
+    // Clean up learned rule from shared test fixture broker
+    broker.policy().revoke_learned_rule(rule.id);
 }

@@ -201,6 +201,14 @@
     </div>
     <button class="sheet-link" id="refreshApprovalsBtn" type="button" style="margin-top:8px;">Review pending requests <span>›</span></button>
     <div id="ownerApprovals" role="status" aria-live="polite"></div>
+    <div style="margin-top:16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+        <strong style="font-size:12px; font-weight:600;">Learned approval rules</strong>
+        <button class="quiet-button" id="refreshLearnedRulesBtn" type="button" style="padding:2px 8px; font-size:11px;">Refresh</button>
+      </div>
+      <p class="sheet-note" style="margin-bottom:6px;">Actions with "Always allow" are remembered and auto-executed without prompting.</p>
+      <div id="guardianLearnedRules" role="status" aria-live="polite" style="display:flex; flex-direction:column; gap:6px;"></div>
+    </div>
   </section>
   <details class="inspector"><summary>Developer details</summary><div class="telemetry-row"><span id="telVad">VAD —</span><span id="telConf">Confidence —</span><span id="telRms">RMS —</span></div></details>
 </aside>

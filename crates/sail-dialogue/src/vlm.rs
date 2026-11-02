@@ -662,8 +662,66 @@ impl LocalKernelToolBroker {
         (99, "P?")
     }
 
-    /// github:issues — Fetch open issues from GitHub CLI sorted by priority (P0 -> P1 -> P2 -> P3 -> P4)
+    /// github:issues — Fetch open issues from GitHub CLI sorted by priority (P0 -> P1 -> P2 -> P3 -> P4),
+    /// or fetch specific issue details if issue_number / number / id is provided.
     fn tool_github_issues(params: &serde_json::Value) -> KernelToolResult {
+        let issue_number = params
+            .get("issue_number")
+            .or_else(|| params.get("number"))
+            .or_else(|| params.get("id"))
+            .and_then(|v| {
+                if let Some(n) = v.as_i64() {
+                    Some(n)
+                } else if let Some(s) = v.as_str() {
+                    s.trim_start_matches('#').parse::<i64>().ok()
+                } else {
+                    None
+                }
+            });
+
+        if let Some(num) = issue_number {
+            let output = std::process::Command::new("gh")
+                .args([
+                    "issue",
+                    "view",
+                    &num.to_string(),
+                    "--json",
+                    "number,title,body,state,labels,author,url,createdAt",
+                ])
+                .output();
+
+            return match output {
+                Ok(out) if out.status.success() => {
+                    if let Ok(issue) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                        KernelToolResult {
+                            tool: "github:issues".into(),
+                            success: true,
+                            output: serde_json::json!({
+                                "found": true,
+                                "issue": issue,
+                                "number": issue.get("number").cloned().unwrap_or(serde_json::json!(num)),
+                                "title": issue.get("title").cloned().unwrap_or_default(),
+                                "body": issue.get("body").cloned().unwrap_or_default(),
+                                "state": issue.get("state").cloned().unwrap_or_default(),
+                                "url": issue.get("url").cloned().unwrap_or_default(),
+                                "labels": issue.get("labels").cloned().unwrap_or_default(),
+                            }),
+                        }
+                    } else {
+                        Self::error("github:issues", "Failed to parse GitHub CLI JSON output")
+                    }
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    Self::error(
+                        "github:issues",
+                        &format!("GitHub issue #{num} not found: {stderr}"),
+                    )
+                }
+                Err(e) => Self::error("github:issues", &format!("GitHub CLI unavailable: {e}")),
+            };
+        }
+
         let limit = params
             .get("limit")
             .and_then(|v| v.as_u64())
@@ -878,7 +936,7 @@ pub fn tool_definitions() -> serde_json::Value {
         {"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}},
         {"type":"function","function":{"name":"fs_read","description":"Read text contents of a file inside the authorized workspace.","parameters":{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Relative path to the file in the workspace"}}}}},
         {"type":"function","function":{"name":"fs_write","description":"Create or write a file inside the authorized workspace. Requires explicit user approval.","parameters":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string","description":"Relative path to write"},"content":{"type":"string","description":"File content to write"}}}}},
-        {"type":"function","function":{"name":"github_issues","description":"Retrieve open GitHub issues ordered by P0 to P4 priority, with optional priority filtering","parameters":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50},"priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}},"additionalProperties":false}}},
+        {"type":"function","function":{"name":"github_issues","description":"Retrieve open GitHub issues ordered by P0 to P4 priority, with optional priority filtering, or fetch full details of a specific issue by number","parameters":{"type":"object","properties":{"issue_number":{"type":"integer","description":"Specific GitHub issue number to fetch full title, body, state and labels for"},"limit":{"type":"integer","minimum":1,"maximum":50},"priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}},"additionalProperties":false}}},
         {"type":"function","function":{"name":"forge_enqueue","description":"Enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting.","parameters":{"type":"object","properties":{"issue_number":{"type":"integer","description":"GitHub issue number to solve"},"repo":{"type":"string","description":"Repository name, defaults to PedroVictorCoding/SAIL"},"task":{"type":"string","description":"Optional description or instructions for the task"}}}}},
         {"type":"function","function":{"name":"forge_status","description":"Check the status, current step, test outcome, and diff of a Forge autonomous coding job. Accepts exact job IDs (e.g. job-5-61c992ad), prefix (e.g. job-5), or issue numbers (e.g. 5 or #5).","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)"}}}}}
     ])
