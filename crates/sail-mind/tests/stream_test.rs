@@ -28,6 +28,10 @@ fn cpu_and_vulkan_launch_profiles_are_explicit_and_bounded() {
     assert!(cpu.windows(2).any(|p| p == ["--device", "none"]));
     assert!(cpu.windows(2).any(|p| p == ["--gpu-layers", "0"]));
     assert!(cpu.windows(2).any(|p| p == ["--parallel", "1"]));
+    assert!(cpu.windows(2).any(|p| p == ["-ctk", "q4_0"]));
+    assert!(cpu.windows(2).any(|p| p == ["-ctv", "q4_0"]));
+    assert!(cpu.windows(2).any(|p| p == ["-fa", "on"]));
+    assert!(cpu.windows(2).any(|p| p == ["--cache-reuse", "256"]));
     let gpu = LocalModelConfig {
         compute: ComputeBackend::Vulkan,
         device: "Vulkan0".into(),

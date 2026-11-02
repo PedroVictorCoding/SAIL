@@ -104,6 +104,22 @@ while [[ $# -gt 0 ]]; do
       export SAIL_VULKAN_DEVICE="$2"
       shift 2
       ;;
+    --cache-type-k|-ctk)
+      export SAIL_CACHE_TYPE_K="$2"
+      shift 2
+      ;;
+    --cache-type-v|-ctv)
+      export SAIL_CACHE_TYPE_V="$2"
+      shift 2
+      ;;
+    --no-flash-attn)
+      export SAIL_FLASH_ATTN="0"
+      shift
+      ;;
+    --cache-reuse)
+      export SAIL_CACHE_REUSE="$2"
+      shift 2
+      ;;
     -h|--help)
       cat << 'EOF'
 Usage: ./run.sh [OPTIONS] [-- CARGO_ARGS...]
@@ -127,6 +143,10 @@ Options:
   --gpu-layers, -ngl N Number of layers to offload to GPU in vulkan/hybrid mode
   --threads, -t N      Number of CPU generation/batch threads (default: min(cores, 6))
   --device <dev>       Compute device identifier (e.g. Vulkan0)
+  --cache-type-k, -ctk KV cache K quant type (q4_0, q8_0, f16; default: q4_0)
+  --cache-type-v, -ctv KV cache V quant type (q4_0, q8_0, f16; default: q4_0)
+  --no-flash-attn      Disable Flash Attention (enabled by default)
+  --cache-reuse N      Chunk size for KV shifting/cache reuse (default: 256)
   --restart            Stop any running SAIL processes before launching
   --stop, --kill       Stop running SAIL and llama processes and exit
   --status             Display active SAIL processes and exit
@@ -270,6 +290,7 @@ if [[ -n "${SAIL_MODEL_PATH:-}" ]]; then
   echo " LLM Model:    $SAIL_MODEL_PATH"
 fi
 echo " Backend:      ${SAIL_MODEL_BACKEND:-cpu}$([ "${SAIL_MODEL_BACKEND:-cpu}" = "hybrid" ] && echo " (GPU+CPU layers: ${SAIL_GPU_LAYERS:-8})" || true)"
+echo " Acceleration: FlashAttention=$([ "${SAIL_FLASH_ATTN:-1}" != "0" ] && echo "on" || echo "off"), KV-Cache=${SAIL_CACHE_TYPE_K:-q4_0}/${SAIL_CACHE_TYPE_V:-q4_0}, CacheReuse=${SAIL_CACHE_REUSE:-256}"
 if [[ -f "$REPO_ROOT/.local/sail_owner_token" ]]; then
   echo " Owner token:  Configured (.local/sail_owner_token)"
 fi

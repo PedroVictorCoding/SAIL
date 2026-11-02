@@ -15,6 +15,10 @@ pub struct LocalModelConfig {
     pub gpu_layers: u32,
     pub threads: usize,
     pub context_tokens: usize,
+    pub cache_type_k: String,
+    pub cache_type_v: String,
+    pub flash_attn: bool,
+    pub cache_reuse: usize,
     pub startup_timeout: Duration,
     pub probe_timeout: Duration,
 }
@@ -71,6 +75,15 @@ impl Default for LocalModelConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(16384),
+            cache_type_k: std::env::var("SAIL_CACHE_TYPE_K").unwrap_or_else(|_| "q4_0".into()),
+            cache_type_v: std::env::var("SAIL_CACHE_TYPE_V").unwrap_or_else(|_| "q4_0".into()),
+            flash_attn: std::env::var("SAIL_FLASH_ATTN")
+                .map(|v| v != "0" && v != "off" && v != "false")
+                .unwrap_or(true),
+            cache_reuse: std::env::var("SAIL_CACHE_REUSE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(256),
             startup_timeout: Duration::from_secs(120),
             probe_timeout: Duration::from_secs(3),
         }
@@ -108,6 +121,20 @@ impl LocalModelConfig {
         }
         if let Ok(v) = std::env::var("SAIL_VULKAN_DEVICE") {
             config.device = v;
+        }
+        if let Ok(v) = std::env::var("SAIL_CACHE_TYPE_K") {
+            config.cache_type_k = v;
+        }
+        if let Ok(v) = std::env::var("SAIL_CACHE_TYPE_V") {
+            config.cache_type_v = v;
+        }
+        if let Ok(v) = std::env::var("SAIL_FLASH_ATTN") {
+            config.flash_attn = v != "0" && v != "off" && v != "false";
+        }
+        if let Ok(v) = std::env::var("SAIL_CACHE_REUSE") {
+            if let Ok(n) = v.parse() {
+                config.cache_reuse = n;
+            }
         }
         config.validate()?;
         Ok(config)
@@ -190,6 +217,18 @@ impl LocalModelConfig {
             && projector.is_file()
         {
             args.extend(["--mmproj".into(), projector.display().to_string()]);
+        }
+        if !self.cache_type_k.is_empty() {
+            args.extend(["-ctk".into(), self.cache_type_k.clone()]);
+        }
+        if !self.cache_type_v.is_empty() {
+            args.extend(["-ctv".into(), self.cache_type_v.clone()]);
+        }
+        if self.flash_attn {
+            args.extend(["-fa".into(), "on".into()]);
+        }
+        if self.cache_reuse > 0 {
+            args.extend(["--cache-reuse".into(), self.cache_reuse.to_string()]);
         }
         Ok(args)
     }
