@@ -75,6 +75,7 @@ function syncActivityPill() {
     'forge:status':'Checking Forge job',
     'forge:list':'Listing Forge tasks',
     'github:issues':'Checking GitHub repo',
+    'web:read':'Reading web page',
   };
   document.getElementById('activityText').textContent = activeTools.size ? labels[[...activeTools.keys()].at(-1)] || 'Using a local tool' : stateLabels[orbState] || '';
 }
@@ -285,6 +286,7 @@ function renderToolResult(result) {
   else if (Array.isArray(output?.entries)) summary.textContent = `${output.entries.length} ${output.entries.length === 1 ? 'item' : 'items'} in ${String(output.path || 'the selected folder')}`;
   else if (output?.issue && output?.title) summary.textContent = `GitHub Issue #${output.number || output.issue.number}: ${output.title} (${output.state || 'OPEN'})`;
   else if (Array.isArray(output?.issues)) summary.textContent = `${output.count} GitHub issues retrieved (sorted by priority)`;
+  else if (result?.tool === 'web:read' && output?.url) summary.textContent = `Fetched ${output.bytes || output.content?.length || 0} bytes from ${output.url}`;
   else if (result?.tool === 'forge:enqueue' && output?.job_id) summary.textContent = `Forge job enqueued: ${output.job_id} (Issue #${output.issue_number || '—'})`;
   else if (result?.tool === 'forge:status' && output?.job_id) summary.textContent = `Forge job ${output.job_id}: ${output.state || 'active'} (${output.diff_stat || output.current_step || '—'})`;
   else if (output?.job_id) summary.textContent = `Forge job ${output.job_id}: ${output.state || 'active'}`;
@@ -339,6 +341,25 @@ function renderToolResult(result) {
       });
       issueDetails.append(heading, meta, body, solveBtn);
       modalBody.append(issueDetails);
+    }
+
+    if (result?.tool === 'web:read' && output?.content) {
+      const webDetails = document.createElement('div');
+      webDetails.style.marginBottom = '14px';
+      const webUrl = document.createElement('p');
+      webUrl.className = 'sheet-note';
+      webUrl.textContent = `Source: ${output.url}`;
+      const pre = document.createElement('pre');
+      pre.style.whiteSpace = 'pre-wrap';
+      pre.style.wordBreak = 'break-word';
+      pre.style.maxHeight = '400px';
+      pre.style.overflowY = 'auto';
+      pre.style.background = 'rgba(255,255,255,0.03)';
+      pre.style.padding = '10px';
+      pre.style.borderRadius = '8px';
+      pre.textContent = output.content;
+      webDetails.append(webUrl, pre);
+      modalBody.append(webDetails);
     }
 
     if (Array.isArray(output?.issues)) {

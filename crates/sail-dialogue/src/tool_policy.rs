@@ -201,9 +201,23 @@ pub fn tool_status_summary(messages: &[Value]) -> String {
                     "{tool}: retrieved {} Forge jobs.",
                     output["count"].as_u64().unwrap_or(0)
                 ),
-                "github:issues" => format!(
-                    "{tool}: retrieved {} open GitHub issues sorted by priority.",
-                    output["count"].as_u64().unwrap_or(0)
+                "github:issues" => {
+                    if let Some(title) = output["title"].as_str() {
+                        format!(
+                            "{tool}: retrieved issue #{}: \"{}\".",
+                            output["number"], title
+                        )
+                    } else {
+                        format!(
+                            "{tool}: retrieved {} open GitHub issues sorted by priority.",
+                            output["count"].as_u64().unwrap_or(0)
+                        )
+                    }
+                }
+                "web:read" => format!(
+                    "{tool}: fetched {} bytes from {}.",
+                    output["bytes"].as_u64().unwrap_or(0),
+                    output["url"].as_str().unwrap_or("URL")
                 ),
                 _ => format!("{tool}: operation completed."),
             }

@@ -82,8 +82,10 @@ impl Capability {
             },
             Capability::Tool(t) => match t {
                 ToolCapability::KernelTool(name) => match name.as_str() {
-                    "os:status" | "forge:status" | "forge:list" => RiskLevel::Low,
-                    "proc:list" | "fs:query" | "fs:read" | "github:issues" => RiskLevel::Medium,
+                    "os:status" | "forge:status" | "forge:list" | "github:issues" | "web:read" => {
+                        RiskLevel::Low
+                    }
+                    "proc:list" | "fs:query" | "fs:read" => RiskLevel::Medium,
                     "vision:frame" | "fs:write" | "forge:enqueue" | "forge:cancel" => {
                         RiskLevel::High
                     }
@@ -94,7 +96,13 @@ impl Capability {
                 {
                     RiskLevel::Low
                 }
-                ToolCapability::Invocation { tool, .. } if tool == "canvas:publish" => {
+                ToolCapability::Invocation { tool, .. }
+                    if tool == "canvas:publish"
+                        || tool == "github:issues"
+                        || tool == "web:read"
+                        || tool == "forge:status"
+                        || tool == "forge:list" =>
+                {
                     RiskLevel::Low
                 }
                 ToolCapability::Invocation { tool, .. } if tool == "command:execute" => {

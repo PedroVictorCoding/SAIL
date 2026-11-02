@@ -82,7 +82,7 @@ impl CapabilityProfile {
             CapabilityProfile::ReadOnly => nono::NetworkMode::Blocked,
             CapabilityProfile::Workspace => nono::NetworkMode::Blocked,
             CapabilityProfile::Forge => nono::NetworkMode::Blocked,
-            CapabilityProfile::Research => nono::NetworkMode::Blocked, // Broker proxy is configured per-request
+            CapabilityProfile::Research => nono::NetworkMode::AllowAll, // Read-only research with outbound internet
             CapabilityProfile::Privileged => nono::NetworkMode::Blocked,
         }
     }

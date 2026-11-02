@@ -44,7 +44,7 @@ impl LocalKernelToolBroker {
             "os:status" => {
                 sail_guardian::Capability::System(sail_guardian::SystemCapability::OsTelemetry)
             }
-            "proc:list" | "forge:enqueue" | "forge:cancel" | "github:issues" => {
+            "proc:list" | "forge:enqueue" | "forge:cancel" | "github:issues" | "web:read" => {
                 sail_guardian::capability::bound_tool_invocation(&call.tool, &call.params)
             }
             "fs:query" | "fs:read" => {
@@ -252,6 +252,7 @@ impl LocalKernelToolBroker {
             "forge:list" => Self::tool_forge_list(&call.params),
             "forge:cancel" => Self::tool_forge_cancel(&call.params),
             "github:issues" => Self::tool_github_issues(&call.params),
+            "web:read" => Self::tool_web_read(&call.params),
             unknown => KernelToolResult {
                 tool: unknown.to_string(),
                 success: false,
@@ -663,28 +664,36 @@ impl LocalKernelToolBroker {
     }
 
     /// github:issues — Fetch open issues from GitHub CLI sorted by priority (P0 -> P1 -> P2 -> P3 -> P4),
-    /// or fetch specific issue details if issue_number / number / id is provided.
+    /// or fetch specific issue details if issue_number / url / number / id is provided.
     fn tool_github_issues(params: &serde_json::Value) -> KernelToolResult {
-        let issue_number = params
-            .get("issue_number")
+        // Extract issue target (number, string "#125", or full URL "https://github.com/owner/repo/issues/125")
+        let target_spec = params
+            .get("url")
+            .or_else(|| params.get("issue_number"))
             .or_else(|| params.get("number"))
             .or_else(|| params.get("id"))
             .and_then(|v| {
                 if let Some(n) = v.as_i64() {
-                    Some(n)
+                    Some(n.to_string())
                 } else if let Some(s) = v.as_str() {
-                    s.trim_start_matches('#').parse::<i64>().ok()
+                    let trimmed = s.trim();
+                    if !trimmed.is_empty() {
+                        Some(trimmed.to_string())
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
             });
 
-        if let Some(num) = issue_number {
+        if let Some(spec) = target_spec {
+            let view_arg = spec.trim_start_matches('#');
             let output = std::process::Command::new("gh")
                 .args([
                     "issue",
                     "view",
-                    &num.to_string(),
+                    view_arg,
                     "--json",
                     "number,title,body,state,labels,author,url,createdAt",
                 ])
@@ -699,7 +708,7 @@ impl LocalKernelToolBroker {
                             output: serde_json::json!({
                                 "found": true,
                                 "issue": issue,
-                                "number": issue.get("number").cloned().unwrap_or(serde_json::json!(num)),
+                                "number": issue.get("number").cloned().unwrap_or(serde_json::json!(view_arg)),
                                 "title": issue.get("title").cloned().unwrap_or_default(),
                                 "body": issue.get("body").cloned().unwrap_or_default(),
                                 "state": issue.get("state").cloned().unwrap_or_default(),
@@ -715,7 +724,7 @@ impl LocalKernelToolBroker {
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     Self::error(
                         "github:issues",
-                        &format!("GitHub issue #{num} not found: {stderr}"),
+                        &format!("GitHub issue '{spec}' not found: {stderr}"),
                     )
                 }
                 Err(e) => Self::error("github:issues", &format!("GitHub CLI unavailable: {e}")),
@@ -812,6 +821,125 @@ impl LocalKernelToolBroker {
             }
             Err(e) => Self::error("github:issues", &format!("GitHub CLI unavailable: {e}")),
         }
+    }
+
+    /// web:read — Read-only HTTP/HTTPS web fetcher for public documentation, web articles, and online URLs.
+    /// Strictly read-only: no writes, no POST/PUT/DELETE, no local file modifications.
+    fn tool_web_read(params: &serde_json::Value) -> KernelToolResult {
+        let url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim();
+
+        if url.is_empty() {
+            return Self::error("web:read", "Parameter 'url' is required (e.g. https://...)");
+        }
+
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Self::error("web:read", "URL must start with http:// or https://");
+        }
+
+        // Restrict loopback and private address probing
+        if url.contains("://127.")
+            || url.contains("://localhost")
+            || url.contains("://0.0.0.0")
+            || url.contains("://[::1]")
+        {
+            return Self::error(
+                "web:read",
+                "Loopback and local addresses are restricted for web reading.",
+            );
+        }
+
+        let output = std::process::Command::new("curl")
+            .args([
+                "-sL",
+                "--max-time",
+                "10",
+                "--max-filesize",
+                "5000000",
+                "-H",
+                "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+                url,
+            ])
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let raw_content = String::from_utf8_lossy(&out.stdout);
+                let clean = Self::extract_text_from_html(&raw_content);
+                let capped: String = clean.chars().take(24000).collect();
+                KernelToolResult {
+                    tool: "web:read".into(),
+                    success: true,
+                    output: serde_json::json!({
+                        "url": url,
+                        "bytes": raw_content.len(),
+                        "content": capped,
+                    }),
+                }
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                Self::error("web:read", &format!("HTTP request failed: {stderr}"))
+            }
+            Err(e) => Self::error("web:read", &format!("Failed to execute curl: {e}")),
+        }
+    }
+
+    fn extract_text_from_html(html: &str) -> String {
+        let mut in_tag = false;
+        let mut in_script = false;
+        let mut in_style = false;
+        let mut result = String::with_capacity(html.len());
+        let mut tag_name = String::new();
+
+        for ch in html.chars() {
+            if ch == '<' {
+                in_tag = true;
+                tag_name.clear();
+            } else if ch == '>' {
+                in_tag = false;
+                let lower = tag_name.to_ascii_lowercase();
+                if lower.starts_with("script") {
+                    in_script = true;
+                } else if lower.starts_with("/script") {
+                    in_script = false;
+                } else if lower.starts_with("style") {
+                    in_style = true;
+                } else if lower.starts_with("/style") {
+                    in_style = false;
+                } else if matches!(
+                    lower.as_str(),
+                    "p" | "/p"
+                        | "div"
+                        | "/div"
+                        | "br"
+                        | "h1"
+                        | "/h1"
+                        | "h2"
+                        | "/h2"
+                        | "h3"
+                        | "/h3"
+                        | "li"
+                        | "/li"
+                ) {
+                    result.push('\n');
+                }
+            } else if in_tag {
+                tag_name.push(ch);
+            } else if !in_script && !in_style {
+                result.push(ch);
+            }
+        }
+
+        result
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -936,7 +1064,8 @@ pub fn tool_definitions() -> serde_json::Value {
         {"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}},
         {"type":"function","function":{"name":"fs_read","description":"Read text contents of a file inside the authorized workspace.","parameters":{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Relative path to the file in the workspace"}}}}},
         {"type":"function","function":{"name":"fs_write","description":"Create or write a file inside the authorized workspace. Requires explicit user approval.","parameters":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string","description":"Relative path to write"},"content":{"type":"string","description":"File content to write"}}}}},
-        {"type":"function","function":{"name":"github_issues","description":"Retrieve open GitHub issues ordered by P0 to P4 priority, with optional priority filtering, or fetch full details of a specific issue by number","parameters":{"type":"object","properties":{"issue_number":{"type":"integer","description":"Specific GitHub issue number to fetch full title, body, state and labels for"},"limit":{"type":"integer","minimum":1,"maximum":50},"priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}},"additionalProperties":false}}},
+        {"type":"function","function":{"name":"github_issues","description":"Retrieve open GitHub issues ordered by priority, or fetch full details of a specific issue by number or URL","parameters":{"type":"object","properties":{"url":{"type":"string","description":"Specific GitHub issue URL (e.g. https://github.com/owner/repo/issues/125)"},"issue_number":{"type":"integer","description":"Specific GitHub issue number to fetch full title, body, state and labels for"},"limit":{"type":"integer","minimum":1,"maximum":50},"priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}},"additionalProperties":false}}},
+        {"type":"function","function":{"name":"web_read","description":"Fetch and read the text contents of any public web page, URL, documentation, or online issue without write permissions","parameters":{"type":"object","required":["url"],"properties":{"url":{"type":"string","description":"The HTTP or HTTPS URL to fetch and read"}},"additionalProperties":false}}},
         {"type":"function","function":{"name":"forge_enqueue","description":"Enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting.","parameters":{"type":"object","properties":{"issue_number":{"type":"integer","description":"GitHub issue number to solve"},"repo":{"type":"string","description":"Repository name, defaults to PedroVictorCoding/SAIL"},"task":{"type":"string","description":"Optional description or instructions for the task"}}}}},
         {"type":"function","function":{"name":"forge_status","description":"Check the status, current step, test outcome, and diff of a Forge autonomous coding job. Accepts exact job IDs (e.g. job-5-61c992ad), prefix (e.g. job-5), or issue numbers (e.g. 5 or #5).","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)"}}}}}
     ])
