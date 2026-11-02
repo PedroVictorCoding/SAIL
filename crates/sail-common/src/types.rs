@@ -216,6 +216,12 @@ pub enum EventPayload {
         target_file: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         logs: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        live_output: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_action: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn: Option<u32>,
     },
     ForgeReviewCompleted {
         job_id: String,

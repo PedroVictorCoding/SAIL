@@ -415,3 +415,78 @@ fn test_flexible_job_identifier_matching() {
         issue_number
     ));
 }
+
+#[tokio::test]
+async fn test_forge_live_model_output_telemetry_emission_and_checkpointing() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("test_orch_live_telemetry_{}", Uuid::new_v4()));
+    setup_test_git_repo(&temp_dir);
+
+    let checkpoint_store = Arc::new(TaskCheckpointStore::new(temp_dir.join("checkpoints")));
+    let review_broker =
+        Arc::new(ReviewBroker::new(ReviewPolicyConfig::default()).with_mock_mode(true));
+    let sandbox = Arc::new(SandboxPolicy::new());
+
+    let mut config = OrchestratorConfig::default();
+    config.workspace_root = temp_dir.clone();
+
+    let orchestrator =
+        ForgeOrchestrator::new(config, checkpoint_store.clone(), review_broker, sandbox);
+
+    let event_bus = sail_common::bus::EventBus::new();
+    let mut rx = event_bus.subscribe();
+    orchestrator.set_event_bus(event_bus);
+
+    let req = IssueEnqueueRequest {
+        repo: "PedroVictorCoding/SAIL".into(),
+        issue_number: 101,
+        priority: Some("P0".into()),
+        review_policy: None,
+        budget: None,
+        issue_title: Some("Add compute feature".into()),
+        issue_body: Some("Ensure live telemetry emitted".into()),
+    };
+    let job_id = orchestrator.enqueue_issue(req).unwrap();
+
+    let patch = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,4 @@\n pub fn compute() -> i32 { 42 }\n+// Live output test annotation\n #[test]\n fn test_compute() { assert_eq!(compute(), 42); }\n";
+
+    let report = orchestrator
+        .run_job_lifecycle(&job_id, Some(patch))
+        .await
+        .unwrap();
+    assert_eq!(report.status, ForgeTaskState::Completed);
+
+    let status = orchestrator.get_status(&job_id).unwrap();
+    // Verify checkpoint status response carries live_output/model_action Option fields without serialization breakage
+    let serialized_status = serde_json::to_string(&status).unwrap();
+    assert!(serialized_status.contains("job_id"));
+
+    // Verify event bus captured ForgeIssueStatusUpdated events
+    let mut stages_received = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let sail_common::types::EventPayload::ForgeIssueStatusUpdated {
+            stage,
+            model_action,
+            turn,
+            ..
+        } = event.payload
+        {
+            stages_received.push((stage, model_action, turn));
+        }
+    }
+
+    assert!(
+        stages_received.iter().any(|(st, _, _)| st == "planning"),
+        "Expected planning event on bus"
+    );
+    assert!(
+        stages_received.iter().any(|(st, _, _)| st == "coding"),
+        "Expected coding event on bus"
+    );
+    assert!(
+        stages_received.iter().any(|(_, act, _)| act.is_some()),
+        "Expected some event with model_action populated"
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

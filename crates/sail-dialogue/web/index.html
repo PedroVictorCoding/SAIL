@@ -276,11 +276,21 @@
                 <div class="forge-live-badge">
                   <span class="forge-live-dot"></span>
                   <span id="forgeLiveTitle">SAIL Live Code Stream</span>
+                  <span class="forge-turn-badge" id="forgeTurnBadge" hidden>Turn 1</span>
                 </div>
                 <div class="forge-live-actions">
-                  <span class="forge-live-file" id="forgeLiveFile" title="Target source file"></span>
-                  <button type="button" class="card-expand-btn" id="forgeExpandDiffBtn" title="Expand Full Code Diff in Pop-up" aria-label="Expand Full Code Diff in Pop-up">⤢</button>
+                  <span class="forge-action-label" id="forgeActionLabel" hidden>Analyzing</span>
+                  <span class="forge-live-file" id="forgeLiveFile" title="Target source file" hidden></span>
+                  <button type="button" class="card-expand-btn" id="forgeExpandDiffBtn" title="Expand Full Code Diff & Output in Pop-up" aria-label="Expand Full Code Diff & Output in Pop-up">⤢</button>
                 </div>
+              </div>
+              <div class="forge-model-stream-box" id="forgeModelStreamBox" hidden>
+                <div class="forge-stream-label">
+                  <span class="live-pulse-dot"></span>
+                  <span>Model Live Output</span>
+                  <span class="forge-token-badge" id="forgeTokenBadge">Live</span>
+                </div>
+                <div class="forge-live-output-text" id="forgeLiveOutputText">Waiting for model generation...</div>
               </div>
               <pre class="forge-live-diff" id="forgeLiveDiff"><code>// Waiting for Forge coding phase...</code></pre>
               <div class="forge-live-logs" id="forgeLiveLogs"></div>

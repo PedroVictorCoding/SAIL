@@ -19,5 +19,6 @@ uuid.workspace = true
 chrono.workspace = true
 ring.workspace = true
 reqwest.workspace = true
+futures-util.workspace = true
 libc = "0.2"
 tracing-subscriber = "0.3"

@@ -49,7 +49,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let log_dir = std::env::temp_dir().join(format!("sail-forge-cli-{}", job_id));
     let outcome = controller
-        .solve_issue(&worktree, &title, &body, &log_dir, || false)
+        .solve_issue(
+            &worktree,
+            &title,
+            &body,
+            &log_dir,
+            || false,
+            |prog| {
+                println!(
+                    "[PROGRESS] [Turn {}] {} - {}",
+                    prog.turn,
+                    prog.model_action.as_deref().unwrap_or("working"),
+                    prog.message
+                );
+            },
+        )
         .await;
 
     println!("\n=== SOLVER OUTCOME ===");

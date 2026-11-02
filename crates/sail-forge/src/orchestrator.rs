@@ -265,6 +265,8 @@ impl ForgeOrchestrator {
             failure_reason: cp.failure_reason.clone(),
             model_endpoint: cp.model_endpoint.clone(),
             modified_files: cp.modified_files.clone(),
+            live_output: cp.live_output.clone(),
+            model_action: cp.model_action.clone(),
         }
     }
 
@@ -358,6 +360,9 @@ impl ForgeOrchestrator {
             diff: job.checkpoint.patch.clone(),
             target_file: job.checkpoint.target_file.clone(),
             logs: Some(vec![format!("Job paused: {reason}")]),
+            live_output: None,
+            model_action: None,
+            turn: None,
         });
 
         info!("Paused job {} ({})", resolved_id, reason);
@@ -393,6 +398,9 @@ impl ForgeOrchestrator {
             diff: job.checkpoint.patch.clone(),
             target_file: job.checkpoint.target_file.clone(),
             logs: Some(vec!["Job resumed by scheduler".into()]),
+            live_output: None,
+            model_action: None,
+            turn: None,
         });
 
         info!("Resumed job {}", resolved_id);
@@ -424,6 +432,9 @@ impl ForgeOrchestrator {
             diff: job.checkpoint.patch.clone(),
             target_file: job.checkpoint.target_file.clone(),
             logs: Some(vec![format!("Job cancelled: {reason}")]),
+            live_output: None,
+            model_action: None,
+            turn: None,
         });
 
         info!("Cancelled job {} ({})", resolved_id, reason);
@@ -551,6 +562,9 @@ impl ForgeOrchestrator {
                 format!("Located candidate target file: {}", target_file.display()),
                 "Reading symbols and synthesizing unified diff...".into(),
             ]),
+            live_output: None,
+            model_action: None,
+            turn: None,
         });
 
         let current_code = worktree.read_file(&target_file).unwrap_or_default();
@@ -822,6 +836,9 @@ impl ForgeOrchestrator {
                 "Initializing isolated git worktree...".into(),
                 "Formulating resolution plan...".into(),
             ]),
+            live_output: None,
+            model_action: Some("Formulating plan".into()),
+            turn: Some(0),
         });
 
         // 2. Setup isolated worktree
@@ -860,6 +877,9 @@ impl ForgeOrchestrator {
                 "Isolated worktree initialized successfully.".into(),
                 "Synthesizing solution patch with coding model...".into(),
             ]),
+            live_output: None,
+            model_action: Some("Starting solver".into()),
+            turn: Some(1),
         });
 
         // Autonomous coding agent: run bounded iterative local solver loop
@@ -951,15 +971,59 @@ impl ForgeOrchestrator {
                 crate::solver::LocalSolverController::new(4, 180, self.config.model_path.clone());
 
             let logs_dir = self.config.workspace_root.join("logs").join(job_id);
-            controller
-                .solve_issue(&worktree, &title, &body, &logs_dir, || {
-                    let jobs = self.active_jobs.lock().unwrap();
-                    if let Some(j) = jobs.get(job_id) {
-                        j.checkpoint.state == ForgeTaskState::Blocked
-                    } else {
-                        false
+            let event_bus = self.event_bus.clone();
+            let job_id_str = job_id.to_string();
+            let active_jobs = self.active_jobs.clone();
+            let on_progress = move |prog: crate::solver::SolverProgress| {
+                {
+                    let mut jobs = active_jobs.lock().unwrap();
+                    if let Some(j) = jobs.get_mut(&job_id_str) {
+                        if prog.diff.is_some() {
+                            j.checkpoint.patch = prog.diff.clone();
+                        }
+                        if prog.target_file.is_some() {
+                            j.checkpoint.target_file = prog.target_file.clone();
+                        }
+                        j.checkpoint.live_output = prog.live_output.clone();
+                        j.checkpoint.model_action = prog.model_action.clone();
                     }
-                })
+                }
+                let lock = event_bus.lock().unwrap();
+                if let Some(bus) = &*lock {
+                    let _ = bus.publish(SailEvent::new(
+                        SubsystemId::Forge,
+                        EventPayload::ForgeIssueStatusUpdated {
+                            job_id: job_id_str.clone(),
+                            state: prog.stage.clone(),
+                            stage: prog.stage,
+                            message: prog.message,
+                            diff: prog.diff,
+                            target_file: prog.target_file,
+                            logs: prog.logs,
+                            live_output: prog.live_output,
+                            model_action: prog.model_action,
+                            turn: Some(prog.turn),
+                        },
+                    ));
+                }
+            };
+
+            controller
+                .solve_issue(
+                    &worktree,
+                    &title,
+                    &body,
+                    &logs_dir,
+                    || {
+                        let jobs = self.active_jobs.lock().unwrap();
+                        if let Some(j) = jobs.get(job_id) {
+                            j.checkpoint.state == ForgeTaskState::Blocked
+                        } else {
+                            false
+                        }
+                    },
+                    on_progress,
+                )
                 .await
         };
 
@@ -1024,7 +1088,11 @@ impl ForgeOrchestrator {
                 ),
                 format!("Solver status: {}", outcome.verification_status),
                 format!("Summary: {}", outcome.summary),
+                format!("Turns used: {}", outcome.turns),
             ]),
+            live_output: Some(outcome.summary.clone()),
+            model_action: Some("Solver pass complete".into()),
+            turn: Some(outcome.turns),
         });
 
         if !outcome.success {
