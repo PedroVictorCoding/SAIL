@@ -50,6 +50,7 @@ impl LocalGemmaBackend {
         let client = builder
             .build()
             .map_err(|e| InferenceError::new(ErrorCode::InvalidConfiguration, e.to_string()))?;
+        let active_profile = Some(config.to_profile());
         let snapshot = ModelStatus {
             version: VERSION,
             state: ModelState::Uninitialized,
@@ -60,6 +61,8 @@ impl LocalGemmaBackend {
             owned_process: false,
             process_id: None,
             last_error: None,
+            active_profile,
+            hardware: None,
         };
         Ok(Self {
             config,
@@ -137,10 +140,13 @@ impl LocalGemmaBackend {
                     .is_some_and(|t| t.contains("tools") || t.contains("tool_calls")),
             context_tokens: context,
         };
+        let hw = Some(crate::hardware::HardwareProbe::diagnose(&self.config.server_binary).await);
         self.update(|s| {
             s.state = ModelState::Ready;
             s.capabilities = Some(caps);
             s.last_error = None;
+            s.hardware = hw;
+            s.active_profile = Some(self.config.to_profile());
         });
         Ok(self.snapshot())
     }
@@ -201,6 +207,18 @@ impl LocalGemmaBackend {
                 if self.config.compute == ComputeBackend::Vulkan
                     || self.config.compute == ComputeBackend::Hybrid
                 {
+                    let render_path = std::path::Path::new("/dev/dri/renderD128");
+                    let (accessible, remediation) =
+                        crate::hardware::HardwareProbe::check_render_device_access(render_path);
+                    if !accessible {
+                        let msg =
+                            remediation.unwrap_or_else(|| "Render node is inaccessible".into());
+                        tracing::warn!(device = %self.config.device, remediation = %msg, "Vulkan/Hybrid device access blocked");
+                        return Err(InferenceError::new(
+                            ErrorCode::UnsupportedCapability,
+                            format!("Requested {} is not available: {}", self.config.device, msg),
+                        ));
+                    }
                     let output = tokio::time::timeout(
                         self.config.probe_timeout,
                         Command::new(&self.config.server_binary)

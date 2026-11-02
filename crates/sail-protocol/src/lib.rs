@@ -256,6 +256,10 @@ pub struct ModelStatus {
     pub owned_process: bool,
     pub process_id: Option<u32>,
     pub last_error: Option<InferenceError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_profile: Option<InferenceProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<HardwareDiagnostics>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InferenceMetrics {
@@ -276,6 +280,85 @@ pub struct MindStatus {
     pub models: Vec<ModelStatus>,
     pub metrics: InferenceMetrics,
     pub limits: ResourceLimits,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<HardwareDiagnostics>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InferenceProfile {
+    pub profile_id: String,
+    pub backend: ComputeBackend,
+    pub threads: usize,
+    pub threads_batch: usize,
+    pub context_tokens: usize,
+    pub cache_type_k: String,
+    pub cache_type_v: String,
+    pub flash_attn: bool,
+    pub cache_reuse: usize,
+    pub batch_size: usize,
+    pub ubatch_size: usize,
+    pub mlock: bool,
+    pub no_mmap: bool,
+    pub gpu_layers: u32,
+    pub device: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HardwareDiagnostics {
+    pub cpu_cores: usize,
+    pub cpu_threads: usize,
+    pub total_ram_mb: u64,
+    pub free_ram_mb: u64,
+    pub gpu_detected: bool,
+    pub gpu_name: Option<String>,
+    pub render_device_accessible: bool,
+    pub permission_remediation: Option<String>,
+    pub supported_devices: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkRecord {
+    pub scenario: String,
+    pub prompt_tokens: usize,
+    pub output_tokens: usize,
+    pub ttft_ms: u64,
+    pub prompt_eval_tokens_per_sec: f32,
+    pub decode_tokens_per_sec: f32,
+    pub peak_rss_mb: u64,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkSummary {
+    pub model: String,
+    pub profile: InferenceProfile,
+    pub records: Vec<BenchmarkRecord>,
+    pub p50_ttft_ms: u64,
+    pub p95_ttft_ms: u64,
+    pub avg_decode_tok_per_sec: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StagedSpeechPhase {
+    ToolPlanned,
+    AckStarted,
+    ToolStarted,
+    ToolCompleted,
+    GroundedAnswerStarted,
+    SpeechFinished,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagedSpeechEvent {
+    pub turn_id: u64,
+    pub phase: StagedSpeechPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

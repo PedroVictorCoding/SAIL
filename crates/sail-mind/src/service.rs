@@ -139,12 +139,14 @@ impl MindService {
         let mut metrics = state.metrics.clone();
         metrics.active = state.jobs.values().filter(|j| j.running).count();
         metrics.queued = state.jobs.len() - metrics.active;
+        let hardware = models.iter().find_map(|m| m.hardware.clone());
         MindStatus {
             version: VERSION,
             accepting_requests: state.accepting,
             models,
             metrics,
             limits: self.inner.limits.clone(),
+            hardware,
         }
     }
     pub async fn infer(

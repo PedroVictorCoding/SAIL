@@ -166,7 +166,11 @@ function connectWs() {
         updateGenMetrics(data);
         updateState('idle');
         break;
-      case 'interruption': cancelVisualCapture(); setCaptureHeld(false); turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
+      case 'interruption':
+        if (data.state === 'interrupted') {
+          for (const tool of activeTools.keys()) updateToolActivity(tool, false);
+        }
+        cancelVisualCapture(); setCaptureHeld(false); turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
       case 'control': applyControl(data.control); break;
       case 'tool_event': {
         const event = data.event;
@@ -181,7 +185,17 @@ function connectWs() {
         if (['completed','failed','cancelled'].includes(event.state)) updateState(turnInProgress ? 'thinking' : 'idle');
         break;
       }
+      case 'tool_planned': updateToolActivity(data.tool, true); break;
+      case 'ack_started':
+        if (!responseNode) responseNode = appendConversation('SAIL', '');
+        if (data.text) {
+          responseText += data.text + ' ';
+          responseNode.lastChild.textContent = responseText;
+        }
+        updateState('speaking');
+        break;
       case 'tool_started': updateToolActivity(data.tool, true); break;
+      case 'tool_completed': updateToolActivity(data.tool, false); break;
       case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); logToolActivity(data.result); break;
       case 'canvas': renderArtifact(data.artifact); break;
       case 'approval_required':
@@ -1611,7 +1625,7 @@ setInterval(() => {
 
 // Auto-ping Forge jobs periodically
 setInterval(() => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (!document.hidden && ws && ws.readyState === WebSocket.OPEN) {
     sendAction('forge:list');
   }
 }, 5000);
