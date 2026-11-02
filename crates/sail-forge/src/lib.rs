@@ -13,6 +13,7 @@ pub mod nightly;
 pub mod orchestrator;
 pub mod persistence;
 pub mod publish;
+pub mod repo_map;
 pub mod reviewer;
 pub mod self_review;
 pub mod solver;

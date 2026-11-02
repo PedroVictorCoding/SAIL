@@ -50,6 +50,9 @@ pub enum RepoToolCall {
     /// SEARCH/REPLACE blocks parsed from the raw reply, applied atomically.
     #[serde(rename = "repo:edit_blocks")]
     EditBlocks { blocks: Vec<EditBlock> },
+    /// Ranked repository map of item signatures relevant to `query`.
+    #[serde(rename = "repo:map", alias = "map")]
+    Map { query: String },
     #[serde(rename = "repo:test", alias = "test")]
     Test {
         #[serde(default)]
@@ -180,6 +183,12 @@ impl RepoToolCall {
     }
 }
 
+/// Initial-context budgets, sized for a 16k-token local model context with 2k output
+/// tokens per turn (roughly 3.5 characters per token for Rust).
+const TARGET_CONTEXT_CHARS: usize = 8_000;
+const REPO_MAP_CHARS: usize = 4_000;
+const HISTORY_BUDGET_CHARS: usize = 36_000;
+
 /// Execute a bounded repository tool strictly inside `worktree`.
 pub fn execute_repo_tool(
     worktree: &IsolatedWorktree,
@@ -213,6 +222,22 @@ pub fn execute_repo_tool(
     match call {
         RepoToolCall::Edit { .. } | RepoToolCall::EditBlocks { .. } => {
             unreachable!("edit calls are handled above")
+        }
+        RepoToolCall::Map { query } => {
+            let files = crate::repo_map::scan_repo(&worktree.root_dir);
+            let ranked = crate::repo_map::rank(&files, query, &[]);
+            let map = crate::repo_map::render_map(&ranked, REPO_MAP_CHARS);
+            RepoToolResult {
+                tool: "repo:map".into(),
+                ok: true,
+                output: if map.is_empty() {
+                    format!("No Rust items match `{query}`; try repo:search")
+                } else {
+                    map
+                },
+                modified_files: Vec::new(),
+                test_record: None,
+            }
         }
         RepoToolCall::List { path } => {
             let rel = path.as_deref().unwrap_or(".");
@@ -951,7 +976,13 @@ impl LocalSolverController {
             .unwrap_or_default();
 
         let endpoints = Self::candidate_endpoints();
-        let initial_ctx = self.build_initial_workspace_context(worktree);
+        let initial_ctx = crate::repo_map::build_issue_context(
+            &worktree.root_dir,
+            issue_title,
+            issue_body,
+            TARGET_CONTEXT_CHARS,
+            REPO_MAP_CHARS,
+        );
 
         on_progress(SolverProgress {
             turn: 1,
@@ -976,9 +1007,10 @@ Tools (JSON):
 1. {"tool": "repo:list", "path": "."}
 2. {"tool": "repo:search", "query": "function_or_symbol"}
 3. {"tool": "repo:read_range", "path": "src/lib.rs", "start_line": 1, "end_line": 120}
-4. {"tool": "repo:diff"}
-5. {"tool": "repo:test"}  (sandboxed cargo test)
-6. {"tool": "done", "summary": "what changed"}  (only after repo:test passes)
+4. {"tool": "repo:map", "query": "words from the issue"}  (ranked item signatures with line numbers)
+5. {"tool": "repo:diff"}
+6. {"tool": "repo:test"}  (sandboxed cargo test)
+7. {"tool": "done", "summary": "what changed"}  (only after repo:test passes)
 
 Edits (preferred; no JSON escaping needed). Write the file path on its own line, then:
 src/lib.rs
@@ -1069,7 +1101,7 @@ Rules:
             });
 
             // Bound accumulated multi-turn history to keep prompts within context limits
-            Self::prune_messages_to_budget(&mut messages, 24000);
+            Self::prune_messages_to_budget(&mut messages, HISTORY_BUDGET_CHARS);
 
             // Call local OpenAI-compatible chat completions endpoint with streaming support
             let mut turn_response_text: Option<String> = None;

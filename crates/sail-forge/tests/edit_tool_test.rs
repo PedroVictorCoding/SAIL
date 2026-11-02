@@ -85,7 +85,10 @@ fn failing_block_rolls_back_the_whole_reply() {
     assert!(!res.ok);
     assert!(res.output.contains("block 2 of 2"), "{}", res.output);
     let content = wt.read_file(Path::new("src/lib.rs")).unwrap();
-    assert!(content.contains("    1\n"), "first block must not be written");
+    assert!(
+        content.contains("    1\n"),
+        "first block must not be written"
+    );
     let _ = fs::remove_dir_all(repo);
 }
 

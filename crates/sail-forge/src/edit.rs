@@ -250,10 +250,7 @@ pub fn apply_edit_blocks(
     for (n, block) in blocks.iter().enumerate() {
         let current = match staged.get(&block.path) {
             Some(c) => Some(c.clone()),
-            None => match worktree.read_file(Path::new(&block.path)) {
-                Ok(c) => Some(c),
-                Err(_) => None,
-            },
+            None => worktree.read_file(Path::new(&block.path)).ok(),
         };
         let updated = match current {
             Some(content) => apply_block(&content, block),
