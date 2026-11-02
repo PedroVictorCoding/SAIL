@@ -22,20 +22,24 @@
 
   <div class="dashboard-layout">
     <nav class="side-rail" aria-label="Main navigation">
-      <button class="nav-item selected" id="homeNav" type="button" aria-current="page"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#home"></use></svg></span><span>Home</span></button>
+      <a class="nav-item selected" id="homeNav" href="#home" data-page="home" aria-current="page"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#home"></use></svg></span><span>Home</span></a>
       <button class="nav-item" id="spacesOpen" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#spaces"></use></svg></span><span>Spaces</span></button>
-      <button class="nav-item" id="canvasNav" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#canvas"></use></svg></span><span>Canvas</span></button>
-      <button class="nav-item unavailable-nav" data-space="Flow" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#flow"></use></svg></span><span>Flow</span></button>
-      <button class="nav-item" id="agentsNav" data-space="Agents" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#agents"></use></svg></span><span>Forge</span></button>
+      <div class="subsystem-nav" id="subsystemNav" aria-label="Subsystem pages"></div>
       <button class="nav-item nav-settings" id="settingsRail" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#settings"></use></svg></span><span>Settings</span></button>
     </nav>
 
     <section class="workspace" id="workspace" aria-label="Home workspace">
+      <div class="page-picker"><label for="pagePicker">Workspace</label><select id="pagePicker"><option value="home">Home</option></select></div>
+      <div id="homePage">
       <article class="welcome-card" aria-labelledby="welcomeGreeting">
-        <div class="welcome-copy"><h1 id="welcomeGreeting">Good day</h1><time id="localDateTime">Local time</time></div>
+        <div class="welcome-copy"><h1 id="welcomeGreeting" tabindex="-1">Good day</h1><time id="localDateTime">Local time</time></div>
         <div class="welcome-art" aria-hidden="true"><svg viewBox="0 0 640 160" preserveAspectRatio="none"><defs><linearGradient id="horizonLine" x1="0" x2="1"><stop stop-color="#8174d4" stop-opacity="0"/><stop offset=".48" stop-color="#d080ac" stop-opacity=".32"/><stop offset=".72" stop-color="#e7a290" stop-opacity=".42"/><stop offset="1" stop-color="#6488ce" stop-opacity="0"/></linearGradient><radialGradient id="horizonSun"><stop stop-color="#f2b39d" stop-opacity=".75"/><stop offset="1" stop-color="#e58b9c" stop-opacity="0"/></radialGradient></defs><path d="M0 127 C70 130 90 101 148 114 S226 144 288 116 374 95 423 119 511 149 558 119 614 105 640 112" fill="none" stroke="url(#horizonLine)" stroke-width="2"/><path d="M0 145 C90 140 125 120 190 132 S280 155 350 130 450 118 503 135 585 147 640 131" fill="none" stroke="url(#horizonLine)" stroke-width="1"/><circle cx="476" cy="112" r="58" fill="url(#horizonSun)"/></svg></div>
       </article>
 
+      <section class="subsystem-directory" aria-labelledby="subsystemDirectoryTitle">
+        <div class="subsystem-section-heading"><h2 id="subsystemDirectoryTitle">Subsystems</h2><p>Open a focused workspace</p></div>
+        <div class="subsystem-directory-grid" id="subsystemDirectory"></div>
+      </section>
       <section class="workspace-grid" aria-label="Live system and session cards">
         <article class="workspace-card system-card" id="systemCard" data-card="systemCard">
           <header class="card-heading">
@@ -319,6 +323,20 @@
             </div>
           </div>
         </article>
+      </section>
+      </div>
+      <section class="subsystem-page" id="subsystemPage" aria-labelledby="subsystemTitle" hidden>
+        <header class="subsystem-header">
+          <a href="#home" class="subsystem-back">← Home</a>
+          <p class="subsystem-eyebrow" id="subsystemEyebrow"></p>
+          <h1 id="subsystemTitle" tabindex="-1"></h1>
+          <p id="subsystemDescription"></p>
+          <button class="quiet-button" id="subsystemSettings" type="button" hidden>Open preferences</button>
+        </header>
+        <p class="subsystem-notice" id="subsystemNotice" role="status" hidden></p>
+        <div class="subsystem-content" id="subsystemContent"></div>
+        <section class="subsystem-about" aria-labelledby="subsystemAboutTitle"><h2 id="subsystemAboutTitle">Responsibilities</h2><ul id="subsystemCapabilities"></ul></section>
+        <section class="subsystem-related" aria-labelledby="subsystemRelatedTitle"><h2 id="subsystemRelatedTitle">Other subsystems</h2><div id="subsystemRelated"></div></section>
       </section>
     </section>
 
@@ -745,6 +763,7 @@
 <script src="/mermaid.js" defer></script>
 <script src="/card-modal.js" defer></script>
 <script src="/voice.js" defer></script>
+<script src="/subsystem-pages.js" defer></script>
 <script src="/ui.js" defer></script>
 </body>
 </html>
