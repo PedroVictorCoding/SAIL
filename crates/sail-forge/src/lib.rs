@@ -2,6 +2,7 @@
 
 pub mod admission;
 pub mod contracts;
+pub mod edit;
 pub mod eval;
 pub mod eval_cases;
 pub mod fixtures;
