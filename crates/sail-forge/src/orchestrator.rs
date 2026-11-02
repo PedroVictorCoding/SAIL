@@ -1203,7 +1203,13 @@ impl ForgeOrchestrator {
         let diff_stat = format!("{} lines changed", final_diff.lines().count());
 
         if !crate::solver::is_meaningful_code_diff(&final_diff) {
-            let err_msg = if let Some(ref reason) = outcome.failure_reason {
+            let err_msg = if outcome.verification_status == "model_unavailable" {
+                // The model never answered; this is not a patch-quality failure.
+                outcome
+                    .failure_reason
+                    .clone()
+                    .unwrap_or_else(|| "Local model unavailable".into())
+            } else if let Some(ref reason) = outcome.failure_reason {
                 format!("Solver failed to produce a valid diff: {}", reason)
             } else {
                 "Nonempty diff requirement failed: autonomous coding agent produced no code modifications for issue".to_string()

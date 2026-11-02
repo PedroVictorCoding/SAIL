@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use ring::digest::{Context, SHA256};
@@ -845,12 +845,103 @@ fn compute_file_fingerprint(path: &Path) -> Option<String> {
     Some(hex)
 }
 
+/// How long model requests may take and how often a busy or restarting model is retried.
+#[derive(Debug, Clone)]
+pub struct ModelTimeouts {
+    /// TCP connect; a local server that is up accepts immediately.
+    pub connect: Duration,
+    /// Longest silence while waiting for the slot or between streamed chunks.
+    pub idle: Duration,
+    /// Retries of a turn after a busy/timeout/5xx/interrupted reply.
+    pub busy_retries: u32,
+    /// Base backoff between retries (doubles each attempt).
+    pub backoff: Duration,
+}
+
+impl Default for ModelTimeouts {
+    fn default() -> Self {
+        Self {
+            connect: Duration::from_secs(5),
+            // One llama-server slot is shared with voice and other jobs; a queued
+            // request can wait several minutes for it.
+            idle: Duration::from_secs(600),
+            busy_retries: 3,
+            backoff: Duration::from_secs(15),
+        }
+    }
+}
+
+/// One failed attempt against one endpoint, classified for retry and reporting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointFailure {
+    pub endpoint: String,
+    pub detail: String,
+    /// The server exists but could not answer now (busy, loading, interrupted).
+    pub transient: bool,
+}
+
+impl EndpointFailure {
+    fn from_request_error(endpoint: &str, e: &reqwest::Error, idle: Duration) -> Self {
+        let (detail, transient) = if e.is_timeout() {
+            (
+                format!(
+                    "no reply within {:?} (model busy with another request, or overloaded)",
+                    idle
+                ),
+                true,
+            )
+        } else if e.is_connect() {
+            (
+                "connection refused (no server listening)".to_string(),
+                false,
+            )
+        } else {
+            (format!("request failed: {e}"), true)
+        };
+        Self {
+            endpoint: endpoint.to_string(),
+            detail,
+            transient,
+        }
+    }
+
+    fn http(endpoint: &str, status: reqwest::StatusCode, body: &str) -> Self {
+        let snippet: String = body.chars().take(180).collect();
+        Self {
+            endpoint: endpoint.to_string(),
+            detail: format!("HTTP {status}: {snippet}"),
+            // 503 = llama-server loading the model; 429/5xx = overloaded.
+            transient: status.is_server_error() || status.as_u16() == 429,
+        }
+    }
+}
+
+/// Human-readable summary naming every endpoint tried, transient failures first.
+pub fn summarize_endpoint_failures(failures: &[EndpointFailure], attempts: u32) -> String {
+    if failures.is_empty() {
+        return "No local OpenAI-compatible inference server configured".to_string();
+    }
+    let mut sorted = failures.to_vec();
+    sorted.sort_by_key(|f| !f.transient);
+    let parts: Vec<String> = sorted
+        .iter()
+        .map(|f| format!("{}: {}", f.endpoint, f.detail))
+        .collect();
+    format!(
+        "Local model unavailable after {attempts} attempt(s): {}",
+        parts.join("; ")
+    )
+}
+
 /// Multi-turn local issue solver controller.
 pub struct LocalSolverController {
     pub max_turns: u32,
     pub max_iterations: u32,
     pub command_timeout_secs: u64,
     pub configured_model_path: Option<PathBuf>,
+    pub model_timeouts: ModelTimeouts,
+    /// Explicit endpoints instead of `candidate_endpoints()` (environment-based).
+    pub endpoint_override: Option<Vec<String>>,
 }
 
 impl LocalSolverController {
@@ -865,7 +956,19 @@ impl LocalSolverController {
             max_iterations: max_iterations.max(1),
             command_timeout_secs,
             configured_model_path,
+            model_timeouts: ModelTimeouts::default(),
+            endpoint_override: None,
         }
+    }
+
+    pub fn with_model_timeouts(mut self, timeouts: ModelTimeouts) -> Self {
+        self.model_timeouts = timeouts;
+        self
+    }
+
+    pub fn with_endpoints(mut self, endpoints: Vec<String>) -> Self {
+        self.endpoint_override = Some(endpoints);
+        self
     }
 
     pub fn candidate_endpoints() -> Vec<String> {
@@ -970,12 +1073,18 @@ impl LocalSolverController {
         F: FnMut() -> bool,
         P: FnMut(SolverProgress),
     {
+        // No total timeout: a request may legitimately wait for the single model slot
+        // and then stream for minutes on CPU. Bound connection setup and silence instead.
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(90))
+            .connect_timeout(self.model_timeouts.connect)
+            .read_timeout(self.model_timeouts.idle)
             .build()
             .unwrap_or_default();
 
-        let endpoints = Self::candidate_endpoints();
+        let endpoints = self
+            .endpoint_override
+            .clone()
+            .unwrap_or_else(Self::candidate_endpoints);
         let initial_ctx = crate::repo_map::build_issue_context(
             &worktree.root_dir,
             issue_title,
@@ -1105,7 +1214,8 @@ Rules:
 
             // Call local OpenAI-compatible chat completions endpoint with streaming support
             let mut turn_response_text: Option<String> = None;
-            let mut turn_endpoint_err: Option<String> = None;
+            let mut endpoint_failures: Vec<EndpointFailure> = Vec::new();
+            let mut model_attempts = 0u32;
 
             let probe_list: Vec<String> = if let Some(ref ep) = active_endpoint {
                 vec![ep.clone()]
@@ -1123,172 +1233,266 @@ Rules:
                 }
             });
 
-            for ep in &probe_list {
-                let req_body = serde_json::json!({
-                    "model": model_name,
-                    "messages": messages,
-                    "temperature": 0.1,
-                    "max_tokens": 2048,
-                    "stream": true,
-                });
+            'model_retry: loop {
+                model_attempts += 1;
+                endpoint_failures.clear();
+                for ep in &probe_list {
+                    let req_body = serde_json::json!({
+                        "model": model_name,
+                        "messages": messages,
+                        "temperature": 0.1,
+                        "max_tokens": 2048,
+                        "stream": true,
+                    });
 
-                match client.post(ep).json(&req_body).send().await {
-                    Ok(resp) if resp.status().is_success() => {
-                        if active_endpoint.is_none() {
-                            active_endpoint = Some(ep.clone());
-                            identified_model = identify_local_model(
-                                &client,
-                                ep,
-                                self.configured_model_path.as_deref(),
-                            )
-                            .await;
-                        }
+                    match client.post(ep).json(&req_body).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            if active_endpoint.is_none() {
+                                active_endpoint = Some(ep.clone());
+                                identified_model = identify_local_model(
+                                    &client,
+                                    ep,
+                                    self.configured_model_path.as_deref(),
+                                )
+                                .await;
+                            }
 
-                        let is_sse = resp
-                            .headers()
-                            .get(reqwest::header::CONTENT_TYPE)
-                            .and_then(|v| v.to_str().ok())
-                            .map(|s| s.contains("text/event-stream"))
-                            .unwrap_or(false);
+                            let is_sse = resp
+                                .headers()
+                                .get(reqwest::header::CONTENT_TYPE)
+                                .and_then(|v| v.to_str().ok())
+                                .map(|s| s.contains("text/event-stream"))
+                                .unwrap_or(false);
 
-                        if is_sse {
-                            let mut stream = resp.bytes_stream();
-                            let mut accumulated = String::new();
-                            let mut line_buf = String::new();
-                            let mut token_count = 0u32;
-                            let mut last_emit = std::time::Instant::now();
+                            if is_sse {
+                                let mut stream = resp.bytes_stream();
+                                let mut accumulated = String::new();
+                                let mut line_buf = String::new();
+                                let mut token_count = 0u32;
+                                let mut last_emit = std::time::Instant::now();
 
-                            while let Some(chunk_res) = stream.next().await {
-                                if is_cancelled() {
-                                    break;
-                                }
-                                if let Ok(bytes) = chunk_res {
-                                    line_buf.push_str(&String::from_utf8_lossy(&bytes));
-                                    while let Some(idx) = line_buf.find('\n') {
-                                        let line = line_buf[..idx].trim().to_string();
-                                        line_buf = line_buf[idx + 1..].to_string();
-                                        if let Some(data) = line.strip_prefix("data:") {
-                                            let data = data.trim();
-                                            if data == "[DONE]" {
-                                                break;
-                                            }
-                                            if let Ok(val) =
-                                                serde_json::from_str::<serde_json::Value>(data)
-                                            {
-                                                let delta = val
-                                                    .get("choices")
-                                                    .and_then(|c| c.get(0))
-                                                    .and_then(|c| c.get("delta"));
-                                                let piece = delta
-                                                    .and_then(|d| {
-                                                        d.get("content").and_then(|v| v.as_str())
-                                                    })
-                                                    .or_else(|| {
-                                                        delta.and_then(|d| {
-                                                            d.get("reasoning_content")
+                                let mut stream_error: Option<String> = None;
+                                while let Some(chunk_res) = stream.next().await {
+                                    if is_cancelled() {
+                                        break;
+                                    }
+                                    if let Err(e) = &chunk_res {
+                                        stream_error = Some(if e.is_timeout() {
+                                            format!(
+                                                "stream stalled for {:?}",
+                                                self.model_timeouts.idle
+                                            )
+                                        } else {
+                                            e.to_string()
+                                        });
+                                        break;
+                                    }
+                                    if let Ok(bytes) = chunk_res {
+                                        line_buf.push_str(&String::from_utf8_lossy(&bytes));
+                                        while let Some(idx) = line_buf.find('\n') {
+                                            let line = line_buf[..idx].trim().to_string();
+                                            line_buf = line_buf[idx + 1..].to_string();
+                                            if let Some(data) = line.strip_prefix("data:") {
+                                                let data = data.trim();
+                                                if data == "[DONE]" {
+                                                    break;
+                                                }
+                                                if let Ok(val) =
+                                                    serde_json::from_str::<serde_json::Value>(data)
+                                                {
+                                                    let delta = val
+                                                        .get("choices")
+                                                        .and_then(|c| c.get(0))
+                                                        .and_then(|c| c.get("delta"));
+                                                    let piece = delta
+                                                        .and_then(|d| {
+                                                            d.get("content")
                                                                 .and_then(|v| v.as_str())
                                                         })
-                                                    });
-
-                                                if let Some(text_chunk) = piece {
-                                                    accumulated.push_str(text_chunk);
-                                                    token_count += 1;
-                                                    if last_emit.elapsed()
-                                                        > std::time::Duration::from_millis(120)
-                                                        || text_chunk.contains('\n')
-                                                    {
-                                                        on_progress(SolverProgress {
-                                                            turn: turns,
-                                                            max_turns: self.max_turns,
-                                                            iteration: iterations + 1,
-                                                            stage: "coding".into(),
-                                                            message: format!(
-                                                                "Turn {}/{}: Generating code patch ({} tokens)...",
-                                                                turns, self.max_turns, token_count
-                                                            ),
-                                                            live_output: Some(accumulated.clone()),
-                                                            model_action: Some(
-                                                                "Streaming model output".into(),
-                                                            ),
-                                                            diff: worktree.get_diff().ok(),
-                                                            target_file: None,
-                                                            logs: None,
+                                                        .or_else(|| {
+                                                            delta.and_then(|d| {
+                                                                d.get("reasoning_content")
+                                                                    .and_then(|v| v.as_str())
+                                                            })
                                                         });
-                                                        last_emit = std::time::Instant::now();
+
+                                                    if let Some(text_chunk) = piece {
+                                                        accumulated.push_str(text_chunk);
+                                                        token_count += 1;
+                                                        if last_emit.elapsed()
+                                                            > std::time::Duration::from_millis(120)
+                                                            || text_chunk.contains('\n')
+                                                        {
+                                                            on_progress(SolverProgress {
+                                                                turn: turns,
+                                                                max_turns: self.max_turns,
+                                                                iteration: iterations + 1,
+                                                                stage: "coding".into(),
+                                                                message: format!(
+                                                                    "Turn {}/{}: Generating code patch ({} tokens)...",
+                                                                    turns,
+                                                                    self.max_turns,
+                                                                    token_count
+                                                                ),
+                                                                live_output: Some(
+                                                                    accumulated.clone(),
+                                                                ),
+                                                                model_action: Some(
+                                                                    "Streaming model output".into(),
+                                                                ),
+                                                                diff: worktree.get_diff().ok(),
+                                                                target_file: None,
+                                                                logs: None,
+                                                            });
+                                                            last_emit = std::time::Instant::now();
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
-                            if !accumulated.trim().is_empty() {
-                                turn_response_text = Some(accumulated);
-                                break;
-                            }
-                        } else if let Ok(json_val) = resp.json::<serde_json::Value>().await {
-                            // If response JSON itself carries a `model` field and identified_model was unknown, capture it
-                            if identified_model.model_id == "unknown" {
-                                if let Some(m) = json_val.get("model").and_then(|v| v.as_str()) {
-                                    if !m.trim().is_empty() {
-                                        identified_model.model_id = m.trim().to_string();
+                                if let Some(err) = stream_error {
+                                    // Never act on a partial reply; retry it instead.
+                                    endpoint_failures.push(EndpointFailure {
+                                        endpoint: ep.clone(),
+                                        detail: format!(
+                                            "reply interrupted after {token_count} tokens: {err}"
+                                        ),
+                                        transient: true,
+                                    });
+                                    continue;
+                                }
+                                if !accumulated.trim().is_empty() {
+                                    turn_response_text = Some(accumulated);
+                                    break;
+                                }
+                                endpoint_failures.push(EndpointFailure {
+                                    endpoint: ep.clone(),
+                                    detail: "streamed an empty reply".into(),
+                                    transient: true,
+                                });
+                            } else if let Ok(json_val) = resp.json::<serde_json::Value>().await {
+                                // If response JSON itself carries a `model` field and identified_model was unknown, capture it
+                                if identified_model.model_id == "unknown" {
+                                    if let Some(m) = json_val.get("model").and_then(|v| v.as_str())
+                                    {
+                                        if !m.trim().is_empty() {
+                                            identified_model.model_id = m.trim().to_string();
+                                        }
                                     }
                                 }
-                            }
-                            let msg_obj = json_val
-                                .get("choices")
-                                .and_then(|c| c.get(0))
-                                .and_then(|c| c.get("message"));
+                                let msg_obj = json_val
+                                    .get("choices")
+                                    .and_then(|c| c.get(0))
+                                    .and_then(|c| c.get("message"));
 
-                            let content = msg_obj
-                                .and_then(|m| m.get("content"))
-                                .and_then(|c| c.as_str())
-                                .unwrap_or_default();
+                                let content = msg_obj
+                                    .and_then(|m| m.get("content"))
+                                    .and_then(|c| c.as_str())
+                                    .unwrap_or_default();
 
-                            let reasoning = msg_obj
-                                .and_then(|m| m.get("reasoning_content"))
-                                .and_then(|r| r.as_str())
-                                .unwrap_or_default();
+                                let reasoning = msg_obj
+                                    .and_then(|m| m.get("reasoning_content"))
+                                    .and_then(|r| r.as_str())
+                                    .unwrap_or_default();
 
-                            let text = if !content.trim().is_empty() {
-                                content.to_string()
-                            } else if !reasoning.trim().is_empty() {
-                                reasoning.to_string()
+                                let text = if !content.trim().is_empty() {
+                                    content.to_string()
+                                } else if !reasoning.trim().is_empty() {
+                                    reasoning.to_string()
+                                } else {
+                                    String::new()
+                                };
+
+                                if !text.is_empty() {
+                                    turn_response_text = Some(text);
+                                    break;
+                                }
+                                endpoint_failures.push(EndpointFailure {
+                                    endpoint: ep.clone(),
+                                    detail: "returned an empty reply".into(),
+                                    transient: true,
+                                });
                             } else {
-                                String::new()
-                            };
-
-                            if !text.is_empty() {
-                                turn_response_text = Some(text);
-                                break;
+                                endpoint_failures.push(EndpointFailure {
+                                    endpoint: ep.clone(),
+                                    detail: "returned a reply that is not valid JSON".into(),
+                                    transient: true,
+                                });
                             }
                         }
+                        Ok(resp) => {
+                            let status = resp.status();
+                            let body = resp.text().await.unwrap_or_default();
+                            endpoint_failures.push(EndpointFailure::http(ep, status, &body));
+                        }
+                        Err(e) => {
+                            endpoint_failures.push(EndpointFailure::from_request_error(
+                                ep,
+                                &e,
+                                self.model_timeouts.idle,
+                            ));
+                        }
                     }
-                    Ok(resp) => {
-                        let status = resp.status();
-                        let body_snippet = resp.text().await.unwrap_or_default();
-                        let snippet = if body_snippet.len() > 180 {
-                            format!("{}...", &body_snippet[..180])
-                        } else {
-                            body_snippet
-                        };
-                        turn_endpoint_err = Some(format!(
-                            "Endpoint {} returned HTTP {}: {}",
-                            ep, status, snippet
-                        ));
+                }
+
+                if turn_response_text.is_some() || is_cancelled() {
+                    break 'model_retry;
+                }
+                // A busy or loading server is worth waiting for; a refused connection gets a
+                // single retry (the server may be restarting) before failing clearly.
+                let transient = endpoint_failures.iter().any(|f| f.transient);
+                let allowed_retries = if transient {
+                    self.model_timeouts.busy_retries
+                } else {
+                    1
+                };
+                if model_attempts > allowed_retries {
+                    break 'model_retry;
+                }
+                let wait = self.model_timeouts.backoff * 2u32.pow(model_attempts - 1);
+                let summary = summarize_endpoint_failures(&endpoint_failures, model_attempts);
+                warn!(
+                    "Turn {}: model not ready, retrying in {}s: {}",
+                    turns,
+                    wait.as_secs(),
+                    summary
+                );
+                on_progress(SolverProgress {
+                    turn: turns,
+                    max_turns: self.max_turns,
+                    iteration: iterations + 1,
+                    stage: "waiting".into(),
+                    message: format!(
+                        "Turn {}/{}: model not ready, retrying in {}s",
+                        turns,
+                        self.max_turns,
+                        wait.as_secs()
+                    ),
+                    live_output: Some(summary.clone()),
+                    model_action: Some("Waiting for model".into()),
+                    diff: worktree.get_diff().ok(),
+                    target_file: None,
+                    logs: Some(vec![summary]),
+                });
+                // Sleep in short steps so cancellation stays responsive.
+                let deadline = Instant::now() + wait;
+                while Instant::now() < deadline {
+                    if is_cancelled() {
+                        break 'model_retry;
                     }
-                    Err(e) => {
-                        turn_endpoint_err = Some(format!("Endpoint {} unreachable: {}", ep, e));
-                    }
+                    let step = deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(500));
+                    tokio::time::sleep(step).await;
                 }
             }
 
             let raw_reply = match turn_response_text {
                 Some(t) => t,
                 None => {
-                    let reason = turn_endpoint_err.unwrap_or_else(|| {
-                        "No local OpenAI-compatible inference server available".to_string()
-                    });
+                    let reason = summarize_endpoint_failures(&endpoint_failures, model_attempts);
                     warn!(
                         "Local solver model unavailable on turn {}: {}",
                         turns, reason
