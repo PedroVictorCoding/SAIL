@@ -75,6 +75,89 @@ document.getElementById('spacesOpen').addEventListener('click', () => { location
 document.getElementById('spacesTop').addEventListener('click', () => { location.hash = '#spaces'; openSheet(spacesSheet); });
 document.getElementById('settingsOpen').addEventListener('click', () => openSheet(contextSheet));
 document.getElementById('settingsRail').addEventListener('click', () => openSheet(contextSheet));
+
+// VS Code Style Settings Tab Navigation & Search
+function initVscodeSettings() {
+  const navItems = document.querySelectorAll('.vscode-nav-item');
+  const panels = document.querySelectorAll('.vscode-category-panel');
+  const searchInput = document.getElementById('settingsSearchInput');
+  const clearBtn = document.getElementById('settingsSearchClear');
+
+  function switchTab(categoryId) {
+    navItems.forEach(item => {
+      const isTarget = item.dataset.settingsTab === categoryId;
+      item.classList.toggle('active', isTarget);
+      item.setAttribute('aria-selected', String(isTarget));
+    });
+    panels.forEach(panel => {
+      const isTarget = panel.dataset.category === categoryId;
+      panel.classList.toggle('active', isTarget);
+      panel.hidden = !isTarget;
+    });
+  }
+
+  navItems.forEach(item => {
+    item.addEventListener('click', () => {
+      const cat = item.dataset.settingsTab;
+      if (cat) switchTab(cat);
+    });
+  });
+
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      const query = e.target.value.trim().toLowerCase();
+      if (clearBtn) clearBtn.hidden = !query;
+
+      const items = document.querySelectorAll('.vscode-setting-item');
+      if (!query) {
+        items.forEach(el => el.classList.remove('is-hidden'));
+        // Restore currently active tab
+        const activeNav = document.querySelector('.vscode-nav-item.active');
+        if (activeNav) switchTab(activeNav.dataset.settingsTab);
+        return;
+      }
+
+      // Search across all setting items in all categories
+      panels.forEach(p => { p.hidden = false; p.classList.add('active'); });
+      items.forEach(item => {
+        const text = (item.textContent + ' ' + (item.dataset.searchTerms || '')).toLowerCase();
+        const matches = text.includes(query);
+        item.classList.toggle('is-hidden', !matches);
+      });
+    });
+
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        searchInput.value = '';
+        clearBtn.hidden = true;
+        const items = document.querySelectorAll('.vscode-setting-item');
+        items.forEach(el => el.classList.remove('is-hidden'));
+        const activeNav = document.querySelector('.vscode-nav-item.active') || navItems[0];
+        if (activeNav) switchTab(activeNav.dataset.settingsTab);
+        searchInput.focus();
+      });
+    }
+  }
+
+  // Cross-links inside settings
+  document.getElementById('openSpacesFromSettingsBtn')?.addEventListener('click', () => {
+    closeSheet();
+    location.hash = '#spaces';
+    openSheet(spacesSheet);
+  });
+  document.getElementById('enqueueFromSettingsBtn')?.addEventListener('click', () => {
+    closeSheet();
+    openForgeEnqueueDialog();
+  });
+  document.getElementById('settingsRefreshTelemetryBtn')?.addEventListener('click', () => {
+    if (typeof sendAction === 'function') sendAction('get_telemetry');
+  });
+  document.getElementById('settingsOsStatusBtn')?.addEventListener('click', () => {
+    closeSheet();
+    runKernelTool('os:status');
+  });
+}
+initVscodeSettings();
 document.getElementById('homeNav').addEventListener('click', () => document.getElementById('workspace').scrollTo({ top:0, behavior:'smooth' }));
 document.getElementById('canvasNav').addEventListener('click', () => document.getElementById('canvasCard').scrollIntoView({ behavior:'smooth', block:'center' }));
 document.getElementById('agentsNav')?.addEventListener('click', () => document.getElementById('forgeCard').scrollIntoView({ behavior:'smooth', block:'center' }));

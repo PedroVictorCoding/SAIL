@@ -337,60 +337,319 @@
   <div class="space-list" id="spaceList"></div>
 </aside>
 
-<aside class="sheet context-sheet" id="contextSheet" role="dialog" aria-modal="true" aria-labelledby="contextTitle" hidden>
-  <div class="sheet-grabber" aria-hidden="true"></div><div class="sheet-heading"><div><p class="eyebrow">PREFERENCES</p><h2 id="contextTitle">Settings</h2></div><button class="icon-button close-sheet" aria-label="Close settings">×</button></div>
-  <div class="setting-row"><div><strong>Voice</strong><small>Choose a locally installed voice</small></div><select id="voiceSelect" aria-label="Speech voice"><option value="af_heart">English · Heart</option><option value="pf_dora">Português · Dora</option><option value="pm_alex">Português · Alex</option><option value="ef_dora">Español · Dora</option></select></div>
-  <div class="setting-row"><div><strong>Compute profile</strong><small>Set the local hardware tier</small></div><button class="quiet-button" id="tierBtn">Balanced</button></div>
-  <div class="setting-row"><div><strong>Turn taking</strong><small>Keep thinking pauses inside your message</small></div><select id="turnModeSelect" aria-label="When to send a spoken turn"><option value="automatic">Automatic</option><option value="manual">Manual · Send turn</option></select></div>
-  <div class="setting-row"><div><strong>Thinking pause</strong><small>Seconds of quiet before replying</small></div><input id="turnPauseInput" type="number" required min="0.5" max="10" step="any" value="3" aria-label="Seconds of silence before sending"></div>
-  <p class="sheet-note" id="turnDetectionNote">Waits 3 seconds of silence. Send turn submits immediately. A recording can hold up to 3 minutes.</p>
-  <div class="setting-row"><div><strong>Microphone</strong><small id="micStatus">Off</small></div><button class="quiet-button" id="muteBtn" aria-pressed="false">Mute</button></div>
-  <button class="sheet-link" id="checkModelsBtn">Check local model status <span>›</span></button>
-  <p class="sheet-note" id="modelStatusSettings">Model status is checked with the local SAIL server.</p>
-  <button class="sheet-link" id="newConversationBtn">Start a new conversation <span>›</span></button>
-  <section aria-labelledby="securityTitle" style="border-top:1px solid rgba(255,255,255,0.08); padding-top:14px; margin-top:14px;">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-      <h3 id="securityTitle" style="margin:0;">Guardian Security</h3>
-      <span id="nonoStatusBadge" style="font-size:11px; padding:2px 8px; border-radius:12px; background:rgba(34,197,94,0.15); color:#4ade80; display:inline-flex; align-items:center; gap:4px;">
-        <span style="width:6px; height:6px; border-radius:50%; background:#4ade80;"></span> Protected
-      </span>
-    </div>
-    <p class="sheet-note" id="nonoDetailNote">Landlock LSM + Bubblewrap active · nono 0.81.0</p>
-    <div class="setting-row" style="margin-top:8px;">
-      <div><strong>Autonomy preset</strong><small>Operation friction and approval threshold</small></div>
-      <select id="autonomyPresetSelect" aria-label="Guardian autonomy preset">
-        <option value="balanced" selected>Balanced · Default</option>
-        <option value="careful">Careful · High review</option>
-        <option value="autonomous">Autonomous · Unattended</option>
-      </select>
-    </div>
-    <p class="sheet-note" id="presetExplanationNote" style="font-size:11px; color:var(--muted); margin-top:2px;">Routine workspace actions run automatically; elevated actions require approval.</p>
-  </section>
-  <section aria-labelledby="approvalTitle">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-      <h3 id="approvalTitle" style="margin:0;">Owner approvals</h3>
-      <span id="approvalStatusBadge" style="font-size:11px; padding:2px 8px; border-radius:12px; background:rgba(34,197,94,0.15); color:#4ade80; display:inline-flex; align-items:center; gap:4px;">
-        <span style="width:6px; height:6px; border-radius:50%; background:#4ade80;"></span> Auto-authorized
-      </span>
-    </div>
-    <p class="sheet-note">Automated authorization is active for local operations. You can also view or copy the active owner token below.</p>
-    <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
-      <input id="ownerApprovalToken" type="password" autocomplete="off" aria-label="Owner approval token" placeholder="Owner approval token" style="flex:1;padding:10px;background:var(--surface);border:var(--border);border-radius:12px; font-family:monospace; font-size:12px;">
-      <button class="quiet-button" id="toggleTokenVisibilityBtn" type="button" aria-label="Show token" title="Show/hide token" style="padding:8px 12px;">Show</button>
-      <button class="quiet-button" id="copyTokenBtn" type="button" aria-label="Copy token" title="Copy token to clipboard" style="padding:8px 12px;">Copy</button>
-    </div>
-    <button class="sheet-link" id="refreshApprovalsBtn" type="button" style="margin-top:8px;">Review pending requests <span>›</span></button>
-    <div id="ownerApprovals" role="status" aria-live="polite"></div>
-    <div style="margin-top:16px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-        <strong style="font-size:12px; font-weight:600;">Learned approval rules</strong>
-        <button class="quiet-button" id="refreshLearnedRulesBtn" type="button" style="padding:2px 8px; font-size:11px;">Refresh</button>
+<aside class="sheet context-sheet vscode-settings-sheet" id="contextSheet" role="dialog" aria-modal="true" aria-labelledby="contextTitle" hidden>
+  <div class="sheet-grabber" aria-hidden="true"></div>
+  <header class="vscode-settings-header">
+    <div class="vscode-settings-title-wrap">
+      <div class="vscode-settings-badge">
+        <svg class="button-svg" aria-hidden="true" style="width:14px;height:14px;"><use href="/icons.svg#settings"></use></svg>
+        <span>SAIL Settings</span>
       </div>
-      <p class="sheet-note" style="margin-bottom:6px;">Actions with "Always allow" are remembered and auto-executed without prompting.</p>
-      <div id="guardianLearnedRules" role="status" aria-live="polite" style="display:flex; flex-direction:column; gap:6px;"></div>
+      <h2 id="contextTitle" class="vscode-settings-title">Preferences</h2>
     </div>
-  </section>
-  <details class="inspector"><summary>Developer details</summary><div class="telemetry-row"><span id="telVad">VAD —</span><span id="telConf">Confidence —</span><span id="telRms">RMS —</span></div></details>
+    <div class="vscode-settings-search-bar">
+      <span aria-hidden="true" class="vscode-search-icon">⌕</span>
+      <input id="settingsSearchInput" type="search" placeholder="Search settings (e.g. voice, guardian, model, pause)…" aria-label="Search settings">
+      <button class="vscode-search-clear" id="settingsSearchClear" type="button" aria-label="Clear search" hidden>×</button>
+    </div>
+    <button class="icon-button close-sheet vscode-close-btn" aria-label="Close settings" title="Close settings (Esc)">×</button>
+  </header>
+
+  <div class="vscode-settings-body">
+    <!-- Left Navigation Categories Sidebar -->
+    <nav class="vscode-settings-nav" aria-label="Settings categories">
+      <div class="vscode-nav-section-label">Categories</div>
+      <button type="button" class="vscode-nav-item active" data-settings-tab="general">
+        <span class="vscode-nav-icon">⚙</span>
+        <span class="vscode-nav-text">General</span>
+      </button>
+      <button type="button" class="vscode-nav-item" data-settings-tab="voice">
+        <span class="vscode-nav-icon">🎙</span>
+        <span class="vscode-nav-text">Voice & Audio</span>
+      </button>
+      <button type="button" class="vscode-nav-item" data-settings-tab="guardian">
+        <span class="vscode-nav-icon">🛡</span>
+        <span class="vscode-nav-text">Guardian Security</span>
+        <span class="vscode-nav-pill-badge" id="navGuardianBadge">Safe</span>
+      </button>
+      <button type="button" class="vscode-nav-item" data-settings-tab="models">
+        <span class="vscode-nav-icon">🧠</span>
+        <span class="vscode-nav-text">Models & Inference</span>
+      </button>
+      <button type="button" class="vscode-nav-item" data-settings-tab="forge">
+        <span class="vscode-nav-icon">⚒</span>
+        <span class="vscode-nav-text">Forge Coding Agent</span>
+      </button>
+      <button type="button" class="vscode-nav-item" data-settings-tab="developer">
+        <span class="vscode-nav-icon">⚡</span>
+        <span class="vscode-nav-text">Developer & Telemetry</span>
+      </button>
+    </nav>
+
+    <!-- Main Content Panels -->
+    <div class="vscode-settings-content">
+      <!-- 1. General Category -->
+      <section class="vscode-category-panel active" id="settingsPanel-general" data-category="general">
+        <div class="vscode-category-header">
+          <h3>General Preferences</h3>
+          <p class="vscode-category-desc">Manage runtime session state, hardware compute profile, and environment.</p>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="compute profile hardware tier balanced performance speed">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Compute Hardware Tier</label>
+            <p class="vscode-setting-desc">Set local compute profile balancing Vulkan / CPU power and responsiveness.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <button class="quiet-button vscode-tier-btn" id="tierBtn">Balanced</button>
+          </div>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="conversation session new restart clear chat reset">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Conversation Session</label>
+            <p class="vscode-setting-desc">Reset the active dialogue history and establish a fresh turn context.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <button class="quiet-button" id="newConversationBtn">Start new conversation</button>
+          </div>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="spaces tools quick launch panel navigate">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Workspace Spaces</label>
+            <p class="vscode-setting-desc">Browse integrated spaces for agents, tools, arena, and media.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <button class="quiet-button" id="openSpacesFromSettingsBtn">Browse Spaces</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Voice & Audio Category -->
+      <section class="vscode-category-panel" id="settingsPanel-voice" data-category="voice" hidden>
+        <div class="vscode-category-header">
+          <h3>Voice & Audio Settings</h3>
+          <p class="vscode-category-desc">Configure speech synthesis models, turn detection thresholds, and microphone hardware.</p>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="voice synthesis speaker speech language accent">
+          <div class="vscode-setting-info">
+            <label for="voiceSelect" class="vscode-setting-name">Speech Voice</label>
+            <p class="vscode-setting-desc">Select from locally installed ONNX Piper speech synthesis voices.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <select id="voiceSelect" aria-label="Speech voice">
+              <option value="af_heart">English · Heart (Natural Warm)</option>
+              <option value="pf_dora">Português · Dora (Feminine)</option>
+              <option value="pm_alex">Português · Alex (Masculine)</option>
+              <option value="ef_dora">Español · Dora (Natural)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="turn taking mode automatic manual silence speech send">
+          <div class="vscode-setting-info">
+            <label for="turnModeSelect" class="vscode-setting-name">Turn Taking Mode</label>
+            <p class="vscode-setting-desc">Automatic turns trigger on silence detection; manual mode buffers until explicitly sent.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <select id="turnModeSelect" aria-label="When to send a spoken turn">
+              <option value="automatic">Automatic · VAD silence trigger</option>
+              <option value="manual">Manual · Explicit 'Send turn' button</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="thinking pause silence delay vad duration seconds buffer">
+          <div class="vscode-setting-info">
+            <label for="turnPauseInput" class="vscode-setting-name">Thinking Pause (Seconds)</label>
+            <p class="vscode-setting-desc">Seconds of silence required before finalizing user turn and dispatching to LLM.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <input id="turnPauseInput" type="number" required min="0.5" max="10" step="any" value="3" aria-label="Seconds of silence before sending" class="vscode-num-input">
+          </div>
+        </div>
+        <p class="sheet-note" id="turnDetectionNote">Waits 3 seconds of silence. Send turn submits immediately. A recording can hold up to 3 minutes.</p>
+
+        <div class="vscode-setting-item" data-search-terms="microphone mic mute audio input record hardware">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Microphone State</label>
+            <p class="vscode-setting-desc">Mute or unmute voice input stream without resetting active sessions.</p>
+          </div>
+          <div class="vscode-setting-control" style="display:flex; align-items:center; gap:10px;">
+            <span class="vscode-status-tag" id="micStatus">Off</span>
+            <button class="quiet-button" id="muteBtn" aria-pressed="false">Mute</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Guardian Security Category -->
+      <section class="vscode-category-panel" id="settingsPanel-guardian" data-category="guardian" hidden>
+        <div class="vscode-category-header">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h3>Guardian Security & Approvals</h3>
+            <span id="nonoStatusBadge" style="font-size:11px; padding:3px 10px; border-radius:12px; background:rgba(34,197,94,0.15); color:#4ade80; display:inline-flex; align-items:center; gap:5px;">
+              <span style="width:6px; height:6px; border-radius:50%; background:#4ade80;"></span> Protected
+            </span>
+          </div>
+          <p class="sheet-note" id="nonoDetailNote" style="margin-top:4px;">Landlock LSM + Bubblewrap active · nono 0.81.0</p>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="autonomy preset security approval friction threshold careful autonomous balanced">
+          <div class="vscode-setting-info">
+            <label for="autonomyPresetSelect" class="vscode-setting-name">Autonomy Preset</label>
+            <p class="vscode-setting-desc">Adjust operational friction and required interactive verification thresholds.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <select id="autonomyPresetSelect" aria-label="Guardian autonomy preset">
+              <option value="balanced" selected>Balanced · Default</option>
+              <option value="careful">Careful · High review</option>
+              <option value="autonomous">Autonomous · Unattended</option>
+            </select>
+          </div>
+        </div>
+        <p class="sheet-note" id="presetExplanationNote" style="font-size:11px; color:var(--muted); margin-bottom:14px;">Routine workspace actions run automatically; elevated actions require approval.</p>
+
+        <div class="vscode-setting-item" data-search-terms="owner approval token password secret auth authorization">
+          <div class="vscode-setting-info">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <label for="ownerApprovalToken" class="vscode-setting-name">Owner Approval Token</label>
+              <span id="approvalStatusBadge" style="font-size:10px; padding:2px 6px; border-radius:8px; background:rgba(34,197,94,0.15); color:#4ade80;">Auto-authorized</span>
+            </div>
+            <p class="vscode-setting-desc">Security token for elevated capability authorizations.</p>
+          </div>
+          <div class="vscode-setting-control" style="display:flex; gap:6px; align-items:center;">
+            <input id="ownerApprovalToken" type="password" autocomplete="off" aria-label="Owner approval token" placeholder="Owner approval token" style="flex:1; max-width:180px; padding:6px 10px; background:var(--recessed); border:var(--border); border-radius:8px; font-family:monospace; font-size:11px; color:var(--text);">
+            <button class="quiet-button" id="toggleTokenVisibilityBtn" type="button" aria-label="Show token" title="Show/hide token" style="padding:6px 10px; font-size:11px;">Show</button>
+            <button class="quiet-button" id="copyTokenBtn" type="button" aria-label="Copy token" title="Copy token to clipboard" style="padding:6px 10px; font-size:11px;">Copy</button>
+          </div>
+        </div>
+
+        <div style="margin-top:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <h4 style="margin:0; font-size:13px; font-weight:600;">Pending Approvals</h4>
+            <button class="quiet-button" id="refreshApprovalsBtn" type="button" style="padding:3px 10px; font-size:11px;">Refresh</button>
+          </div>
+          <div id="ownerApprovals" role="status" aria-live="polite"></div>
+        </div>
+
+        <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <h4 style="margin:0; font-size:13px; font-weight:600;">Learned Approval Rules</h4>
+            <button class="quiet-button" id="refreshLearnedRulesBtn" type="button" style="padding:3px 10px; font-size:11px;">Refresh</button>
+          </div>
+          <p class="sheet-note" style="margin-bottom:8px;">Actions with "Always allow" are remembered and auto-executed without prompting.</p>
+          <div id="guardianLearnedRules" role="status" aria-live="polite" style="display:flex; flex-direction:column; gap:6px;"></div>
+        </div>
+      </section>
+
+      <!-- 4. Models & Inference Category -->
+      <section class="vscode-category-panel" id="settingsPanel-models" data-category="models" hidden>
+        <div class="vscode-category-header">
+          <h3>Models & Inference Configuration</h3>
+          <p class="vscode-category-desc">Manage local LLM weights, llama-server endpoints, context windows, and fallback models.</p>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="qwen gemma model llm inference llama local server weights">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Primary Local Language Model</label>
+            <p class="vscode-setting-desc">Primary: Qwen3.6-35B-A3B (16,384 token context window via Vulkan/CPU).</p>
+          </div>
+          <div class="vscode-setting-control">
+            <button class="quiet-button" id="checkModelsBtn">Check model status</button>
+          </div>
+        </div>
+        <p class="sheet-note" id="modelStatusSettings">Model status is checked with the local SAIL server.</p>
+
+        <div class="vscode-setting-item" data-search-terms="model fallback coder secondary gemma qwen3">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Secondary / Fallback Model</label>
+            <p class="vscode-setting-desc">Fallback order: Qwen3-Coder-30B-A3B &rarr; Gemma-4-E4B &rarr; Gemma-2-27B.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <span class="vscode-badge-tag">Auto-Failover Active</span>
+          </div>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="context size budget tokens window 16384 memory">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Context Window Budget</label>
+            <p class="vscode-setting-desc">Local context capacity allocated to conversation and autonomous solver passes.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <span class="vscode-badge-tag" style="color:var(--accent);">16,384 Tokens (2.6GB KV)</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. Forge Coding Agent Category -->
+      <section class="vscode-category-panel" id="settingsPanel-forge" data-category="forge" hidden>
+        <div class="vscode-category-header">
+          <h3>Forge Autonomous Coding Agent</h3>
+          <p class="vscode-category-desc">Inspect autonomous solver policies, worktree isolation directories, and quality gates.</p>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="worktree git isolation sandbox git safety">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Worktree Isolation Sandbox</label>
+            <p class="vscode-setting-desc">Each coding task operates inside dedicated, isolated worktrees under <code>.local/forge-worktrees/</code>.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <span class="vscode-badge-tag" style="color:#4ade80;">Isolated & Clean</span>
+          </div>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="diff requirement test validation review pr gate quality">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Quality Gate Requirements</label>
+            <p class="vscode-setting-desc">Non-empty diff enforcement, sandboxed <code>cargo check</code>, unit test verification, and automated PR drafting.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <span class="vscode-badge-tag">Strict Verification Enabled</span>
+          </div>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="forge quick dispatch enqueue task prompt">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Dispatch New Forge Job</label>
+            <p class="vscode-setting-desc">Enqueue an issue or prompt for autonomous coding resolution.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <button class="quiet-button" id="enqueueFromSettingsBtn">Enqueue Task</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. Developer & Telemetry Category -->
+      <section class="vscode-category-panel" id="settingsPanel-developer" data-category="developer" hidden>
+        <div class="vscode-category-header">
+          <h3>Developer & Telemetry Inspector</h3>
+          <p class="vscode-category-desc">Real-time voice activity detection (VAD), audio RMS, and WebSocket bus metrics.</p>
+        </div>
+
+        <div class="vscode-telemetry-grid">
+          <div class="vscode-telemetry-card">
+            <span class="vscode-telemetry-label">Voice Activity Detection</span>
+            <strong class="vscode-telemetry-val" id="telVad">VAD —</strong>
+          </div>
+          <div class="vscode-telemetry-card">
+            <span class="vscode-telemetry-label">VAD Confidence</span>
+            <strong class="vscode-telemetry-val" id="telConf">Confidence —</strong>
+          </div>
+          <div class="vscode-telemetry-card">
+            <span class="vscode-telemetry-label">Audio RMS Energy</span>
+            <strong class="vscode-telemetry-val" id="telRms">RMS —</strong>
+          </div>
+        </div>
+
+        <div style="margin-top:20px; display:flex; gap:10px;">
+          <button class="quiet-button" id="settingsRefreshTelemetryBtn" type="button">Refresh Metrics</button>
+          <button class="quiet-button" id="settingsOsStatusBtn" type="button">Run OS Status Diagnostic</button>
+        </div>
+      </section>
+    </div>
+  </div>
 </aside>
 
 <dialog id="captureDialog" class="capture-dialog" aria-labelledby="captureTitle">

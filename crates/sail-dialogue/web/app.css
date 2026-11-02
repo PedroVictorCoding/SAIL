@@ -820,3 +820,402 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 }
 
 .card-modal:not([open]) { display:none; }
+
+/* ==========================================================================
+   VS Code Style Large Settings Popup & Modal
+   ========================================================================== */
+.vscode-settings-sheet {
+  position: fixed;
+  z-index: 100;
+  inset: 40px auto auto 50%;
+  transform: translateX(-50%);
+  width: min(940px, calc(100vw - 48px));
+  height: min(720px, calc(100svh - 80px));
+  max-height: calc(100svh - 80px);
+  padding: 0;
+  border: var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--panel);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.75), var(--depth-panel);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: vscodeModalIn 0.22s var(--ease-out);
+}
+
+@keyframes vscodeModalIn {
+  from { opacity: 0; transform: translate(-50%, -10px) scale(0.98); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+.vscode-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 22px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: linear-gradient(180deg, #282E33, #24292D);
+  flex-shrink: 0;
+}
+
+.vscode-settings-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vscode-settings-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.vscode-settings-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+
+.vscode-settings-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  max-width: 480px;
+  height: 38px;
+  padding: 0 12px;
+  background: var(--recessed);
+  box-shadow: var(--depth-inset);
+  border: var(--border);
+  border-radius: var(--radius-control);
+  position: relative;
+}
+
+.vscode-search-icon {
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.vscode-settings-search-bar input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.vscode-settings-search-bar input::placeholder {
+  color: #7d848c;
+}
+
+.vscode-search-clear {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.vscode-close-btn {
+  font-size: 20px;
+  width: 36px;
+  height: 36px;
+}
+
+.vscode-settings-body {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Sidebar Categories Nav */
+.vscode-settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 12px;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  background: #1F2427;
+  overflow-y: auto;
+}
+
+.vscode-nav-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #798089;
+  padding: 4px 10px 8px;
+}
+
+.vscode-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.vscode-nav-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.vscode-nav-item.active {
+  background: var(--control);
+  color: var(--text);
+  box-shadow: var(--depth-control);
+  font-weight: 580;
+}
+
+.vscode-nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.vscode-nav-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.vscode-nav-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vscode-nav-pill-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+/* Main Content Settings Panels */
+.vscode-settings-content {
+  padding: 24px 28px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  background: var(--panel);
+}
+
+.vscode-category-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.vscode-category-panel[hidden] {
+  display: none !important;
+}
+
+.vscode-category-header {
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.vscode-category-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.vscode-category-desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.vscode-setting-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  transition: opacity 0.15s;
+}
+
+.vscode-setting-item.is-hidden {
+  display: none !important;
+}
+
+.vscode-setting-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.vscode-setting-name {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 550;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.vscode-setting-desc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.vscode-setting-control {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.vscode-setting-control select,
+.vscode-setting-control input[type="number"],
+.vscode-setting-control input[type="text"] {
+  min-height: 36px;
+  padding: 0 10px;
+  border: var(--border);
+  border-radius: var(--radius-control);
+  background: var(--recessed);
+  box-shadow: var(--depth-inset);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.vscode-num-input {
+  width: 90px;
+  text-align: right;
+}
+
+.vscode-status-tag {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.vscode-badge-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--control);
+  box-shadow: var(--depth-control);
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--muted);
+}
+
+.vscode-telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.vscode-telemetry-card {
+  padding: 14px;
+  border-radius: var(--radius-control);
+  background: var(--recessed);
+  box-shadow: var(--depth-inset);
+  border: var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vscode-telemetry-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.vscode-telemetry-val {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+@media (max-width: 820px) {
+  .vscode-settings-sheet {
+    inset: auto 0 0 0;
+    transform: none;
+    width: 100%;
+    height: 90svh;
+    max-height: 90svh;
+    border-radius: 24px 24px 0 0;
+    animation: sheet-up 0.25s var(--ease-out);
+  }
+  .vscode-settings-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .vscode-settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 8px 12px;
+  }
+  .vscode-nav-section-label {
+    display: none;
+  }
+  .vscode-nav-item {
+    white-space: nowrap;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .vscode-nav-item.active::before {
+    left: 6px;
+    right: 6px;
+    top: auto;
+    bottom: 0;
+    width: auto;
+    height: 2px;
+  }
+  .vscode-settings-header {
+    flex-wrap: wrap;
+    padding: 14px 16px;
+  }
+  .vscode-settings-search-bar {
+    order: 3;
+    max-width: 100%;
+    width: 100%;
+    margin-top: 8px;
+  }
+}
