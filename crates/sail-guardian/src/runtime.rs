@@ -109,7 +109,7 @@ pub struct ActionRequest {
 }
 
 /// Fully authorized and bound action ready for sandbox execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizedAction {
     pub authorization_id: Uuid,
     pub token_id: Option<Uuid>,
