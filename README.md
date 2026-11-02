@@ -84,19 +84,16 @@ The speech models and Gemma 4 12B vision projector are downloaded to `models/voi
 # First-time setup requires Python 3.11 and internet for package/model downloads.
 # This workspace already has .venv-voice and the downloaded models.
 ./scripts/voice/setup.sh
-cargo run -p sail-core
+./run.sh
 ```
 
-Open **http://localhost:8088** on the server computer. The managed Gemma service uses **127.0.0.1:8081**; `SAIL_LLAMA_SERVER` overrides its binary path. `SAIL_LLM_URL` can select an existing local OpenAI-compatible server, which must load a vision projector for image input.
+Open **https://localhost:8088** (or `https://<LAN_IP>:8088`) on your computer or phone. The `./run.sh` runner automatically detects and provisions TLS certificates in `.local/tls/`, selects the local model, guards against invalid target directory permissions, and launches all 10 subsystems.
 
 For another device on your LAN, microphone capture requires **trusted HTTPS**:
 
 ```bash
-./scripts/voice/tls.sh 192.168.1.101
-# Trust .local/tls/voice-cert.pem on the client device, or provide your own trusted certificate.
-SAIL_VOICE_BIND=0.0.0.0:8088 \
-SAIL_TLS_CERT=.local/tls/voice-cert.pem \
-SAIL_TLS_KEY=.local/tls/voice-key.pem cargo run -p sail-core
+# Automatically loads .local/tls/ certificates and binds to 0.0.0.0:8088
+./run.sh
 ```
 
 Open `https://192.168.1.101:8088` after trusting the certificate. Plain HTTP on a LAN IP cannot provide browser microphone or camera access. The Home screen shows when local services are disconnected and the browser explains denied device permissions.

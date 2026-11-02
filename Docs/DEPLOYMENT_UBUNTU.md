@@ -56,7 +56,12 @@ bwrap --version
 
 ## 4. Running the SAIL Server
 
-Start the core daemon:
+Start the core daemon with the unified runner (which automatically provisions TLS certificates in `.local/tls/`, configures `CARGO_TARGET_DIR=target`, and binds to port 8088):
+```bash
+./run.sh
+```
+
+Or run directly with cargo:
 ```bash
 CARGO_TARGET_DIR=target SAIL_VOICE_BIND=0.0.0.0:8088 \
   SAIL_TLS_CERT=.local/tls/voice-cert.pem \

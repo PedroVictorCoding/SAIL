@@ -12,10 +12,10 @@ Run these commands from the repository root. In the current workspace:
 
 ```bash
 cd /home/main/SAIL
-cargo run -p sail-core
+./run.sh
 ```
 
-Keep the terminal open while using SAIL. If an older SAIL process is already running, stop it with **Ctrl+C in its terminal** before starting the new version.
+Keep the terminal open while using SAIL. If an older SAIL process is already running, `./run.sh --restart` stops it before starting the new version (or stop it with **Ctrl+C in its terminal**).
 
 1. Open **http://localhost:8088** on this computer.
 2. Wait for the page to show that it is connected.
@@ -185,8 +185,13 @@ For the example server address `192.168.1.101`:
 
 Trust the public certificate `.local/tls/voice-cert.pem` on the client device using its operating system or browser certificate settings. Keep `.local/tls/voice-key.pem` on the server. If you already have a trusted certificate covering the server address, use its certificate and key instead.
 
-Stop the existing SAIL runtime, then start HTTPS:
+Stop any existing SAIL runtime, then start with the runner (which automatically passes the certificates and binds to `0.0.0.0:8088`):
 
+```bash
+./run.sh
+```
+
+Or manually:
 ```bash
 SAIL_VOICE_BIND=0.0.0.0:8088 \
 SAIL_TLS_CERT=.local/tls/voice-cert.pem \
