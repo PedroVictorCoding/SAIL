@@ -526,3 +526,115 @@ impl KnowledgeStore<'_> {
         })
     }
 }
+
+impl KnowledgeStore<'_> {
+    /// Visible active claims. SQL permission filtering happens before limits or ranking.
+    pub fn search(
+        &self,
+        query: &sail_protocol::memory::MemoryQuery,
+        access: &Access,
+        embedding: Option<&sail_protocol::memory::Embedding>,
+        now: i64,
+    ) -> KnowledgeResult<sail_protocol::memory::MemoryReply> {
+        use sail_protocol::memory::*;
+        if query.version != VERSION
+            || query.text.len() > 16000
+            || embedding.is_some_and(|e| !e.valid())
+        {
+            return Err(KnowledgeError::Invalid(
+                "invalid memory query version, size or embedding".into(),
+            ));
+        }
+        // Read generation, candidates, vectors and evidence from one SQLite snapshot.
+        self.read(|conn| {
+            conn.execute_batch("BEGIN DEFERRED")?;
+            let result=(|| {
+                let generation=super::write::generation(conn)?;
+                let a=access_params(access);
+                let sql=format!("SELECT {CLAIM_COLS} {} AND c.status NOT IN ('superseded','invalidated')
+                    AND (c.valid_from IS NULL OR c.valid_from<=:now) AND (c.valid_until IS NULL OR c.valid_until>:now)
+                    AND (c.expires_at IS NULL OR c.expires_at>:now)",claim_from_clause());
+                let mut stmt=conn.prepare(&sql)?;
+                let claims=stmt.query_map(&*named(&a,&[(":now",&now)]),claim_from_row)?.collect::<Result<Vec<_>,_>>()?;
+                let terms:Vec<String>=query.text.split(|c:char|!c.is_alphanumeric()).filter(|s|!s.is_empty()).take(16).map(|s|format!("\"{}\"",s.replace('"',"\"\""))).collect();
+                let mut lexical=std::collections::HashMap::new();
+                if !terms.is_empty() {
+                    let mut s=conn.prepare("SELECT rowid,bm25(kn_search) FROM kn_search WHERE kn_search MATCH ?1")?;
+                    for row in s.query_map([terms.join(" OR ")],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,f64>(1)?)))? {let (id,rank)=row?;lexical.insert(id,1.0+(-rank).min(1.0));}
+                }
+                let mut hits=Vec::new();
+                let mut edges=Vec::new();
+                for claim in claims {
+                    let mut score=*lexical.get(&claim.id).unwrap_or(&0.0);
+                    if let Some(q)=embedding {
+                        let vector:Option<String>=conn.query_row("SELECT vector FROM kn_vectors WHERE claim_id=?1 AND model=?2 AND revision=?3",rusqlite::params![claim.id,q.model,q.revision],|r|r.get(0)).optional()?;
+                        if let Some(v)=vector.and_then(|v|serde_json::from_str::<Vec<f32>>(&v).ok()) {
+                            if let Some(cos)=super::retrieval::cosine(&v,&q.values) {score+=cos.max(0.0);}
+                        }
+                    }
+                    if query.text.trim().is_empty() {score=0.1;}
+                    if let ClaimObject::Entity(target)=&claim.object {edges.push((claim.subject,*target));}
+                    let entity_name:String=conn.query_row("SELECT name FROM kn_entities WHERE id=?1",[claim.subject],|r|r.get(0))?;
+                    let value=match &claim.object {ClaimObject::Value(v)=>v.clone(),ClaimObject::Entity(e)=>conn.query_row("SELECT name FROM kn_entities WHERE id=?1",[e],|r|r.get(0))?};
+                    let mut s=conn.prepare("SELECT ce.evidence_id FROM kn_claim_evidence ce JOIN kn_evidence e ON e.id=ce.evidence_id WHERE ce.claim_id=?1 AND (?2=1 OR e.scope IN (SELECT value FROM json_each(?3))) ORDER BY ce.evidence_id")?;
+                    let evidence_ids=s.query_map(rusqlite::params![claim.id,a.all,a.scopes],|r|r.get(0))?.collect::<Result<_,_>>()?;
+                    let preference=if score>0.0 && claim.basis==Some(PreferenceBasis::Explicit) {0.25} else {0.0};
+                    hits.push(MemoryHit{claim_id:claim.id,entity_id:claim.subject,entity_name,predicate:claim.predicate,value,status:claim.status.as_str().into(),scope:claim.scope,observed_at:claim.observed_at,score:score+preference,evidence_ids});
+                }
+                if query.expand_graph {
+                    let seeds:std::collections::HashSet<i64>=hits.iter().filter(|h|h.score>0.0).map(|h|h.entity_id).collect();
+                    let mut expanded=seeds.clone();
+                    for (source,target) in edges {if seeds.contains(&source)||seeds.contains(&target) {expanded.insert(source);expanded.insert(target);}}
+                    for h in &mut hits {if h.score<=0.0 && expanded.contains(&h.entity_id) {h.score=0.2;}}
+                }
+                hits.retain(|h|h.score>0.0);
+                hits.sort_by(|a,b|b.score.total_cmp(&a.score).then(b.observed_at.cmp(&a.observed_at)).then(a.claim_id.cmp(&b.claim_id)));
+                hits.truncate(query.limit.min(100));
+                let context=super::retrieval::compose(&hits,query.token_budget,|s|s.len());
+                Ok(MemoryReply{version:VERSION,hits,context,generation})
+            })();
+            conn.execute_batch("ROLLBACK")?;
+            result
+        })
+    }
+
+    /// Exact indexed input for a later embedder. The write checks it has not changed.
+    pub fn embedding_text(&self, claim: i64, access: &Access) -> KnowledgeResult<Option<String>> {
+        let a = access_params(access);
+        self.read(|conn| {
+            Ok(conn
+                .query_row(
+                    &format!(
+                        "SELECT d.text {} AND c.id=:id AND c.id=d.id",
+                        claim_from_clause().replace(
+                            "FROM kn_claims c",
+                            "FROM kn_claims c CROSS JOIN kn_search_documents d"
+                        )
+                    ),
+                    &*named(&a, &[(":id", &claim)]),
+                    |r| r.get(0),
+                )
+                .optional()?)
+        })
+    }
+
+    pub fn put_embedding(
+        &self,
+        claim: i64,
+        text: &str,
+        embedding: &sail_protocol::memory::Embedding,
+        access: &Access,
+        generation: i64,
+    ) -> KnowledgeResult<()> {
+        if !embedding.valid() || self.embedding_text(claim, access)?.as_deref() != Some(text) {
+            return Err(KnowledgeError::Invalid(
+                "invalid vector or inaccessible/stale embedding input".into(),
+            ));
+        }
+        self.write_at_generation(generation,Actor::subsystem("mind"),|tx| {
+            let current:String=tx.conn.query_row("SELECT text FROM kn_search_documents WHERE id=?1",[claim],|r|r.get(0))?;
+            if current!=text {return Err(KnowledgeError::Invalid("embedding input changed".into()));}
+            tx.conn.execute("INSERT INTO kn_vectors(claim_id,model,revision,text,vector) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(claim_id,model,revision) DO UPDATE SET text=excluded.text,vector=excluded.vector",rusqlite::params![claim,embedding.model,embedding.revision,text,serde_json::to_string(&embedding.values).map_err(|e|KnowledgeError::Invalid(e.to_string()))?])?;Ok(())
+        })
+    }
+}
