@@ -3,6 +3,9 @@ use ring::digest::{Context, SHA256};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -206,37 +209,113 @@ impl ReviewBroker {
         self.invocation_count.load(Ordering::SeqCst)
     }
 
-    fn load_ledger_from_disk(path: &Path) -> Option<ReviewUsageLedger> {
-        if path.exists() {
-            if let Ok(content) = fs::read_to_string(path) {
-                if let Ok(mut ledger) = serde_json::from_str::<ReviewUsageLedger>(&content) {
-                    ledger.roll_windows_if_needed(&Utc::now());
-                    return Some(ledger);
+    fn load_ledger_from_disk(path: &Path) -> io::Result<ReviewUsageLedger> {
+        match fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(path)
+        {
+            Ok(mut file) => {
+                if !file.metadata()?.is_file() {
+                    return Err(io::Error::other("review ledger must be a regular file"));
                 }
+                let mut content = Vec::new();
+                file.read_to_end(&mut content)?;
+                let mut ledger: ReviewUsageLedger = serde_json::from_slice(&content)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                ledger.roll_windows_if_needed(&Utc::now());
+                Ok(ledger)
             }
-        }
-        None
-    }
-
-    pub fn persist_ledger(&self, ledger: &ReviewUsageLedger) {
-        if let Some(path) = &self.ledger_path {
-            if let Some(parent) = path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            let tmp = path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-            if let Ok(json) = serde_json::to_string_pretty(ledger) {
-                if let Ok(mut file) = fs::File::create(&tmp) {
-                    use std::io::Write;
-                    let _ = file.write_all(json.as_bytes());
-                    let _ = file.sync_all();
-                    let _ = fs::rename(&tmp, path);
-                }
-            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(ReviewUsageLedger::default()),
+            Err(e) => Err(e),
         }
     }
 
-    pub fn persist_ledger_sync(&self, ledger: &ReviewUsageLedger) {
-        self.persist_ledger(ledger);
+    /// Lock a stable sidecar inode, never the ledger inode replaced by rename.
+    /// Contention fails closed instead of blocking an async executor thread.
+    fn lock_ledger(&self) -> io::Result<fs::File> {
+        let path = self
+            .ledger_path
+            .as_ref()
+            .ok_or_else(|| io::Error::other("durable review ledger is not configured"))?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut lock_path = path.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(PathBuf::from(lock_path))?;
+        // SAFETY: the descriptor is live. File ownership releases the lock on drop.
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(lock)
+    }
+
+    /// Caller holds the sidecar lock through reload, mutation and durable commit.
+    fn write_ledger(&self, ledger: &ReviewUsageLedger) -> io::Result<()> {
+        let path = self
+            .ledger_path
+            .as_ref()
+            .ok_or_else(|| io::Error::other("durable review ledger is not configured"))?;
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let tmp = path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+        let result = (|| {
+            let json = serde_json::to_vec_pretty(ledger)?;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(&json)?;
+            file.sync_all()?;
+            fs::rename(&tmp, path)?;
+            // Sync ancestors too: first-run data directories may have just been
+            // created, and syncing only the leaf would not persist their names.
+            for directory in parent.ancestors() {
+                if !directory.as_os_str().is_empty() {
+                    fs::File::open(directory)?.sync_all()?;
+                }
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        result
+    }
+
+    /// Persist a snapshot for trusted administrative callers. Errors must be handled;
+    /// normal review dispatch uses a locked read-modify-write transaction instead.
+    pub fn persist_ledger(&self, ledger: &ReviewUsageLedger) -> io::Result<()> {
+        let _lock = self.lock_ledger()?;
+        self.write_ledger(ledger)
+    }
+
+    pub fn persist_ledger_sync(&self, ledger: &ReviewUsageLedger) -> io::Result<()> {
+        self.persist_ledger(ledger)
+    }
+
+    fn ledger_transaction<T>(
+        &self,
+        update: impl FnOnce(&mut ReviewUsageLedger) -> T,
+    ) -> io::Result<T> {
+        let _lock = self.lock_ledger()?;
+        let path = self
+            .ledger_path
+            .as_ref()
+            .expect("lock requires ledger path");
+        let mut ledger = Self::load_ledger_from_disk(path)?;
+        let result = update(&mut ledger);
+        self.write_ledger(&ledger)?;
+        *self.ledger.lock().unwrap() = ledger;
+        Ok(result)
     }
 
     pub fn get_ledger(&self) -> ReviewUsageLedger {
@@ -372,36 +451,52 @@ impl ReviewBroker {
             return result;
         }
 
-        // Daily requests cap check
-        {
-            let ledger = self.ledger.lock().unwrap();
-            if ledger.requests_today >= self.config.max_requests_per_day {
-                warn!(
-                    "Daily review quota reached ({} requests)",
-                    ledger.requests_today
-                );
-                let result =
-                    self.run_local_fallback(req, dedup_hash, "daily_request_limit_exceeded");
-                self.finish_in_flight(&canonical_key, &result);
-                return result;
+        // Reload under a cross-process lock: constructor snapshots and single-flight
+        // are insufficient when multiple daemon/broker instances share this ledger.
+        let reservation = self.ledger_transaction(|ledger| {
+            if let Some(existing) = ledger.canonical_issue_reviews.get(&canonical_key) {
+                let mut result = existing.clone();
+                result.cached = true;
+                return Some(result);
             }
-        }
-
-        // Atomic Crash-Safe Reservation: Persist attempt state to durable ledger with fsync BEFORE invocation
-        {
-            let mut ledger = self.ledger.lock().unwrap();
+            let reason = if ledger.canonical_issue_attempts.contains_key(&canonical_key) {
+                Some("previously_attempted_canonical_issue")
+            } else if ledger.requests_today >= self.config.max_requests_per_day {
+                Some("daily_request_limit_exceeded")
+            } else if ledger.requests_this_week >= self.config.max_requests_per_week {
+                Some("weekly_request_limit_exceeded")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return Some(self.run_local_fallback(req, dedup_hash.clone(), reason));
+            }
+            // Ambiguous crashes consume the slot conservatively. No invocation may
+            // occur until this reservation and its directory entry are synchronized.
             let marker = format!("attempted:{}:{}", Utc::now().to_rfc3339(), dedup_hash);
             ledger
                 .canonical_issue_attempts
                 .insert(canonical_key.clone(), marker);
             ledger.requests_today += 1;
             ledger.requests_this_week += 1;
-            let count = ledger
+            *ledger
                 .issue_review_counts
                 .entry(canonical_key.clone())
-                .or_insert(0);
-            *count += 1;
-            self.persist_ledger(&ledger);
+                .or_insert(0) += 1;
+            None
+        });
+        match reservation {
+            Ok(None) => {}
+            Ok(Some(result)) => {
+                self.finish_in_flight(&canonical_key, &result);
+                return result;
+            }
+            Err(error) => {
+                warn!(%error, "Review ledger unavailable; refusing reviewer invocation");
+                let result = self.run_local_fallback(req, dedup_hash, "review_ledger_unavailable");
+                self.finish_in_flight(&canonical_key, &result);
+                return result;
+            }
         }
 
         // Execute ChatGPT-subscription authenticated official Codex review
@@ -421,13 +516,14 @@ impl ReviewBroker {
             }
         };
 
-        // Persist final result to durable ledger
-        {
-            let mut ledger = self.ledger.lock().unwrap();
+        // Merge completion into the latest ledger, preserving concurrent issues.
+        // Failure here cannot release the already durable attempt reservation.
+        if let Err(error) = self.ledger_transaction(|ledger| {
             ledger
                 .canonical_issue_reviews
                 .insert(canonical_key.clone(), result.clone());
-            self.persist_ledger(&ledger);
+        }) {
+            warn!(%error, "Review completed but result persistence failed; attempt remains consumed");
         }
 
         if self.config.dedup_cache_enabled {

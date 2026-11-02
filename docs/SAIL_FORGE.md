@@ -117,3 +117,28 @@ entries are left untouched with a warning. Retained jobs require manual inspecti
 and removal before their ID can be reused. Linux `openat2` support is required;
 unsupported confinement fails closed. This allocation fix addresses part of #94;
 command-runner integration and remaining execution isolation are separate work.
+
+### Durable external-review accounting (#96)
+
+Review dispatch reloads the JSON ledger under an exclusive Linux `flock` on a
+stable `.lock` sidecar. Every broker using the same ledger path shares lifetime
+issue reservations and daily/weekly request caps. A private temporary file,
+file sync, atomic rename and directory sync commit the reservation before the
+reviewer can run. Completion merges into the latest ledger, preserving other
+issues' reservations. Ambiguous crashes leave the issue consumed; they never
+trigger an automatic second review.
+
+Corrupt, unreadable or unwritable accounting storage, symlinked ledger files and
+lock contention produce an inconclusive `review_ledger_unavailable` result with
+no invocation. A failed completion write retains the durable consumed slot and
+logs the persistence failure. Existing ledger JSON remains compatible;
+`persist_ledger`/`persist_ledger_sync` now return I/O errors to their trusted
+callers. These snapshot APIs are administrative operations, not review dispatch.
+
+Use one stable absolute ledger path on a local filesystem supporting `flock`,
+atomic rename and `fsync`, in a trusted service-owned directory. Do not remove the
+ledger/sidecar or run older daemons concurrently: older versions do not honor the
+lock protocol. Back up both accounting state and configuration. This change does
+not complete #96's remaining canonical repository identity, CLI authentication,
+read-only review isolation, capacity detection or verdict-validation requirements.
+No UI additions are required; denied reviews use the existing review result pane.

@@ -297,7 +297,7 @@ async fn test_crash_after_reservation_prevents_subsequent_process_invocation() {
             "PedroVictorCoding/SAIL#100".into(),
             "attempted:2026-10-31T15:00:00Z:dummy_hash".into(),
         );
-        broker.persist_ledger_sync(&ledger);
+        broker.persist_ledger_sync(&ledger).unwrap();
         // Process "crashes" here before execute_codex_review completes
     }
 
@@ -329,4 +329,226 @@ async fn test_crash_after_reservation_prevents_subsequent_process_invocation() {
     assert!(!res.verdict.passed);
 
     let _ = fs::remove_file(&temp_ledger);
+}
+
+fn accounting_request(issue: usize) -> ReviewRequest {
+    ReviewRequest {
+        job_id: format!("accounting-{issue}"),
+        issue_id: format!("repo#{}", issue),
+        base_commit: "base".into(),
+        diff_patch: "verified patch".into(),
+        test_manifest: "test result: ok".into(),
+    }
+}
+
+fn accounting_config() -> ReviewPolicyConfig {
+    ReviewPolicyConfig {
+        enabled: true,
+        max_requests_per_day: 100,
+        max_requests_per_week: 100,
+        ..ReviewPolicyConfig::default()
+    }
+}
+
+#[test]
+fn independent_brokers_share_one_lifetime_reservation() {
+    let dir = std::env::temp_dir().join(format!("review-race-{}", Uuid::new_v4()));
+    fs::create_dir(&dir).unwrap();
+    let path = dir.join("ledger.json");
+    // Construct all brokers before any ledger exists: cached snapshots are stale.
+    let brokers: Vec<_> = (0..20)
+        .map(|_| {
+            Arc::new(
+                ReviewBroker::new(accounting_config())
+                    .with_ledger_path(path.clone())
+                    .with_mock_mode(true),
+            )
+        })
+        .collect();
+    let barrier = Arc::new(std::sync::Barrier::new(20));
+    let handles: Vec<_> = brokers
+        .iter()
+        .map(|broker| {
+            let broker = broker.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .unwrap();
+                barrier.wait();
+                rt.block_on(broker.review(&accounting_request(1)))
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    assert_eq!(
+        brokers.iter().map(|b| b.invocation_count()).sum::<usize>(),
+        1
+    );
+    // A different job/diff on an already constructed broker cannot bypass the cap.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let mut retry = accounting_request(1);
+    retry.job_id = "new-job".into();
+    retry.diff_patch = "revised patch".into();
+    rt.block_on(brokers[19].review(&retry));
+    assert_eq!(
+        brokers.iter().map(|b| b.invocation_count()).sum::<usize>(),
+        1
+    );
+    let ledger: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(ledger["requests_today"], 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn stale_brokers_preserve_other_issues_and_enforce_daily_and_weekly_caps() {
+    for weekly in [false, true] {
+        let dir = std::env::temp_dir().join(format!("review-caps-{}", Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("ledger.json");
+        let mut config = accounting_config();
+        if weekly {
+            config.max_requests_per_week = 2;
+        } else {
+            config.max_requests_per_day = 2;
+        }
+        let brokers: Vec<_> = (0..3)
+            .map(|_| {
+                ReviewBroker::new(config.clone())
+                    .with_ledger_path(path.clone())
+                    .with_mock_mode(true)
+            })
+            .collect();
+        assert!(
+            brokers[0]
+                .review(&accounting_request(1))
+                .await
+                .verdict
+                .passed
+        );
+        assert!(
+            brokers[1]
+                .review(&accounting_request(2))
+                .await
+                .verdict
+                .passed
+        );
+        let denied = brokers[2].review(&accounting_request(3)).await;
+        assert!(!denied.verdict.passed);
+        assert!(denied.provider.contains(if weekly {
+            "weekly_request_limit_exceeded"
+        } else {
+            "daily_request_limit_exceeded"
+        }));
+        assert_eq!(brokers[2].invocation_count(), 0);
+        let ledger: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(ledger["requests_today"], 2);
+        assert_eq!(
+            ledger["canonical_issue_reviews"].as_object().unwrap().len(),
+            2
+        );
+        assert_eq!(
+            ledger["canonical_issue_attempts"]
+                .as_object()
+                .unwrap()
+                .len(),
+            2
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn corrupt_or_inaccessible_ledger_never_dispatches() {
+    let dir = std::env::temp_dir().join(format!("review-fail-closed-{}", Uuid::new_v4()));
+    fs::create_dir(&dir).unwrap();
+    for mode in [
+        "corrupt",
+        "directory",
+        "invalid-parent",
+        "symlink",
+        "dangling",
+    ] {
+        let path = dir.join(mode).join("ledger.json");
+        if mode == "invalid-parent" {
+            fs::write(path.parent().unwrap(), "not a directory").unwrap();
+        } else {
+            fs::create_dir(path.parent().unwrap()).unwrap();
+            if mode == "corrupt" {
+                fs::write(&path, "{broken journal").unwrap();
+            } else if mode == "symlink" {
+                std::os::unix::fs::symlink("/dev/null", &path).unwrap();
+            } else if mode == "dangling" {
+                std::os::unix::fs::symlink(dir.join("nonexistent"), &path).unwrap();
+            } else {
+                fs::create_dir(&path).unwrap();
+            }
+        }
+        let broker = ReviewBroker::new(accounting_config())
+            .with_ledger_path(path.clone())
+            .with_mock_mode(true);
+        let result = broker.review(&accounting_request(1)).await;
+        assert_eq!(broker.invocation_count(), 0, "{mode}");
+        assert!(!result.verdict.passed);
+        assert!(result.provider.contains("review_ledger_unavailable"));
+        if mode == "corrupt" {
+            assert_eq!(fs::read_to_string(&path).unwrap(), "{broken journal");
+        }
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn reservation_write_failure_is_returned_and_never_dispatches() {
+    let dir = std::env::temp_dir().join(format!("review-write-failure-{}", Uuid::new_v4()));
+    fs::create_dir(&dir).unwrap();
+    let path = dir.join("ledger.json");
+    let broker = ReviewBroker::new(accounting_config())
+        .with_ledger_path(path.clone())
+        .with_mock_mode(true);
+    let ledger = broker.get_ledger();
+    // Rename cannot replace a directory. Persistence must expose that failure.
+    fs::create_dir(&path).unwrap();
+    assert!(broker.persist_ledger_sync(&ledger).is_err());
+    assert!(
+        broker
+            .review(&accounting_request(1))
+            .await
+            .provider
+            .contains("review_ledger_unavailable")
+    );
+    assert_eq!(broker.invocation_count(), 0);
+    assert_eq!(
+        fs::read_dir(&dir).unwrap().count(),
+        2,
+        "temporary file leaked"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn failed_reservation_commit_does_not_consume_or_dispatch() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("review-readonly-{}", Uuid::new_v4()));
+    fs::create_dir(&dir).unwrap();
+    let path = dir.join("ledger.json");
+    let broker = ReviewBroker::new(accounting_config())
+        .with_ledger_path(path.clone())
+        .with_mock_mode(true);
+    broker.persist_ledger_sync(&broker.get_ledger()).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).unwrap();
+    let result = broker.review(&accounting_request(1)).await;
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.provider.contains("review_ledger_unavailable"));
+    assert_eq!(broker.invocation_count(), 0);
+    let ledger: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(ledger["requests_today"], 0);
+    let retry = broker.review(&accounting_request(1)).await;
+    assert!(retry.verdict.passed, "{}", retry.verdict.raw_feedback);
+    assert_eq!(broker.invocation_count(), 1);
+    fs::remove_dir_all(dir).unwrap();
 }
