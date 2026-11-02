@@ -1,7 +1,7 @@
 # Subsystem workspaces
 
 Home remains the system overview. Open any subsystem from the navigation rail,
-Home's subsystem directory, the Spaces chooser, or the Workspace picker on mobile.
+or the Spaces chooser. On mobile, use the Spaces button in the header.
 The assistant and conversation stay available while navigating.
 
 Every registered `SubsystemId` has a linkable workspace:

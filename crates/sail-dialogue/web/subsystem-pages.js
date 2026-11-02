@@ -175,7 +175,6 @@ function initializeSubsystemPages() {
   const page = document.getElementById('subsystemPage');
   const title = document.getElementById('subsystemTitle');
   const content = document.getElementById('subsystemContent');
-  const picker = document.getElementById('pagePicker');
   const cardHomes = new Map();
   let currentPage = 'home';
   let requestedPanel = null;
@@ -196,12 +195,7 @@ function initializeSubsystemPages() {
     link.append(icon, label); return link;
   }
   for (const item of subsystemPages) {
-    document.getElementById('subsystemNav').append(pageLink(item, 'nav-item'));
-    const link = pageLink(item, 'subsystem-tile');
-    const subtitle = document.createElement('small'); subtitle.textContent = item.subtitle;
-    link.lastElementChild.append(subtitle);
-    document.getElementById('subsystemDirectory').append(link);
-    const option = document.createElement('option'); option.value = item.id; option.textContent = item.name; picker.append(option);
+    document.getElementById('subsystemNav').append(pageLink(item, 'quiet-button nav-item'));
   }
   function renderRoute(focus = true) {
     const id = location.hash.slice(1) || 'home';
@@ -214,7 +208,7 @@ function initializeSubsystemPages() {
     for (const [card, marker] of cardHomes) marker.after(card);
     content.replaceChildren(); home.hidden = !!item; page.hidden = !item;
     workspace.setAttribute('aria-label', `${item?.name || 'Home'} workspace`);
-    document.title = `SAIL — ${item?.name || 'Home'}`; picker.value = route;
+    document.title = `SAIL — ${item?.name || 'Home'}`;
     document.querySelectorAll('[data-page]').forEach(link => {
       const selected = link.dataset.page === route; link.classList.toggle('selected', selected);
       if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
@@ -230,8 +224,7 @@ function initializeSubsystemPages() {
       const settings = document.getElementById('subsystemSettings'); settings.hidden = !item.settings;
       settings.onclick = () => { openSheet(contextSheet); contextSheet.querySelector(`[data-settings-tab="${item.settings}"]`)?.click(); };
       if (item.card) { content.append(document.getElementById(item.card)); if (item.panel) switchCardTab(item.card, requestedPanel || item.panel); }
-      const related = document.getElementById('subsystemRelated'); related.replaceChildren();
-      for (const other of subsystemPages.filter(other => other.id !== item.id)) related.append(pageLink(other, 'subsystem-related-link'));
+
     }
     currentPage = route; requestedPanel = null; workspace.scrollTop = 0;
     if (focus) (item ? title : document.getElementById('welcomeGreeting')).focus({ preventScroll:true });
@@ -244,6 +237,5 @@ function initializeSubsystemPages() {
   document.getElementById('homeNav').addEventListener('click', event => {
     if (currentPage === 'home' && location.hash !== '#spaces') { event.preventDefault(); renderRoute(); }
   });
-  picker.addEventListener('change', () => window.sailNavigate(picker.value));
   window.addEventListener('hashchange', () => renderRoute()); renderRoute(false);
 }

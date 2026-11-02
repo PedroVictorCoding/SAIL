@@ -69,7 +69,7 @@ def check_pages(page, url, screenshots=None):
     page.locator("#homeNav").click()
     expect(page.locator("#homePage")).to_be_visible()
     assert page.evaluate("originalCards.every(card => card.parentElement.matches('.workspace-grid'))")
-    page.locator('#subsystemDirectory a[href="#forge"]').click()
+    page.locator('#subsystemNav a[href="#forge"]').click()
     expect(page.locator("#subsystemContent #forgeCard")).to_be_visible()
     page.locator("#forgeQuickEnqueueBtn").click()
     expect(page.locator("#forgeEnqueueDialog")).to_be_visible()
@@ -98,10 +98,16 @@ def check_pages(page, url, screenshots=None):
     page.locator('#spaceList [data-space="vision"]').click()
     expect(page.locator("#subsystemTitle")).to_have_text("Canvas")
     expect(page.locator("#canvasPanelCamera")).to_be_visible()
+    assert page.locator("#pagePicker").count() == 0
+    assert page.locator("#subsystemDirectory").count() == 0
     for width in (390, 820):
         page.set_viewport_size({"width": width, "height": 844})
         for subsystem in [*ids, "home"]:
-            page.locator("#pagePicker").select_option(subsystem)
+            if subsystem == "home":
+                page.locator('.brand').click()
+            else:
+                page.locator("#spacesTop").click()
+                page.locator(f'#spaceList [data-space="{subsystem}"]').click()
             if subsystem == "home":
                 expect(page.locator("#homePage")).to_be_visible()
             else:
@@ -109,9 +115,10 @@ def check_pages(page, url, screenshots=None):
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), page.evaluate("""({route:location.hash, width:innerWidth, scroll:document.documentElement.scrollWidth, wide:[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+1).map(el=>[el.id,el.className,el.getBoundingClientRect().right]).slice(0,15)})""")
     if screenshots:
         page.set_viewport_size({"width": 390, "height": 844})
-        page.locator("#pagePicker").select_option("home")
+        page.locator('.brand').click()
         page.screenshot(path=str(screenshots / "home-mobile.png"), full_page=True)
-        page.locator("#pagePicker").select_option("guardian")
+        page.locator("#spacesTop").click()
+        page.locator('#spaceList [data-space="guardian"]').click()
         expect(page.locator("#toolsPanelSafetyReview")).to_be_visible()
         page.screenshot(path=str(screenshots / "guardian-mobile.png"), full_page=True)
     page.goto(url + "/#unknown")
