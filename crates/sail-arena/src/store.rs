@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 /// Bodies shorter than this are stored raw; compression does not pay off below it.
 const COMPRESS_MIN_BYTES: usize = 512;
 const CODEC_RAW: i64 = 0;
@@ -117,7 +117,7 @@ impl MemoryStore {
     /// Ephemeral store with the same schema; used for tests and when persistence is off.
     pub fn open_in_memory() -> StoreResult<Self> {
         let conn = Connection::open_in_memory()?;
-        conn.execute_batch("PRAGMA temp_store=MEMORY;")?;
+        conn.execute_batch("PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON;")?;
         migrate(&conn)?;
         Ok(Self {
             writer: Mutex::new(conn),
@@ -130,7 +130,10 @@ impl MemoryStore {
         self.path.as_deref()
     }
 
-    fn with_writer<T>(&self, f: impl FnOnce(&mut Connection) -> StoreResult<T>) -> StoreResult<T> {
+    pub(crate) fn with_writer<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> StoreResult<T>,
+    ) -> StoreResult<T> {
         let mut conn = self
             .writer
             .lock()
@@ -138,7 +141,10 @@ impl MemoryStore {
         f(&mut conn)
     }
 
-    fn with_reader<T>(&self, f: impl FnOnce(&Connection) -> StoreResult<T>) -> StoreResult<T> {
+    pub(crate) fn with_reader<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> StoreResult<T>,
+    ) -> StoreResult<T> {
         match &self.reader {
             Some(reader) => {
                 let conn = reader
@@ -300,6 +306,33 @@ impl MemoryStore {
         })
     }
 
+    /// Problems reported by SQLite's integrity and foreign-key checks; empty when healthy.
+    /// Cheap enough to run at startup after an unclean shutdown.
+    pub fn check_integrity(&self) -> StoreResult<Vec<String>> {
+        self.with_reader(|conn| {
+            let mut problems = Vec::new();
+            let mut stmt = conn.prepare("PRAGMA integrity_check")?;
+            for row in stmt.query_map([], |r| r.get::<_, String>(0))? {
+                let row = row?;
+                if row != "ok" {
+                    problems.push(row);
+                }
+            }
+            let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+            for row in stmt.query_map([], |r| {
+                Ok(format!(
+                    "foreign key violation in {} row {:?} -> {}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, String>(2)?
+                ))
+            })? {
+                problems.push(row?);
+            }
+            Ok(problems)
+        })
+    }
+
     /// Merge FTS segments and checkpoint the WAL. Run when idle (e.g. nightly), not per turn.
     pub fn maintain(&self) -> StoreResult<()> {
         self.with_writer(|conn| {
@@ -340,7 +373,8 @@ fn configure(conn: &Connection, writer: bool) -> StoreResult<()> {
     }
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute_batch(
-        "PRAGMA synchronous=NORMAL;
+        "PRAGMA foreign_keys=ON;
+         PRAGMA synchronous=NORMAL;
          PRAGMA temp_store=MEMORY;
          PRAGMA cache_size=-65536;
          PRAGMA mmap_size=1073741824;
@@ -350,60 +384,79 @@ fn configure(conn: &Connection, writer: bool) -> StoreResult<()> {
     Ok(())
 }
 
-fn migrate(conn: &Connection) -> StoreResult<()> {
+/// Schema steps; `MIGRATIONS[i]` moves a database from version `i` to `i + 1`. Each step runs
+/// in one transaction together with its `user_version` bump, so a failed step leaves the
+/// previous version intact.
+const MIGRATIONS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS records(
+         id INTEGER PRIMARY KEY,
+         scope TEXT NOT NULL,
+         session TEXT NOT NULL,
+         kind TEXT NOT NULL,
+         turn INTEGER,
+         created_at INTEGER NOT NULL,
+         gist TEXT NOT NULL,
+         codec INTEGER NOT NULL,
+         body BLOB NOT NULL,
+         body_chars INTEGER NOT NULL,
+         hash BLOB NOT NULL UNIQUE,
+         provenance TEXT,
+         embedding BLOB
+     ) STRICT;
+     CREATE INDEX IF NOT EXISTS records_by_session ON records(scope, session, id);
+     CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
+         ns, text,
+         content='', contentless_delete=1,
+         tokenize='unicode61 remove_diacritics 2'
+     );",
+    crate::knowledge::schema::V2,
+];
+
+pub(crate) fn migrate(conn: &Connection) -> StoreResult<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version > SCHEMA_VERSION {
         return Err(StoreError(format!(
             "database schema v{version} is newer than this build (v{SCHEMA_VERSION})"
         )));
     }
-    if version < 1 {
-        conn.execute_batch(
-            "BEGIN;
-             CREATE TABLE IF NOT EXISTS records(
-                 id INTEGER PRIMARY KEY,
-                 scope TEXT NOT NULL,
-                 session TEXT NOT NULL,
-                 kind TEXT NOT NULL,
-                 turn INTEGER,
-                 created_at INTEGER NOT NULL,
-                 gist TEXT NOT NULL,
-                 codec INTEGER NOT NULL,
-                 body BLOB NOT NULL,
-                 body_chars INTEGER NOT NULL,
-                 hash BLOB NOT NULL UNIQUE,
-                 provenance TEXT,
-                 embedding BLOB
-             ) STRICT;
-             CREATE INDEX IF NOT EXISTS records_by_session ON records(scope, session, id);
-             CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
-                 ns, text,
-                 content='', contentless_delete=1,
-                 tokenize='unicode61 remove_diacritics 2'
-             );
-             PRAGMA user_version=1;
-             COMMIT;",
-        )?;
+    for (step, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+        let target = step + 1;
+        conn.execute_batch(&format!(
+            "BEGIN;\n{sql}\nPRAGMA user_version={target};\nCOMMIT;"
+        ))
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK;");
+            StoreError(format!("migration to schema v{target} failed: {e}"))
+        })?;
     }
     Ok(())
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
 
-fn content_hash(r: &NewRecord<'_>) -> [u8; 16] {
+pub(crate) fn sha16(parts: &[&[u8]]) -> [u8; 16] {
     let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
-    for part in [r.scope, r.session, r.kind, r.body] {
-        ctx.update(part.as_bytes());
+    for part in parts {
+        ctx.update(part);
         ctx.update(&[0]);
     }
     let mut out = [0u8; 16];
     out.copy_from_slice(&ctx.finish().as_ref()[..16]);
     out
+}
+
+fn content_hash(r: &NewRecord<'_>) -> [u8; 16] {
+    sha16(&[
+        r.scope.as_bytes(),
+        r.session.as_bytes(),
+        r.kind.as_bytes(),
+        r.body.as_bytes(),
+    ])
 }
 
 fn encode_body(body: &str) -> (i64, Vec<u8>) {
@@ -602,6 +655,46 @@ mod tests {
         store.maintain().unwrap();
         drop(store);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn v1_archive_upgrades_to_v2_without_losing_records() {
+        let dir = std::env::temp_dir().join(format!("sail-arena-migrate-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("arena.db");
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            // A database exactly as the previous release left it.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&format!(
+                "BEGIN;{}PRAGMA user_version=1;COMMIT;",
+                MIGRATIONS[0]
+            ))
+            .unwrap();
+            conn.execute(
+                "INSERT INTO records(scope,session,kind,turn,created_at,gist,codec,body,body_chars,hash)
+                 VALUES('voice','s','turn',1,0,'g',0,CAST('kept' AS BLOB),4,x'00')",
+                [],
+            )
+            .unwrap();
+        }
+        let store = MemoryStore::open(&path).unwrap();
+        let version: i64 = store
+            .with_reader(|c| Ok(c.query_row("PRAGMA user_version", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(store.get(1).unwrap().unwrap().body, "kept");
+        assert_eq!(store.knowledge().deletion_generation().unwrap(), 0);
+        assert!(store.check_integrity().unwrap().is_empty());
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn newer_schema_is_refused_rather_than_downgraded() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!("PRAGMA user_version={};", SCHEMA_VERSION + 1))
+            .unwrap();
+        assert!(migrate(&conn).is_err());
     }
 
     #[test]
