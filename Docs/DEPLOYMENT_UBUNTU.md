@@ -44,6 +44,20 @@ bwrap --version
    ```bash
    sudo sysctl -w kernel.unprivileged_userns_clone=1
    ```
+   On Ubuntu 24.04 and later, AppArmor also restricts unprivileged user namespaces. With the
+   restriction active, Bubblewrap starts but cannot configure its network namespace and fails
+   with `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`, so Forge's sandboxed
+   builds are refused (fail closed). Check it:
+   ```bash
+   cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+   # 1 = restricted
+   ```
+   Prefer an AppArmor profile that grants `userns` to `/usr/bin/bwrap` only (Ubuntu ships an
+   example, `bwrap-userns-restrict`, in the `apparmor` package's extra profiles). Lifting the
+   restriction system-wide also works but widens it for every program:
+   ```bash
+   sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+   ```
 
 2. **Cgroups v2 (for process and memory limits)**:
    Verify cgroups v2 controllers:
