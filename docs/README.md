@@ -12,7 +12,7 @@ Status: design and implementation reference. These docs describe intended behavi
 | Infrastructure & Compute | [MESH](SAIL_MESH.md) |
 | Health & Physiology | [HEALTH](SAIL_HEALTH.md) |
 | Shared foundation | [CORE](SAIL_CORE.md) |
-| Cross-cutting experience | [STUDIO](SAIL_STUDIO.md) · [CAMPUS LEARNING](SAIL_CAMPUS_LEARNING.md) |
+| Cross-cutting experience | [STUDIO](SAIL_STUDIO.md) · [CAMPUS LEARNING](SAIL_CAMPUS_LEARNING.md) · [FORGE / CRAFT ANYTHING](SAIL_FORGE_CRAFT_ANYTHING.md) |
 
 ## Design rules
 - Specs are per-capability **ownership and acceptance contracts**, not permission to add navigation tabs, new processes or microservices.
