@@ -496,3 +496,55 @@ async fn test_forge_live_model_output_telemetry_emission_and_checkpointing() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[tokio::test]
+async fn test_gate_violation_blocks_job_before_review() {
+    let temp_dir = std::env::temp_dir().join(format!("test_orch_gates_{}", Uuid::new_v4()));
+    setup_test_git_repo(&temp_dir);
+
+    let checkpoint_store = Arc::new(TaskCheckpointStore::new(temp_dir.join("checkpoints")));
+    let review_broker = Arc::new(
+        ReviewBroker::new(ReviewPolicyConfig::default())
+            .with_mock_mode(true)
+            .with_ledger_path(temp_dir.join("review_ledger.json")),
+    );
+    let sandbox = Arc::new(SandboxPolicy::new());
+
+    let mut config = OrchestratorConfig::default();
+    config.workspace_root = temp_dir.clone();
+
+    let orchestrator = ForgeOrchestrator::new(
+        config,
+        checkpoint_store.clone(),
+        review_broker.clone(),
+        sandbox,
+    );
+
+    let req = IssueEnqueueRequest {
+        repo: "PedroVictorCoding/SAIL".into(),
+        issue_number: 125,
+        issue_body: Some("## Target files\n- `src/lib.rs`\n\n## Acceptance\n- [ ] works".into()),
+        ..Default::default()
+    };
+    let job_id = orchestrator.enqueue_issue(req).unwrap();
+
+    // Compiles and passes tests, but introduces a production `.unwrap()`.
+    let patch = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,3 @@\n pub fn compute() -> i32 { 42 }\n+pub fn parse() -> u32 { \"1\".parse().unwrap() }\n";
+    let err = orchestrator
+        .run_job_lifecycle(&job_id, Some(patch))
+        .await
+        .unwrap_err();
+    assert!(err.contains("Pre-review gates failed"), "{err}");
+    assert!(err.contains("new_unwrap"), "{err}");
+
+    let cp = checkpoint_store.load(&job_id).unwrap().unwrap();
+    assert_eq!(cp.state, ForgeTaskState::Blocked);
+    assert_eq!(cp.verification_status.as_deref(), Some("gate_failed"));
+
+    let ledger = review_broker.get_ledger();
+    assert!(ledger.canonical_issue_attempts.is_empty());
+    assert!(ledger.canonical_issue_reviews.is_empty());
+    assert_eq!(review_broker.invocation_count(), 0);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

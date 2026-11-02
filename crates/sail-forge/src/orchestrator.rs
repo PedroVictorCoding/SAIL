@@ -18,6 +18,7 @@ use crate::contracts::{
     ForgeBudgetConfig, ForgeJobReport, ForgeTaskState, IssueEnqueueRequest, IssueStatusResponse,
     PrDraftRequest, PrDraftResult, ReviewPolicyConfig, ReviewRequest, TestExecutionRecord,
 };
+use crate::gates::DiffGatePolicy;
 use crate::persistence::{TaskCheckpoint, TaskCheckpointStore};
 use crate::reviewer::ReviewBroker;
 use crate::worktree::IsolatedWorktree;
@@ -31,6 +32,7 @@ pub struct OrchestratorConfig {
     pub default_review_policy: ReviewPolicyConfig,
     pub workspace_root: PathBuf,
     pub model_path: Option<PathBuf>,
+    pub diff_gates: DiffGatePolicy,
 }
 
 impl Default for OrchestratorConfig {
@@ -64,6 +66,7 @@ impl Default for OrchestratorConfig {
             default_review_policy: ReviewPolicyConfig::default(),
             workspace_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             model_path,
+            diff_gates: DiffGatePolicy::default(),
         }
     }
 }
@@ -1253,6 +1256,42 @@ impl ForgeOrchestrator {
         }
 
         self.check_interruption(job_id).await?;
+
+        // 4b. Deterministic gates: never spend review quota on a patch that breaks policy
+        let target_files = {
+            let jobs = self.active_jobs.lock().unwrap();
+            jobs.get(job_id)
+                .and_then(|j| j.checkpoint.issue_body.as_deref())
+                .map(crate::admission::parse_target_files)
+                .unwrap_or_default()
+        };
+        let violations = self.config.diff_gates.evaluate(&final_diff, &target_files);
+        if !violations.is_empty() {
+            let details: Vec<String> = violations.iter().map(|v| v.to_string()).collect();
+            let reason = format!("Pre-review gates failed: {}", details.join("; "));
+            {
+                let mut jobs = self.active_jobs.lock().unwrap();
+                if let Some(job) = jobs.get_mut(job_id) {
+                    job.checkpoint.failure_reason = Some(reason.clone());
+                    job.checkpoint.verification_status = Some("gate_failed".into());
+                    job.checkpoint.transition(ForgeTaskState::Blocked, &reason);
+                    let _ = self.checkpoint_store.save(&job.checkpoint);
+                }
+            }
+            self.emit_event(EventPayload::ForgeIssueStatusUpdated {
+                job_id: job_id.to_string(),
+                state: "blocked".into(),
+                stage: "gates".into(),
+                message: reason.clone(),
+                diff: Some(final_diff.clone()),
+                target_file: outcome.target_file.clone(),
+                logs: Some(details),
+                live_output: None,
+                model_action: Some("Gate failed".into()),
+                turn: Some(outcome.turns),
+            });
+            return Err(reason);
+        }
 
         // 5. Review phase: call reviewer or mark skipped when local-first
         {

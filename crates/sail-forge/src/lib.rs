@@ -1,7 +1,9 @@
 #![allow(clippy::type_complexity, clippy::collapsible_if, clippy::manual_strip)]
 
+pub mod admission;
 pub mod contracts;
 pub mod fixtures;
+pub mod gates;
 pub mod model_bench;
 pub mod orchestrator;
 pub mod persistence;
@@ -10,8 +12,10 @@ pub mod solver;
 pub mod subsystem;
 pub mod worktree;
 
+pub use admission::{AdmissionDecision, AdmissionPolicy, IssueCandidate, parse_target_files};
 pub use contracts::*;
 pub use fixtures::{IssueFixture, get_benchmark_fixtures};
+pub use gates::{DiffGatePolicy, GateViolation};
 pub use model_bench::{
     BenchmarkHarness, FixtureBenchmarkResult, ModelBenchmarkMetrics, ModelCandidateConfig,
 };
