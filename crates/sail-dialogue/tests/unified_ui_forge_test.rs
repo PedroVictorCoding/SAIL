@@ -222,32 +222,14 @@ fn test_github_issues_priority_sorting() {
     assert_eq!(rank, 2);
     assert_eq!(label, "P2");
 
-    // 2. Test guarded execution of github:issues via broker
+    // 2. Test execution of github:issues (low risk read-only inspection auto-approves in Balanced mode)
     let issues_call = KernelToolCall {
         tool: "github:issues".into(),
         params: serde_json::json!({ "limit": 10 }),
     };
     let broker = sail_guardian::global_broker().unwrap();
     broker.policy().clear_learned_rules();
-    let denied = LocalKernelToolBroker::execute(&issues_call);
-    assert!(!denied.success);
-    assert_eq!(denied.output["approval_required"], true);
-
-    let session_uuid: uuid::Uuid = denied.output["session_id"]
-        .as_str()
-        .unwrap()
-        .parse()
-        .unwrap();
-    let token = broker
-        .approval()
-        .resolve_session(session_uuid, true)
-        .unwrap();
-
-    let res = LocalKernelToolBroker::execute_guarded(
-        SubsystemId::Dialogue,
-        &issues_call,
-        Some(token.token_id),
-    );
+    let res = LocalKernelToolBroker::execute(&issues_call);
 
     // If gh CLI is installed and succeeds, verify priority sort invariants
     if res.success {
@@ -268,49 +250,101 @@ fn test_github_issues_priority_sorting() {
 }
 
 #[test]
-fn test_github_issue_specific_view_and_learned_approval() {
+fn test_github_issue_specific_view_by_url_and_number() {
     let _fixture = GUARDIAN_FIXTURE.lock().unwrap();
     let _guardian = GuardianSubsystem::new();
     let broker = sail_guardian::global_broker().unwrap();
     broker.policy().clear_learned_rules();
 
-    let issue_call = KernelToolCall {
+    // 1. Fetch by URL directly (auto-approves as low-risk read-only assessment)
+    let url_call = KernelToolCall {
         tool: "github:issues".into(),
-        params: serde_json::json!({ "issue_number": 125 }),
+        params: serde_json::json!({ "url": "https://github.com/PedroVictorCoding/SAIL/issues/125" }),
     };
-
-    // First attempt without grant: requires approval
-    let denied = LocalKernelToolBroker::execute(&issue_call);
-    assert!(!denied.success);
-    assert_eq!(denied.output["approval_required"], true);
-
-    // Learn approval so future invocations auto-approve
-    let cap = LocalKernelToolBroker::tool_to_capability(&issue_call);
-    let rule = broker.policy().learn_approval(
-        SubsystemId::Dialogue,
-        &cap,
-        "Always allow viewing GitHub issues".into(),
-    );
-
-    // Second attempt: auto-approves via learned approval rule without providing a token
-    let res = LocalKernelToolBroker::execute(&issue_call);
-    if res.success {
-        assert_eq!(res.output["found"], true);
-        assert_eq!(res.output["number"], 125);
+    let res_url = LocalKernelToolBroker::execute(&url_call);
+    if res_url.success {
+        assert_eq!(res_url.output["found"], true);
+        assert_eq!(res_url.output["number"], 125);
         assert!(
-            res.output["title"]
+            res_url.output["title"]
                 .as_str()
                 .unwrap()
                 .contains("Add concise cargo test failure summaries")
         );
         assert!(
-            res.output["body"]
+            res_url.output["body"]
                 .as_str()
                 .unwrap()
                 .contains("summarize_test_failure")
         );
     }
 
-    // Clean up learned rule from shared test fixture broker
+    // 2. Fetch by number
+    let num_call = KernelToolCall {
+        tool: "github:issues".into(),
+        params: serde_json::json!({ "issue_number": 125 }),
+    };
+    let res_num = LocalKernelToolBroker::execute(&num_call);
+    if res_num.success {
+        assert_eq!(res_num.output["found"], true);
+        assert_eq!(res_num.output["number"], 125);
+    }
+}
+
+#[test]
+fn test_web_read_read_only_internet_access() {
+    let _fixture = GUARDIAN_FIXTURE.lock().unwrap();
+    let _guardian = GuardianSubsystem::new();
+
+    let web_call = KernelToolCall {
+        tool: "web:read".into(),
+        params: serde_json::json!({ "url": "https://httpbin.org/get" }),
+    };
+
+    let res = LocalKernelToolBroker::execute(&web_call);
+    if res.success {
+        assert_eq!(res.output["url"], "https://httpbin.org/get");
+        assert!(res.output["bytes"].as_u64().unwrap() > 0);
+    }
+
+    // Ensure loopback addresses are restricted
+    let loopback_call = KernelToolCall {
+        tool: "web:read".into(),
+        params: serde_json::json!({ "url": "http://127.0.0.1:8088/secret" }),
+    };
+    let loopback_res = LocalKernelToolBroker::execute(&loopback_call);
+    assert!(!loopback_res.success);
+}
+
+#[test]
+fn test_proc_list_learned_approval() {
+    let _fixture = GUARDIAN_FIXTURE.lock().unwrap();
+    let _guardian = GuardianSubsystem::new();
+    let broker = sail_guardian::global_broker().unwrap();
+    broker.policy().clear_learned_rules();
+
+    let proc_call = KernelToolCall {
+        tool: "proc:list".into(),
+        params: serde_json::json!({ "limit": 5 }),
+    };
+
+    // First attempt: Medium risk requires approval in Balanced mode
+    let denied = LocalKernelToolBroker::execute(&proc_call);
+    assert!(!denied.success);
+    assert_eq!(denied.output["approval_required"], true);
+
+    // Learn approval rule for proc:list
+    let cap = LocalKernelToolBroker::tool_to_capability(&proc_call);
+    let rule = broker.policy().learn_approval(
+        SubsystemId::Dialogue,
+        &cap,
+        "Always allow listing processes".into(),
+    );
+
+    // Second attempt: auto-approves via learned rule
+    let res = LocalKernelToolBroker::execute(&proc_call);
+    assert!(res.success);
+    assert!(res.output["processes"].as_array().is_some());
+
     broker.policy().revoke_learned_rule(rule.id);
 }

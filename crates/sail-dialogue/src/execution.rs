@@ -170,7 +170,19 @@ pub fn scheduler(broker: Arc<sail_guardian::GuardianExecutionBroker>) -> Arc<Too
         ("forge:list", json!({}), ToolEffect::ReadOnly),
         (
             "github:issues",
-            json!({"limit":{"type":"integer","minimum":1,"maximum":50},"priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}}),
+            json!({
+                "issue_number": {"type": "integer"},
+                "url": {"type": "string", "maxLength": 1024},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                "priority": {"type": "string", "maxLength": 2, "enum": ["P0", "P1", "P2", "P3", "P4", "p0", "p1", "p2", "p3", "p4"]}
+            }),
+            ToolEffect::ReadOnly,
+        ),
+        (
+            "web:read",
+            json!({
+                "url": {"type": "string", "maxLength": 2048}
+            }),
             ToolEffect::ReadOnly,
         ),
     ] {
