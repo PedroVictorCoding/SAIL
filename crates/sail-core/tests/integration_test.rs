@@ -202,13 +202,19 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
         other => panic!("Unexpected event received by Flow: {other:?}"),
     }
 
-    // Allow agents to execute bridge tool and report task completion to flow
-    sleep(Duration::from_millis(150)).await;
-
-    // Check Arena memory store has recorded the interaction
-    assert!(
-        !arena_arc.is_empty(),
-        "Arena should have stored memory records"
-    );
+    // Agents reports the turn as a `MemoryRecordStored` bus event; Arena archives it in its
+    // durable store (not the in-RAM voice session ledger that `len()`/`is_empty()` count).
+    let stored = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let records = arena_arc.store().stats().map(|s| s.records).unwrap_or(0);
+            if records > 0 {
+                return records;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Arena should have archived the bus memory record in its store");
+    assert!(stored > 0);
     mock.abort();
 }
