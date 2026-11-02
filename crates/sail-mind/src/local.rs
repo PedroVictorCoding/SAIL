@@ -198,7 +198,9 @@ impl LocalGemmaBackend {
                         "Local Gemma weights or llama-server binary are missing; no download or model substitution is performed",
                     ));
                 }
-                if self.config.compute == ComputeBackend::Vulkan {
+                if self.config.compute == ComputeBackend::Vulkan
+                    || self.config.compute == ComputeBackend::Hybrid
+                {
                     let output = tokio::time::timeout(
                         self.config.probe_timeout,
                         Command::new(&self.config.server_binary)
@@ -207,7 +209,7 @@ impl LocalGemmaBackend {
                             .output(),
                     )
                     .await
-                    .map_err(|_| unavailable("Vulkan device enumeration timed out"))?
+                    .map_err(|_| unavailable("GPU device enumeration timed out"))?
                     .map_err(|e| unavailable(e.to_string()))?;
                     let devices = format!(
                         "{}{}",
