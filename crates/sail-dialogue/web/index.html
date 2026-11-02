@@ -41,17 +41,18 @@
           <header class="card-heading">
             <div class="card-title"><span class="card-icon" aria-hidden="true">⌁</span><div><h3 id="systemCardHeading">System</h3><p id="systemCardSub">Local device status</p></div></div>
             <div class="card-heading-actions">
+              <span class="card-live-badge" id="systemLiveBadge" title="Live telemetry"><i class="live-dot"></i>Live</span>
               <div class="card-tabs" role="tablist" aria-label="System tabs">
                 <button type="button" class="card-tab active" data-tab-card="systemCard" data-tab-panel="systemPanelMetrics"><span>Metrics</span></button>
                 <button type="button" class="card-tab" data-tab-card="systemCard" data-tab-panel="systemPanelGuardian"><span>Guardian</span></button>
               </div>
               <button class="card-action card-cycle-btn" data-cycle-card="systemCard" type="button" aria-label="Cycle system view" title="Cycle view (Status / Guardian)">⇋</button>
-              <button class="card-action" id="checkSystemBtn" type="button" aria-label="Check local system status" title="Refresh metrics">↻</button>
+              <button class="card-action" id="checkSystemBtn" type="button" aria-label="Check local system status" title="Ping metrics now">↻</button>
             </div>
           </header>
           <div class="card-tab-panel active" id="systemPanelMetrics">
-            <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">Not checked</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">Not checked</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">Not checked</strong></div></div>
-            <p class="card-footnote" id="systemNote">System details are queried only when you ask.</p>
+            <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">Querying…</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">Querying…</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">Querying…</strong></div></div>
+            <p class="card-footnote" id="systemNote">Telemetry auto-updates continuously in real time.</p>
           </div>
           <div class="card-tab-panel" id="systemPanelGuardian" hidden>
             <div class="guardian-summary-lines">
@@ -111,17 +112,18 @@
           <header class="card-heading">
             <div class="card-title"><span class="card-icon" aria-hidden="true">✳</span><div><h3 id="modelsCardHeading">Local models</h3><p id="modelsCardSub">Speech and language services</p></div></div>
             <div class="card-heading-actions">
+              <span class="card-live-badge" id="modelsLiveBadge" title="Continuous health monitoring"><i class="live-dot"></i>Live</span>
               <div class="card-tabs" role="tablist" aria-label="Model tabs">
                 <button type="button" class="card-tab active" data-tab-card="modelsCard" data-tab-panel="modelsPanelMain"><span>Models</span></button>
                 <button type="button" class="card-tab" data-tab-card="modelsCard" data-tab-panel="modelsPanelGovernor"><span>Governor</span></button>
               </div>
               <button class="card-action card-cycle-btn" data-cycle-card="modelsCard" type="button" aria-label="Cycle model view" title="Cycle view (Models / Governor)">⇋</button>
-              <button class="card-action" id="modelsRefreshBtn" type="button" aria-label="Check local model status" title="Refresh model health">↻</button>
+              <button class="card-action" id="modelsRefreshBtn" type="button" aria-label="Check local model status" title="Ping model health now">↻</button>
             </div>
           </header>
           <div class="card-tab-panel active" id="modelsPanelMain">
-            <div class="model-summary" id="modelStatus" role="status">Not checked yet</div>
-            <div class="model-lines"><div><span>Language model</span><strong id="llmStatus">Not checked</strong></div><div><span>Voice workers</span><strong id="speechStatus">Not checked</strong></div><div><span>Capabilities</span><strong id="modelCapabilities">—</strong></div></div>
+            <div class="model-summary" id="modelStatus" role="status">Checking local services…</div>
+            <div class="model-lines"><div><span>Language model</span><strong id="llmStatus">Checking…</strong></div><div><span>Voice workers</span><strong id="speechStatus">Checking…</strong></div><div><span>Capabilities</span><strong id="modelCapabilities">—</strong></div></div>
           </div>
           <div class="card-tab-panel" id="modelsPanelGovernor" hidden>
             <div class="governor-metrics">
@@ -260,12 +262,13 @@
           <header class="card-heading">
             <div class="card-title"><span class="card-icon" aria-hidden="true">⚒</span><div><h3 id="forgeCardHeading">Forge</h3><p id="forgeCardSub">Autonomous coding agent</p></div></div>
             <div class="card-heading-actions">
+              <span class="card-live-badge" id="forgeLiveBadge" title="Continuous task monitoring"><i class="live-dot"></i>Live</span>
               <div class="card-tabs" role="tablist" aria-label="Forge tabs">
                 <button type="button" class="card-tab active" data-tab-card="forgeCard" data-tab-panel="forgePanelMain"><span>Agent</span></button>
                 <button type="button" class="card-tab" data-tab-card="forgeCard" data-tab-panel="forgePanelStream"><span>Stream</span></button>
               </div>
               <button class="card-action card-cycle-btn" data-cycle-card="forgeCard" type="button" aria-label="Cycle forge view" title="Cycle view (Agent / Stream)">⇋</button>
-              <button class="card-action" id="forgeRefreshBtn" type="button" aria-label="Refresh Forge jobs" title="Refresh Forge jobs">↻</button>
+              <button class="card-action" id="forgeRefreshBtn" type="button" aria-label="Refresh Forge jobs" title="Ping Forge jobs now">↻</button>
             </div>
           </header>
           <div class="card-tab-panel active" id="forgePanelMain">
@@ -544,17 +547,25 @@
 
         <div style="margin-top:16px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <h4 style="margin:0; font-size:13px; font-weight:600;">Pending Approvals</h4>
-            <button class="quiet-button" id="refreshApprovalsBtn" type="button" style="padding:3px 10px; font-size:11px;">Refresh</button>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <h4 style="margin:0; font-size:13px; font-weight:600;">Pending Approvals</h4>
+              <span class="card-live-badge" id="approvalsLiveBadge" title="Continuous approval synchronization"><i class="live-dot"></i>Live</span>
+            </div>
+            <button class="quiet-button" id="refreshApprovalsBtn" type="button" style="padding:3px 10px; font-size:11px;" title="Ping approvals now">Ping</button>
           </div>
           <div id="ownerApprovals" role="status" aria-live="polite"></div>
         </div>
 
         <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <h4 style="margin:0; font-size:13px; font-weight:600;">Daily Safety Review & Findings</h4>
+        <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <h4 style="margin:0; font-size:13px; font-weight:600;">Daily Safety Review & Findings</h4>
+              <span class="card-live-badge" id="safetyReviewLiveBadge" title="Continuous safety monitoring"><i class="live-dot"></i>Live</span>
+            </div>
             <div style="display:flex; gap:6px;">
-              <button class="quiet-button" id="refreshSafetyReviewBtn" type="button" style="padding:3px 10px; font-size:11px;">Refresh</button>
+              <button class="quiet-button" id="refreshSafetyReviewBtn" type="button" style="padding:3px 10px; font-size:11px;" title="Ping safety review now">Ping</button>
               <button class="quiet-button" id="runSafetyReviewBtn" type="button" style="padding:3px 10px; font-size:11px; background:var(--accent); color:#fff; border-color:transparent;">Run review now</button>
             </div>
           </div>
@@ -564,8 +575,12 @@
 
         <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <h4 style="margin:0; font-size:13px; font-weight:600;">Learned Approval Rules</h4>
-            <button class="quiet-button" id="refreshLearnedRulesBtn" type="button" style="padding:3px 10px; font-size:11px;">Refresh</button>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <h4 style="margin:0; font-size:13px; font-weight:600;">Learned Approval Rules</h4>
+              <span class="card-live-badge" id="rulesLiveBadge" title="Auto-synced rule database"><i class="live-dot"></i>Live</span>
+            </div>
+            <button class="quiet-button" id="refreshLearnedRulesBtn" type="button" style="padding:3px 10px; font-size:11px;" title="Ping rules now">Ping</button>
+          </div>
           </div>
           <p class="sheet-note" style="margin-bottom:8px;">Actions with "Always allow" are remembered and auto-executed without prompting.</p>
           <div id="guardianLearnedRules" role="status" aria-live="polite" style="display:flex; flex-direction:column; gap:6px;"></div>
@@ -671,8 +686,9 @@
           </div>
         </div>
 
-        <div style="margin-top:20px; display:flex; gap:10px;">
-          <button class="quiet-button" id="settingsRefreshTelemetryBtn" type="button">Refresh Metrics</button>
+        <div style="margin-top:20px; display:flex; gap:10px; align-items:center;">
+          <span class="card-live-badge" id="telemetryLiveBadge" title="Live audio & VAD metrics"><i class="live-dot"></i>Live Stream</span>
+          <button class="quiet-button" id="settingsRefreshTelemetryBtn" type="button">Ping Metrics Now</button>
           <button class="quiet-button" id="settingsOsStatusBtn" type="button">Run OS Status Diagnostic</button>
         </div>
       </section>

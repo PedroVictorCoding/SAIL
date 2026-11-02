@@ -1343,6 +1343,11 @@ document.getElementById('refreshApprovalsBtn')?.addEventListener('click',refresh
 window.addEventListener('pagehide', () => { pendingApprovalActions.clear(); lastToolCalls.clear(); });
 getOrFetchOwnerToken();
 
+// Auto-ping approvals periodically
+setInterval(() => {
+  refreshOwnerApprovals();
+}, 6000);
+
 async function fetchSecurityStatus() {
   try {
     const res = await fetch('/api/guardian/status', { cache: 'no-store' });
@@ -1446,6 +1451,18 @@ async function refreshLearnedRules() {
 }
 document.getElementById('refreshLearnedRulesBtn')?.addEventListener('click', refreshLearnedRules);
 refreshLearnedRules();
+
+// Auto-ping learned rules periodically
+setInterval(() => {
+  refreshLearnedRules();
+}, 15000);
+
+// Auto-ping Forge jobs periodically
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    sendAction('forge:list');
+  }
+}, 5000);
 
 // ============================================================================
 // Daily Safety Review of Learned Approval Rules & Web Notifications
@@ -1608,3 +1625,6 @@ document.getElementById('runSafetyReviewBtn')?.addEventListener('click', trigger
 document.getElementById('refreshSafetyReviewBtn')?.addEventListener('click', fetchSafetyReview);
 
 fetchSafetyReview();
+setInterval(() => {
+  fetchSafetyReview();
+}, 20000);
