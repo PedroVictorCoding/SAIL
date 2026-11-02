@@ -28,12 +28,15 @@ fn spawn_subsystem_worker(
     });
 }
 
+/// Next event explicitly addressed to this receiver's subsystem. Broadcasts (no target) such
+/// as `SystemReady` or Flow's startup `SafetyReviewCompleted` catch-up can arrive at any time
+/// and are not responses to the test's requests, so they are skipped.
 async fn next_business_event(
     rx: &mut sail_common::FilteredReceiver,
 ) -> sail_common::Result<SailEvent> {
     loop {
         let event = rx.recv().await?;
-        if !matches!(event.payload, EventPayload::SystemReady { .. }) {
+        if event.target.is_some() {
             return Ok(event);
         }
     }
@@ -115,6 +118,20 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
     let mut rx_dialogue = bus.subscribe_filtered(SubsystemId::Dialogue);
     let mut rx_canvas = bus.subscribe_filtered(SubsystemId::Canvas);
     let mut rx_flow = bus.subscribe_filtered(SubsystemId::Flow);
+
+    // Unrelated broadcasts (e.g. Flow's startup safety-review catch-up) may reach every
+    // subscriber first; publish one deterministically so the assertions below must skip it.
+    bus.publish(SailEvent::new(
+        SubsystemId::Flow,
+        EventPayload::SafetyReviewCompleted {
+            run_id: "test-broadcast".to_string(),
+            trigger: "catchup".to_string(),
+            findings_count: 0,
+            high_or_critical_count: 0,
+            summary: "unrelated broadcast".to_string(),
+        },
+    ))
+    .unwrap();
 
     // 1. Simulate Dialogue turn from User
     let user_utterance = SailEvent::new(
@@ -202,13 +219,19 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
         other => panic!("Unexpected event received by Flow: {other:?}"),
     }
 
-    // Allow agents to execute bridge tool and report task completion to flow
-    sleep(Duration::from_millis(150)).await;
-
-    // Check Arena memory store has recorded the interaction
-    assert!(
-        !arena_arc.is_empty(),
-        "Arena should have stored memory records"
-    );
+    // Agents reports the turn as a `MemoryRecordStored` bus event; Arena archives it in its
+    // durable store (not the in-RAM voice session ledger that `len()`/`is_empty()` count).
+    let stored = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let records = arena_arc.store().stats().map(|s| s.records).unwrap_or(0);
+            if records > 0 {
+                return records;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Arena should have archived the bus memory record in its store");
+    assert!(stored > 0);
     mock.abort();
 }

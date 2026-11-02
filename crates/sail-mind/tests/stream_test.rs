@@ -43,19 +43,43 @@ fn cpu_and_vulkan_launch_profiles_are_explicit_and_bounded() {
     assert!(gpu.windows(2).any(|p| p == ["--device", "Vulkan0"]));
     assert!(gpu.windows(2).any(|p| p == ["--gpu-layers", "8"]));
 
+    // Validation caps threads at the CPUs actually available, so use a count this host has.
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let threads = cpus.min(4);
     let hybrid = LocalModelConfig {
         compute: ComputeBackend::Hybrid,
         device: "Vulkan0".into(),
         gpu_layers: 16,
-        threads: 4,
+        threads,
         ..Default::default()
     }
     .launch_args(1)
     .unwrap();
+    let threads = threads.to_string();
     assert!(hybrid.windows(2).any(|p| p == ["--device", "Vulkan0"]));
     assert!(hybrid.windows(2).any(|p| p == ["--gpu-layers", "16"]));
-    assert!(hybrid.windows(2).any(|p| p == ["--threads", "4"]));
-    assert!(hybrid.windows(2).any(|p| p == ["--threads-batch", "4"]));
+    assert!(
+        hybrid
+            .windows(2)
+            .any(|p| p == ["--threads", threads.as_str()])
+    );
+    assert!(
+        hybrid
+            .windows(2)
+            .any(|p| p == ["--threads-batch", threads.as_str()])
+    );
+
+    assert!(
+        LocalModelConfig {
+            threads: cpus + 1,
+            ..Default::default()
+        }
+        .validate()
+        .is_err(),
+        "more threads than available CPUs must be rejected"
+    );
 
     assert!(
         LocalModelConfig {
