@@ -270,6 +270,12 @@ async fn test_offline_model_transitions_to_blocked_without_synthetic_patch() {
     );
     let status = orchestrator.get_status(&job_id).unwrap();
     assert_eq!(status.state, ForgeTaskState::Blocked);
+    let failure_msg = status.failure_reason.as_deref().unwrap_or_default();
+    assert!(
+        failure_msg.contains("19999") || failure_msg.contains("unreachable"),
+        "Failure reason should reflect actual solver failure instead of masking it: {}",
+        failure_msg
+    );
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

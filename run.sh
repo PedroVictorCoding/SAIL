@@ -216,6 +216,9 @@ if [[ -z "${SAIL_MODEL_PATH:-}" ]]; then
   done
 fi
 
+# Set default context tokens (16k for Qwen 3.6 on 32GB systems)
+export SAIL_CONTEXT_TOKENS="${SAIL_CONTEXT_TOKENS:-16384}"
+
 # 9. Startup summary banner
 LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
 echo "=================================================="

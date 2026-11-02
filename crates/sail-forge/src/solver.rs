@@ -769,11 +769,12 @@ impl LocalSolverController {
         urls
     }
 
-    /// Gather initial workspace snapshot (`repo:list` and up to 6 relevant source files with line numbers)
-    /// so local models have immediate grounded context and can also call `repo:search` / `repo:read_range` for larger repos.
-    fn build_initial_workspace_context(&self, worktree: &IsolatedWorktree) -> String {
+    /// Gather initial workspace snapshot (`repo:list` and up to 2 relevant entrypoint files)
+    /// strictly bounded so the initial prompt stays under ~1,000 tokens while allowing
+    /// the model to explore further with `repo:search`, `repo:read_range`, and `repo:list`.
+    pub fn build_initial_workspace_context(&self, worktree: &IsolatedWorktree) -> String {
         let mut files = Vec::new();
-        collect_files_bounded(&worktree.root_dir, &worktree.root_dir, &mut files, 100);
+        collect_files_bounded(&worktree.root_dir, &worktree.root_dir, &mut files, 40);
         files.sort();
 
         let mut out = String::new();
@@ -782,17 +783,20 @@ impl LocalSolverController {
             out.push_str(&format!("- {}\n", f));
         }
 
-        // Pre-read up to 6 small source files (`.rs` or `Cargo.toml`) so 1-2 file fixtures can be inspected immediately
+        // Bounded pre-reading: pre-read at most 2 entry files (max 80 lines each)
+        // and strictly cap the total initial context to 4,000 characters (~1,000 tokens)
+        // to prevent prompt bloat and keep context well within local inference budgets.
         let mut read_count = 0usize;
         for f in &files {
-            if read_count >= 6 {
+            if read_count >= 2 || out.len() >= 4000 {
                 break;
             }
-            if f.ends_with(".rs") || f == "Cargo.toml" {
+            if f == "Cargo.toml" || f.ends_with("lib.rs") || f.ends_with("main.rs") {
                 if let Ok(content) = worktree.read_file(Path::new(f)) {
-                    if content.lines().count() <= 160 {
+                    let lines: Vec<&str> = content.lines().collect();
+                    if lines.len() <= 80 {
                         out.push_str(&format!("\n--- File: {} ---\n", f));
-                        for (idx, line) in content.lines().enumerate() {
+                        for (idx, line) in lines.iter().enumerate() {
                             out.push_str(&format!("{:4}: {}\n", idx + 1, line));
                         }
                         read_count += 1;
@@ -801,6 +805,30 @@ impl LocalSolverController {
             }
         }
         out
+    }
+
+    /// Prune older intermediate tool turns if total message content exceeds the character budget,
+    /// preserving the initial system prompt (index 0), the initial issue description (index 1),
+    /// and the latest turn context.
+    pub fn prune_messages_to_budget(messages: &mut Vec<serde_json::Value>, max_chars: usize) {
+        if messages.len() <= 3 {
+            return;
+        }
+        while messages.len() > 4 {
+            let curr: usize = messages
+                .iter()
+                .map(|m| {
+                    m.get("content")
+                        .and_then(|c| c.as_str())
+                        .map(str::len)
+                        .unwrap_or(0)
+                })
+                .sum();
+            if curr <= max_chars {
+                break;
+            }
+            messages.remove(2);
+        }
     }
 
     /// Run the bounded local solver loop inside `worktree`.
@@ -929,6 +957,9 @@ Rules:
                 )]),
             });
 
+            // Bound accumulated multi-turn history to keep prompts within context limits
+            Self::prune_messages_to_budget(&mut messages, 24000);
+
             // Call local OpenAI-compatible chat completions endpoint with streaming support
             let mut turn_response_text: Option<String> = None;
             let mut turn_endpoint_err: Option<String> = None;
@@ -939,9 +970,19 @@ Rules:
                 endpoints.clone()
             };
 
+            let model_name = std::env::var("SAIL_FORGE_MODEL").unwrap_or_else(|_| {
+                if let Some(ref p) = self.configured_model_path {
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "Qwen3.6-35B-A3B".to_string())
+                } else {
+                    "Qwen3.6-35B-A3B".to_string()
+                }
+            });
+
             for ep in &probe_list {
                 let req_body = serde_json::json!({
-                    "model": std::env::var("SAIL_FORGE_MODEL").unwrap_or_else(|_| "local-coder".to_string()),
+                    "model": model_name,
                     "messages": messages,
                     "temperature": 0.1,
                     "max_tokens": 2048,
@@ -1081,8 +1122,17 @@ Rules:
                         }
                     }
                     Ok(resp) => {
-                        turn_endpoint_err =
-                            Some(format!("Endpoint {} returned HTTP {}", ep, resp.status()));
+                        let status = resp.status();
+                        let body_snippet = resp.text().await.unwrap_or_default();
+                        let snippet = if body_snippet.len() > 180 {
+                            format!("{}...", &body_snippet[..180])
+                        } else {
+                            body_snippet
+                        };
+                        turn_endpoint_err = Some(format!(
+                            "Endpoint {} returned HTTP {}: {}",
+                            ep, status, snippet
+                        ));
                     }
                     Err(e) => {
                         turn_endpoint_err = Some(format!("Endpoint {} unreachable: {}", ep, e));

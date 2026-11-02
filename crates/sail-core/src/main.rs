@@ -44,7 +44,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let candidates = [
             "models/Qwen3.6-35B-A3B-Q4_K_M.gguf",
             "/home/main/SAIL/models/Qwen3.6-35B-A3B-Q4_K_M.gguf",
+            "/srv/sail/models/Qwen3.6-35B-A3B-Q4_K_M.gguf",
             "models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+            "/srv/sail/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
             "models/gemma4-v2-Q4_K_M.gguf",
         ];
         for cand in candidates {

@@ -468,3 +468,85 @@ fn test_multi_file_smoke_fixture_reference_and_broken_patches() {
 
     let _ = fs::remove_dir_all(&temp_repo);
 }
+
+#[test]
+fn test_forge_solver_context_budget_bounded() {
+    let temp_repo = std::env::temp_dir().join(format!("test_repo_budget_{}", Uuid::new_v4()));
+    setup_test_git_repo(&temp_repo);
+
+    let policy = Arc::new(SandboxPolicy::new());
+    let worktree = IsolatedWorktree::create("test-budget", &temp_repo, "HEAD", policy).unwrap();
+
+    // Create multiple source files with varying line lengths
+    worktree
+        .write_file(
+            Path::new("Cargo.toml"),
+            "[package]\nname = \"big_repo\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+    worktree
+        .write_file(
+            Path::new("src/lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+        )
+        .unwrap();
+    worktree
+        .write_file(Path::new("src/main.rs"), "fn main() {}\n")
+        .unwrap();
+    for i in 0..60 {
+        worktree
+            .write_file(
+                Path::new(&format!("src/module_{}.rs", i)),
+                &format!("// Module {}\npub fn mod_{}() -> usize {{ {} }}\n", i, i, i),
+            )
+            .unwrap();
+    }
+
+    let controller = sail_forge::solver::LocalSolverController::new(4, 180, None);
+    let initial_ctx = controller.build_initial_workspace_context(&worktree);
+
+    // Initial context must strictly remain under 4,000 characters (~1,000 tokens)
+    assert!(
+        initial_ctx.len() <= 4000,
+        "Initial context was {} chars; must stay <= 4000 to prevent context overflow",
+        initial_ctx.len()
+    );
+    assert!(initial_ctx.contains("Cargo.toml"));
+
+    // Test message pruning: system prompt and original task prompt must be preserved
+    let mut messages = vec![
+        serde_json::json!({"role": "system", "content": "SYSTEM_PROMPT"}),
+        serde_json::json!({"role": "user", "content": "INITIAL_TASK"}),
+        serde_json::json!({"role": "user", "content": "a".repeat(10000)}),
+        serde_json::json!({"role": "assistant", "content": "b".repeat(10000)}),
+        serde_json::json!({"role": "user", "content": "c".repeat(10000)}),
+        serde_json::json!({"role": "assistant", "content": "LATEST_REPAIR"}),
+    ];
+
+    sail_forge::solver::LocalSolverController::prune_messages_to_budget(&mut messages, 15000);
+
+    assert_eq!(
+        messages[0]["content"], "SYSTEM_PROMPT",
+        "System prompt preserved"
+    );
+    assert_eq!(
+        messages[1]["content"], "INITIAL_TASK",
+        "Initial task preserved"
+    );
+    assert_eq!(
+        messages.last().unwrap()["content"],
+        "LATEST_REPAIR",
+        "Latest turn preserved"
+    );
+    let total_len: usize = messages
+        .iter()
+        .map(|m| m["content"].as_str().unwrap().len())
+        .sum();
+    assert!(
+        total_len <= 15000 + 10000,
+        "Pruned message budget exceeded: {}",
+        total_len
+    );
+
+    let _ = fs::remove_dir_all(&temp_repo);
+}
