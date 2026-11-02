@@ -46,10 +46,12 @@ impl Default for OrchestratorConfig {
                 let candidates = [
                     PathBuf::from("/home/main/SAIL/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
                     PathBuf::from("models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
+                    PathBuf::from("/srv/sail/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
                     PathBuf::from(
                         "/home/main/SAIL/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
                     ),
                     PathBuf::from("models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
+                    PathBuf::from("/srv/sail/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
                     PathBuf::from("models/gemma4-v2-Q4_K_M.gguf"),
                 ];
                 candidates.into_iter().find(|p| p.exists())
@@ -467,6 +469,7 @@ impl ForgeOrchestrator {
     }
 
     /// Autonomous issue context retrieval and candidate patch synthesis.
+    #[allow(dead_code)]
     async fn synthesize_solution_for_issue(
         &self,
         repo: &str,
@@ -652,6 +655,7 @@ impl ForgeOrchestrator {
     }
 
     /// Iterative repair patch synthesis when sandbox compiler or tests report errors.
+    #[allow(dead_code)]
     async fn synthesize_repair_patch(
         &self,
         repo: &str,
@@ -956,7 +960,7 @@ impl ForgeOrchestrator {
                 summary: "Pinned patch applied".into(),
             }
         } else {
-            let (title, body) = {
+            let (mut title, mut body) = {
                 let jobs = self.active_jobs.lock().unwrap();
                 let j = jobs.get(job_id);
                 (
@@ -966,6 +970,49 @@ impl ForgeOrchestrator {
                         .unwrap_or_default(),
                 )
             };
+
+            // If issue details were not pre-specified, attempt live lookup via gh CLI
+            if (body.trim().is_empty()
+                || title == "Autonomous task resolution"
+                || title == format!("Issue #{}", issue_number))
+                && !repo.is_empty()
+                && issue_number > 0
+            {
+                let gh_out = std::process::Command::new("gh")
+                    .args([
+                        "issue",
+                        "view",
+                        &issue_number.to_string(),
+                        "--repo",
+                        &repo,
+                        "--json",
+                        "title,body",
+                    ])
+                    .output();
+
+                if let Ok(out) = gh_out {
+                    if out.status.success() {
+                        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                            if let Some(t) = val.get("title").and_then(|v| v.as_str()) {
+                                if !t.trim().is_empty() {
+                                    title = t.trim().to_string();
+                                }
+                            }
+                            if let Some(b) = val.get("body").and_then(|v| v.as_str()) {
+                                if !b.trim().is_empty() {
+                                    body = b.trim().to_string();
+                                }
+                            }
+                            let mut jobs = self.active_jobs.lock().unwrap();
+                            if let Some(j) = jobs.get_mut(job_id) {
+                                j.checkpoint.issue_title = Some(title.clone());
+                                j.checkpoint.issue_body = Some(body.clone());
+                                let _ = self.checkpoint_store.save(&j.checkpoint);
+                            }
+                        }
+                    }
+                }
+            }
 
             let controller =
                 crate::solver::LocalSolverController::new(4, 180, self.config.model_path.clone());
@@ -1032,14 +1079,35 @@ impl ForgeOrchestrator {
         let diff_stat = format!("{} lines changed", final_diff.lines().count());
 
         if !crate::solver::is_meaningful_code_diff(&final_diff) {
-            let err_msg = "Nonempty diff requirement failed: autonomous coding agent produced no code modifications for issue".to_string();
+            let err_msg = if let Some(ref reason) = outcome.failure_reason {
+                format!("Solver failed to produce a valid diff: {}", reason)
+            } else {
+                "Nonempty diff requirement failed: autonomous coding agent produced no code modifications for issue".to_string()
+            };
             let mut jobs = self.active_jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(job_id) {
                 job.checkpoint.failure_reason = Some(err_msg.clone());
                 job.checkpoint.verification_status = Some("blocked".into());
+                job.checkpoint.model_endpoint = Some(outcome.model.endpoint.clone());
                 job.checkpoint.transition(ForgeTaskState::Blocked, &err_msg);
                 let _ = self.checkpoint_store.save(&job.checkpoint);
             }
+            self.emit_event(EventPayload::ForgeIssueStatusUpdated {
+                job_id: job_id.to_string(),
+                state: "blocked".into(),
+                stage: "blocked".into(),
+                message: err_msg.clone(),
+                diff: None,
+                target_file: outcome.target_file.clone(),
+                logs: Some(vec![
+                    format!("Model endpoint: {}", outcome.model.endpoint),
+                    format!("Model: {}", outcome.model.model_id),
+                    format!("Failure: {}", err_msg),
+                ]),
+                live_output: outcome.failure_reason.clone(),
+                model_action: Some("Failed".into()),
+                turn: Some(outcome.turns),
+            });
             return Err(err_msg);
         }
 

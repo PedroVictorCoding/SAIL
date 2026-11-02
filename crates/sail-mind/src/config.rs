@@ -40,10 +40,12 @@ impl Default for LocalModelConfig {
                     let candidates = [
                         PathBuf::from("models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
                         PathBuf::from("/home/main/SAIL/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
+                        PathBuf::from("/srv/sail/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
                         PathBuf::from("models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
                         PathBuf::from(
                             "/home/main/SAIL/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
                         ),
+                        PathBuf::from("/srv/sail/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
                         PathBuf::from("models/gemma4-v2-Q4_K_M.gguf"),
                     ];
                     for cand in candidates {
@@ -65,7 +67,10 @@ impl Default for LocalModelConfig {
             threads: std::thread::available_parallelism()
                 .map(|n| n.get().min(6))
                 .unwrap_or(1),
-            context_tokens: 8192,
+            context_tokens: std::env::var("SAIL_CONTEXT_TOKENS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(16384),
             startup_timeout: Duration::from_secs(120),
             probe_timeout: Duration::from_secs(3),
         }
