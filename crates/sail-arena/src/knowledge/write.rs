@@ -330,7 +330,13 @@ impl<'t> KnowledgeTx<'t> {
             "INSERT OR IGNORE INTO kn_aliases(entity_id,alias_key,alias) VALUES(?1,?2,?3)",
             params![entity, name_key(alias), alias],
         )?;
-        Ok(())
+        self.log(
+            "alias",
+            "entity",
+            Some(entity),
+            None,
+            json!({"changed":true}),
+        )
     }
 
     /// Merge `from` into `into` (same kind). `from` stays as a `merged` stub pointing at
@@ -343,6 +349,10 @@ impl<'t> KnowledgeTx<'t> {
         if a.kind != b.kind {
             return Err(invalid("only entities of the same kind can be merged"));
         }
+        let compatible:bool=self.conn.query_row("SELECT a.scope=b.scope AND a.sensitivity=b.sensitivity FROM kn_entities a,kn_entities b WHERE a.id=?1 AND b.id=?2",[from,into],|r|r.get(0))?;
+        if !compatible {
+            return Err(invalid("merge requires the same scope and privacy level"));
+        }
         let both_have_procedures: bool = self.conn.query_row(
             "SELECT (SELECT count(*) FROM kn_procedures WHERE entity_id=?1) > 0
                 AND (SELECT count(*) FROM kn_procedures WHERE entity_id=?2) > 0",
@@ -354,6 +364,31 @@ impl<'t> KnowledgeTx<'t> {
                 "both entities have procedure versions; reconcile them first",
             ));
         }
+        let ids = |sql: &str| -> KnowledgeResult<Vec<i64>> {
+            let mut stmt = self.conn.prepare(sql)?;
+            Ok(stmt
+                .query_map([from], |r| r.get(0))?
+                .collect::<Result<_, _>>()?)
+        };
+        let aliases: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT alias FROM kn_aliases WHERE entity_id=?1")?;
+            stmt.query_map([from], |r| r.get(0))?
+                .collect::<Result<_, _>>()?
+        };
+        let target_aliases: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT alias FROM kn_aliases WHERE entity_id=?1")?;
+            stmt.query_map([into], |r| r.get(0))?
+                .collect::<Result<_, _>>()?
+        };
+        let snapshot = json!({"subjects":ids("SELECT id FROM kn_claims WHERE subject_id=?1")?,
+            "objects":ids("SELECT id FROM kn_claims WHERE object_entity_id=?1")?,
+            "projects":ids("SELECT id FROM kn_project_items WHERE project_id=?1")?,
+            "procedures":ids("SELECT id FROM kn_procedures WHERE entity_id=?1")?,
+            "aliases":aliases,"target_aliases":target_aliases});
         self.conn.execute(
             "INSERT OR IGNORE INTO kn_aliases(entity_id,alias_key,alias)
              SELECT ?2, name_key, name FROM kn_entities WHERE id=?1
@@ -409,8 +444,13 @@ impl<'t> KnowledgeTx<'t> {
             "entity",
             Some(into),
             Some(reason),
-            json!({"from": from}),
-        )
+            json!({"from":from}),
+        )?;
+        let operation_id: i64 =
+            self.conn
+                .query_row("SELECT max(id) FROM kn_operations", [], |r| r.get(0))?;
+        self.conn.execute("INSERT OR REPLACE INTO kn_merge_snapshots(from_id,into_id,operation_id,snapshot) VALUES(?1,?2,?3,?4)",params![from,into,operation_id,snapshot.to_string()])?;
+        Ok(())
     }
 
     /// Forget an entity, every claim about or pointing at it, its project items and
@@ -1021,6 +1061,132 @@ impl<'t> KnowledgeTx<'t> {
             Some(old),
             Some(reason),
             json!({"by": new}),
+        )
+    }
+}
+
+impl KnowledgeTx<'_> {
+    pub fn pin_entity(&mut self, entity: i64, pinned: bool) -> KnowledgeResult<()> {
+        self.active_entity(entity)?;
+        self.conn.execute("INSERT INTO kn_pins(entity_id,pinned) VALUES(?1,?2) ON CONFLICT(entity_id) DO UPDATE SET pinned=excluded.pinned",params![entity,pinned])?;
+        self.log(
+            "pin",
+            "entity",
+            Some(entity),
+            None,
+            json!({"pinned":pinned}),
+        )
+    }
+    /// Privacy changes invalidate in-flight retrieval/consolidation work too.
+    pub fn mark_private(&mut self, entity: i64) -> KnowledgeResult<()> {
+        self.active_entity(entity)?;
+        self.conn.execute(
+            "UPDATE kn_entities SET sensitivity=max(sensitivity,1) WHERE id=?1",
+            [entity],
+        )?;
+        self.conn.execute("UPDATE kn_claims SET sensitivity=max(sensitivity,1) WHERE subject_id=?1 OR object_entity_id=?1",[entity])?;
+        self.conn.execute(
+            "UPDATE kn_meta SET value=value+1 WHERE key='deletion_generation'",
+            [],
+        )?;
+        self.log(
+            "privacy",
+            "entity",
+            Some(entity),
+            None,
+            json!({"sensitivity":"private"}),
+        )
+    }
+    /// Undo the most recent merge only while no subsequent knowledge mutation exists.
+    /// A stale snapshot must never overwrite edits, deletions or later merges.
+    pub fn separate_entity(&mut self, from: i64, reason: &str) -> KnowledgeResult<()> {
+        let (into, operation, snapshot): (i64, i64, String) = self
+            .conn
+            .query_row(
+                "SELECT into_id,operation_id,snapshot FROM kn_merge_snapshots WHERE from_id=?1",
+                [from],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?
+            .ok_or(KnowledgeError::NotFound("merge snapshot", from))?;
+        let latest: i64 = self
+            .conn
+            .query_row("SELECT max(id) FROM kn_operations", [], |r| r.get(0))?;
+        if latest != operation {
+            return Err(invalid(
+                "separation requires an unchanged merge; later edits must be reconciled explicitly",
+            ));
+        }
+        let data: serde_json::Value =
+            serde_json::from_str(&snapshot).map_err(|e| invalid(e.to_string()))?;
+        self.conn.execute(
+            "UPDATE kn_entities SET status='active',merged_into=NULL WHERE id=?1",
+            [from],
+        )?;
+        for (key, table, column) in [
+            ("subjects", "kn_claims", "subject_id"),
+            ("objects", "kn_claims", "object_entity_id"),
+            ("projects", "kn_project_items", "project_id"),
+            ("procedures", "kn_procedures", "entity_id"),
+        ] {
+            let ids = data[key]
+                .as_array()
+                .ok_or_else(|| invalid("corrupt merge snapshot"))?;
+            for id in ids {
+                let id = id.as_i64().ok_or_else(|| invalid("corrupt merge id"))?;
+                self.conn.execute(
+                    &format!("UPDATE {table} SET {column}=?1 WHERE id=?2"),
+                    [from, id],
+                )?;
+            }
+        }
+        self.conn.execute(
+            "DELETE FROM kn_aliases WHERE entity_id IN (?1,?2)",
+            [from, into],
+        )?;
+        for (key, entity) in [("aliases", from), ("target_aliases", into)] {
+            for alias in data[key]
+                .as_array()
+                .ok_or_else(|| invalid("corrupt alias snapshot"))?
+            {
+                self.add_alias(
+                    entity,
+                    alias.as_str().ok_or_else(|| invalid("corrupt alias"))?,
+                )?;
+            }
+        }
+        // Recompute fingerprints under the restored identity assignments.
+        let rows: Vec<(i64, i64, String, Option<i64>, Option<String>)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id,subject_id,predicate,object_entity_id,object_value FROM kn_claims",
+            )?;
+            stmt.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect::<Result<_, _>>()?
+        };
+        for (id, subject, predicate, object, value) in rows {
+            let object = object
+                .map(ClaimObject::Entity)
+                .unwrap_or_else(|| ClaimObject::Value(value.unwrap_or_default()));
+            let fp = self.claim_fingerprint(subject, &predicate, &object)?;
+            self.conn.execute(
+                "UPDATE kn_claims SET fingerprint=?2 WHERE id=?1",
+                params![id, &fp[..]],
+            )?;
+        }
+        self.conn
+            .execute("DELETE FROM kn_merge_snapshots WHERE from_id=?1", [from])?;
+        self.conn.execute(
+            "UPDATE kn_meta SET value=value+1 WHERE key='deletion_generation'",
+            [],
+        )?;
+        self.log(
+            "separate",
+            "entity",
+            Some(from),
+            Some(reason),
+            json!({"from":into}),
         )
     }
 }

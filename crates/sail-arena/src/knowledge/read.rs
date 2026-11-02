@@ -638,3 +638,63 @@ impl KnowledgeStore<'_> {
         })
     }
 }
+
+impl KnowledgeStore<'_> {
+    pub fn entities(&self, access: &Access, limit: usize) -> KnowledgeResult<Vec<(Entity, bool)>> {
+        let a = access_params(access);
+        self.read(|conn| {
+            let mut stmt=conn.prepare(&format!("SELECT {ENTITY_COLS},COALESCE(p.pinned,0) FROM kn_entities e LEFT JOIN kn_pins p ON p.entity_id=e.id WHERE {} ORDER BY COALESCE(p.pinned,0) DESC,e.name,e.id LIMIT :limit",visible("e")))?;
+            let rows=stmt.query_map(&*named(&a,&[(":limit",&(limit.min(500) as i64))]),|r|Ok((entity_from_row(r)?,r.get::<_,bool>(8)?)))?.collect::<Result<Vec<_>,_>>()?;
+            rows.into_iter().map(|(e,p)|Ok((with_aliases(conn,e)?,p))).collect()
+        })
+    }
+}
+
+impl KnowledgeStore<'_> {
+    pub fn claim(&self, id: i64, access: &Access) -> KnowledgeResult<Option<Claim>> {
+        let a = access_params(access);
+        self.read(|conn| {
+            Ok(conn
+                .query_row(
+                    &format!("SELECT {CLAIM_COLS} {} AND c.id=:id", claim_from_clause()),
+                    &*named(&a, &[(":id", &id)]),
+                    claim_from_row,
+                )
+                .optional()?)
+        })
+    }
+    pub fn export(&self, access: &Access) -> KnowledgeResult<serde_json::Value> {
+        let generation = self.deletion_generation()?;
+        let a = access_params(access);
+        let ids: Vec<i64> = self.read(|conn| {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT e.id FROM kn_entities e WHERE {} ORDER BY e.id",
+                visible("e")
+            ))?;
+            Ok(stmt
+                .query_map(&*named(&a, &[]), |r| r.get(0))?
+                .collect::<Result<_, _>>()?)
+        })?;
+        let mut entities = Vec::new();
+        for id in ids {
+            if let Some(entity) = self.entity(id, access)? {
+                let claims = self.claims_about(id, access, true)?;
+                let mut evidence = Vec::new();
+                for c in &claims {
+                    evidence.push(
+                        serde_json::json!({"claim_id":c.id,"sources":self.evidence(c.id,access)?}),
+                    );
+                }
+                entities.push(serde_json::json!({"entity":entity,"claims":claims,"evidence":evidence,"procedures":self.procedure_versions(id,access)?,"project_items":self.project_items(id,access)?}));
+            }
+        }
+        let current = self.deletion_generation()?;
+        if current != generation {
+            return Err(KnowledgeError::StaleGeneration {
+                expected: generation,
+                current,
+            });
+        }
+        Ok(serde_json::json!({"version":1,"generation":generation,"entities":entities}))
+    }
+}

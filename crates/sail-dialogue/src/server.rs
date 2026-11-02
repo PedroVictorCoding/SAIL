@@ -72,6 +72,12 @@ pub async fn run_dialogue_server_with_services(
     };
     let services = services.with_inference(inference.clone());
     let (owner_authority, active_token) = resolve_or_generate_owner_token();
+    let memory_routes = crate::memory_http::router(
+        arena.store().clone(),
+        active_token
+            .as_deref()
+            .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok()),
+    );
     let approval_routes = crate::approval_http::router_with_token(
         owner_authority,
         sail_guardian::global_broker().ok(),
@@ -79,6 +85,7 @@ pub async fn run_dialogue_server_with_services(
     );
     let app = Router::new()
         .nest_service("/api/guardian", approval_routes)
+        .nest_service("/api/memory", memory_routes)
         .route(
             "/",
             get(|| async { Html(include_str!("../web/index.html")) }),
@@ -116,6 +123,15 @@ pub async fn run_dialogue_server_with_services(
                 (
                     [("content-type", "text/css; charset=utf-8")],
                     include_str!("../web/tokens.css"),
+                )
+            }),
+        )
+        .route(
+            "/memory.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/memory.js"),
                 )
             }),
         )

@@ -183,3 +183,21 @@ change the active chat worker. Model identity, dimensions, finite/nonzero values
 input/output sizes and timeouts are checked. Embedding inputs must still match
 when their vectors are committed, and stale deletion generations are rejected.
 No embedding model is downloaded, started, or benchmarked by this change.
+
+## Phase 4: owner memory views
+
+Arena's existing web page now includes entity overview/search, details, evidence
+receipts ("Why remembered"), relationship graph, procedure/project records, change
+history, correction, pin/unpin, privacy, merge/separate, forget and JSON export.
+Controls reuse the dialogue `quiet-button` design. Retrieved text is inserted as
+text nodes, never interpreted as HTML or instructions. No frontend migration is
+required.
+
+The `/api/memory` POST routes require the existing owner bearer authority, enforce
+body limits, return `no-store`, and check deletion generation for mutations. Model
+tool calls cannot choose `Actor::User`. Corrections add user evidence and supersede
+the old claim; they never become tool-verified. Merge requires equal scope/privacy.
+Separation restores the captured assignments/aliases only if no knowledge mutation
+has happened since that merge; otherwise it refuses rather than overwriting later
+edits. Deleting an entity removes its merge snapshots. Export contains knowledge
+and receipts, not the transient transcript archive.

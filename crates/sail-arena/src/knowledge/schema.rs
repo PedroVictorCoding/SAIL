@@ -191,3 +191,12 @@ CREATE TRIGGER kn_search_alias_delete AFTER DELETE ON kn_aliases BEGIN
  DELETE FROM kn_vectors WHERE claim_id IN (SELECT id FROM kn_claims WHERE subject_id=old.entity_id);
 END;
 ";
+
+pub(crate) const V4: &str = "
+CREATE TABLE kn_pins(entity_id INTEGER PRIMARY KEY REFERENCES kn_entities(id) ON DELETE CASCADE,pinned INTEGER NOT NULL CHECK(pinned IN (0,1))) STRICT;
+CREATE TABLE kn_merge_snapshots(
+ from_id INTEGER PRIMARY KEY REFERENCES kn_entities(id) ON DELETE CASCADE,
+ into_id INTEGER NOT NULL REFERENCES kn_entities(id) ON DELETE CASCADE,
+ operation_id INTEGER NOT NULL, snapshot TEXT NOT NULL
+) STRICT;
+";
