@@ -1,13 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use ring::digest::{Context, SHA256};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use crate::contracts::TestExecutionRecord;
+use crate::contracts::{ForgeActivityEntry, TestExecutionRecord};
 use crate::edit::{EditBlock, apply_edit_blocks, parse_edit_blocks};
 use crate::worktree::{IsolatedWorktree, WorktreeError};
 
@@ -201,6 +201,10 @@ pub struct SolverOutcome {
 /// Real-time progress update emitted during autonomous solver iterations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolverProgress {
+    /// Entry for the job's persisted activity log; `stage == "activity"` events carry
+    /// only this and should not overwrite live UI state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<ForgeActivityEntry>,
     pub turn: u32,
     pub max_turns: u32,
     pub iteration: u32,
@@ -930,12 +934,149 @@ fn compute_file_fingerprint(path: &Path) -> Option<String> {
     Some(hex)
 }
 
+/// How long model requests may take and how often a busy or restarting model is retried.
+#[derive(Debug, Clone)]
+pub struct ModelTimeouts {
+    /// TCP connect; a local server that is up accepts immediately.
+    pub connect: Duration,
+    /// Longest silence while waiting for the slot or between streamed chunks.
+    pub idle: Duration,
+    /// Retries of a turn after a busy/timeout/5xx/interrupted reply.
+    pub busy_retries: u32,
+    /// Base backoff between retries (doubles each attempt).
+    pub backoff: Duration,
+}
+
+impl Default for ModelTimeouts {
+    fn default() -> Self {
+        Self {
+            connect: Duration::from_secs(5),
+            // One llama-server slot is shared with voice and other jobs; a queued
+            // request can wait several minutes for it.
+            idle: model_timeout(
+                std::env::var("SAIL_FORGE_MODEL_TIMEOUT_SECS")
+                    .ok()
+                    .as_deref(),
+            ),
+            busy_retries: 3,
+            backoff: Duration::from_secs(15),
+        }
+    }
+}
+
+/// One failed attempt against one endpoint, classified for retry and reporting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointFailure {
+    pub endpoint: String,
+    pub detail: String,
+    /// The server exists but could not answer now (busy, loading, interrupted).
+    pub transient: bool,
+}
+
+impl EndpointFailure {
+    fn from_request_error(endpoint: &str, e: &reqwest::Error, idle: Duration) -> Self {
+        let (detail, transient) = if e.is_timeout() {
+            (
+                format!(
+                    "no reply within {:?} (model busy with another request, or overloaded)",
+                    idle
+                ),
+                true,
+            )
+        } else if e.is_connect() {
+            (
+                "connection refused (no server listening)".to_string(),
+                false,
+            )
+        } else {
+            (model_transport_error(endpoint, e, idle), true)
+        };
+        Self {
+            endpoint: endpoint.to_string(),
+            detail,
+            transient,
+        }
+    }
+
+    fn http(endpoint: &str, status: reqwest::StatusCode, body: &str) -> Self {
+        let snippet: String = body.chars().take(180).collect();
+        Self {
+            endpoint: endpoint.to_string(),
+            detail: format!("HTTP {status}: {snippet}"),
+            // 503 = llama-server loading the model; 429/5xx = overloaded.
+            transient: status.is_server_error() || status.as_u16() == 429,
+        }
+    }
+}
+
+/// Human-readable summary naming every endpoint tried, transient failures first.
+pub fn summarize_endpoint_failures(failures: &[EndpointFailure], attempts: u32) -> String {
+    if failures.is_empty() {
+        return "No local OpenAI-compatible inference server configured".to_string();
+    }
+    let mut sorted = failures.to_vec();
+    sorted.sort_by_key(|f| !f.transient);
+    let parts: Vec<String> = sorted
+        .iter()
+        .map(|f| format!("{}: {}", f.endpoint, f.detail))
+        .collect();
+    format!(
+        "Local model unavailable after {attempts} attempt(s): {}",
+        parts.join("; ")
+    )
+}
+
+/// A progress event that only carries an activity-log entry.
+fn activity_progress(
+    turn: u32,
+    max_turns: u32,
+    iteration: u32,
+    entry: ForgeActivityEntry,
+) -> SolverProgress {
+    SolverProgress {
+        message: entry.title.clone(),
+        activity: Some(entry),
+        turn,
+        max_turns,
+        iteration,
+        stage: "activity".into(),
+        live_output: None,
+        model_action: None,
+        diff: None,
+        target_file: None,
+        logs: None,
+    }
+}
+
+/// Activity entry for a chat message: model replies, and everything Forge feeds back
+/// (tool results, test output, edit errors).
+fn message_activity(turn: u32, msg: &serde_json::Value) -> ForgeActivityEntry {
+    let content = msg
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap_or_default();
+    if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
+        return ForgeActivityEntry::new(turn, "model", "Model reply", content);
+    }
+    let first_line: String = content
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(120)
+        .collect();
+    ForgeActivityEntry::new(turn, "feedback", first_line, content)
+}
+
 /// Multi-turn local issue solver controller.
 pub struct LocalSolverController {
     pub max_turns: u32,
     pub max_iterations: u32,
     pub command_timeout_secs: u64,
     pub configured_model_path: Option<PathBuf>,
+    pub model_timeouts: ModelTimeouts,
+    /// Explicit endpoints instead of `candidate_endpoints()` (environment-based).
+    pub endpoint_override: Option<Vec<String>>,
 }
 
 impl LocalSolverController {
@@ -950,7 +1091,19 @@ impl LocalSolverController {
             max_iterations: max_iterations.max(1),
             command_timeout_secs,
             configured_model_path,
+            model_timeouts: ModelTimeouts::default(),
+            endpoint_override: None,
         }
+    }
+
+    pub fn with_model_timeouts(mut self, timeouts: ModelTimeouts) -> Self {
+        self.model_timeouts = timeouts;
+        self
+    }
+
+    pub fn with_endpoints(mut self, endpoints: Vec<String>) -> Self {
+        self.endpoint_override = Some(endpoints);
+        self
     }
 
     pub fn candidate_endpoints() -> Vec<String> {
@@ -1055,18 +1208,18 @@ impl LocalSolverController {
         F: FnMut() -> bool,
         P: FnMut(SolverProgress),
     {
-        let request_timeout = model_timeout(
-            std::env::var("SAIL_FORGE_MODEL_TIMEOUT_SECS")
-                .ok()
-                .as_deref(),
-        );
+        // No total timeout: a request may legitimately wait for the single model slot
+        // and then stream for minutes on CPU. Bound connection setup and silence instead.
         let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .timeout(request_timeout)
+            .connect_timeout(self.model_timeouts.connect)
+            .read_timeout(self.model_timeouts.idle)
             .build()
             .unwrap_or_default();
 
-        let endpoints = Self::candidate_endpoints();
+        let endpoints = self
+            .endpoint_override
+            .clone()
+            .unwrap_or_else(Self::candidate_endpoints);
         let initial_ctx = crate::repo_map::build_issue_context(
             &worktree.root_dir,
             issue_title,
@@ -1085,6 +1238,7 @@ impl LocalSolverController {
             model_action: Some("Context initialization".into()),
             diff: worktree.get_diff().ok(),
             target_file: None,
+            activity: None,
             logs: Some(vec![
                 format!("Loaded issue: {}", issue_title),
                 "Inspecting workspace crates and candidate target files...".into(),
@@ -1127,6 +1281,17 @@ Rules:
             issue_title, issue_body, initial_ctx
         );
 
+        on_progress(activity_progress(
+            0,
+            self.max_turns,
+            0,
+            ForgeActivityEntry::new(
+                0,
+                "context",
+                "Issue and initial context",
+                user_prompt.clone(),
+            ),
+        ));
         let mut messages = vec![
             serde_json::json!({ "role": "system", "content": system_prompt }),
             serde_json::json!({ "role": "user", "content": user_prompt }),
@@ -1143,6 +1308,20 @@ Rules:
         let mut iterations = 0u32;
         let mut test_records: Vec<TestExecutionRecord> = Vec::new();
         let mut tests_verified = false;
+        let max_turns = self.max_turns;
+        // Every message to or from the model also goes to the job's activity log.
+        macro_rules! push_message {
+            ($msg:expr) => {{
+                let msg: serde_json::Value = $msg;
+                on_progress(activity_progress(
+                    turns,
+                    max_turns,
+                    iterations,
+                    message_activity(turns, &msg),
+                ));
+                messages.push(msg);
+            }};
+        }
         let mut last_error: Option<String> = None;
         let mut edit_failures = 0u32;
         let mut parse_failures = 0u32;
@@ -1189,6 +1368,7 @@ Rules:
                 model_action: Some("Model inference started".into()),
                 diff: worktree.get_diff().ok(),
                 target_file: None,
+                activity: None,
                 logs: Some(vec![format!(
                     "Turn {}/{}: Querying model at endpoint...",
                     turns, self.max_turns
@@ -1200,7 +1380,8 @@ Rules:
 
             // Call local OpenAI-compatible chat completions endpoint with streaming support
             let mut turn_response_text: Option<String> = None;
-            let mut turn_endpoint_err: Option<String> = None;
+            let mut endpoint_failures: Vec<EndpointFailure> = Vec::new();
+            let mut model_attempts = 0u32;
 
             let probe_list: Vec<String> = if let Some(ref ep) = active_endpoint {
                 vec![ep.clone()]
@@ -1218,18 +1399,23 @@ Rules:
                 }
             });
 
-            for ep in &probe_list {
-                let req_body = serde_json::json!({
-                    "model": model_name,
-                    "messages": messages,
-                    "temperature": 0.1,
-                    "max_tokens": 2048,
-                    "stream": true,
-                });
+            'model_retry: loop {
+                model_attempts += 1;
+                endpoint_failures.clear();
+                for ep in &probe_list {
+                    let req_body = serde_json::json!({
+                        "model": model_name,
+                        "messages": messages,
+                        "temperature": 0.1,
+                        "max_tokens": 2048,
+                        "stream": true,
+                    });
 
-                let response =
-                    match wait_for_model(client.post(ep).json(&req_body).send(), &mut is_cancelled)
-                        .await
+                    let response = match wait_for_model(
+                        client.post(ep).json(&req_body).send(),
+                        &mut is_cancelled,
+                    )
+                    .await
                     {
                         Some(response) => response,
                         None => {
@@ -1237,33 +1423,37 @@ Rules:
                             continue 'solver;
                         }
                     };
-                match response {
-                    Ok(resp) if resp.status().is_success() => {
-                        if active_endpoint.is_none() {
-                            active_endpoint = Some(ep.clone());
-                            identified_model = identify_local_model(
-                                &client,
-                                ep,
-                                self.configured_model_path.as_deref(),
-                            )
-                            .await;
-                        }
+                    match response {
+                        Ok(resp) if resp.status().is_success() => {
+                            if active_endpoint.is_none() {
+                                active_endpoint = Some(ep.clone());
+                                identified_model = identify_local_model(
+                                    &client,
+                                    ep,
+                                    self.configured_model_path.as_deref(),
+                                )
+                                .await;
+                            }
 
-                        let is_sse = resp
-                            .headers()
-                            .get(reqwest::header::CONTENT_TYPE)
-                            .and_then(|v| v.to_str().ok())
-                            .map(|s| s.contains("text/event-stream"))
-                            .unwrap_or(false);
+                            let is_sse = resp
+                                .headers()
+                                .get(reqwest::header::CONTENT_TYPE)
+                                .and_then(|v| v.to_str().ok())
+                                .map(|s| s.contains("text/event-stream"))
+                                .unwrap_or(false);
 
-                        if is_sse {
-                            let mut stream = resp.bytes_stream();
-                            let mut reply = ModelStreamReply::default();
-                            let mut last_emit = std::time::Instant::now();
-                            let mut stream_failed = false;
-                            loop {
-                                let chunk =
-                                    match wait_for_model(stream.next(), &mut is_cancelled).await {
+                            if is_sse {
+                                let mut stream = resp.bytes_stream();
+                                let mut reply = ModelStreamReply::default();
+                                let mut last_emit = std::time::Instant::now();
+                                let mut stream_failed = false;
+                                loop {
+                                    let chunk = match wait_for_model(
+                                        stream.next(),
+                                        &mut is_cancelled,
+                                    )
+                                    .await
+                                    {
                                         Some(Some(chunk)) => chunk,
                                         Some(None) => break,
                                         None => {
@@ -1271,144 +1461,197 @@ Rules:
                                             continue 'solver;
                                         }
                                     };
-                                let bytes = match chunk {
-                                    Ok(bytes) => bytes,
-                                    Err(error) => {
-                                        turn_endpoint_err = Some(model_transport_error(
-                                            ep,
-                                            &error,
-                                            request_timeout,
-                                        ));
-                                        stream_failed = true;
+                                    let bytes = match chunk {
+                                        Ok(bytes) => bytes,
+                                        Err(error) => {
+                                            endpoint_failures.push(
+                                                EndpointFailure::from_request_error(
+                                                    ep,
+                                                    &error,
+                                                    self.model_timeouts.idle,
+                                                ),
+                                            );
+                                            stream_failed = true;
+                                            break;
+                                        }
+                                    };
+                                    reply.push(&bytes);
+                                    if last_emit.elapsed() > std::time::Duration::from_millis(120)
+                                        || reply.text.ends_with('\n')
+                                    {
+                                        on_progress(SolverProgress {
+                                            turn: turns,
+                                            max_turns: self.max_turns,
+                                            iteration: iterations + 1,
+                                            stage: "coding".into(),
+                                            message: format!(
+                                                "Turn {}/{}: Generating code patch ({} chunks)...",
+                                                turns, self.max_turns, reply.chunks
+                                            ),
+                                            live_output: Some(reply.text.clone()),
+                                            model_action: Some("Streaming model output".into()),
+                                            diff: worktree.get_diff().ok(),
+                                            target_file: None,
+                                            activity: None,
+                                            logs: None,
+                                        });
+                                        last_emit = std::time::Instant::now();
+                                    }
+                                    if reply.complete {
                                         break;
                                     }
-                                };
-                                reply.push(&bytes);
-                                if last_emit.elapsed() > std::time::Duration::from_millis(120)
-                                    || reply.text.ends_with('\n')
-                                {
-                                    on_progress(SolverProgress {
-                                        turn: turns,
-                                        max_turns: self.max_turns,
-                                        iteration: iterations + 1,
-                                        stage: "coding".into(),
-                                        message: format!(
-                                            "Turn {}/{}: Generating code patch ({} chunks)...",
-                                            turns, self.max_turns, reply.chunks
-                                        ),
-                                        live_output: Some(reply.text.clone()),
-                                        model_action: Some("Streaming model output".into()),
-                                        diff: worktree.get_diff().ok(),
-                                        target_file: None,
-                                        logs: None,
-                                    });
-                                    last_emit = std::time::Instant::now();
                                 }
-                                if reply.complete {
+                                if !stream_failed && let Some(text) = reply.into_complete_text() {
+                                    turn_response_text = Some(text);
                                     break;
                                 }
-                            }
-                            if !stream_failed && let Some(text) = reply.into_complete_text() {
-                                turn_response_text = Some(text);
-                                break;
-                            }
-                            if turn_endpoint_err.is_none() {
-                                turn_endpoint_err = Some(format!(
-                                    "Model stream from {ep} ended before a complete response; partial output was discarded"
-                                ));
-                            }
-                        } else {
-                            let json_val = match wait_for_model(
+                                if !stream_failed {
+                                    endpoint_failures.push(EndpointFailure { endpoint: ep.clone(), detail: "stream ended before a complete response; partial output was discarded".into(), transient: true });
+                                }
+                            } else if let Ok(json_val) = match wait_for_model(
                                 resp.json::<serde_json::Value>(),
                                 &mut is_cancelled,
                             )
                             .await
                             {
-                                Some(Ok(value)) => value,
-                                Some(Err(error)) => {
-                                    turn_endpoint_err =
-                                        Some(model_transport_error(ep, &error, request_timeout));
-                                    continue;
-                                }
+                                Some(result) => result,
                                 None => {
                                     cancelled_during_request = true;
                                     continue 'solver;
                                 }
-                            };
-                            // If response JSON itself carries a `model` field and identified_model was unknown, capture it
-                            if identified_model.model_id == "unknown" {
-                                if let Some(m) = json_val.get("model").and_then(|v| v.as_str()) {
-                                    if !m.trim().is_empty() {
-                                        identified_model.model_id = m.trim().to_string();
+                            } {
+                                // If response JSON itself carries a `model` field and identified_model was unknown, capture it
+                                if identified_model.model_id == "unknown" {
+                                    if let Some(m) = json_val.get("model").and_then(|v| v.as_str())
+                                    {
+                                        if !m.trim().is_empty() {
+                                            identified_model.model_id = m.trim().to_string();
+                                        }
                                     }
                                 }
-                            }
-                            let msg_obj = json_val
-                                .get("choices")
-                                .and_then(|c| c.get(0))
-                                .and_then(|c| c.get("message"));
+                                let msg_obj = json_val
+                                    .get("choices")
+                                    .and_then(|c| c.get(0))
+                                    .and_then(|c| c.get("message"));
 
-                            let content = msg_obj
-                                .and_then(|m| m.get("content"))
-                                .and_then(|c| c.as_str())
-                                .unwrap_or_default();
+                                let content = msg_obj
+                                    .and_then(|m| m.get("content"))
+                                    .and_then(|c| c.as_str())
+                                    .unwrap_or_default();
 
-                            let reasoning = msg_obj
-                                .and_then(|m| m.get("reasoning_content"))
-                                .and_then(|r| r.as_str())
-                                .unwrap_or_default();
+                                let reasoning = msg_obj
+                                    .and_then(|m| m.get("reasoning_content"))
+                                    .and_then(|r| r.as_str())
+                                    .unwrap_or_default();
 
-                            let text = if !content.trim().is_empty() {
-                                content.to_string()
-                            } else if !reasoning.trim().is_empty() {
-                                reasoning.to_string()
+                                let text = if !content.trim().is_empty() {
+                                    content.to_string()
+                                } else if !reasoning.trim().is_empty() {
+                                    reasoning.to_string()
+                                } else {
+                                    String::new()
+                                };
+
+                                if !text.is_empty() {
+                                    turn_response_text = Some(text);
+                                    break;
+                                }
+                                endpoint_failures.push(EndpointFailure {
+                                    endpoint: ep.clone(),
+                                    detail: "returned an empty reply".into(),
+                                    transient: true,
+                                });
                             } else {
-                                String::new()
-                            };
-
-                            if !text.is_empty() {
-                                turn_response_text = Some(text);
-                                break;
+                                endpoint_failures.push(EndpointFailure {
+                                    endpoint: ep.clone(),
+                                    detail: "returned a reply that is not valid JSON".into(),
+                                    transient: true,
+                                });
                             }
                         }
-                    }
-                    Ok(resp) => {
-                        let status = resp.status();
-                        let body_snippet =
-                            match wait_for_model(resp.text(), &mut is_cancelled).await {
-                                Some(Ok(text)) => text,
-                                Some(Err(error)) => {
-                                    turn_endpoint_err =
-                                        Some(model_transport_error(ep, &error, request_timeout));
-                                    continue;
-                                }
+                        Ok(resp) => {
+                            let status = resp.status();
+                            let body = match wait_for_model(resp.text(), &mut is_cancelled).await {
+                                Some(result) => result.unwrap_or_default(),
                                 None => {
                                     cancelled_during_request = true;
                                     continue 'solver;
                                 }
                             };
-                        let snippet = if body_snippet.len() > 180 {
-                            format!("{}...", body_snippet.chars().take(180).collect::<String>())
-                        } else {
-                            body_snippet
-                        };
-                        turn_endpoint_err = Some(format!(
-                            "Endpoint {} returned HTTP {}: {}",
-                            ep, status, snippet
-                        ));
+                            endpoint_failures.push(EndpointFailure::http(ep, status, &body));
+                        }
+                        Err(e) => {
+                            endpoint_failures.push(EndpointFailure::from_request_error(
+                                ep,
+                                &e,
+                                self.model_timeouts.idle,
+                            ));
+                        }
                     }
-                    Err(e) => {
-                        turn_endpoint_err = Some(model_transport_error(ep, &e, request_timeout));
+                }
+
+                if turn_response_text.is_some() || is_cancelled() {
+                    break 'model_retry;
+                }
+                // A busy or loading server is worth waiting for; a refused connection gets a
+                // single retry (the server may be restarting) before failing clearly.
+                let transient = endpoint_failures.iter().any(|f| f.transient);
+                let allowed_retries = if transient {
+                    self.model_timeouts.busy_retries
+                } else {
+                    1
+                };
+                if model_attempts > allowed_retries {
+                    break 'model_retry;
+                }
+                let wait = self.model_timeouts.backoff * 2u32.pow(model_attempts - 1);
+                let summary = summarize_endpoint_failures(&endpoint_failures, model_attempts);
+                warn!(
+                    "Turn {}: model not ready, retrying in {}s: {}",
+                    turns,
+                    wait.as_secs(),
+                    summary
+                );
+                on_progress(SolverProgress {
+                    turn: turns,
+                    max_turns: self.max_turns,
+                    iteration: iterations + 1,
+                    stage: "waiting".into(),
+                    message: format!(
+                        "Turn {}/{}: model not ready, retrying in {}s",
+                        turns,
+                        self.max_turns,
+                        wait.as_secs()
+                    ),
+                    live_output: Some(summary.clone()),
+                    model_action: Some("Waiting for model".into()),
+                    diff: worktree.get_diff().ok(),
+                    target_file: None,
+                    activity: Some(ForgeActivityEntry::new(
+                        turns,
+                        "waiting",
+                        format!("Model not ready, retrying in {}s", wait.as_secs()),
+                        summary.clone(),
+                    )),
+                    logs: Some(vec![summary]),
+                });
+                // Sleep in short steps so cancellation stays responsive.
+                let deadline = Instant::now() + wait;
+                while Instant::now() < deadline {
+                    if is_cancelled() {
+                        break 'model_retry;
                     }
+                    let step = deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(500));
+                    tokio::time::sleep(step).await;
                 }
             }
 
             let raw_reply = match turn_response_text {
                 Some(t) => t,
                 None => {
-                    let reason = turn_endpoint_err.unwrap_or_else(|| {
-                        "No local OpenAI-compatible inference server available".to_string()
-                    });
+                    let reason = summarize_endpoint_failures(&endpoint_failures, model_attempts);
                     warn!(
                         "Local solver model unavailable on turn {}: {}",
                         turns, reason
@@ -1448,6 +1691,7 @@ Rules:
                 model_action: Some("Model response ready".into()),
                 diff: worktree.get_diff().ok(),
                 target_file: None,
+                activity: None,
                 logs: Some(vec![format!(
                     "Turn {}: Model response received ({} chars)",
                     turns,
@@ -1455,7 +1699,7 @@ Rules:
                 )]),
             });
 
-            messages.push(serde_json::json!({
+            push_message!(serde_json::json!({
                 "role": "assistant",
                 "content": raw_reply
             }));
@@ -1464,7 +1708,7 @@ Rules:
                 Some(a) => a,
                 None => {
                     parse_failures += 1;
-                    messages.push(serde_json::json!({
+                    push_message!(serde_json::json!({
                         "role": "user",
                         "content": "Could not parse a tool call or edit. Reply with either one JSON tool call (e.g. {\"tool\":\"repo:read_range\",\"path\":\"src/lib.rs\",\"start_line\":1,\"end_line\":80}) or SEARCH/REPLACE edit blocks."
                     }));
@@ -1494,6 +1738,7 @@ Rules:
                         model_action: Some("done".into()),
                         diff: worktree.get_diff().ok(),
                         target_file: None,
+                        activity: None,
                         logs: Some(vec![format!(
                             "Done: {}",
                             summary.as_deref().unwrap_or("Resolved")
@@ -1503,7 +1748,7 @@ Rules:
                     // Verify that we have a real diff and that staged tests pass before accepting `done`
                     let current_diff = worktree.get_diff().unwrap_or_default();
                     if !is_meaningful_code_diff(&current_diff) {
-                        messages.push(serde_json::json!({
+                        push_message!(serde_json::json!({
                             "role": "user",
                             "content": "Cannot finish yet: worktree has no meaningful code diff. Apply a patch with `repo:apply_patch` first."
                         }));
@@ -1523,7 +1768,7 @@ Rules:
                         }
                         if !test_res.ok {
                             last_error = Some(test_res.output.clone());
-                            messages.push(serde_json::json!({
+                            push_message!(serde_json::json!({
                                 "role": "user",
                                 "content": format!("Tests failed when verifying completion:\n{}\nPlease inspect and apply a repair patch.", test_res.output)
                             }));
@@ -1576,6 +1821,7 @@ Rules:
                         )),
                         diff: Some(patch.clone()),
                         target_file: target_candidate.clone(),
+                        activity: None,
                         logs: Some(vec![format!(
                             "Applying unified patch ({} lines)...",
                             patch.lines().count()
@@ -1592,7 +1838,7 @@ Rules:
                     if !patch_res.ok {
                         edit_failures += 1;
                         last_error = Some(patch_res.output.clone());
-                        messages.push(serde_json::json!({
+                        push_message!(serde_json::json!({
                             "role": "user",
                             "content": format!("Edit failed:\n{}\nRe-read the file with `repo:read_range` and emit a corrected SEARCH/REPLACE block whose SEARCH copies the current lines exactly.", patch_res.output)
                         }));
@@ -1618,6 +1864,7 @@ Rules:
                         model_action: Some("Patch applied successfully".into()),
                         diff: Some(current_diff.clone()),
                         target_file: target_candidate,
+                        activity: None,
                         logs: Some(vec![
                             "Unified diff applied cleanly to isolated worktree.".into(),
                         ]),
@@ -1639,6 +1886,7 @@ Rules:
                             model_action: Some("repo:test".into()),
                             diff: Some(current_diff.clone()),
                             target_file: None,
+                            activity: None,
                             logs: Some(vec!["Executing cargo test in sandbox worktree...".into()]),
                         });
 
@@ -1669,6 +1917,7 @@ Rules:
                                 model_action: Some("cargo test: PASSED".into()),
                                 diff: Some(final_diff.clone()),
                                 target_file: modified_files.first().cloned(),
+                                activity: None,
                                 logs: Some(vec![
                                     "All sandbox tests passed with exit code 0.".into(),
                                 ]),
@@ -1705,6 +1954,7 @@ Rules:
                                 model_action: Some("Tests failed -> Initiating repair pass".into()),
                                 diff: Some(current_diff.clone()),
                                 target_file: None,
+                                activity: None,
                                 logs: Some(vec![
                                     format!("cargo test failed (exit code {}).", test_code),
                                     "Feeding compiler errors to model for repair...".into(),
@@ -1725,7 +1975,7 @@ Rules:
                                     }
                                 }
                             }
-                            messages.push(serde_json::json!({
+                            push_message!(serde_json::json!({
                                 "role": "user",
                                 "content": format!(
                                     "{}\n`repo:test` failed:\n{}\n{}\nEmit a repair unified diff or tool call against the current file state.",
@@ -1734,7 +1984,7 @@ Rules:
                             }));
                         }
                     } else {
-                        messages.push(serde_json::json!({
+                        push_message!(serde_json::json!({
                             "role": "user",
                             "content": format!("{}\nNow call {{\"tool\": \"repo:test\"}} to verify the build and tests.", patch_res.output)
                         }));
@@ -1755,6 +2005,7 @@ Rules:
                         model_action: Some("repo:test".into()),
                         diff: worktree.get_diff().ok(),
                         target_file: None,
+                        activity: None,
                         logs: Some(vec!["Executing cargo test in sandbox...".into()]),
                     });
 
@@ -1781,6 +2032,7 @@ Rules:
                             model_action: Some("cargo test: PASSED".into()),
                             diff: Some(current_diff.clone()),
                             target_file: modified_files.first().cloned(),
+                            activity: None,
                             logs: Some(vec!["All sandbox tests passed with exit code 0.".into()]),
                         });
                         return SolverOutcome {
@@ -1799,7 +2051,7 @@ Rules:
                             summary: "Sandboxed cargo test passed with verified code diff".into(),
                         };
                     } else if test_res.ok {
-                        messages.push(serde_json::json!({
+                        push_message!(serde_json::json!({
                             "role": "user",
                             "content": format!("`repo:test` output:\n{}\nNote: no code changes have been applied yet.", test_res.output)
                         }));
@@ -1821,12 +2073,13 @@ Rules:
                             model_action: Some("Tests failed -> Initiating repair pass".into()),
                             diff: Some(current_diff),
                             target_file: None,
+                            activity: None,
                             logs: Some(vec![
                                 format!("cargo test failed (exit code {}).", test_code),
                                 "Prompting model with compiler diagnostics for repair...".into(),
                             ]),
                         });
-                        messages.push(serde_json::json!({
+                        push_message!(serde_json::json!({
                             "role": "user",
                             "content": format!("`repo:test` failed:\n{}\nInspect the failure and apply a repair patch.", test_res.output)
                         }));
@@ -1859,6 +2112,7 @@ Rules:
                         model_action: Some(tool_desc.clone()),
                         diff: worktree.get_diff().ok(),
                         target_file: None,
+                        activity: None,
                         logs: Some(vec![format!("Executed {}", tool_desc)]),
                     });
 
@@ -1869,7 +2123,7 @@ Rules:
                         self.command_timeout_secs,
                         iterations,
                     );
-                    messages.push(serde_json::json!({
+                    push_message!(serde_json::json!({
                         "role": "user",
                         "content": format!("Tool `{}` result:\n{}", res.tool, res.output)
                     }));

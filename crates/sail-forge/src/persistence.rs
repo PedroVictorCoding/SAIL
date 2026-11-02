@@ -6,9 +6,14 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::contracts::{
-    ForgeBudgetConfig, ForgeJobReport, ForgeTaskEvent, ForgeTaskState, ReviewPolicyConfig,
-    ReviewResult, TestExecutionRecord,
+    ForgeActivityEntry, ForgeBudgetConfig, ForgeJobReport, ForgeTaskEvent, ForgeTaskState,
+    ReviewPolicyConfig, ReviewResult, TestExecutionRecord,
 };
+
+/// Bounds for the persisted activity log (keeps checkpoints and UI payloads small).
+pub const MAX_ACTIVITY_ENTRIES: usize = 400;
+pub const MAX_ACTIVITY_BODY_CHARS: usize = 16_000;
+pub const MAX_ACTIVITY_TOTAL_CHARS: usize = 1_000_000;
 
 /// Durable checkpoint for a `forge:issue_solve` task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +56,9 @@ pub struct TaskCheckpoint {
     pub live_output: Option<String>,
     #[serde(default)]
     pub model_action: Option<String>,
+    /// Complete, bounded record of model replies, tool results and pipeline stages.
+    #[serde(default)]
+    pub activity: Vec<ForgeActivityEntry>,
 }
 
 impl TaskCheckpoint {
@@ -94,7 +102,30 @@ impl TaskCheckpoint {
             modified_files: None,
             live_output: None,
             model_action: None,
+            activity: Vec::new(),
         }
+    }
+
+    /// Append to the activity log. Long bodies are truncated, and once the log exceeds its
+    /// bounds the oldest entries after the first (the issue context) are dropped.
+    pub fn push_activity(&mut self, mut entry: ForgeActivityEntry) {
+        let len = entry.body.chars().count();
+        if len > MAX_ACTIVITY_BODY_CHARS {
+            let kept: String = entry.body.chars().take(MAX_ACTIVITY_BODY_CHARS).collect();
+            entry.body = format!(
+                "{kept}\n… [truncated {} of {len} chars]",
+                len - MAX_ACTIVITY_BODY_CHARS
+            );
+        }
+        self.activity.push(entry);
+        let total = |a: &[ForgeActivityEntry]| a.iter().map(|e| e.body.len()).sum::<usize>();
+        while self.activity.len() > 2
+            && (self.activity.len() > MAX_ACTIVITY_ENTRIES
+                || total(&self.activity) > MAX_ACTIVITY_TOTAL_CHARS)
+        {
+            self.activity.remove(1);
+        }
+        self.updated_at = Utc::now();
     }
 
     /// Add event to task timeline.
@@ -215,5 +246,75 @@ impl TaskCheckpointStore {
             fs::remove_file(path)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn checkpoint() -> TaskCheckpoint {
+        TaskCheckpoint::new(
+            "job-1".into(),
+            "o/r".into(),
+            1,
+            "main".into(),
+            "agent/forge-issue-1".into(),
+            ForgeBudgetConfig::default(),
+            ReviewPolicyConfig::default(),
+        )
+    }
+
+    #[test]
+    fn long_bodies_are_truncated_with_a_marker() {
+        let mut cp = checkpoint();
+        cp.push_activity(ForgeActivityEntry::new(
+            1,
+            "model",
+            "big",
+            "x".repeat(MAX_ACTIVITY_BODY_CHARS + 10),
+        ));
+        assert!(cp.activity[0].body.ends_with(&format!(
+            "[truncated 10 of {} chars]",
+            MAX_ACTIVITY_BODY_CHARS + 10
+        )));
+    }
+
+    #[test]
+    fn oldest_entries_are_dropped_but_context_is_kept() {
+        let mut cp = checkpoint();
+        cp.push_activity(ForgeActivityEntry::new(0, "context", "ctx", "issue"));
+        for i in 0..MAX_ACTIVITY_ENTRIES + 5 {
+            cp.push_activity(ForgeActivityEntry::new(1, "feedback", format!("e{i}"), ""));
+        }
+        assert_eq!(cp.activity.len(), MAX_ACTIVITY_ENTRIES);
+        assert_eq!(cp.activity[0].kind, "context");
+        assert_eq!(
+            cp.activity.last().unwrap().title,
+            format!("e{}", MAX_ACTIVITY_ENTRIES + 4)
+        );
+    }
+
+    #[test]
+    fn total_size_is_bounded() {
+        let mut cp = checkpoint();
+        for _ in 0..200 {
+            cp.push_activity(ForgeActivityEntry::new(
+                1,
+                "model",
+                "m",
+                "y".repeat(MAX_ACTIVITY_BODY_CHARS),
+            ));
+        }
+        let total: usize = cp.activity.iter().map(|e| e.body.len()).sum();
+        assert!(total <= MAX_ACTIVITY_TOTAL_CHARS, "{total}");
+    }
+
+    #[test]
+    fn old_checkpoints_without_activity_still_load() {
+        let mut v = serde_json::to_value(checkpoint()).unwrap();
+        v.as_object_mut().unwrap().remove("activity");
+        let cp: TaskCheckpoint = serde_json::from_value(v).unwrap();
+        assert!(cp.activity.is_empty());
     }
 }

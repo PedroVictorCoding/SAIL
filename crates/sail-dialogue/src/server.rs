@@ -648,10 +648,19 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 if let Ok(orch) = sail_forge::global_orchestrator()
                                     && let Some(st) = orch.get_status(job_id)
                                 {
+                                    // The full activity log is only sent to the UI on request
+                                    // (detail pop-up), never to job lists or the LLM tool.
+                                    let activity = value
+                                        .get("include_activity")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false)
+                                        .then(|| orch.get_activity(job_id))
+                                        .flatten();
                                     emit(&tx, epoch.load(Ordering::SeqCst), json!({
                                         "type": "forge_status_response",
                                         "job_id": job_id,
-                                        "status": st
+                                        "status": st,
+                                        "activity": activity
                                     })).await;
                                 }
                             },

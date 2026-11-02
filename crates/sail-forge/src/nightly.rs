@@ -225,8 +225,9 @@ impl NightlyDigest {
 /// Failures that are about the host (no model server), not the patch: stop the run and
 /// do not spend the issue's attempt.
 fn is_infrastructure_failure(reason: &str) -> bool {
-    reason.contains("unreachable")
-        || reason.contains("inference server available")
+    reason.contains("Local model unavailable")
+        || reason.contains("unreachable")
+        || reason.contains("inference server")
         || reason.contains("Concurrency semaphore")
         || reason.contains("Failed to create isolated worktree")
 }
@@ -615,6 +616,9 @@ mod tests {
     fn infrastructure_failures_are_detected() {
         assert!(is_infrastructure_failure(
             "Solver failed to produce a valid diff: Endpoint http://x unreachable: refused"
+        ));
+        assert!(is_infrastructure_failure(
+            "Local model unavailable after 4 attempt(s): http://127.0.0.1:8081/v1/chat/completions: no reply within 600s (model busy)"
         ));
         assert!(!is_infrastructure_failure(
             "Pre-review gates failed: [new_unwrap] src/lib.rs"

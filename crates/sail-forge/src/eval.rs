@@ -299,6 +299,32 @@ pub fn grade_worktree(case: &EvalCase, worktree: &IsolatedWorktree) -> (bool, St
     }
 }
 
+/// Poll the model server (`GET <base>/v1/models`) until it answers or `max_wait` passes.
+/// Used to ride out server restarts instead of aborting a long evaluation.
+pub async fn wait_for_model(chat_endpoint: &str, max_wait: Duration, poll: Duration) -> bool {
+    let base = chat_endpoint
+        .trim_end_matches('/')
+        .strip_suffix("/v1/chat/completions")
+        .unwrap_or(chat_endpoint);
+    let url = format!("{base}/v1/models");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+    let deadline = Instant::now() + max_wait;
+    loop {
+        if let Ok(resp) = client.get(&url).send().await {
+            if resp.status().is_success() {
+                return true;
+            }
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
+
 /// Run one case end to end with the real solver.
 pub async fn run_case(
     case: &EvalCase,
@@ -442,6 +468,29 @@ mod tests {
             cases: vec![result(1, false, false, true)],
         };
         assert!(run.summary_line().contains("model unavailable"));
+    }
+
+    #[tokio::test]
+    async fn wait_for_model_gives_up_or_sees_server() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = closed.local_addr().unwrap();
+        drop(closed);
+        let ep = format!("http://{addr}/v1/chat/completions");
+        assert!(!wait_for_model(&ep, Duration::from_millis(200), Duration::from_millis(50)).await);
+
+        let up = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ep = format!("http://{}/v1/chat/completions", up.local_addr().unwrap());
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut s, _)) = up.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf).await;
+                let _ = s
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}")
+                    .await;
+            }
+        });
+        assert!(wait_for_model(&ep, Duration::from_secs(5), Duration::from_millis(50)).await);
     }
 
     fn case_worktree(case: &EvalCase, root: &Path, tag: &str) -> IsolatedWorktree {
