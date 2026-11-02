@@ -61,7 +61,18 @@ impl Default for LocalModelConfig {
                 }),
             server_binary: std::env::var("SAIL_LLAMA_SERVER")
                 .map(PathBuf::from)
-                .unwrap_or("/home/main/llama.cpp/build/bin/llama-server".into()),
+                .unwrap_or_else(|_| {
+                    let candidates = [
+                        PathBuf::from("/home/main/llama-cpp-turboquant/build/bin/llama-server"),
+                        PathBuf::from("/home/main/llama.cpp/build/bin/llama-server"),
+                    ];
+                    for cand in candidates {
+                        if cand.is_file() {
+                            return cand;
+                        }
+                    }
+                    PathBuf::from("/home/main/llama.cpp/build/bin/llama-server")
+                }),
             endpoint,
             projector: std::env::var("SAIL_MMPROJ").map(PathBuf::from).ok(),
             managed,
