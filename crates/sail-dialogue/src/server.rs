@@ -542,10 +542,13 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 let token=value["approval_token"].as_str().and_then(|id|uuid::Uuid::parse_str(id).ok());
                                 let name=name.to_owned();let params=value.get("params").cloned().unwrap_or(json!({}));
                                 let current=epoch.load(Ordering::SeqCst);let correlation=Some(tool_correlation(&session,current));let tx=tx.clone();
-                                turn.take();turn=Some(AbortTask(tokio::spawn(async move {
+                                let tool_task=AbortTask(tokio::spawn(async move {
                                     let result=execute_scheduled_tool(&name,params,token,correlation,&tx,current).await;
                                     emit(&tx,current,json!({"type":"tool_result","channel":"voice:vlm","result":result})).await;
-                                })));
+                                }));
+                                if turn.is_none() {
+                                    turn=Some(tool_task);
+                                }
                             },
                             "tool_plan"=>{
                                 let steps=match serde_json::from_value::<Vec<sail_protocol::execution::ToolStep>>(value["steps"].clone()) {
