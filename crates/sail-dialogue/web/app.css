@@ -64,6 +64,11 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 .card-title h3 { margin:0; font-size:14px; font-weight:540; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 .card-title p { margin:2px 0 0; color:var(--muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 .card-heading-actions { display:flex; align-items:center; gap:6px }
+.card-live-badge { display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:550; letter-spacing:0.02em; padding:2px 7px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06); color:var(--muted); text-transform:uppercase; transition:all var(--transition-fast) }
+.card-live-badge .live-dot { width:6px; height:6px; border-radius:50%; background:#4ade80; box-shadow:0 0 6px rgba(74,222,128,0.5); animation:cardLivePulse 2.4s ease-in-out infinite }
+.card-live-badge.idle .live-dot { background:#64748b; box-shadow:none; animation:none }
+.card-live-badge.busy .live-dot { background:var(--accent); box-shadow:0 0 6px var(--accent); animation:cardLivePulse 1.2s ease-in-out infinite }
+@keyframes cardLivePulse { 0%,100% { opacity:1; transform:scale(1) } 50% { opacity:0.4; transform:scale(0.85) } }
 .card-tabs { display:inline-flex; align-items:center; gap:3px; padding:3px; background:var(--recessed); box-shadow:var(--depth-inset); border:var(--border); border-radius:10px }
 .card-tab { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border:0; border-radius:8px; background:transparent; color:var(--muted); font-size:11px; font-weight:500; cursor:pointer; transition:all var(--transition-fast); white-space:nowrap }
 .card-tab:hover { color:var(--text); background:rgba(255,255,255,0.04) }

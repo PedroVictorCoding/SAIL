@@ -413,19 +413,14 @@ const AdaptiveFeedEngine = {
   startTelemetry() {
     if (this.telemetryTimer) return;
     this.telemetryTimer = setInterval(() => {
-      if (this.cameraActive || this.desktopActive) {
-        if (typeof runKernelTool === 'function') {
-          runKernelTool('os:status');
-        }
+      if (typeof runKernelTool === 'function') {
+        runKernelTool('os:status');
       }
-    }, 4000);
+    }, 5000);
   },
 
   stopTelemetryIfIdle() {
-    if (!this.cameraActive && !this.desktopActive && this.telemetryTimer) {
-      clearInterval(this.telemetryTimer);
-      this.telemetryTimer = null;
-    }
+    // Keep telemetry pinging smoothly for live system metrics
   },
 
   // --- Live Camera ---
@@ -770,3 +765,12 @@ document.getElementById('captureScreenChoice').addEventListener('click', () => c
 document.getElementById('captureCancel').addEventListener('click', cancelVisualCapture);
 captureDialog.addEventListener('cancel', cancelVisualCapture);
 window.addEventListener('pagehide', cancelVisualCapture);
+
+// Auto-ping live metrics & models on page startup
+AdaptiveFeedEngine.startTelemetry();
+if (typeof checkModels === 'function') {
+  checkModels();
+  setInterval(() => {
+    checkModels();
+  }, 15000);
+}
