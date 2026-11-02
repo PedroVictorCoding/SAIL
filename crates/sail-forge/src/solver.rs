@@ -7,7 +7,7 @@ use ring::digest::{Context, SHA256};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use crate::contracts::TestExecutionRecord;
+use crate::contracts::{ForgeActivityEntry, TestExecutionRecord};
 use crate::edit::{EditBlock, apply_edit_blocks, parse_edit_blocks};
 use crate::worktree::{IsolatedWorktree, WorktreeError};
 
@@ -116,6 +116,10 @@ pub struct SolverOutcome {
 /// Real-time progress update emitted during autonomous solver iterations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolverProgress {
+    /// Entry for the job's persisted activity log; `stage == "activity"` events carry
+    /// only this and should not overwrite live UI state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<ForgeActivityEntry>,
     pub turn: u32,
     pub max_turns: u32,
     pub iteration: u32,
@@ -933,6 +937,48 @@ pub fn summarize_endpoint_failures(failures: &[EndpointFailure], attempts: u32) 
     )
 }
 
+/// A progress event that only carries an activity-log entry.
+fn activity_progress(
+    turn: u32,
+    max_turns: u32,
+    iteration: u32,
+    entry: ForgeActivityEntry,
+) -> SolverProgress {
+    SolverProgress {
+        message: entry.title.clone(),
+        activity: Some(entry),
+        turn,
+        max_turns,
+        iteration,
+        stage: "activity".into(),
+        live_output: None,
+        model_action: None,
+        diff: None,
+        target_file: None,
+        logs: None,
+    }
+}
+
+/// Activity entry for a chat message: model replies, and everything Forge feeds back
+/// (tool results, test output, edit errors).
+fn message_activity(turn: u32, msg: &serde_json::Value) -> ForgeActivityEntry {
+    let content = msg
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap_or_default();
+    if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
+        return ForgeActivityEntry::new(turn, "model", "Model reply", content);
+    }
+    let first_line: String = content
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(120)
+        .collect();
+    ForgeActivityEntry::new(turn, "feedback", first_line, content)
+}
+
 /// Multi-turn local issue solver controller.
 pub struct LocalSolverController {
     pub max_turns: u32,
@@ -1103,6 +1149,7 @@ impl LocalSolverController {
             model_action: Some("Context initialization".into()),
             diff: worktree.get_diff().ok(),
             target_file: None,
+            activity: None,
             logs: Some(vec![
                 format!("Loaded issue: {}", issue_title),
                 "Inspecting workspace crates and candidate target files...".into(),
@@ -1145,6 +1192,17 @@ Rules:
             issue_title, issue_body, initial_ctx
         );
 
+        on_progress(activity_progress(
+            0,
+            self.max_turns,
+            0,
+            ForgeActivityEntry::new(
+                0,
+                "context",
+                "Issue and initial context",
+                user_prompt.clone(),
+            ),
+        ));
         let mut messages = vec![
             serde_json::json!({ "role": "system", "content": system_prompt }),
             serde_json::json!({ "role": "user", "content": user_prompt }),
@@ -1161,6 +1219,20 @@ Rules:
         let mut iterations = 0u32;
         let mut test_records: Vec<TestExecutionRecord> = Vec::new();
         let mut tests_verified = false;
+        let max_turns = self.max_turns;
+        // Every message to or from the model also goes to the job's activity log.
+        macro_rules! push_message {
+            ($msg:expr) => {{
+                let msg: serde_json::Value = $msg;
+                on_progress(activity_progress(
+                    turns,
+                    max_turns,
+                    iterations,
+                    message_activity(turns, &msg),
+                ));
+                messages.push(msg);
+            }};
+        }
         let mut last_error: Option<String> = None;
         let mut edit_failures = 0u32;
         let mut parse_failures = 0u32;
@@ -1203,6 +1275,7 @@ Rules:
                 model_action: Some("Model inference started".into()),
                 diff: worktree.get_diff().ok(),
                 target_file: None,
+                activity: None,
                 logs: Some(vec![format!(
                     "Turn {}/{}: Querying model at endpoint...",
                     turns, self.max_turns
@@ -1342,6 +1415,7 @@ Rules:
                                                                 ),
                                                                 diff: worktree.get_diff().ok(),
                                                                 target_file: None,
+                                                                activity: None,
                                                                 logs: None,
                                                             });
                                                             last_emit = std::time::Instant::now();
@@ -1474,6 +1548,12 @@ Rules:
                     model_action: Some("Waiting for model".into()),
                     diff: worktree.get_diff().ok(),
                     target_file: None,
+                    activity: Some(ForgeActivityEntry::new(
+                        turns,
+                        "waiting",
+                        format!("Model not ready, retrying in {}s", wait.as_secs()),
+                        summary.clone(),
+                    )),
                     logs: Some(vec![summary]),
                 });
                 // Sleep in short steps so cancellation stays responsive.
@@ -1532,6 +1612,7 @@ Rules:
                 model_action: Some("Model response ready".into()),
                 diff: worktree.get_diff().ok(),
                 target_file: None,
+                activity: None,
                 logs: Some(vec![format!(
                     "Turn {}: Model response received ({} chars)",
                     turns,
@@ -1539,7 +1620,7 @@ Rules:
                 )]),
             });
 
-            messages.push(serde_json::json!({
+            push_message!(serde_json::json!({
                 "role": "assistant",
                 "content": raw_reply
             }));
@@ -1548,7 +1629,7 @@ Rules:
                 Some(a) => a,
                 None => {
                     parse_failures += 1;
-                    messages.push(serde_json::json!({
+                    push_message!(serde_json::json!({
                         "role": "user",
                         "content": "Could not parse a tool call or edit. Reply with either one JSON tool call (e.g. {\"tool\":\"repo:read_range\",\"path\":\"src/lib.rs\",\"start_line\":1,\"end_line\":80}) or SEARCH/REPLACE edit blocks."
                     }));
@@ -1578,6 +1659,7 @@ Rules:
                         model_action: Some("done".into()),
                         diff: worktree.get_diff().ok(),
                         target_file: None,
+                        activity: None,
                         logs: Some(vec![format!(
                             "Done: {}",
                             summary.as_deref().unwrap_or("Resolved")
@@ -1587,7 +1669,7 @@ Rules:
                     // Verify that we have a real diff and that staged tests pass before accepting `done`
                     let current_diff = worktree.get_diff().unwrap_or_default();
                     if !is_meaningful_code_diff(&current_diff) {
-                        messages.push(serde_json::json!({
+                        push_message!(serde_json::json!({
                             "role": "user",
                             "content": "Cannot finish yet: worktree has no meaningful code diff. Apply a patch with `repo:apply_patch` first."
                         }));
@@ -1607,7 +1689,7 @@ Rules:
                         }
                         if !test_res.ok {
                             last_error = Some(test_res.output.clone());
-                            messages.push(serde_json::json!({
+                            push_message!(serde_json::json!({
                                 "role": "user",
                                 "content": format!("Tests failed when verifying completion:\n{}\nPlease inspect and apply a repair patch.", test_res.output)
                             }));
@@ -1660,6 +1742,7 @@ Rules:
                         )),
                         diff: Some(patch.clone()),
                         target_file: target_candidate.clone(),
+                        activity: None,
                         logs: Some(vec![format!(
                             "Applying unified patch ({} lines)...",
                             patch.lines().count()
@@ -1676,7 +1759,7 @@ Rules:
                     if !patch_res.ok {
                         edit_failures += 1;
                         last_error = Some(patch_res.output.clone());
-                        messages.push(serde_json::json!({
+                        push_message!(serde_json::json!({
                             "role": "user",
                             "content": format!("Edit failed:\n{}\nRe-read the file with `repo:read_range` and emit a corrected SEARCH/REPLACE block whose SEARCH copies the current lines exactly.", patch_res.output)
                         }));
@@ -1702,6 +1785,7 @@ Rules:
                         model_action: Some("Patch applied successfully".into()),
                         diff: Some(current_diff.clone()),
                         target_file: target_candidate,
+                        activity: None,
                         logs: Some(vec![
                             "Unified diff applied cleanly to isolated worktree.".into(),
                         ]),
@@ -1723,6 +1807,7 @@ Rules:
                             model_action: Some("repo:test".into()),
                             diff: Some(current_diff.clone()),
                             target_file: None,
+                            activity: None,
                             logs: Some(vec!["Executing cargo test in sandbox worktree...".into()]),
                         });
 
@@ -1753,6 +1838,7 @@ Rules:
                                 model_action: Some("cargo test: PASSED".into()),
                                 diff: Some(final_diff.clone()),
                                 target_file: modified_files.first().cloned(),
+                                activity: None,
                                 logs: Some(vec![
                                     "All sandbox tests passed with exit code 0.".into(),
                                 ]),
@@ -1789,6 +1875,7 @@ Rules:
                                 model_action: Some("Tests failed -> Initiating repair pass".into()),
                                 diff: Some(current_diff.clone()),
                                 target_file: None,
+                                activity: None,
                                 logs: Some(vec![
                                     format!("cargo test failed (exit code {}).", test_code),
                                     "Feeding compiler errors to model for repair...".into(),
@@ -1809,7 +1896,7 @@ Rules:
                                     }
                                 }
                             }
-                            messages.push(serde_json::json!({
+                            push_message!(serde_json::json!({
                                 "role": "user",
                                 "content": format!(
                                     "{}\n`repo:test` failed:\n{}\n{}\nEmit a repair unified diff or tool call against the current file state.",
@@ -1818,7 +1905,7 @@ Rules:
                             }));
                         }
                     } else {
-                        messages.push(serde_json::json!({
+                        push_message!(serde_json::json!({
                             "role": "user",
                             "content": format!("{}\nNow call {{\"tool\": \"repo:test\"}} to verify the build and tests.", patch_res.output)
                         }));
@@ -1839,6 +1926,7 @@ Rules:
                         model_action: Some("repo:test".into()),
                         diff: worktree.get_diff().ok(),
                         target_file: None,
+                        activity: None,
                         logs: Some(vec!["Executing cargo test in sandbox...".into()]),
                     });
 
@@ -1865,6 +1953,7 @@ Rules:
                             model_action: Some("cargo test: PASSED".into()),
                             diff: Some(current_diff.clone()),
                             target_file: modified_files.first().cloned(),
+                            activity: None,
                             logs: Some(vec!["All sandbox tests passed with exit code 0.".into()]),
                         });
                         return SolverOutcome {
@@ -1883,7 +1972,7 @@ Rules:
                             summary: "Sandboxed cargo test passed with verified code diff".into(),
                         };
                     } else if test_res.ok {
-                        messages.push(serde_json::json!({
+                        push_message!(serde_json::json!({
                             "role": "user",
                             "content": format!("`repo:test` output:\n{}\nNote: no code changes have been applied yet.", test_res.output)
                         }));
@@ -1905,12 +1994,13 @@ Rules:
                             model_action: Some("Tests failed -> Initiating repair pass".into()),
                             diff: Some(current_diff),
                             target_file: None,
+                            activity: None,
                             logs: Some(vec![
                                 format!("cargo test failed (exit code {}).", test_code),
                                 "Prompting model with compiler diagnostics for repair...".into(),
                             ]),
                         });
-                        messages.push(serde_json::json!({
+                        push_message!(serde_json::json!({
                             "role": "user",
                             "content": format!("`repo:test` failed:\n{}\nInspect the failure and apply a repair patch.", test_res.output)
                         }));
@@ -1943,6 +2033,7 @@ Rules:
                         model_action: Some(tool_desc.clone()),
                         diff: worktree.get_diff().ok(),
                         target_file: None,
+                        activity: None,
                         logs: Some(vec![format!("Executed {}", tool_desc)]),
                     });
 
@@ -1953,7 +2044,7 @@ Rules:
                         self.command_timeout_secs,
                         iterations,
                     );
-                    messages.push(serde_json::json!({
+                    push_message!(serde_json::json!({
                         "role": "user",
                         "content": format!("Tool `{}` result:\n{}", res.tool, res.output)
                     }));

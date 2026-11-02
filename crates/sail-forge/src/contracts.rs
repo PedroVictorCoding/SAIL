@@ -135,6 +135,35 @@ pub struct ForgeTaskEvent {
     pub idempotency_key: String,
 }
 
+/// One entry in a job's persisted activity log: what the model said and what Forge did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForgeActivityEntry {
+    pub at: DateTime<Utc>,
+    pub turn: u32,
+    /// `context`, `model`, `feedback`, `waiting`, `outcome`, `gates`, `review`, ...
+    pub kind: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+}
+
+impl ForgeActivityEntry {
+    pub fn new(
+        turn: u32,
+        kind: impl Into<String>,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Self {
+        Self {
+            at: Utc::now(),
+            turn,
+            kind: kind.into(),
+            title: title.into(),
+            body: body.into(),
+        }
+    }
+}
+
 /// Real-time status of a Forge issue job (`forge:issue_status`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueStatusResponse {

@@ -15,9 +15,9 @@ use sail_common::types::{EventPayload, SailEvent, SubsystemId};
 use sail_guardian::sandbox::SandboxPolicy;
 
 use crate::contracts::{
-    ForgeBudgetConfig, ForgeJobReport, ForgeTaskState, IssueEnqueueRequest, IssueStatusResponse,
-    PrDraftRequest, PrDraftResult, ReviewPolicyConfig, ReviewRequest, ReviewResult, ReviewVerdict,
-    TestExecutionRecord,
+    ForgeActivityEntry, ForgeBudgetConfig, ForgeJobReport, ForgeTaskState, IssueEnqueueRequest,
+    IssueStatusResponse, PrDraftRequest, PrDraftResult, ReviewPolicyConfig, ReviewRequest,
+    ReviewResult, ReviewVerdict, TestExecutionRecord,
 };
 use crate::gates::DiffGatePolicy;
 use crate::persistence::{TaskCheckpoint, TaskCheckpointStore};
@@ -315,6 +315,32 @@ impl ForgeOrchestrator {
             live_output: cp.live_output.clone(),
             model_action: cp.model_action.clone(),
         }
+    }
+
+    /// Append to a job's activity log and persist it.
+    fn record_activity(&self, job_id: &str, entry: ForgeActivityEntry) {
+        let mut jobs = self.active_jobs.lock().unwrap();
+        if let Some(job) = jobs.get_mut(job_id) {
+            job.checkpoint.push_activity(entry);
+            let _ = self.checkpoint_store.save(&job.checkpoint);
+        }
+    }
+
+    /// Full activity log of a job (active or stored), for UI detail views. Kept out of
+    /// `IssueStatusResponse` so job lists and the LLM status tool stay small.
+    pub fn get_activity(&self, query: &str) -> Option<Vec<ForgeActivityEntry>> {
+        let job_id = self.get_status(query)?.job_id;
+        {
+            let jobs = self.active_jobs.lock().unwrap();
+            if let Some(job) = jobs.get(&job_id) {
+                return Some(job.checkpoint.activity.clone());
+            }
+        }
+        self.checkpoint_store
+            .load(&job_id)
+            .ok()
+            .flatten()
+            .map(|cp| cp.activity)
     }
 
     /// Retrieve the status of an active or stored job.
@@ -1145,7 +1171,18 @@ impl ForgeOrchestrator {
             let event_bus = self.event_bus.clone();
             let job_id_str = job_id.to_string();
             let active_jobs = self.active_jobs.clone();
-            let on_progress = move |prog: crate::solver::SolverProgress| {
+            let store = self.checkpoint_store.clone();
+            let on_progress = move |mut prog: crate::solver::SolverProgress| {
+                if let Some(entry) = prog.activity.take() {
+                    let mut jobs = active_jobs.lock().unwrap();
+                    if let Some(j) = jobs.get_mut(&job_id_str) {
+                        j.checkpoint.push_activity(entry);
+                        let _ = store.save(&j.checkpoint);
+                    }
+                }
+                if prog.stage == "activity" {
+                    return;
+                }
                 {
                     let mut jobs = active_jobs.lock().unwrap();
                     if let Some(j) = jobs.get_mut(&job_id_str) {
@@ -1201,6 +1238,21 @@ impl ForgeOrchestrator {
         // Recompute diff strictly after solver/repairs complete
         let final_diff = worktree.get_diff().unwrap_or(outcome.final_diff.clone());
         let diff_stat = format!("{} lines changed", final_diff.lines().count());
+        self.record_activity(
+            job_id,
+            ForgeActivityEntry::new(
+                outcome.turns,
+                "outcome",
+                format!(
+                    "Solver finished: {} ({}, {} edit failure(s))",
+                    outcome.verification_status, diff_stat, outcome.edit_failures
+                ),
+                outcome
+                    .failure_reason
+                    .clone()
+                    .unwrap_or_else(|| outcome.summary.clone()),
+            ),
+        );
 
         if !crate::solver::is_meaningful_code_diff(&final_diff) {
             let err_msg = if outcome.verification_status == "model_unavailable" {
@@ -1316,6 +1368,23 @@ impl ForgeOrchestrator {
                 .unwrap_or_default()
         };
         let violations = self.config.diff_gates.evaluate(&final_diff, &target_files);
+        self.record_activity(
+            job_id,
+            ForgeActivityEntry::new(
+                outcome.turns,
+                "gates",
+                if violations.is_empty() {
+                    "Pre-review gates passed".to_string()
+                } else {
+                    format!("Pre-review gates failed ({})", violations.len())
+                },
+                violations
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        );
         if !violations.is_empty() {
             let details: Vec<String> = violations.iter().map(|v| v.to_string()).collect();
             let reason = format!("Pre-review gates failed: {}", details.join("; "));
@@ -1392,6 +1461,24 @@ impl ForgeOrchestrator {
                 cost_usd: 0.0,
                 finding_count: verdict.detected_bugs.len(),
             });
+            self.record_activity(
+                job_id,
+                ForgeActivityEntry::new(
+                    outcome.turns,
+                    "review",
+                    format!(
+                        "Self-review ({}): {} (confidence {:.2})",
+                        reviewer.name(),
+                        if verdict.passed { "passed" } else { "rejected" },
+                        verdict.confidence_score
+                    ),
+                    if verdict.raw_feedback.is_empty() {
+                        verdict.detected_bugs.join("\n")
+                    } else {
+                        verdict.raw_feedback.clone()
+                    },
+                ),
+            );
             if !verdict.passed {
                 let reason = format!(
                     "Self-review rejected patch: {}",
@@ -1452,6 +1539,23 @@ impl ForgeOrchestrator {
                 cost_usd: result.cost_usd,
                 finding_count: result.verdict.detected_bugs.len(),
             });
+            self.record_activity(
+                job_id,
+                ForgeActivityEntry::new(
+                    outcome.turns,
+                    "review",
+                    format!(
+                        "External review ({}): {}",
+                        result.provider,
+                        if result.verdict.passed {
+                            "passed"
+                        } else {
+                            "not passed"
+                        }
+                    ),
+                    result.verdict.raw_feedback.clone(),
+                ),
+            );
             Some(result)
         } else {
             info!(
@@ -1492,6 +1596,15 @@ impl ForgeOrchestrator {
                 job.checkpoint.final_report = Some(report.clone());
                 job.checkpoint
                     .transition(ForgeTaskState::Completed, "Verified by sandbox tests");
+                job.checkpoint.push_activity(ForgeActivityEntry::new(
+                    outcome.turns,
+                    "outcome",
+                    format!(
+                        "Completed ({}ready to publish)",
+                        if ready_to_publish { "" } else { "not " }
+                    ),
+                    String::new(),
+                ));
                 let _ = self.checkpoint_store.save(&job.checkpoint);
             }
         }

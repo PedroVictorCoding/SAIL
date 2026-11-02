@@ -193,8 +193,11 @@ function connectWs() {
         break;
       case 'forge_event':
       case 'forge_enqueued':
+        handleForgeEvent(data);
+        break;
       case 'forge_status_response':
         handleForgeEvent(data);
+        handleForgeLogResponse(data);
         break;
       case 'forge_jobs':
         renderForgeJobList(data.jobs);
@@ -834,24 +837,155 @@ function handleForgeEvent(data) {
       }
 
       if (expandDiffBtn && typeof openCardModal === 'function') {
+        // Latest live data is shown immediately; the full recorded log replaces it when
+        // the server answers the status request.
+        const live = { live_output: data.live_output, diff: data.diff || liveDiff?.textContent || '' };
         expandDiffBtn.onclick = (e) => {
           e.stopPropagation();
-          let modalContent = '';
-          if (data.live_output) {
-            modalContent += `/* === MODEL LIVE REASONING & OUTPUT === */\n${data.live_output}\n\n`;
-          }
-          modalContent += `/* === UNIFIED CODE DIFF === */\n${data.diff || liveDiff.textContent}`;
-          openCardModal({
-            title: `Forge Live Output & Diff · ${data.target_file || jobId}`,
-            badge: `${state.toUpperCase()}`,
-            badgeClass: state === 'completed' ? 'result-success' : 'forge-state-active',
-            content: modalContent,
-            contentType: 'code'
-          });
+          requestForgeLog(jobId, state, live);
         };
       }
     }
   }
+}
+
+// Full Forge activity log pop-up: every model reply, tool result, test run and pipeline
+// stage recorded for the job, followed by the final diff.
+let pendingForgeLog = null;
+const FORGE_LOG_OPEN_KINDS = new Set(['model', 'outcome', 'gates', 'review', 'waiting']);
+
+function requestForgeLog(jobId, state, live) {
+  pendingForgeLog = { jobId, state, live };
+  renderForgeLogModal(jobId, state, { loading: true, live });
+  if (!sendAction('forge:status', { job_id: jobId, include_activity: true })) {
+    renderForgeLogModal(jobId, state, { live, note: 'Not connected; showing the latest live output only.' });
+  }
+}
+
+function handleForgeLogResponse(data) {
+  // Only responses to an include_activity request carry an array.
+  if (!pendingForgeLog || !Array.isArray(data.activity)) return;
+  const status = data.status || {};
+  if (![data.job_id, status.job_id].includes(pendingForgeLog.jobId)) return;
+  const dialog = document.getElementById('cardModal');
+  if (dialog && !dialog.open) { pendingForgeLog = null; return; }
+  renderForgeLogModal(status.job_id || pendingForgeLog.jobId, status.state || pendingForgeLog.state, {
+    status, activity: data.activity, live: pendingForgeLog.live
+  });
+}
+
+function forgeLogTime(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function forgeLogPlainText(jobId, status, activity, diff) {
+  const lines = [`Forge job ${jobId} · ${status.state || ''}`];
+  if (status.failure_reason) lines.push(`Reason: ${status.failure_reason}`);
+  for (const e of activity) {
+    lines.push('', `=== [${forgeLogTime(e.at)}] Turn ${e.turn} · ${e.kind} · ${e.title} ===`);
+    if (e.body) lines.push(e.body);
+  }
+  if (diff) lines.push('', '=== Final diff ===', diff);
+  return lines.join('\n');
+}
+
+function renderForgeLogModal(jobId, state, { loading = false, status = {}, activity = null, live = {}, note = '' }) {
+  const body = document.createElement('div');
+  body.className = 'forge-log';
+
+  const summary = document.createElement('div');
+  summary.className = 'forge-log-summary';
+  const facts = [
+    ['State', status.state || state],
+    ['Result', status.verification_status],
+    ['Reason', status.failure_reason],
+    ['Files', (status.modified_files || []).join(', ')],
+    ['Model endpoint', status.model_endpoint]
+  ].filter(([, v]) => v);
+  for (const [k, v] of facts) {
+    const row = document.createElement('div');
+    const key = document.createElement('span'); key.textContent = k;
+    const val = document.createElement('strong'); val.textContent = String(v);
+    row.append(key, val); summary.append(row);
+  }
+  body.append(summary);
+
+  const notice = (text) => { const p = document.createElement('p'); p.className = 'forge-log-note'; p.textContent = text; body.append(p); };
+  if (note) notice(note);
+
+  if (loading) {
+    notice('Loading the full activity log…');
+  } else if (Array.isArray(activity) && activity.length) {
+    const list = document.createElement('ol');
+    list.className = 'forge-log-list';
+    for (const e of activity) {
+      const item = document.createElement('li');
+      item.className = `forge-log-entry forge-log-${e.kind}`;
+      const details = document.createElement('details');
+      details.open = FORGE_LOG_OPEN_KINDS.has(e.kind) || (e.kind === 'feedback' && (e.body || '').length < 1500);
+      const head = document.createElement('summary');
+      const time = document.createElement('span'); time.className = 'forge-log-time'; time.textContent = forgeLogTime(e.at);
+      const kind = document.createElement('span'); kind.className = 'forge-log-kind'; kind.textContent = `T${e.turn} · ${e.kind}`;
+      const title = document.createElement('span'); title.className = 'forge-log-title'; title.textContent = e.title;
+      head.append(time, kind, title);
+      details.append(head);
+      if (e.body) { const pre = document.createElement('pre'); pre.textContent = e.body; details.append(pre); }
+      item.append(details);
+      list.append(item);
+    }
+    body.append(list);
+  } else {
+    notice('No detailed activity was recorded for this job (jobs started before activity logging only keep their stage timeline).');
+    const events = status.events || [];
+    if (events.length) {
+      const pre = document.createElement('pre');
+      pre.textContent = events.map(ev => `[${forgeLogTime(ev.timestamp)}] ${ev.stage}: ${ev.detail}`).join('\n');
+      body.append(pre);
+    }
+    const lastOutput = status.live_output || live.live_output;
+    if (lastOutput) {
+      const h = document.createElement('h4'); h.textContent = 'Latest model output';
+      const pre = document.createElement('pre'); pre.textContent = lastOutput;
+      body.append(h, pre);
+    }
+  }
+
+  const diff = status.patch || live.diff || '';
+  if (diff && !diff.startsWith('// ')) {
+    const h = document.createElement('h4'); h.textContent = 'Final diff';
+    const pre = document.createElement('pre'); pre.className = 'forge-log-diff';
+    // One block span per line; the joining newlines would render as blank lines in <pre>.
+    pre.innerHTML = formatDiffHighlight(diff).split('\n').join('');
+    body.append(h, pre);
+  }
+
+  const footer = document.createElement('div');
+  footer.className = 'forge-log-footer';
+  const refresh = document.createElement('button');
+  refresh.type = 'button'; refresh.className = 'quiet-button'; refresh.textContent = 'Refresh';
+  refresh.addEventListener('click', () => requestForgeLog(jobId, state, live));
+  const copy = document.createElement('button');
+  copy.type = 'button'; copy.className = 'quiet-button'; copy.textContent = 'Copy full log';
+  copy.disabled = loading;
+  copy.addEventListener('click', () => {
+    navigator.clipboard?.writeText(forgeLogPlainText(jobId, status, activity || [], diff));
+    copy.textContent = 'Copied!';
+    setTimeout(() => { copy.textContent = 'Copy full log'; }, 2000);
+  });
+  footer.append(refresh, copy);
+
+  const finalState = status.state || state;
+  openCardModal({
+    icon: '⚒',
+    title: `Forge activity · ${jobId}`,
+    badge: String(finalState || '').toUpperCase(),
+    badgeClass: finalState === 'completed' ? 'result-success' : finalState === 'blocked' ? 'result-failure' : 'forge-state-active',
+    bodyNode: body,
+    footerNode: footer
+  });
+  const list = body.querySelector('.forge-log-list');
+  if (list && !loading) list.lastElementChild?.scrollIntoView({ block: 'nearest' });
 }
 
 function renderForgeJobList(jobs) {

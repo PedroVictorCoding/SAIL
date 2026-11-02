@@ -701,6 +701,102 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
   font-weight: 500;
 }
 
+/* Forge full activity log (pop-up) */
+.forge-log {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.forge-log-summary {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.forge-log-summary div {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.forge-log-summary span {
+  flex: 0 0 auto;
+  min-width: 96px;
+}
+.forge-log-summary strong {
+  color: var(--text);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.forge-log-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.forge-log h4 {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.forge-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.forge-log-entry details {
+  border: 1px solid #ffffff0a;
+  border-left: 3px solid #3b3e49;
+  border-radius: 8px;
+  background: #11141b;
+}
+.forge-log-entry summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+}
+.forge-log-entry pre {
+  margin: 0 8px 8px;
+  max-height: 50vh;
+  overflow: auto;
+}
+.forge-log-time,
+.forge-log-kind {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  color: #8b949e;
+}
+.forge-log-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.forge-log-model details { border-left-color: #58a6ff; }
+.forge-log-feedback details { border-left-color: #8b949e; }
+.forge-log-waiting details { border-left-color: var(--warning); }
+.forge-log-gates details,
+.forge-log-review details { border-left-color: #d2a8ff; }
+.forge-log-outcome details { border-left-color: var(--good); }
+.forge-log-diff {
+  white-space: pre;
+  overflow-x: auto;
+}
+.forge-log-diff > span {
+  display: block;
+  min-height: 1.55em;
+}
+.forge-log-footer {
+  display: flex;
+  gap: 8px;
+}
+
 /* Forge Live Model Outputs & Action Badges */
 .forge-turn-badge {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;

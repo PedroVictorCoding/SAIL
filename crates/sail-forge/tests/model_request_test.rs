@@ -28,7 +28,12 @@ enum Behavior {
     BreakStream,
     /// Answer with the fix as a plain JSON completion.
     Fix,
+    /// Answer with an edit whose SEARCH text does not exist.
+    BadEdit,
 }
+
+const BAD_EDIT_REPLY: &str =
+    "src/lib.rs\n<<<<<<< SEARCH\npub fn g() {}\n=======\npub fn g() { }\n>>>>>>> REPLACE\n";
 
 async fn read_request(sock: &mut TcpStream) -> String {
     let mut buf = Vec::new();
@@ -90,10 +95,15 @@ async fn fake_model(script: Vec<Behavior>) -> (String, Arc<AtomicUsize>) {
                         let _ = sock.write_all(head.as_bytes()).await;
                         // Drop without the terminating 0-length chunk.
                     }
-                    Behavior::Fix => {
+                    reply @ (Behavior::Fix | Behavior::BadEdit) => {
+                        let content = if matches!(reply, Behavior::Fix) {
+                            FIX_REPLY
+                        } else {
+                            BAD_EDIT_REPLY
+                        };
                         let body = serde_json::json!({
                             "model": "fake",
-                            "choices": [{"message": {"content": FIX_REPLY}}]
+                            "choices": [{"message": {"content": content}}]
                         })
                         .to_string();
                         let resp = format!(
@@ -180,7 +190,12 @@ async fn solve(
             "## Target files\n- `src/lib.rs`\n",
             &logs,
             || false,
-            |p| stages.push(p.stage.clone()),
+            |p| {
+                if let Some(a) = &p.activity {
+                    stages.push(format!("activity:{}", a.kind));
+                }
+                stages.push(p.stage.clone())
+            },
         )
         .await;
     (outcome, stages)
@@ -265,6 +280,62 @@ async fn nothing_listening_fails_fast_with_one_retry() {
             .failure_reason
             .unwrap()
             .contains("after 2 attempt(s)")
+    );
+    let _ = fs::remove_dir_all(repo);
+}
+
+#[tokio::test]
+async fn activity_log_records_context_waits_and_replies() {
+    let (ep, _) = fake_model(vec![Behavior::Hang, Behavior::Fix]).await;
+    let (wt, repo) = repo_worktree();
+    let controller = LocalSolverController::new(2, 120, None)
+        .with_model_timeouts(fast_timeouts())
+        .with_endpoints(vec![ep]);
+    let logs = std::env::temp_dir().join(format!("model_req_logs_{}", Uuid::new_v4()));
+    let mut activity = Vec::new();
+    let mut activity_only_with_ui_state = false;
+    let outcome = controller
+        .solve_issue(
+            &wt,
+            "f must return 2",
+            "## Target files\n- `src/lib.rs`\n",
+            &logs,
+            || false,
+            |p| {
+                if p.stage == "activity" && (p.live_output.is_some() || p.diff.is_some()) {
+                    activity_only_with_ui_state = true;
+                }
+                if let Some(a) = p.activity {
+                    activity.push(a);
+                }
+            },
+        )
+        .await;
+    assert!(outcome.success, "{:?}", outcome.failure_reason);
+    assert!(!activity_only_with_ui_state);
+    let kinds: Vec<&str> = activity.iter().map(|a| a.kind.as_str()).collect();
+    assert_eq!(kinds, vec!["context", "waiting", "model"], "{activity:?}");
+    assert!(activity[0].body.contains("--- File: src/lib.rs ---"));
+    assert!(activity[1].body.contains("no reply within"));
+    assert!(activity[2].body.contains(">>>>>>> REPLACE"));
+    let _ = fs::remove_dir_all(repo);
+}
+
+#[tokio::test]
+async fn every_model_exchange_is_recorded_as_activity() {
+    let (ep, _) = fake_model(vec![Behavior::Hang, Behavior::BadEdit, Behavior::Fix]).await;
+    let (wt, repo) = repo_worktree();
+    let (outcome, stages) = solve(vec![ep], &wt).await;
+    assert!(outcome.success, "{:?}", outcome.failure_reason);
+    let kinds: Vec<&str> = stages
+        .iter()
+        .filter_map(|s| s.strip_prefix("activity:"))
+        .collect();
+    // context, wait for the busy slot, bad edit reply, the edit error fed back, the fix.
+    assert_eq!(
+        kinds,
+        vec!["context", "waiting", "model", "feedback", "model"],
+        "{stages:?}"
     );
     let _ = fs::remove_dir_all(repo);
 }

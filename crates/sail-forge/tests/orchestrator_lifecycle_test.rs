@@ -86,6 +86,23 @@ async fn test_full_autonomous_issue_resolution_lifecycle() {
     assert!(report.tests[0].status.contains("passed"));
     assert_eq!(report.tests[0].command, "cargo test");
 
+    // The pipeline stages are in the persisted activity log, which survives a reload and
+    // is kept out of the regular status payload (job lists, LLM status tool).
+    let activity = orchestrator.get_activity(&job_id).expect("activity");
+    let kinds: Vec<&str> = activity.iter().map(|a| a.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        vec!["outcome", "gates", "review", "outcome"],
+        "{activity:?}"
+    );
+    assert!(activity[1].title.contains("gates passed"));
+    assert!(activity[3].title.starts_with("Completed"));
+    let stored = checkpoint_store.load(&job_id).unwrap().unwrap();
+    assert_eq!(stored.activity.len(), activity.len());
+    let status_json = serde_json::to_value(orchestrator.get_status(&job_id).unwrap()).unwrap();
+    assert!(status_json.get("activity").is_none());
+    assert_eq!(orchestrator.get_activity("90").map(|a| a.len()), Some(4));
+
     // Verify logs and patches written to disk
     assert!(
         temp_dir
