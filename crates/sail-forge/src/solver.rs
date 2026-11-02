@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use futures_util::StreamExt;
 use ring::digest::{Context, SHA256};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -90,6 +91,26 @@ pub struct SolverOutcome {
     pub test_records: Vec<TestExecutionRecord>,
     pub model: IdentifiedModel,
     pub summary: String,
+}
+
+/// Real-time progress update emitted during autonomous solver iterations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolverProgress {
+    pub turn: u32,
+    pub max_turns: u32,
+    pub iteration: u32,
+    pub stage: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logs: Option<Vec<String>>,
 }
 
 /// Execute a bounded repository tool strictly inside `worktree`.
@@ -783,16 +804,18 @@ impl LocalSolverController {
     }
 
     /// Run the bounded local solver loop inside `worktree`.
-    pub async fn solve_issue<F>(
+    pub async fn solve_issue<F, P>(
         &self,
         worktree: &IsolatedWorktree,
         issue_title: &str,
         issue_body: &str,
         log_dir: &Path,
         mut is_cancelled: F,
+        mut on_progress: P,
     ) -> SolverOutcome
     where
         F: FnMut() -> bool,
+        P: FnMut(SolverProgress),
     {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(90))
@@ -801,6 +824,22 @@ impl LocalSolverController {
 
         let endpoints = Self::candidate_endpoints();
         let initial_ctx = self.build_initial_workspace_context(worktree);
+
+        on_progress(SolverProgress {
+            turn: 1,
+            max_turns: self.max_turns,
+            iteration: 1,
+            stage: "planning".into(),
+            message: format!("Inspecting workspace context for issue: {}", issue_title),
+            live_output: Some("Preparing repository context and workspace symbols...".into()),
+            model_action: Some("Context initialization".into()),
+            diff: worktree.get_diff().ok(),
+            target_file: None,
+            logs: Some(vec![
+                format!("Loaded issue: {}", issue_title),
+                "Inspecting workspace crates and candidate target files...".into(),
+            ]),
+        });
 
         let system_prompt = r#"You are SAIL Forge Local Issue Solver v0.1, an autonomous Rust coding agent operating inside an isolated sandbox worktree.
 You have access to the following bounded repository tools. Respond with EITHER a single JSON tool call object OR a unified diff (`--- a/<path>` / `+++ b/<path>`):
@@ -869,7 +908,28 @@ Rules:
 
             turns += 1;
 
-            // Call local OpenAI-compatible chat completions endpoint
+            on_progress(SolverProgress {
+                turn: turns,
+                max_turns: self.max_turns,
+                iteration: iterations + 1,
+                stage: "coding".into(),
+                message: format!(
+                    "Turn {}/{}: Consulting local coding model...",
+                    turns, self.max_turns
+                ),
+                live_output: Some(
+                    "Prompting model with issue requirements and workspace symbols...".into(),
+                ),
+                model_action: Some("Model inference started".into()),
+                diff: worktree.get_diff().ok(),
+                target_file: None,
+                logs: Some(vec![format!(
+                    "Turn {}/{}: Querying model at endpoint...",
+                    turns, self.max_turns
+                )]),
+            });
+
+            // Call local OpenAI-compatible chat completions endpoint with streaming support
             let mut turn_response_text: Option<String> = None;
             let mut turn_endpoint_err: Option<String> = None;
 
@@ -884,7 +944,8 @@ Rules:
                     "model": std::env::var("SAIL_FORGE_MODEL").unwrap_or_else(|_| "local-coder".to_string()),
                     "messages": messages,
                     "temperature": 0.1,
-                    "max_tokens": 2048
+                    "max_tokens": 2048,
+                    "stream": true,
                 });
 
                 match client.post(ep).json(&req_body).send().await {
@@ -898,7 +959,90 @@ Rules:
                             )
                             .await;
                         }
-                        if let Ok(json_val) = resp.json::<serde_json::Value>().await {
+
+                        let is_sse = resp
+                            .headers()
+                            .get(reqwest::header::CONTENT_TYPE)
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.contains("text/event-stream"))
+                            .unwrap_or(false);
+
+                        if is_sse {
+                            let mut stream = resp.bytes_stream();
+                            let mut accumulated = String::new();
+                            let mut line_buf = String::new();
+                            let mut token_count = 0u32;
+                            let mut last_emit = std::time::Instant::now();
+
+                            while let Some(chunk_res) = stream.next().await {
+                                if is_cancelled() {
+                                    break;
+                                }
+                                if let Ok(bytes) = chunk_res {
+                                    line_buf.push_str(&String::from_utf8_lossy(&bytes));
+                                    while let Some(idx) = line_buf.find('\n') {
+                                        let line = line_buf[..idx].trim().to_string();
+                                        line_buf = line_buf[idx + 1..].to_string();
+                                        if let Some(data) = line.strip_prefix("data:") {
+                                            let data = data.trim();
+                                            if data == "[DONE]" {
+                                                break;
+                                            }
+                                            if let Ok(val) =
+                                                serde_json::from_str::<serde_json::Value>(data)
+                                            {
+                                                let delta = val
+                                                    .get("choices")
+                                                    .and_then(|c| c.get(0))
+                                                    .and_then(|c| c.get("delta"));
+                                                let piece = delta
+                                                    .and_then(|d| {
+                                                        d.get("content").and_then(|v| v.as_str())
+                                                    })
+                                                    .or_else(|| {
+                                                        delta.and_then(|d| {
+                                                            d.get("reasoning_content")
+                                                                .and_then(|v| v.as_str())
+                                                        })
+                                                    });
+
+                                                if let Some(text_chunk) = piece {
+                                                    accumulated.push_str(text_chunk);
+                                                    token_count += 1;
+                                                    if last_emit.elapsed()
+                                                        > std::time::Duration::from_millis(120)
+                                                        || text_chunk.contains('\n')
+                                                    {
+                                                        on_progress(SolverProgress {
+                                                            turn: turns,
+                                                            max_turns: self.max_turns,
+                                                            iteration: iterations + 1,
+                                                            stage: "coding".into(),
+                                                            message: format!(
+                                                                "Turn {}/{}: Generating code patch ({} tokens)...",
+                                                                turns, self.max_turns, token_count
+                                                            ),
+                                                            live_output: Some(accumulated.clone()),
+                                                            model_action: Some(
+                                                                "Streaming model output".into(),
+                                                            ),
+                                                            diff: worktree.get_diff().ok(),
+                                                            target_file: None,
+                                                            logs: None,
+                                                        });
+                                                        last_emit = std::time::Instant::now();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if !accumulated.trim().is_empty() {
+                                turn_response_text = Some(accumulated);
+                                break;
+                            }
+                        } else if let Ok(json_val) = resp.json::<serde_json::Value>().await {
                             // If response JSON itself carries a `model` field and identified_model was unknown, capture it
                             if identified_model.model_id == "unknown" {
                                 if let Some(m) = json_val.get("model").and_then(|v| v.as_str()) {
@@ -974,6 +1118,28 @@ Rules:
                 }
             };
 
+            on_progress(SolverProgress {
+                turn: turns,
+                max_turns: self.max_turns,
+                iteration: iterations + 1,
+                stage: "coding".into(),
+                message: format!(
+                    "Turn {}/{}: Model generation complete ({} chars)",
+                    turns,
+                    self.max_turns,
+                    raw_reply.len()
+                ),
+                live_output: Some(raw_reply.clone()),
+                model_action: Some("Model response ready".into()),
+                diff: worktree.get_diff().ok(),
+                target_file: None,
+                logs: Some(vec![format!(
+                    "Turn {}: Model response received ({} chars)",
+                    turns,
+                    raw_reply.len()
+                )]),
+            });
+
             messages.push(serde_json::json!({
                 "role": "assistant",
                 "content": raw_reply
@@ -996,6 +1162,25 @@ Rules:
 
             match &action {
                 RepoToolCall::Done { summary } => {
+                    on_progress(SolverProgress {
+                        turn: turns,
+                        max_turns: self.max_turns,
+                        iteration: iterations + 1,
+                        stage: "review".into(),
+                        message: format!(
+                            "Turn {}/{}: Model marked issue as resolved",
+                            turns, self.max_turns
+                        ),
+                        live_output: Some(raw_reply.clone()),
+                        model_action: Some("done".into()),
+                        diff: worktree.get_diff().ok(),
+                        target_file: None,
+                        logs: Some(vec![format!(
+                            "Done: {}",
+                            summary.as_deref().unwrap_or("Resolved")
+                        )]),
+                    });
+
                     // Verify that we have a real diff and that staged tests pass before accepting `done`
                     let current_diff = worktree.get_diff().unwrap_or_default();
                     if !is_meaningful_code_diff(&current_diff) {
@@ -1017,9 +1202,7 @@ Rules:
                         if let Some(rec) = test_res.test_record.clone() {
                             test_records.push(rec);
                         }
-                        if test_res.ok {
-                            tests_verified = true;
-                        } else {
+                        if !test_res.ok {
                             last_error = Some(test_res.output.clone());
                             messages.push(serde_json::json!({
                                 "role": "user",
@@ -1047,7 +1230,34 @@ Rules:
                             .unwrap_or_else(|| "Solved and verified inside sandbox".into()),
                     };
                 }
-                RepoToolCall::ApplyPatch { .. } => {
+                RepoToolCall::ApplyPatch { patch } => {
+                    let modified_files = extract_modified_files_from_diff(patch);
+                    let target_candidate = modified_files.first().cloned();
+
+                    on_progress(SolverProgress {
+                        turn: turns,
+                        max_turns: self.max_turns,
+                        iteration: iterations + 1,
+                        stage: "coding".into(),
+                        message: format!(
+                            "Turn {}/{}: Applying patch to {}",
+                            turns,
+                            self.max_turns,
+                            modified_files.join(", ")
+                        ),
+                        live_output: Some(raw_reply.clone()),
+                        model_action: Some(format!(
+                            "repo:apply_patch ({})",
+                            modified_files.join(", ")
+                        )),
+                        diff: Some(patch.clone()),
+                        target_file: target_candidate.clone(),
+                        logs: Some(vec![format!(
+                            "Applying unified patch ({} lines)...",
+                            patch.lines().count()
+                        )]),
+                    });
+
                     let patch_res = execute_repo_tool(
                         worktree,
                         &action,
@@ -1067,9 +1277,46 @@ Rules:
                     // Patch applied! Mark tests as needing verification.
                     tests_verified = false;
 
+                    let current_diff = worktree.get_diff().unwrap_or_default();
+                    on_progress(SolverProgress {
+                        turn: turns,
+                        max_turns: self.max_turns,
+                        iteration: iterations + 1,
+                        stage: "coding".into(),
+                        message: format!(
+                            "Turn {}/{}: Patch applied ({} modified lines). Ready for tests.",
+                            turns,
+                            self.max_turns,
+                            current_diff.lines().count()
+                        ),
+                        live_output: Some(raw_reply.clone()),
+                        model_action: Some("Patch applied successfully".into()),
+                        diff: Some(current_diff.clone()),
+                        target_file: target_candidate,
+                        logs: Some(vec![
+                            "Unified diff applied cleanly to isolated worktree.".into(),
+                        ]),
+                    });
+
                     // If the model emitted a raw unified diff directly, automatically run `repo:test` in this iteration
                     if is_direct_diff {
                         iterations += 1;
+                        on_progress(SolverProgress {
+                            turn: turns,
+                            max_turns: self.max_turns,
+                            iteration: iterations,
+                            stage: "testing".into(),
+                            message: format!(
+                                "Turn {}/{}: Running sandbox cargo test...",
+                                turns, self.max_turns
+                            ),
+                            live_output: Some(raw_reply.clone()),
+                            model_action: Some("repo:test".into()),
+                            diff: Some(current_diff.clone()),
+                            target_file: None,
+                            logs: Some(vec!["Executing cargo test in sandbox worktree...".into()]),
+                        });
+
                         let test_res = execute_repo_tool(
                             worktree,
                             &RepoToolCall::Test { filter: None },
@@ -1087,6 +1334,20 @@ Rules:
                                 "Local solver verified fix on iteration {} (modified files: {:?})",
                                 iterations, modified_files
                             );
+                            on_progress(SolverProgress {
+                                turn: turns,
+                                max_turns: self.max_turns,
+                                iteration: iterations,
+                                stage: "review".into(),
+                                message: "All sandbox tests PASSED! Verified fix ready.".into(),
+                                live_output: Some(raw_reply.clone()),
+                                model_action: Some("cargo test: PASSED".into()),
+                                diff: Some(final_diff.clone()),
+                                target_file: modified_files.first().cloned(),
+                                logs: Some(vec![
+                                    "All sandbox tests passed with exit code 0.".into(),
+                                ]),
+                            });
                             return SolverOutcome {
                                 success: true,
                                 verification_status: "verified".into(),
@@ -1102,6 +1363,26 @@ Rules:
                             };
                         } else {
                             last_error = Some(test_res.output.clone());
+                            let test_code = test_res
+                                .test_record
+                                .as_ref()
+                                .map(|r| r.exit_code)
+                                .unwrap_or(1);
+                            on_progress(SolverProgress {
+                                turn: turns,
+                                max_turns: self.max_turns,
+                                iteration: iterations,
+                                stage: "coding".into(),
+                                message: "cargo test failed. Preparing compiler error diagnostics for repair pass...".into(),
+                                live_output: Some(format!("=== TEST FAILURE ===\n{}", test_res.output)),
+                                model_action: Some("Tests failed -> Initiating repair pass".into()),
+                                diff: Some(current_diff.clone()),
+                                target_file: None,
+                                logs: Some(vec![
+                                    format!("cargo test failed (exit code {}).", test_code),
+                                    "Feeding compiler errors to model for repair...".into(),
+                                ]),
+                            });
                             // Include current content of modified files so repair turn has exact line context
                             let mut current_files_snapshot = String::new();
                             for f in &patch_res.modified_files {
@@ -1134,6 +1415,22 @@ Rules:
                 }
                 RepoToolCall::Test { .. } => {
                     iterations += 1;
+                    on_progress(SolverProgress {
+                        turn: turns,
+                        max_turns: self.max_turns,
+                        iteration: iterations,
+                        stage: "testing".into(),
+                        message: format!(
+                            "Turn {}/{}: Running sandboxed `cargo test`...",
+                            turns, self.max_turns
+                        ),
+                        live_output: Some(raw_reply.clone()),
+                        model_action: Some("repo:test".into()),
+                        diff: worktree.get_diff().ok(),
+                        target_file: None,
+                        logs: Some(vec!["Executing cargo test in sandbox...".into()]),
+                    });
+
                     let test_res = execute_repo_tool(
                         worktree,
                         &action,
@@ -1146,8 +1443,19 @@ Rules:
                     }
                     let current_diff = worktree.get_diff().unwrap_or_default();
                     if test_res.ok && is_meaningful_code_diff(&current_diff) {
-                        tests_verified = true;
                         let modified_files = extract_modified_files_from_diff(&current_diff);
+                        on_progress(SolverProgress {
+                            turn: turns,
+                            max_turns: self.max_turns,
+                            iteration: iterations,
+                            stage: "review".into(),
+                            message: "Sandboxed tests PASSED with verified code diff!".into(),
+                            live_output: Some(raw_reply.clone()),
+                            model_action: Some("cargo test: PASSED".into()),
+                            diff: Some(current_diff.clone()),
+                            target_file: modified_files.first().cloned(),
+                            logs: Some(vec!["All sandbox tests passed with exit code 0.".into()]),
+                        });
                         return SolverOutcome {
                             success: true,
                             verification_status: "verified".into(),
@@ -1169,6 +1477,26 @@ Rules:
                     } else {
                         tests_verified = false;
                         last_error = Some(test_res.output.clone());
+                        let test_code = test_res
+                            .test_record
+                            .as_ref()
+                            .map(|r| r.exit_code)
+                            .unwrap_or(1);
+                        on_progress(SolverProgress {
+                            turn: turns,
+                            max_turns: self.max_turns,
+                            iteration: iterations,
+                            stage: "coding".into(),
+                            message: "Tests failed. Prompting model for repair pass...".into(),
+                            live_output: Some(format!("=== TEST FAILURE ===\n{}", test_res.output)),
+                            model_action: Some("Tests failed -> Initiating repair pass".into()),
+                            diff: Some(current_diff),
+                            target_file: None,
+                            logs: Some(vec![
+                                format!("cargo test failed (exit code {}).", test_code),
+                                "Prompting model with compiler diagnostics for repair...".into(),
+                            ]),
+                        });
                         messages.push(serde_json::json!({
                             "role": "user",
                             "content": format!("`repo:test` failed:\n{}\nInspect the failure and apply a repair patch.", test_res.output)
@@ -1176,6 +1504,35 @@ Rules:
                     }
                 }
                 other_tool => {
+                    let tool_desc = match other_tool {
+                        RepoToolCall::Search { query, .. } => format!("repo:search \"{}\"", query),
+                        RepoToolCall::ReadRange {
+                            path,
+                            start_line,
+                            end_line,
+                        } => format!("repo:read_range {}:{}-{}", path, start_line, end_line),
+                        RepoToolCall::List { path } => {
+                            format!("repo:list {}", path.as_deref().unwrap_or("."))
+                        }
+                        RepoToolCall::Diff => "repo:diff".into(),
+                        _ => "tool_call".into(),
+                    };
+                    on_progress(SolverProgress {
+                        turn: turns,
+                        max_turns: self.max_turns,
+                        iteration: iterations + 1,
+                        stage: "coding".into(),
+                        message: format!(
+                            "Turn {}/{}: Executing {}",
+                            turns, self.max_turns, tool_desc
+                        ),
+                        live_output: Some(raw_reply.clone()),
+                        model_action: Some(tool_desc.clone()),
+                        diff: worktree.get_diff().ok(),
+                        target_file: None,
+                        logs: Some(vec![format!("Executed {}", tool_desc)]),
+                    });
+
                     let res = execute_repo_tool(
                         worktree,
                         other_tool,

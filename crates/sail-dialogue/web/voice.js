@@ -713,17 +713,56 @@ function handleForgeEvent(data) {
   if(data.passed!==undefined)metadata('Review verdict:',`${data.passed ? '✓ Passed' : 'Failed'} (${data.finding_count||0} findings)`);
   if(data.pr_draft_ready)metadata('✓','Pull Request draft ready for review');
 
-  // Live Forge Code Stream & Diff Viewer
+  // Live action strip on the active job card in Agent tab
+  if (data.model_action || data.turn) {
+    const strip = document.createElement('div');
+    strip.className = 'forge-active-action-strip';
+    if (data.turn) {
+      const t = document.createElement('span');
+      t.className = 'forge-turn-badge';
+      t.textContent = `Turn ${data.turn}`;
+      strip.appendChild(t);
+    }
+    if (data.model_action) {
+      const a = document.createElement('span');
+      a.className = 'forge-action-desc';
+      a.textContent = data.model_action;
+      strip.appendChild(a);
+    }
+    const viewBtn = document.createElement('button');
+    viewBtn.type = 'button';
+    viewBtn.className = 'forge-view-stream-btn';
+    viewBtn.textContent = 'View Live';
+    viewBtn.onclick = (e) => {
+      e.stopPropagation();
+      const streamTab = document.querySelector('.card-tab[data-tab-panel="forgePanelStream"]');
+      if (streamTab) streamTab.click();
+    };
+    strip.appendChild(viewBtn);
+    jobCard.append(strip);
+  }
+  if (data.live_output) {
+    const snippet = document.createElement('div');
+    snippet.className = 'forge-active-live-snippet';
+    snippet.textContent = data.live_output.length > 240 ? '...' + data.live_output.slice(-240) : data.live_output;
+    jobCard.append(snippet);
+  }
+
+  // Live Forge Code Stream, Model Outputs & Diff Viewer
   const liveStream = document.getElementById('forgeLiveStream');
   const liveTitle = document.getElementById('forgeLiveTitle');
   const liveFile = document.getElementById('forgeLiveFile');
   const liveDiff = document.getElementById('forgeLiveDiff');
   const liveLogs = document.getElementById('forgeLiveLogs');
+  const turnBadge = document.getElementById('forgeTurnBadge');
+  const actionLabel = document.getElementById('forgeActionLabel');
+  const modelStreamBox = document.getElementById('forgeModelStreamBox');
+  const liveOutputText = document.getElementById('forgeLiveOutputText');
   const expandDiffBtn = document.getElementById('forgeExpandDiffBtn');
 
   if (liveStream) {
     const isLivePhase = ['planning', 'coding', 'testing'].includes(state);
-    if (data.diff || data.target_file || data.logs || isLivePhase) {
+    if (data.diff || data.target_file || data.logs || data.live_output || data.model_action || isLivePhase) {
       liveStream.hidden = false;
       if (liveTitle) {
         const stateLabels = {
@@ -736,6 +775,32 @@ function handleForgeEvent(data) {
           completed: '✓ Solution verified & completed'
         };
         liveTitle.textContent = stateLabels[state] || `Forge: ${state}`;
+      }
+      if (turnBadge) {
+        if (data.turn) {
+          turnBadge.textContent = `Turn ${data.turn}`;
+          turnBadge.hidden = false;
+        } else {
+          turnBadge.hidden = true;
+        }
+      }
+      if (actionLabel) {
+        if (data.model_action) {
+          actionLabel.textContent = data.model_action;
+          actionLabel.hidden = false;
+        } else {
+          actionLabel.hidden = true;
+        }
+      }
+      if (modelStreamBox && liveOutputText) {
+        if (data.live_output) {
+          modelStreamBox.hidden = false;
+          liveOutputText.textContent = data.live_output;
+          liveOutputText.scrollTop = liveOutputText.scrollHeight;
+        } else if (state === 'coding') {
+          modelStreamBox.hidden = false;
+          liveOutputText.textContent = 'Generating reasoning & code diff...';
+        }
       }
       if (data.target_file && liveFile) {
         liveFile.textContent = data.target_file;
@@ -762,12 +827,16 @@ function handleForgeEvent(data) {
       if (expandDiffBtn && typeof openCardModal === 'function') {
         expandDiffBtn.onclick = (e) => {
           e.stopPropagation();
-          const currentDiff = data.diff || liveDiff.textContent;
+          let modalContent = '';
+          if (data.live_output) {
+            modalContent += `/* === MODEL LIVE REASONING & OUTPUT === */\n${data.live_output}\n\n`;
+          }
+          modalContent += `/* === UNIFIED CODE DIFF === */\n${data.diff || liveDiff.textContent}`;
           openCardModal({
-            title: `Forge Live Diff · ${data.target_file || jobId}`,
+            title: `Forge Live Output & Diff · ${data.target_file || jobId}`,
             badge: `${state.toUpperCase()}`,
             badgeClass: state === 'completed' ? 'result-success' : 'forge-state-active',
-            content: currentDiff,
+            content: modalContent,
             contentType: 'code'
           });
         };

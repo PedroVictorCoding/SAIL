@@ -162,6 +162,10 @@ pub struct IssueStatusResponse {
     pub model_endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modified_files: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_action: Option<String>,
 }
 
 /// Request to pause an active task (`forge:issue_pause`).
