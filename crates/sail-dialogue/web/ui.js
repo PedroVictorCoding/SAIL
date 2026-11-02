@@ -414,7 +414,7 @@ const AdaptiveFeedEngine = {
   startTelemetry() {
     if (this.telemetryTimer) return;
     this.telemetryTimer = setInterval(() => {
-      if (typeof runKernelTool === 'function') {
+      if (!document.hidden && ws?.readyState === WebSocket.OPEN && !activeTools.has('os:status') && typeof runKernelTool === 'function') {
         runKernelTool('os:status');
       }
     }, 5000);
@@ -772,6 +772,6 @@ AdaptiveFeedEngine.startTelemetry();
 if (typeof checkModels === 'function') {
   checkModels();
   setInterval(() => {
-    checkModels();
+    if (!document.hidden) checkModels();
   }, 15000);
 }

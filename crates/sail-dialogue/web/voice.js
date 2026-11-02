@@ -166,7 +166,11 @@ function connectWs() {
         updateGenMetrics(data);
         updateState('idle');
         break;
-      case 'interruption': cancelVisualCapture(); setCaptureHeld(false); turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
+      case 'interruption':
+        if (data.state === 'interrupted') {
+          for (const tool of activeTools.keys()) updateToolActivity(tool, false);
+        }
+        cancelVisualCapture(); setCaptureHeld(false); turnInProgress = false; stopPlayback(); updateState(data.state || 'interrupted'); break;
       case 'control': applyControl(data.control); break;
       case 'tool_event': {
         const event = data.event;
@@ -1487,7 +1491,7 @@ setInterval(() => {
 
 // Auto-ping Forge jobs periodically
 setInterval(() => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (!document.hidden && ws && ws.readyState === WebSocket.OPEN) {
     sendAction('forge:list');
   }
 }, 5000);
