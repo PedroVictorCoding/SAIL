@@ -111,13 +111,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let maintenance_grant =
             sail_guardian::memory::memory_grant(&sail_protocol::memory::MemoryPurpose::Maintenance)
                 .expect("maintenance memory grant is static");
-        flow = flow.with_memory(sail_flow::memory::MemoryMaintenance::new(
+        let mut maintenance = sail_flow::memory::MemoryMaintenance::new(
             arena.store().clone(),
             sail_arena::knowledge::Access::from_grant(&maintenance_grant),
             maintenance_grant.scopes.clone(),
             idle,
             days,
-        ));
+        );
+        // Opt-in until extraction quality is measured on the target host's local model.
+        if std::env::var("SAIL_MEMORY_MODEL_PROPOSALS").is_ok_and(|v| v == "1" || v == "true") {
+            info!("Memory model proposals enabled; the validator gates every change");
+            maintenance = maintenance.with_proposer(memory_proposer(model_service.clone()));
+        }
+        flow = flow.with_memory(maintenance);
     }
     let mut forge = ForgeSubsystem::new(orchestrator.clone());
     let nightly_config = NightlyConfig::from_env();
@@ -237,4 +243,40 @@ fn spawn_subsystem_worker(
             }
         }
     });
+}
+
+/// Local-model proposer for background memory consolidation. Runs on Flow's blocking worker,
+/// so it may block on the runtime; it is bounded by a timeout and never retried here.
+fn memory_proposer(service: sail_mind::MindService) -> sail_flow::memory::Proposer {
+    let handle = tokio::runtime::Handle::current();
+    Arc::new(move |prompt: &str| {
+        let mut request = sail_protocol::InferenceRequest::text(prompt);
+        request.generation = sail_protocol::Generation {
+            max_tokens: 768,
+            temperature: 0.0,
+        };
+        let service = service.clone();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let guard = cancel.clone();
+        handle.block_on(async move {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(180),
+                service.infer(request, cancel, None),
+            )
+            .await
+            {
+                Ok(Ok(response)) => response
+                    .message
+                    .content
+                    .text()
+                    .map(str::to_string)
+                    .ok_or_else(|| "model reply had no text".to_string()),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => {
+                    guard.cancel();
+                    Err("memory proposal timed out".to_string())
+                }
+            }
+        })
+    })
 }

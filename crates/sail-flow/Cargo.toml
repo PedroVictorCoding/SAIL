@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 sail-common.workspace = true
 sail-arena.workspace = true
+sail-protocol.workspace = true
 sail-guardian = { path = "../sail-guardian" }
 chrono.workspace = true
 tokio.workspace = true
