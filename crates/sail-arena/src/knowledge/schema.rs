@@ -200,3 +200,20 @@ CREATE TABLE kn_merge_snapshots(
  operation_id INTEGER NOT NULL, snapshot TEXT NOT NULL
 ) STRICT;
 ";
+
+pub(crate) const V5: &str = "
+CREATE TABLE kn_jobs(
+ id INTEGER PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, scope TEXT NOT NULL,
+ generation INTEGER NOT NULL, sources TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('pending','running','done','failed','obsolete')),
+ attempts INTEGER NOT NULL DEFAULT 0, not_before INTEGER NOT NULL,
+ lease_until INTEGER, lease_token TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+ last_error TEXT
+) STRICT;
+CREATE INDEX kn_jobs_due ON kn_jobs(state,not_before);
+CREATE TABLE kn_source_progress(
+ record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+ extractor_version INTEGER NOT NULL,
+ PRIMARY KEY(record_id,extractor_version)
+) STRICT, WITHOUT ROWID;
+";

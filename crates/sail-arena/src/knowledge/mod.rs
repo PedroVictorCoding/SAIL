@@ -17,6 +17,7 @@
 //! - reads are filtered by [`Access`] in SQL, before rows are hydrated.
 
 pub mod consolidation;
+pub mod jobs;
 pub mod model;
 mod read;
 pub mod retrieval;

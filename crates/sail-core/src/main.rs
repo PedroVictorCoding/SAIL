@@ -59,6 +59,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut mind = MindSubsystem::try_new(model_path)?;
     let model_service = mind.model_service()?;
     let mut arena = ArenaSubsystem::open_default();
+    let integrity = arena.store().check_integrity()?;
+    if !integrity.is_empty() {
+        return Err(std::io::Error::other(format!(
+            "Arena integrity check failed: {}",
+            integrity.join("; ")
+        ))
+        .into());
+    }
     let mut bridge = BridgeSubsystem::new();
     let mut canvas = CanvasSubsystem::new();
     let mut dialogue = DialogueSubsystem::new().with_model_services(mind.voice_services());
@@ -80,6 +88,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_self_reviewer(Arc::new(LocalModelReviewer::new())),
     );
+    if !std::env::var("SAIL_MEMORY_BACKGROUND").is_ok_and(|v| v == "0" || v == "false") {
+        let admission_mind = model_service.clone();
+        let admission_forge = orchestrator.clone();
+        let idle = Arc::new(move || {
+            !admission_mind.has_work()
+                && !admission_forge.list_all_jobs().iter().any(|j| {
+                    matches!(
+                        j.state,
+                        sail_forge::contracts::ForgeTaskState::Planning
+                            | sail_forge::contracts::ForgeTaskState::Coding
+                            | sail_forge::contracts::ForgeTaskState::Testing
+                            | sail_forge::contracts::ForgeTaskState::ReviewPending
+                    )
+                })
+        });
+        let days = std::env::var("SAIL_MEMORY_RETENTION_DAYS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|n| (1..=3650).contains(n))
+            .unwrap_or(30);
+        flow = flow.with_memory(sail_flow::memory::MemoryMaintenance::new(
+            arena.store().clone(),
+            sail_arena::knowledge::Access::scoped(
+                &["voice", "bus"],
+                sail_arena::knowledge::Sensitivity::Private,
+            ),
+            vec!["voice".into(), "bus".into()],
+            idle,
+            days,
+        ));
+    }
     let mut forge = ForgeSubsystem::new(orchestrator.clone());
     let nightly_config = NightlyConfig::from_env();
     if nightly_config.enabled {

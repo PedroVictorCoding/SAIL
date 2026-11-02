@@ -130,6 +130,17 @@ impl MindService {
             false
         }
     }
+    /// Cheap admission signal covering active and queued inference, without backend probes.
+    pub fn has_work(&self) -> bool {
+        !self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .jobs
+            .is_empty()
+    }
+
     pub async fn status(&self) -> MindStatus {
         let mut models = Vec::new();
         for backend in &self.inner.backends {

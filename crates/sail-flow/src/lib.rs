@@ -1,3 +1,4 @@
+pub mod memory;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -30,6 +31,7 @@ impl Default for SafetyReviewScheduleConfig {
 
 pub struct FlowSubsystem {
     bus: Option<EventBus>,
+    memory: Option<memory::MemoryMaintenance>,
     config: SafetyReviewScheduleConfig,
     last_evaluation: Arc<Mutex<Option<DateTime<Utc>>>>,
     shutdown_flag: Arc<tokio::sync::Notify>,
@@ -39,6 +41,7 @@ impl FlowSubsystem {
     pub fn new() -> Self {
         Self {
             bus: None,
+            memory: None,
             config: SafetyReviewScheduleConfig::default(),
             last_evaluation: Arc::new(Mutex::new(None)),
             shutdown_flag: Arc::new(tokio::sync::Notify::new()),
@@ -48,10 +51,16 @@ impl FlowSubsystem {
     pub fn with_config(config: SafetyReviewScheduleConfig) -> Self {
         Self {
             bus: None,
+            memory: None,
             config,
             last_evaluation: Arc::new(Mutex::new(None)),
             shutdown_flag: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    pub fn with_memory(mut self, memory: memory::MemoryMaintenance) -> Self {
+        self.memory = Some(memory);
+        self
     }
 
     /// Trigger an immediate manual or scheduled run of the daily learned-rules safety review.
@@ -125,6 +134,25 @@ impl Subsystem for FlowSubsystem {
                 },
             );
             let _ = bus.publish(event);
+        }
+
+        if let Some(memory) = self.memory.clone() {
+            let shutdown = self.shutdown_flag.clone();
+            tokio::spawn(async move {
+                let mut ticks = tokio::time::interval(Duration::from_secs(60));
+                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _=shutdown.notified()=>break,
+                        _=ticks.tick()=>{
+                            let memory=memory.clone();
+                            match tokio::task::spawn_blocking(move ||memory.tick(Utc::now().timestamp_millis())).await {
+                                Ok(Ok(_))=>{},Ok(Err(error))=>warn!(%error,"Memory maintenance failed"),Err(error)=>warn!(%error,"Memory worker failed"),
+                            }
+                        }
+                    }
+                }
+            });
         }
 
         // Spawn background scheduled evaluation worker with catch-up logic

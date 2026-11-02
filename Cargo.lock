@@ -2447,6 +2447,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "sail-arena",
  "sail-common",
  "sail-guardian",
  "serde",
