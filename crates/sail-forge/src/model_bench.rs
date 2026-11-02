@@ -192,7 +192,9 @@ pub struct FixtureBenchmarkResult {
     pub error_detail: Option<String>,
 }
 
-/// Runner and independent grader for model evaluations.
+/// Fixture validator: grades each fixture's *reference patch*, not model output, so it
+/// says nothing about solve ability. Use `crate::eval` (`sail_forge_eval`) to measure
+/// the real solver.
 pub struct BenchmarkHarness;
 
 impl BenchmarkHarness {

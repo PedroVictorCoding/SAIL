@@ -88,6 +88,27 @@ If a gate or the self-review rejects the patch, the reason is appended to the is
 - The self-review uses the same local model as the solver.
 - A job interrupted by a daemon restart is resumed by checkpoint recovery, but it is only published if it completes during a later nightly run.
 
+### Solver: edits, context and measurement
+
+**Edits.** The solver prefers Aider-style SEARCH/REPLACE blocks (`crates/sail-forge/src/edit.rs`): a path line, then `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE`.
+- Matching tries an exact unique match, then ignores trailing whitespace, then ignores indentation (and re-indents the replacement).
+- All blocks in one reply apply together or not at all.
+- When an edit fails, the model is told how many places matched, or is shown the closest lines.
+- `repo:edit` (JSON) and unified diffs are still accepted.
+
+**Context.** The first prompt contains:
+1. the workspace crate list
+2. the numbered contents of the issue's `## Target files` (8k chars)
+3. a ranked repo map of item signatures (`repo_map.rs`, 4k chars), with targets pinned first and the rest ranked by how well their identifiers match the issue text
+
+`repo:map {"query": ...}` re-ranks on demand. The history budget is 36k chars, sized for the 16k-token llama-server context.
+
+**Measurement.** `cargo run -p sail-forge --bin sail_forge_eval -- --label <name> [--only 201,202] [--compare <prev.json>]` runs the real solver on the validated cases in `eval_cases.rs` and grades each with hidden tests the solver never sees.
+- Results go to `$SAIL_FORGE_STATE_DIR/eval/<label>.{json,md}`.
+- Recorded per case: solve rate, false success (the solver claimed success but the hidden tests fail), edit failures, unparseable replies, turns and time.
+- A test enforces that every case fails unmodified and passes with its reference solution. The older `BenchmarkHarness` only grades reference patches; 6 of its 8 fixtures pass unmodified, so it does not measure the model.
+- If the model server is unreachable, the run stops and reports the case as `n/a`. It never reports a score in that case.
+
 ## 9. Next steps
 1. Audit the relevant implementation and the linked roadmap issue; update this spec with confirmed module/file paths and contracts.
 2. Build the MVP vertical slice with real tool/model/provider integrations.
