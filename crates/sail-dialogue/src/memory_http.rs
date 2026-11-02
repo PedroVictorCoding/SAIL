@@ -79,7 +79,7 @@ async fn read(
     let result = (|| -> KnowledgeResult<Value> {
         Ok(match request {
             Read::Overview => {
-                json!({"entities":k.entities(&access,500)?,"history":k.operations(100)?,"generation":k.deletion_generation()?})
+                json!({"entities":k.entities(&access,500)?,"history":k.operations(100)?,"jobs":k.job_summaries(&access)?,"generation":k.deletion_generation()?})
             }
             Read::Search { query } => {
                 serde_json::to_value(k.search(&query, &access, None, now())?)

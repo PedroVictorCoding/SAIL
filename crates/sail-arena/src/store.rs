@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 /// Bodies shorter than this are stored raw; compression does not pay off below it.
 const COMPRESS_MIN_BYTES: usize = 512;
 const CODEC_RAW: i64 = 0;
@@ -412,6 +412,7 @@ const MIGRATIONS: &[&str] = &[
     crate::knowledge::schema::V2,
     crate::knowledge::schema::V3,
     crate::knowledge::schema::V4,
+    crate::knowledge::schema::V5,
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> StoreResult<()> {

@@ -128,6 +128,17 @@ impl KnowledgeStore<'_> {
         generation: i64,
         limit: usize,
     ) -> KnowledgeResult<ConsolidationReport> {
+        self.consolidate_sources(scope, access, generation, limit, None)
+    }
+
+    pub(crate) fn consolidate_sources(
+        &self,
+        scope: &str,
+        access: &Access,
+        generation: i64,
+        limit: usize,
+        sources: Option<&str>,
+    ) -> KnowledgeResult<ConsolidationReport> {
         if !access.allows(scope, Sensitivity::Private) {
             return Err(KnowledgeError::Invalid(
                 "consolidation requires private access to the source scope".into(),
@@ -135,8 +146,8 @@ impl KnowledgeStore<'_> {
         }
         self.write_at_generation(generation, Actor::subsystem("consolidation"), |tx| {
             let rows = {
-                let mut stmt = tx.conn.prepare("SELECT id,kind,codec,body,created_at FROM records WHERE scope=?1 ORDER BY id LIMIT ?2")?;
-                stmt.query_map(params![scope, limit.min(256) as i64], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,Vec<u8>>(3)?,r.get::<_,i64>(4)?)))?.collect::<Result<Vec<_>,_>>()?
+                let mut stmt = tx.conn.prepare("SELECT id,kind,codec,body,created_at FROM records WHERE scope=?1 AND (?3 IS NULL OR EXISTS (SELECT 1 FROM json_each(?3) WHERE json_extract(value,'$.id')=records.id AND json_extract(value,'$.hash')=hex(records.hash) AND json_extract(value,'$.created_at')=records.created_at)) ORDER BY id LIMIT ?2")?;
+                stmt.query_map(params![scope, limit.min(256) as i64, sources], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,Vec<u8>>(3)?,r.get::<_,i64>(4)?)))?.collect::<Result<Vec<_>,_>>()?
             };
             let mut report = ConsolidationReport::default();
             for (id, kind, codec, blob, observed_at) in rows {

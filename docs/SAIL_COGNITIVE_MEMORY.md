@@ -201,3 +201,26 @@ Separation restores the captured assignments/aliases only if no knowledge mutati
 has happened since that merge; otherwise it refuses rather than overwriting later
 edits. Deleting an entity removes its merge snapshots. Export contains knowledge
 and receipts, not the transient transcript archive.
+
+## Phase 5: background jobs and retention
+
+Schema v5 adds durable, idempotent `kn_jobs`, exclusive five-minute leases, restart
+recovery, a five-attempt limit and exponential storage-failure backoff. Sources are
+identified by id, content hash and creation time, so row-id reuse cannot change a
+queued job's inputs. Knowledge/source commits are atomic; completion bookkeeping
+is replay-safe. Unsupported/failed sources remain until retention, but processed
+source markers prevent them from starving newer batches. Stale-generation and
+tombstoned jobs become obsolete and never recreate deleted knowledge.
+
+Core checks database integrity before starting services. Flow schedules one bounded
+memory tick per minute on a blocking worker, catches up after startup, and admits
+work only while Mind has no active/queued inference and Forge is not planning,
+coding, testing or reviewing. Admission is rechecked between stages; maintenance
+never calls a model. `SAIL_MEMORY_BACKGROUND=0` disables this worker.
+
+Raw evidence-buffer records expire after 30 days by default, configurable with
+`SAIL_MEMORY_RETENTION_DAYS` (1–3650). Expiry deletes archive and FTS rows together.
+Expired transient claims are removed using deletion/tombstone rules; pins protect
+their subject's transient claims. Expiry, consolidation and queue batches are
+bounded to 256 records per tick. The owner overview exposes job summaries without
+source content. No scheduler latency or throughput benchmark is claimed.
