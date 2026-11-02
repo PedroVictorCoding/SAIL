@@ -95,13 +95,20 @@ fn profiles_preserve_wire_rate_and_apply_thread_budget() {
 #[test]
 fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
     let guardian = sail_guardian::GuardianSubsystem::new();
-    assert!(
-        LocalKernelToolBroker::execute(&KernelToolCall {
-            tool: "os:status".into(),
-            params: serde_json::json!({})
-        })
-        .success
-    );
+    let os_res = LocalKernelToolBroker::execute(&KernelToolCall {
+        tool: "os:status".into(),
+        params: serde_json::json!({}),
+    });
+    assert!(os_res.success);
+    assert!(os_res.output.get("logical_cpus").is_some());
+    assert!(os_res.output.get("load_average").is_some());
+    assert!(os_res.output.get("load_averages").is_some());
+    assert!(os_res.output.get("cpu_percent").is_some());
+    assert!(os_res.output.get("cpu_usage_raw").is_some());
+    let raw_cpu = os_res.output["cpu_usage_raw"]
+        .as_f64()
+        .expect("cpu_usage_raw is f64");
+    assert!(raw_cpu >= 0.0 && raw_cpu <= 100.0);
     let process_call = KernelToolCall {
         tool: "proc:list".into(),
         params: serde_json::json!({"limit":3}),

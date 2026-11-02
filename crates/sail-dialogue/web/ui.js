@@ -2,18 +2,25 @@
 const spaces = [
   { id:'dialogue', name:'Dialogue', subtitle:'Talk with SAIL', available:true, action:() => document.getElementById('textInput').focus() },
   { id:'canvas', name:'Canvas', subtitle:'Visual responses', available:true, action:() => {
+    switchCardTab('canvasCard', 'canvasPanelMain');
     const panel = document.getElementById('canvasPanel');
     if (!panel.childElementCount) { const empty = document.createElement('div'); empty.id = 'canvasEmptyState'; empty.className = 'artifact-card canvas-empty-state'; empty.textContent = 'Diagrams, images and structured results from your conversation will appear here.'; panel.append(empty); }
-    panel.scrollIntoView({ behavior:'smooth', block:'center' });
+    document.getElementById('canvasCard')?.scrollIntoView({ behavior:'smooth', block:'center' });
   } },
-  { id:'vision', name:'Vision', subtitle:'Use camera or an image', available:true, action:() => startCamera() },
+  { id:'vision', name:'Vision', subtitle:'Camera & desktop feeds', available:true, action:() => {
+    switchCardTab('canvasCard', 'canvasPanelCamera');
+    document.getElementById('canvasCard')?.scrollIntoView({ behavior:'smooth', block:'center' });
+  } },
   { id:'arena', name:'Arena', subtitle:'Knowledge', available:false },
   { id:'flow', name:'Flow', subtitle:'Automations', available:false },
   { id:'life', name:'Life', subtitle:'Personal space', available:false },
   { id:'entertainment', name:'Entertainment', subtitle:'Listen and read', available:false },
   { id:'mind', name:'Mind', subtitle:'Local models', available:true, action:() => document.getElementById('checkModelsBtn').click() },
   { id:'agents', name:'Forge', subtitle:'Autonomous coding', available:true, action:() => document.getElementById('forgeCard')?.scrollIntoView({ behavior:'smooth', block:'center' }) },
-  { id:'guardian', name:'Guardian', subtitle:'Security approvals', available:true, action:() => document.getElementById('canvasCard')?.scrollIntoView({ behavior:'smooth', block:'center' }) },
+  { id:'guardian', name:'Guardian', subtitle:'Security approvals', available:true, action:() => {
+    switchCardTab('systemCard', 'systemPanelGuardian');
+    document.getElementById('systemCard')?.scrollIntoView({ behavior:'smooth', block:'center' });
+  } },
   { id:'bridge', name:'Bridge', subtitle:'Device tools', available:false },
   { id:'discovery', name:'Discovery', subtitle:'Research', available:false },
   { id:'pulse', name:'Pulse', subtitle:'Goals and routines', available:false },
@@ -154,43 +161,463 @@ document.addEventListener('touchend', event => {
 }, { passive:true });
 window.addEventListener('hashchange', () => { if (location.hash === '#spaces' && !activeSheet) openSheet(spacesSheet); else if (location.hash !== '#spaces' && activeSheet === spacesSheet) closeSheet(); });
 
-let cameraStream = null;
-async function startCamera() {
-  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-    showError('Camera access requires HTTPS or localhost in a supported browser.'); return;
+// --- Card Tabs & Cycling Manager ---
+function switchCardTab(cardId, targetPanelId) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+
+  const tabs = card.querySelectorAll('.card-tab');
+  tabs.forEach(tab => {
+    const isTarget = tab.dataset.tabPanel === targetPanelId;
+    tab.classList.toggle('active', isTarget);
+    tab.setAttribute('aria-selected', isTarget ? 'true' : 'false');
+  });
+
+  const panels = card.querySelectorAll('.card-tab-panel');
+  panels.forEach(panel => {
+    const isTarget = panel.id === targetPanelId;
+    panel.hidden = !isTarget;
+    panel.classList.toggle('active', isTarget);
+  });
+
+  if (cardId === 'canvasCard') {
+    const iconEl = document.getElementById('canvasCardIcon');
+    const titleEl = document.getElementById('canvasCardTitle');
+    const subEl = document.getElementById('canvasCardSub');
+    const clearBtn = document.getElementById('canvasClearBtn');
+
+    if (targetPanelId === 'canvasPanelCamera') {
+      if (iconEl) iconEl.textContent = '📷';
+      if (titleEl) titleEl.textContent = 'Live Camera';
+      if (subEl) subEl.textContent = 'Adaptive slow frame preview';
+      if (clearBtn) clearBtn.hidden = true;
+    } else if (targetPanelId === 'canvasPanelDesktop') {
+      if (iconEl) iconEl.textContent = '🖥';
+      if (titleEl) titleEl.textContent = 'Live Desktop';
+      if (subEl) subEl.textContent = 'Adaptive screen share preview';
+      if (clearBtn) clearBtn.hidden = true;
+    } else {
+      if (iconEl) iconEl.textContent = '▧';
+      if (titleEl) titleEl.textContent = 'Canvas';
+      if (subEl) subEl.textContent = 'Visuals & Guardian approvals';
+      if (clearBtn) clearBtn.hidden = false;
+    }
   }
-  try {
-    cameraStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:false });
-    const video = document.getElementById('cameraPreview'); video.srcObject = cameraStream;
-    document.getElementById('cameraPanel').hidden = false;
-    document.getElementById('appShell').dataset.camera = 'on';
-    updateState('seeing');
-    video.focus?.();
-  } catch (error) {
-    showError(error.name === 'NotAllowedError' ? 'Camera permission was not granted.' : `Camera: ${error.message}`);
+
+  if (cardId === 'modelsCard' && targetPanelId === 'modelsPanelGovernor') {
+    AdaptiveFeedEngine.updateAllBadges();
   }
+}
+
+function cycleCardTab(cardId) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  const tabs = Array.from(card.querySelectorAll('.card-tab'));
+  if (tabs.length <= 1) return;
+  const activeIndex = tabs.findIndex(tab => tab.classList.contains('active'));
+  const nextIndex = (activeIndex + 1) % tabs.length;
+  const nextTab = tabs[nextIndex];
+  if (nextTab && nextTab.dataset.tabPanel) {
+    switchCardTab(cardId, nextTab.dataset.tabPanel);
+  }
+}
+
+document.querySelectorAll('.card-tab').forEach(tab => {
+  tab.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const cardId = tab.dataset.tabCard;
+    const panelId = tab.dataset.tabPanel;
+    if (cardId && panelId) switchCardTab(cardId, panelId);
+  });
+});
+
+document.querySelectorAll('.card-cycle-btn').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const cardId = btn.dataset.cycleCard;
+    if (cardId) cycleCardTab(cardId);
+  });
+});
+
+// --- Adaptive Feed Engine: Inversely Throttled Vision Feeds ---
+const AdaptiveFeedEngine = {
+  cpuUsage: 15,
+  cameraActive: false,
+  desktopActive: false,
+  cameraStream: null,
+  desktopStream: null,
+  cameraFacing: 'user',
+  cameraTimer: null,
+  desktopTimer: null,
+  telemetryTimer: null,
+
+  updateCpuUsage(percent) {
+    if (Number.isFinite(percent)) {
+      this.cpuUsage = Math.max(2, Math.min(100, Math.round(percent)));
+      this.updateAllBadges();
+    }
+  },
+
+  calculateInterval() {
+    // Inversely proportional to CPU load:
+    // Low CPU (5%) -> ~240ms (~4 FPS)
+    // Medium CPU (35%) -> ~650ms (~1.5 FPS)
+    // High CPU (75%) -> ~1500ms (~0.66 FPS)
+    // Peak CPU (95%+) -> ~2200ms (~0.45 FPS, 1 frame every 2.2s)
+    const minMs = 200;
+    const maxMs = 2400;
+    return Math.round(minMs + (this.cpuUsage / 100) * (maxMs - minMs));
+  },
+
+  getTargetFps() {
+    return (1000 / this.calculateInterval()).toFixed(1);
+  },
+
+  updateAllBadges() {
+    const interval = this.calculateInterval();
+    const fps = this.getTargetFps();
+    const cpu = this.cpuUsage;
+
+    const camRateBadge = document.getElementById('cameraRateBadge');
+    if (camRateBadge) {
+      camRateBadge.textContent = this.cameraActive
+        ? `${fps} FPS (${interval}ms) · CPU ${cpu}%`
+        : `Slow Mode · Idle (CPU ${cpu}%)`;
+    }
+    const camOverlay = document.getElementById('cameraOverlayStats');
+    if (camOverlay) {
+      camOverlay.textContent = `Adaptive: ${interval}ms (${fps} FPS) · Inversely matched to CPU`;
+    }
+
+    const deskRateBadge = document.getElementById('desktopRateBadge');
+    if (deskRateBadge) {
+      deskRateBadge.textContent = this.desktopActive
+        ? `${fps} FPS (${interval}ms) · CPU ${cpu}%`
+        : `Slow Mode · Idle (CPU ${cpu}%)`;
+    }
+    const deskOverlay = document.getElementById('desktopOverlayStats');
+    if (deskOverlay) {
+      deskOverlay.textContent = `Adaptive: ${interval}ms (${fps} FPS) · Inversely matched to CPU`;
+    }
+
+    const govCpuText = document.getElementById('governorCpuPercent');
+    if (govCpuText) govCpuText.textContent = `${cpu}%`;
+    const govCpuFill = document.getElementById('governorCpuFill');
+    if (govCpuFill) {
+      govCpuFill.style.width = `${cpu}%`;
+      govCpuFill.style.background = cpu > 75 ? 'var(--warning)' : 'linear-gradient(90deg,#38bdf8,#818cf8)';
+    }
+    const govFpsText = document.getElementById('governorFpsTarget');
+    if (govFpsText) govFpsText.textContent = `${fps} FPS (${interval}ms)`;
+    const govFpsFill = document.getElementById('governorFpsFill');
+    if (govFpsFill) govFpsFill.style.width = `${Math.min(100, Math.round((parseFloat(fps) / 5) * 100))}%`;
+
+    const govStatus = document.getElementById('governorStatusBadge');
+    if (govStatus) {
+      if (cpu < 30) {
+        govStatus.textContent = 'Optimal autonomy (Full FPS)';
+        govStatus.className = 'good-text';
+      } else if (cpu < 70) {
+        govStatus.textContent = 'Moderate load (Adaptive throttle)';
+        govStatus.className = 'good-text';
+      } else {
+        govStatus.textContent = 'High system load (Power conserve)';
+        govStatus.className = 'warn-text';
+      }
+    }
+  },
+
+  startTelemetry() {
+    if (this.telemetryTimer) return;
+    this.telemetryTimer = setInterval(() => {
+      if (this.cameraActive || this.desktopActive) {
+        if (typeof runKernelTool === 'function') {
+          runKernelTool('os:status');
+        }
+      }
+    }, 4000);
+  },
+
+  stopTelemetryIfIdle() {
+    if (!this.cameraActive && !this.desktopActive && this.telemetryTimer) {
+      clearInterval(this.telemetryTimer);
+      this.telemetryTimer = null;
+    }
+  },
+
+  // --- Live Camera ---
+  async toggleCamera() {
+    if (this.cameraActive) {
+      this.stopCamera();
+    } else {
+      await this.startCamera();
+    }
+  },
+
+  async startCamera() {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      showError('Camera access requires HTTPS or localhost in a supported browser.');
+      return;
+    }
+    try {
+      this.cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: this.cameraFacing }, width: { ideal: 960 }, height: { ideal: 540 } },
+        audio: false
+      });
+      const video = document.getElementById('cameraVideo');
+      video.srcObject = this.cameraStream;
+      await video.play();
+
+      this.cameraActive = true;
+      const placeholder = document.getElementById('cameraPlaceholder');
+      if (placeholder) placeholder.hidden = true;
+      const toggleBtn = document.getElementById('cameraToggleBtn');
+      if (toggleBtn) {
+        toggleBtn.textContent = 'Stop Camera';
+        toggleBtn.classList.add('active-stop');
+      }
+      const captureBtn = document.getElementById('cameraCaptureBtn');
+      if (captureBtn) captureBtn.disabled = false;
+      const flipBtn = document.getElementById('cameraFlipBtn');
+      if (flipBtn) flipBtn.disabled = false;
+
+      const indicator = document.getElementById('cameraStatusIndicator');
+      if (indicator) {
+        indicator.className = 'feed-live-indicator active';
+        const span = indicator.querySelector('span');
+        if (span) span.textContent = 'Camera Live';
+      }
+
+      this.startTelemetry();
+      this.updateAllBadges();
+      this.tickCamera();
+    } catch (err) {
+      showError(err.name === 'NotAllowedError' ? 'Camera permission was not granted.' : `Camera error: ${err.message}`);
+    }
+  },
+
+  stopCamera() {
+    this.cameraActive = false;
+    if (this.cameraTimer) clearTimeout(this.cameraTimer);
+    this.cameraTimer = null;
+    this.cameraStream?.getTracks().forEach(t => t.stop());
+    this.cameraStream = null;
+
+    const video = document.getElementById('cameraVideo');
+    if (video) video.srcObject = null;
+    const placeholder = document.getElementById('cameraPlaceholder');
+    if (placeholder) placeholder.hidden = false;
+
+    const toggleBtn = document.getElementById('cameraToggleBtn');
+    if (toggleBtn) {
+      toggleBtn.textContent = 'Start Camera';
+      toggleBtn.classList.remove('active-stop');
+    }
+    const captureBtn = document.getElementById('cameraCaptureBtn');
+    if (captureBtn) captureBtn.disabled = true;
+    const flipBtn = document.getElementById('cameraFlipBtn');
+    if (flipBtn) flipBtn.disabled = true;
+
+    const indicator = document.getElementById('cameraStatusIndicator');
+    if (indicator) {
+      indicator.className = 'feed-live-indicator inactive';
+      const span = indicator.querySelector('span');
+      if (span) span.textContent = 'Camera Off';
+    }
+
+    this.updateAllBadges();
+    this.stopTelemetryIfIdle();
+  },
+
+  async flipCamera() {
+    this.cameraFacing = this.cameraFacing === 'user' ? 'environment' : 'user';
+    if (this.cameraActive) {
+      this.stopCamera();
+      await this.startCamera();
+    }
+  },
+
+  tickCamera() {
+    if (!this.cameraActive) return;
+    const video = document.getElementById('cameraVideo');
+    const canvas = document.getElementById('cameraCanvas');
+    if (video && canvas && video.videoWidth > 0) {
+      const scale = Math.min(1, 640 / video.videoWidth, 480 / video.videoHeight);
+      const w = Math.max(1, Math.round(video.videoWidth * scale));
+      const h = Math.max(1, Math.round(video.videoHeight * scale));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, w, h);
+    }
+    const interval = this.calculateInterval();
+    this.cameraTimer = setTimeout(() => this.tickCamera(), interval);
+  },
+
+  captureCameraFrame() {
+    const canvas = document.getElementById('cameraCanvas');
+    if (!this.cameraActive || !canvas.width) {
+      showError('Camera preview is not active yet.');
+      return;
+    }
+    const data = canvas.toDataURL('image/jpeg', 0.85);
+    const vision = { format: 'image/jpeg', data_base64: data.split(',')[1] };
+    if (typeof renderArtifact === 'function') {
+      renderArtifact({ artifact_type: 'image', content: data });
+    }
+    if (typeof sendAction === 'function') {
+      sendAction('text', { text: 'Analyze this camera frame.', vision });
+      if (typeof updateState === 'function') updateState('thinking');
+    }
+  },
+
+  // --- Live Desktop Screen Share ---
+  async toggleDesktop() {
+    if (this.desktopActive) {
+      this.stopDesktop();
+    } else {
+      await this.startDesktop();
+    }
+  },
+
+  async startDesktop() {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getDisplayMedia) {
+      showError('Screen capture is not supported or requires HTTPS/localhost.');
+      return;
+    }
+    try {
+      this.desktopStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 5, max: 15 } },
+        audio: false
+      });
+      const video = document.getElementById('desktopVideo');
+      video.srcObject = this.desktopStream;
+      await video.play();
+
+      const track = this.desktopStream.getVideoTracks()[0];
+      if (track) track.onended = () => this.stopDesktop();
+
+      this.desktopActive = true;
+      const placeholder = document.getElementById('desktopPlaceholder');
+      if (placeholder) placeholder.hidden = true;
+      const toggleBtn = document.getElementById('desktopToggleBtn');
+      if (toggleBtn) {
+        toggleBtn.textContent = 'Stop Desktop';
+        toggleBtn.classList.add('active-stop');
+      }
+      const captureBtn = document.getElementById('desktopCaptureBtn');
+      if (captureBtn) captureBtn.disabled = false;
+
+      const indicator = document.getElementById('desktopStatusIndicator');
+      if (indicator) {
+        indicator.className = 'feed-live-indicator active';
+        const span = indicator.querySelector('span');
+        if (span) span.textContent = 'Desktop Live';
+      }
+
+      this.startTelemetry();
+      this.updateAllBadges();
+      this.tickDesktop();
+    } catch (err) {
+      if (err.name !== 'NotAllowedError') {
+        showError(`Desktop capture error: ${err.message}`);
+      }
+    }
+  },
+
+  stopDesktop() {
+    this.desktopActive = false;
+    if (this.desktopTimer) clearTimeout(this.desktopTimer);
+    this.desktopTimer = null;
+    this.desktopStream?.getTracks().forEach(t => t.stop());
+    this.desktopStream = null;
+
+    const video = document.getElementById('desktopVideo');
+    if (video) video.srcObject = null;
+    const placeholder = document.getElementById('desktopPlaceholder');
+    if (placeholder) placeholder.hidden = false;
+
+    const toggleBtn = document.getElementById('desktopToggleBtn');
+    if (toggleBtn) {
+      toggleBtn.textContent = 'Share Screen';
+      toggleBtn.classList.remove('active-stop');
+    }
+    const captureBtn = document.getElementById('desktopCaptureBtn');
+    if (captureBtn) captureBtn.disabled = true;
+
+    const indicator = document.getElementById('desktopStatusIndicator');
+    if (indicator) {
+      indicator.className = 'feed-live-indicator inactive';
+      const span = indicator.querySelector('span');
+      if (span) span.textContent = 'Desktop Off';
+    }
+
+    this.updateAllBadges();
+    this.stopTelemetryIfIdle();
+  },
+
+  tickDesktop() {
+    if (!this.desktopActive) return;
+    const video = document.getElementById('desktopVideo');
+    const canvas = document.getElementById('desktopCanvas');
+    if (video && canvas && video.videoWidth > 0) {
+      const scale = Math.min(1, 960 / video.videoWidth, 540 / video.videoHeight);
+      const w = Math.max(1, Math.round(video.videoWidth * scale));
+      const h = Math.max(1, Math.round(video.videoHeight * scale));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, w, h);
+    }
+    const interval = this.calculateInterval();
+    this.desktopTimer = setTimeout(() => this.tickDesktop(), interval);
+  },
+
+  captureDesktopFrame() {
+    const canvas = document.getElementById('desktopCanvas');
+    if (!this.desktopActive || !canvas.width) {
+      showError('Screen share is not active yet.');
+      return;
+    }
+    const data = canvas.toDataURL('image/jpeg', 0.85);
+    const vision = { format: 'image/jpeg', data_base64: data.split(',')[1] };
+    if (typeof renderArtifact === 'function') {
+      renderArtifact({ artifact_type: 'image', content: data });
+    }
+    if (typeof sendAction === 'function') {
+      sendAction('text', { text: 'Analyze this desktop screen.', vision });
+      if (typeof updateState === 'function') updateState('thinking');
+    }
+  }
+};
+window.AdaptiveFeedEngine = AdaptiveFeedEngine;
+
+// Wire up Feed buttons
+document.getElementById('cameraToggleBtn')?.addEventListener('click', () => AdaptiveFeedEngine.toggleCamera());
+document.getElementById('cameraCaptureBtn')?.addEventListener('click', () => AdaptiveFeedEngine.captureCameraFrame());
+document.getElementById('cameraFlipBtn')?.addEventListener('click', () => AdaptiveFeedEngine.flipCamera());
+document.getElementById('desktopToggleBtn')?.addEventListener('click', () => AdaptiveFeedEngine.toggleDesktop());
+document.getElementById('desktopCaptureBtn')?.addEventListener('click', () => AdaptiveFeedEngine.captureDesktopFrame());
+
+// Legacy helper compatibility
+function startCamera() {
+  switchCardTab('canvasCard', 'canvasPanelCamera');
+  AdaptiveFeedEngine.startCamera();
 }
 function stopCamera() {
-  cameraStream?.getTracks().forEach(track => track.stop()); cameraStream = null;
-  const video = document.getElementById('cameraPreview'); video.srcObject = null;
-  document.getElementById('cameraPanel').hidden = true;
-  delete document.getElementById('appShell').dataset.camera;
-  if (orbState === 'seeing') updateState(isRecording ? 'listening' : 'idle');
+  AdaptiveFeedEngine.stopCamera();
 }
-async function captureCameraFrame() {
-  const video = document.getElementById('cameraPreview');
-  if (!cameraStream || !video.videoWidth) { showError('Camera preview is not ready yet.'); return; }
-  const scale = Math.min(1, 960 / video.videoWidth, 720 / video.videoHeight);
-  const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(video.videoWidth * scale)); canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-  const data = canvas.toDataURL('image/jpeg', .86);
-  const vision = { format:'image/jpeg', data_base64:data.split(',')[1] };
-  renderArtifact({ artifact_type:'image', content:data });
-  if (sendAction('text', { text:'Analyze this camera frame.', vision })) {
-    updateState('thinking');
-  }
+function captureCameraFrame() {
+  AdaptiveFeedEngine.captureCameraFrame();
 }
-window.addEventListener('pagehide', stopCamera);
+window.addEventListener('pagehide', () => {
+  AdaptiveFeedEngine.stopCamera();
+  AdaptiveFeedEngine.stopDesktop();
+});
 
 // Screen sharing requires transient user activation: never invoke it from a
 // WebSocket callback. Preserve the original request until a frame is attached.
