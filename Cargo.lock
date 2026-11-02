@@ -2316,6 +2316,7 @@ dependencies = [
  "ring",
  "rusqlite",
  "sail-common",
+ "sail-protocol",
  "serde",
  "serde_json",
  "tokio",

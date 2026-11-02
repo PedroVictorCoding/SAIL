@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 /// Bodies shorter than this are stored raw; compression does not pay off below it.
 const COMPRESS_MIN_BYTES: usize = 512;
 const CODEC_RAW: i64 = 0;
@@ -410,6 +410,7 @@ const MIGRATIONS: &[&str] = &[
          tokenize='unicode61 remove_diacritics 2'
      );",
     crate::knowledge::schema::V2,
+    crate::knowledge::schema::V3,
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> StoreResult<()> {
@@ -471,7 +472,7 @@ fn encode_body(body: &str) -> (i64, Vec<u8>) {
     }
 }
 
-fn decode_body(codec: i64, blob: &[u8]) -> String {
+pub(crate) fn decode_body(codec: i64, blob: &[u8]) -> String {
     let bytes = match codec {
         CODEC_LZ4 => lz4_flex::decompress_size_prepended(blob).unwrap_or_default(),
         _ => blob.to_vec(),
