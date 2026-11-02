@@ -1,33 +1,18 @@
 'use strict';
-const spaces = [
-  { id:'dialogue', name:'Dialogue', subtitle:'Talk with SAIL', available:true, action:() => document.getElementById('textInput').focus() },
-  { id:'canvas', name:'Canvas', subtitle:'Visual responses', available:true, action:() => {
-    switchCardTab('canvasCard', 'canvasPanelMain');
-    const panel = document.getElementById('canvasPanel');
-    if (!panel.childElementCount) { const empty = document.createElement('div'); empty.id = 'canvasEmptyState'; empty.className = 'artifact-card canvas-empty-state'; empty.textContent = 'Diagrams, images and structured results from your conversation will appear here.'; panel.append(empty); }
-    document.getElementById('canvasCard')?.scrollIntoView({ behavior:'smooth', block:'center' });
-  } },
+const spaces = subsystemPages.map(page => ({
+  id:page.id, icon:page.icon, name:page.name, subtitle:page.subtitle, available:true,
+  action:() => window.sailNavigate(page.id),
+})).concat([
   { id:'vision', name:'Vision', subtitle:'Camera & desktop feeds', available:true, action:() => {
-    switchCardTab('canvasCard', 'canvasPanelCamera');
-    document.getElementById('canvasCard')?.scrollIntoView({ behavior:'smooth', block:'center' });
+    window.sailNavigate('canvas', 'canvasPanelCamera');
   } },
-  { id:'arena', name:'Arena', subtitle:'Knowledge', available:false },
-  { id:'flow', name:'Flow', subtitle:'Automations', available:false },
   { id:'life', name:'Life', subtitle:'Personal space', available:false },
   { id:'entertainment', name:'Entertainment', subtitle:'Listen and read', available:false },
-  { id:'mind', name:'Mind', subtitle:'Local models', available:true, action:() => document.getElementById('checkModelsBtn').click() },
-  { id:'agents', name:'Forge', subtitle:'Autonomous coding', available:true, action:() => document.getElementById('forgeCard')?.scrollIntoView({ behavior:'smooth', block:'center' }) },
-  { id:'guardian', name:'Guardian', subtitle:'Security approvals', available:true, action:() => {
-    switchCardTab('systemCard', 'systemPanelGuardian');
-    document.getElementById('systemCard')?.scrollIntoView({ behavior:'smooth', block:'center' });
-  } },
-  { id:'bridge', name:'Bridge', subtitle:'Device tools', available:false },
-  { id:'discovery', name:'Discovery', subtitle:'Research', available:false },
   { id:'pulse', name:'Pulse', subtitle:'Goals and routines', available:false },
   { id:'sense', name:'Sense', subtitle:'Context', available:false },
   { id:'mesh', name:'Mesh', subtitle:'Local network', available:false },
   { id:'lab', name:'Lab', subtitle:'Experiments', available:false },
-];
+]);
 const spacesSheet = document.getElementById('spacesSheet');
 const contextSheet = document.getElementById('contextSheet');
 const scrim = document.getElementById('scrim');
@@ -46,7 +31,7 @@ function closeSheet() {
   if (!activeSheet) return;
   scrim.classList.remove('visible'); activeSheet.hidden = true;
   const wasSpaces = activeSheet === spacesSheet; activeSheet = null;
-  if (wasSpaces && window.location.hash === '#spaces') history.replaceState(null, '', location.pathname + location.search);
+  if (wasSpaces && window.location.hash === '#spaces') history.replaceState(null, '', `#${window.sailCurrentPage?.() || 'home'}`);
   setTimeout(() => { if (!activeSheet) scrim.hidden = true; }, 240);
   document.body.style.overflow = ''; priorFocus?.focus?.();
 }
@@ -59,7 +44,7 @@ function renderSpaces(filter = '') {
     button.setAttribute('aria-label', space.available ? `${space.name}: ${space.subtitle}` : `${space.name}: Not connected`);
     const icon = document.createElement('span'); icon.className = 'space-icon'; icon.setAttribute('aria-hidden', 'true');
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true');
-    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use'); use.setAttribute('href', `/icons.svg#${space.id}`); svg.append(use); icon.append(svg);
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use'); use.setAttribute('href', `/icons.svg#${space.icon || space.id}`); svg.append(use); icon.append(svg);
     const text = document.createElement('span'); text.className = 'space-name'; text.textContent = space.name;
     const subtitle = document.createElement('small'); subtitle.className = 'space-subtitle'; subtitle.textContent = space.available ? space.subtitle : 'Not connected';
     text.append(subtitle); button.append(icon, text);
@@ -158,10 +143,6 @@ function initVscodeSettings() {
   });
 }
 initVscodeSettings();
-document.getElementById('homeNav').addEventListener('click', () => document.getElementById('workspace').scrollTo({ top:0, behavior:'smooth' }));
-document.getElementById('canvasNav').addEventListener('click', () => document.getElementById('canvasCard').scrollIntoView({ behavior:'smooth', block:'center' }));
-document.getElementById('agentsNav')?.addEventListener('click', () => document.getElementById('forgeCard').scrollIntoView({ behavior:'smooth', block:'center' }));
-document.querySelectorAll('.unavailable-nav').forEach(button => button.addEventListener('click', () => showError(`${button.dataset.space} is not connected in this build.`)));
 document.getElementById('checkSystemBtn').addEventListener('click', () => runKernelTool('os:status'));
 document.getElementById('modelsRefreshBtn').addEventListener('click', () => checkModels());
 document.getElementById('listIssuesBtn')?.addEventListener('click', () => runKernelTool('github:issues'));
@@ -775,3 +756,5 @@ if (typeof checkModels === 'function') {
     if (!document.hidden) checkModels();
   }, 15000);
 }
+
+initializeSubsystemPages();

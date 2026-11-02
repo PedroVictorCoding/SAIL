@@ -120,6 +120,15 @@ pub async fn run_dialogue_server_with_services(
             }),
         )
         .route(
+            "/subsystem-pages.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/subsystem-pages.js"),
+                )
+            }),
+        )
+        .route(
             "/ui.js",
             get(|| async {
                 (
