@@ -19,6 +19,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap
 
+      # Ubuntu 24.04+ runners restrict unprivileged user namespaces through AppArmor: bwrap can
+      # create the namespace but holds no capabilities in it, so `--unshare-net` fails with
+      # "loopback: Failed RTM_NEWADDR". Lift the restriction on this disposable runner only so
+      # Forge's mandatory sandbox can run; the sandbox code still fails closed without bwrap.
+      - name: Allow Bubblewrap user namespaces (AppArmor)
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,5 +47,7 @@ jobs:
         run: cargo clippy -p sail-forge --all-targets --no-deps --locked -- -D warnings
 
       - name: Run workspace unit & integration tests
-        run: cargo test --workspace --locked
+        # --no-fail-fast: report every failing test binary instead of hiding later crates
+        # behind the first failure. The step still fails if any test fails.
+        run: cargo test --workspace --locked --no-fail-fast
 
