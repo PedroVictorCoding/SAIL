@@ -1149,6 +1149,8 @@ pub fn tool_definitions() -> serde_json::Value {
         {"type":"function","function":{"name":"web_read","description":"Fetch and read the text contents of any public web page, URL, documentation, or online issue without write permissions","parameters":{"type":"object","required":["url"],"properties":{"url":{"type":"string","description":"The HTTP or HTTPS URL to fetch and read"}},"additionalProperties":false}}},
         {"type":"function","function":{"name":"forge_enqueue","description":"Enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting.","parameters":{"type":"object","properties":{"issue_number":{"type":"integer","description":"GitHub issue number to solve"},"repo":{"type":"string","description":"Repository name, defaults to PedroVictorCoding/SAIL"},"task":{"type":"string","description":"Optional description or instructions for the task"}}}}},
         {"type":"function","function":{"name":"forge_status","description":"Check the status, current step, test outcome, and diff of a Forge autonomous coding job. Accepts exact job IDs (e.g. job-5-61c992ad), prefix (e.g. job-5), or issue numbers (e.g. 5 or #5).","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)"}}}}},
+        {"type":"function","function":{"name":"forge_list","description":"List all active, recent, and stored Forge autonomous coding jobs and tasks.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
+        {"type":"function","function":{"name":"forge_cancel","description":"Cancel or stop a running or in-progress Forge autonomous coding task.","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID or issue number to cancel"},"reason":{"type":"string","description":"Optional cancellation reason"}}}}},
         {"type":"function","function":{"name":"forge_clear","description":"Remove, clear, or archive blocked, cancelled, or completed Forge coding jobs from the active queue and delete their local checkpoints. Pass 'all' to clear all finished/blocked jobs, or specify a job_id.","parameters":{"type":"object","properties":{"job_id":{"type":"string","description":"Specific job ID to remove, or 'all' to clear all finished and blocked jobs (defaults to 'all')"}}}}}
     ])
 }
@@ -1220,5 +1222,34 @@ mod schema_selection_tests {
                 .iter()
                 .any(|t| t["function"]["name"] == "forge_enqueue")
         );
+    }
+
+    #[test]
+    fn all_tools_are_represented_in_definitions() {
+        let all = super::tool_definitions();
+        let tools = all.as_array().expect("array of tools");
+        assert_eq!(tools.len(), 16);
+
+        let names: Vec<_> = tools
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap())
+            .collect();
+
+        assert!(names.contains(&"os_status"));
+        assert!(names.contains(&"proc_list"));
+        assert!(names.contains(&"fs_query"));
+        assert!(names.contains(&"fs_read"));
+        assert!(names.contains(&"fs_write"));
+        assert!(names.contains(&"canvas_publish"));
+        assert!(names.contains(&"local_time"));
+        assert!(names.contains(&"command_execute"));
+        assert!(names.contains(&"vision_frame"));
+        assert!(names.contains(&"github_issues"));
+        assert!(names.contains(&"web_read"));
+        assert!(names.contains(&"forge_enqueue"));
+        assert!(names.contains(&"forge_status"));
+        assert!(names.contains(&"forge_list"));
+        assert!(names.contains(&"forge_cancel"));
+        assert!(names.contains(&"forge_clear"));
     }
 }
