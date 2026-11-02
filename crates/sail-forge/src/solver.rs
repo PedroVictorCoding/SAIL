@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::contracts::TestExecutionRecord;
+use crate::edit::{EditBlock, apply_edit_blocks, parse_edit_blocks};
 use crate::worktree::{IsolatedWorktree, WorktreeError};
 
 /// Bounded repository tool call emitted by the local coding model.
@@ -37,6 +38,21 @@ pub enum RepoToolCall {
     Diff,
     #[serde(rename = "repo:apply_patch", alias = "apply_patch")]
     ApplyPatch { patch: String },
+    /// Single search/replace edit (JSON form of a SEARCH/REPLACE block).
+    #[serde(rename = "repo:edit", alias = "edit")]
+    Edit {
+        path: String,
+        #[serde(alias = "old_str", alias = "search")]
+        old: String,
+        #[serde(alias = "new_str", alias = "replace")]
+        new: String,
+    },
+    /// SEARCH/REPLACE blocks parsed from the raw reply, applied atomically.
+    #[serde(rename = "repo:edit_blocks")]
+    EditBlocks { blocks: Vec<EditBlock> },
+    /// Ranked repository map of item signatures relevant to `query`.
+    #[serde(rename = "repo:map", alias = "map")]
+    Map { query: String },
     #[serde(rename = "repo:test", alias = "test")]
     Test {
         #[serde(default)]
@@ -91,6 +107,10 @@ pub struct SolverOutcome {
     pub test_records: Vec<TestExecutionRecord>,
     pub model: IdentifiedModel,
     pub summary: String,
+    /// Edit/patch tool calls that failed to apply (malformed or mismatched edits).
+    pub edit_failures: u32,
+    /// Model replies that contained no parseable tool call or edit.
+    pub parse_failures: u32,
 }
 
 /// Real-time progress update emitted during autonomous solver iterations.
@@ -113,6 +133,62 @@ pub struct SolverProgress {
     pub logs: Option<Vec<String>>,
 }
 
+impl RepoToolCall {
+    fn edit_blocks(&self) -> Option<Vec<EditBlock>> {
+        match self {
+            RepoToolCall::Edit { path, old, new } => Some(vec![EditBlock {
+                path: path.clone(),
+                search: old.clone(),
+                replace: new.clone(),
+            }]),
+            RepoToolCall::EditBlocks { blocks } => Some(blocks.clone()),
+            _ => None,
+        }
+    }
+
+    /// Files an edit-type call intends to change.
+    pub fn edit_paths(&self) -> Vec<String> {
+        match self {
+            RepoToolCall::ApplyPatch { patch } => extract_modified_files_from_diff(patch),
+            other => {
+                let mut paths: Vec<String> = other
+                    .edit_blocks()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|b| b.path)
+                    .collect();
+                paths.dedup();
+                paths
+            }
+        }
+    }
+
+    /// Human-readable body of an edit-type call for progress events.
+    pub fn edit_preview(&self) -> String {
+        match self {
+            RepoToolCall::ApplyPatch { patch } => patch.clone(),
+            other => other
+                .edit_blocks()
+                .unwrap_or_default()
+                .iter()
+                .map(|b| {
+                    format!(
+                        "{}\n<<<<<<< SEARCH\n{}\n=======\n{}\n>>>>>>> REPLACE",
+                        b.path, b.search, b.replace
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+}
+
+/// Initial-context budgets, sized for a 16k-token local model context with 2k output
+/// tokens per turn (roughly 3.5 characters per token for Rust).
+const TARGET_CONTEXT_CHARS: usize = 8_000;
+const REPO_MAP_CHARS: usize = 4_000;
+const HISTORY_BUDGET_CHARS: usize = 36_000;
+
 /// Execute a bounded repository tool strictly inside `worktree`.
 pub fn execute_repo_tool(
     worktree: &IsolatedWorktree,
@@ -121,7 +197,48 @@ pub fn execute_repo_tool(
     timeout_secs: u64,
     step_idx: u32,
 ) -> RepoToolResult {
+    if let Some(blocks) = call.edit_blocks() {
+        return match apply_edit_blocks(worktree, &blocks) {
+            Ok(files) => RepoToolResult {
+                tool: "repo:edit".into(),
+                ok: true,
+                output: format!(
+                    "Edit applied ({} block(s)). Modified files: {}",
+                    blocks.len(),
+                    files.join(", ")
+                ),
+                modified_files: files,
+                test_record: None,
+            },
+            Err(e) => RepoToolResult {
+                tool: "repo:edit".into(),
+                ok: false,
+                output: format!("Error: {e}"),
+                modified_files: Vec::new(),
+                test_record: None,
+            },
+        };
+    }
     match call {
+        RepoToolCall::Edit { .. } | RepoToolCall::EditBlocks { .. } => {
+            unreachable!("edit calls are handled above")
+        }
+        RepoToolCall::Map { query } => {
+            let files = crate::repo_map::scan_repo(&worktree.root_dir);
+            let ranked = crate::repo_map::rank(&files, query, &[]);
+            let map = crate::repo_map::render_map(&ranked, REPO_MAP_CHARS);
+            RepoToolResult {
+                tool: "repo:map".into(),
+                ok: true,
+                output: if map.is_empty() {
+                    format!("No Rust items match `{query}`; try repo:search")
+                } else {
+                    map
+                },
+                modified_files: Vec::new(),
+                test_record: None,
+            }
+        }
         RepoToolCall::List { path } => {
             let rel = path.as_deref().unwrap_or(".");
             let rel_path = Path::new(rel);
@@ -553,6 +670,14 @@ pub fn extract_unified_diff(raw: &str) -> String {
 pub fn parse_model_action(raw: &str) -> Option<RepoToolCall> {
     let trimmed = raw.trim();
 
+    // 0. SEARCH/REPLACE blocks (preferred edit format)
+    if trimmed.contains("SEARCH") {
+        let blocks = parse_edit_blocks(trimmed);
+        if !blocks.is_empty() {
+            return Some(RepoToolCall::EditBlocks { blocks });
+        }
+    }
+
     // 1. Try direct JSON object or JSON inside markdown fence
     let mut json_candidates = vec![trimmed.to_string()];
     if trimmed.contains("```") {
@@ -851,7 +976,13 @@ impl LocalSolverController {
             .unwrap_or_default();
 
         let endpoints = Self::candidate_endpoints();
-        let initial_ctx = self.build_initial_workspace_context(worktree);
+        let initial_ctx = crate::repo_map::build_issue_context(
+            &worktree.root_dir,
+            issue_title,
+            issue_body,
+            TARGET_CONTEXT_CHARS,
+            REPO_MAP_CHARS,
+        );
 
         on_progress(SolverProgress {
             turn: 1,
@@ -869,28 +1000,36 @@ impl LocalSolverController {
             ]),
         });
 
-        let system_prompt = r#"You are SAIL Forge Local Issue Solver v0.1, an autonomous Rust coding agent operating inside an isolated sandbox worktree.
-You have access to the following bounded repository tools. Respond with EITHER a single JSON tool call object OR a unified diff (`--- a/<path>` / `+++ b/<path>`):
+        let system_prompt = r#"You are SAIL Forge Local Issue Solver v0.2, an autonomous Rust coding agent operating inside an isolated sandbox worktree.
+Each reply must be EITHER one JSON tool call OR one or more SEARCH/REPLACE edit blocks.
 
-1. List files:
-{"tool": "repo:list", "path": "."}
-2. Search lines/symbols across files:
-{"tool": "repo:search", "query": "function_or_symbol"}
-3. Read line range (up to 200 lines):
-{"tool": "repo:read_range", "path": "src/lib.rs", "start_line": 1, "end_line": 120}
-4. Inspect current git diff:
-{"tool": "repo:diff"}
-5. Apply a unified diff patch (supports modifying 1 or multiple files in a single patch):
-{"tool": "repo:apply_patch", "patch": "--- a/src/file1.rs\n+++ b/src/file1.rs\n@@ -1,3 +1,3 @@\n-old\n+new\n"}
-6. Run sandboxed `cargo test`:
-{"tool": "repo:test"}
-7. Finish after tests pass:
-{"tool": "done", "summary": "Fixed issue and verified tests pass"}
+Tools (JSON):
+1. {"tool": "repo:list", "path": "."}
+2. {"tool": "repo:search", "query": "function_or_symbol"}
+3. {"tool": "repo:read_range", "path": "src/lib.rs", "start_line": 1, "end_line": 120}
+4. {"tool": "repo:map", "query": "words from the issue"}  (ranked item signatures with line numbers)
+5. {"tool": "repo:diff"}
+6. {"tool": "repo:test"}  (sandboxed cargo test)
+7. {"tool": "done", "summary": "what changed"}  (only after repo:test passes)
+
+Edits (preferred; no JSON escaping needed). Write the file path on its own line, then:
+src/lib.rs
+<<<<<<< SEARCH
+exact existing lines to replace
+=======
+replacement lines
+>>>>>>> REPLACE
+
+Edit rules:
+- SEARCH must copy the current file lines exactly and be unique in the file; include 2-3 surrounding lines if needed.
+- Use several blocks for several places or files; they are applied together.
+- To create a new file use an empty SEARCH section.
+- Unified diffs (--- a/ +++ b/) are still accepted but SEARCH/REPLACE is more reliable.
 
 Rules:
-- Never emit comment-only patches. Modify real Rust code to fix the root cause.
-- When fixing a multi-file bug, include hunks for all required files (`--- a/...` / `+++ b/...`) or apply patches sequentially.
-- Always ensure `repo:test` passes before finishing."#;
+- Fix the root cause in real Rust code; never emit comment-only changes.
+- Keep existing tests; do not delete or #[ignore] them.
+- Edits are tested automatically; finish with done once tests pass."#;
 
         let user_prompt = format!(
             "Issue Title: {}\nIssue Description:\n{}\n\n{}",
@@ -914,6 +1053,8 @@ Rules:
         let mut test_records: Vec<TestExecutionRecord> = Vec::new();
         let mut tests_verified = false;
         let mut last_error: Option<String> = None;
+        let mut edit_failures = 0u32;
+        let mut parse_failures = 0u32;
 
         while turns < self.max_turns && iterations < self.max_iterations {
             if is_cancelled() {
@@ -929,6 +1070,8 @@ Rules:
                     iterations,
                     turns,
                     test_records,
+                    edit_failures,
+                    parse_failures,
                     model: identified_model,
                     summary: "Cancelled by operator".into(),
                 };
@@ -958,7 +1101,7 @@ Rules:
             });
 
             // Bound accumulated multi-turn history to keep prompts within context limits
-            Self::prune_messages_to_budget(&mut messages, 24000);
+            Self::prune_messages_to_budget(&mut messages, HISTORY_BUDGET_CHARS);
 
             // Call local OpenAI-compatible chat completions endpoint with streaming support
             let mut turn_response_text: Option<String> = None;
@@ -1162,6 +1305,8 @@ Rules:
                         iterations,
                         turns,
                         test_records,
+                        edit_failures,
+                        parse_failures,
                         model: identified_model,
                         summary: reason,
                     };
@@ -1198,9 +1343,10 @@ Rules:
             let action = match parse_model_action(&raw_reply) {
                 Some(a) => a,
                 None => {
+                    parse_failures += 1;
                     messages.push(serde_json::json!({
                         "role": "user",
-                        "content": "Could not parse a valid tool call or unified diff. Emit a JSON object such as {\"tool\":\"repo:apply_patch\",\"patch\":\"--- a/...\\n+++ b/...\"} or a unified diff block."
+                        "content": "Could not parse a tool call or edit. Reply with either one JSON tool call (e.g. {\"tool\":\"repo:read_range\",\"path\":\"src/lib.rs\",\"start_line\":1,\"end_line\":80}) or SEARCH/REPLACE edit blocks."
                     }));
                     continue;
                 }
@@ -1208,7 +1354,10 @@ Rules:
 
             // Determine whether the model emitted a raw unified diff directly (vs an explicit JSON `repo:apply_patch` tool call)
             let is_direct_diff = !raw_reply.contains("\"tool\"")
-                && matches!(action, RepoToolCall::ApplyPatch { .. });
+                && matches!(
+                    action,
+                    RepoToolCall::ApplyPatch { .. } | RepoToolCall::EditBlocks { .. }
+                );
 
             match &action {
                 RepoToolCall::Done { summary } => {
@@ -1274,14 +1423,19 @@ Rules:
                         iterations,
                         turns,
                         test_records,
+                        edit_failures,
+                        parse_failures,
                         model: identified_model,
                         summary: summary
                             .clone()
                             .unwrap_or_else(|| "Solved and verified inside sandbox".into()),
                     };
                 }
-                RepoToolCall::ApplyPatch { patch } => {
-                    let modified_files = extract_modified_files_from_diff(patch);
+                RepoToolCall::ApplyPatch { .. }
+                | RepoToolCall::Edit { .. }
+                | RepoToolCall::EditBlocks { .. } => {
+                    let patch = &action.edit_preview();
+                    let modified_files = action.edit_paths();
                     let target_candidate = modified_files.first().cloned();
 
                     on_progress(SolverProgress {
@@ -1316,10 +1470,11 @@ Rules:
                         iterations + 1,
                     );
                     if !patch_res.ok {
+                        edit_failures += 1;
                         last_error = Some(patch_res.output.clone());
                         messages.push(serde_json::json!({
                             "role": "user",
-                            "content": format!("Tool `repo:apply_patch` failed:\n{}\nUse `repo:read_range` to check exact file lines and emit an accurate unified diff.", patch_res.output)
+                            "content": format!("Edit failed:\n{}\nRe-read the file with `repo:read_range` and emit a corrected SEARCH/REPLACE block whose SEARCH copies the current lines exactly.", patch_res.output)
                         }));
                         continue;
                     }
@@ -1408,6 +1563,8 @@ Rules:
                                 iterations,
                                 turns,
                                 test_records,
+                                edit_failures,
+                                parse_failures,
                                 model: identified_model,
                                 summary: "Patch applied and cargo test passed".into(),
                             };
@@ -1516,6 +1673,8 @@ Rules:
                             iterations,
                             turns,
                             test_records,
+                            edit_failures,
+                            parse_failures,
                             model: identified_model,
                             summary: "Sandboxed cargo test passed with verified code diff".into(),
                         };
@@ -1617,6 +1776,8 @@ Rules:
             iterations,
             turns,
             test_records,
+            edit_failures,
+            parse_failures,
             model: identified_model,
             summary: reason,
         }

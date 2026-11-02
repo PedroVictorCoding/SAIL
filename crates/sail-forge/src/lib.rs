@@ -2,6 +2,9 @@
 
 pub mod admission;
 pub mod contracts;
+pub mod edit;
+pub mod eval;
+pub mod eval_cases;
 pub mod fixtures;
 pub mod gates;
 pub mod github;
@@ -10,6 +13,7 @@ pub mod nightly;
 pub mod orchestrator;
 pub mod persistence;
 pub mod publish;
+pub mod repo_map;
 pub mod reviewer;
 pub mod self_review;
 pub mod solver;

@@ -1074,6 +1074,8 @@ impl ForgeOrchestrator {
                 iterations: 1,
                 turns: 1,
                 test_records: test_recs,
+                edit_failures: 0,
+                parse_failures: 0,
                 model: crate::solver::IdentifiedModel {
                     model_id: "caller-pinned-patch".into(),
                     model_hash: "pinned".into(),
