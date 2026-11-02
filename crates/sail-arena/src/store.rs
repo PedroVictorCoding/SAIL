@@ -471,7 +471,7 @@ fn encode_body(body: &str) -> (i64, Vec<u8>) {
     }
 }
 
-fn decode_body(codec: i64, blob: &[u8]) -> String {
+pub(crate) fn decode_body(codec: i64, blob: &[u8]) -> String {
     let bytes = match codec {
         CODEC_LZ4 => lz4_flex::decompress_size_prepended(blob).unwrap_or_default(),
         _ => blob.to_vec(),

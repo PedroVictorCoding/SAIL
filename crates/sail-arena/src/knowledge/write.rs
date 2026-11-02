@@ -11,7 +11,7 @@ const MAX_VALUE_CHARS: usize = 2_000;
 /// Mutations inside one knowledge transaction. Obtained from
 /// [`KnowledgeStore::write`](super::KnowledgeStore::write).
 pub struct KnowledgeTx<'t> {
-    conn: &'t Connection,
+    pub(crate) conn: &'t Connection,
     actor: Actor,
     now: i64,
 }

@@ -141,3 +141,22 @@ Each of these has a test in `crates/sail-arena/tests/knowledge_test.rs`.
 
 Evaluation (spec §10) is added alongside each phase as deterministic datasets. No accuracy
 or latency figures are claimed until they have been measured.
+
+## Phase 2: deterministic consolidation
+
+`KnowledgeStore::consolidate` consumes a bounded batch from one authorized scope.
+Its whole-utterance grammar accepts `Remember: NAME is VALUE`, `Correction: NAME
+is VALUE`, `Decision: NAME is VALUE`, `I prefer VALUE`, and `I now prefer VALUE`.
+Only the user part of an archived turn is eligible. Unsupported or ambiguous
+multiline text stays in the buffer; no general language extraction is claimed.
+Trusted tool adapters can archive a typed `consolidation::Observation` as
+`tool_observation`; ordinary tool-result text cannot promote claims to verified.
+
+Resolution uses a supplied entity id first, then a unique same-kind name/alias in
+the same scope. Multiple matches create a separate entity with
+`possible_duplicate_of` links. There is no automatic embedding or model-based merge.
+Claims, reconciliation, and source/index deletion commit together at the job's
+captured deletion generation. Evidence keeps a bounded receipt and source hash.
+An invalid candidate rolls back the entire batch, including all source deletions.
+Tests in `consolidation_test.rs` cover restart, release, corrections, disputes,
+permissions, injected role text, verified tool observations, and rollback/replay.

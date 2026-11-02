@@ -16,6 +16,7 @@
 //!   bumps a deletion generation that in-flight jobs can be checked against;
 //! - reads are filtered by [`Access`] in SQL, before rows are hydrated.
 
+pub mod consolidation;
 pub mod model;
 mod read;
 pub(crate) mod schema;
