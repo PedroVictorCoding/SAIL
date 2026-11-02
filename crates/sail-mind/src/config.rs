@@ -14,11 +14,16 @@ pub struct LocalModelConfig {
     pub device: String,
     pub gpu_layers: u32,
     pub threads: usize,
+    pub threads_batch: Option<usize>,
     pub context_tokens: usize,
     pub cache_type_k: String,
     pub cache_type_v: String,
     pub flash_attn: bool,
     pub cache_reuse: usize,
+    pub batch_size: usize,
+    pub ubatch_size: usize,
+    pub no_mmap: bool,
+    pub mlock: bool,
     pub startup_timeout: Duration,
     pub probe_timeout: Duration,
 }
@@ -27,6 +32,9 @@ impl Default for LocalModelConfig {
         let endpoint = std::env::var("SAIL_LLM_URL")
             .unwrap_or("http://127.0.0.1:8081/v1/chat/completions".into());
         let managed = std::env::var("SAIL_LLM_URL").is_err();
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
         Self {
             name: "Qwen3.6-35B-A3B".into(),
             aliases: vec![
@@ -63,6 +71,7 @@ impl Default for LocalModelConfig {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     let candidates = [
+                        PathBuf::from("/home/main/llama.cpp/build-vulkan/bin/llama-server"),
                         PathBuf::from("/home/main/llama-cpp-turboquant/build/bin/llama-server"),
                         PathBuf::from("/home/main/llama.cpp/build/bin/llama-server"),
                     ];
@@ -79,9 +88,8 @@ impl Default for LocalModelConfig {
             compute: ComputeBackend::Cpu,
             device: "Vulkan0".into(),
             gpu_layers: 8,
-            threads: std::thread::available_parallelism()
-                .map(|n| n.get().min(6))
-                .unwrap_or(1),
+            threads: cpus.min(5),
+            threads_batch: None,
             context_tokens: std::env::var("SAIL_CONTEXT_TOKENS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -95,6 +103,20 @@ impl Default for LocalModelConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(256),
+            batch_size: std::env::var("SAIL_BATCH_SIZE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2048),
+            ubatch_size: std::env::var("SAIL_UBATCH_SIZE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(512),
+            no_mmap: std::env::var("SAIL_NO_MMAP")
+                .map(|v| v == "1" || v == "true")
+                .unwrap_or(false),
+            mlock: std::env::var("SAIL_MLOCK")
+                .map(|v| v == "1" || v == "true")
+                .unwrap_or(false),
             startup_timeout: Duration::from_secs(120),
             probe_timeout: Duration::from_secs(3),
         }
@@ -142,10 +164,31 @@ impl LocalModelConfig {
         if let Ok(v) = std::env::var("SAIL_FLASH_ATTN") {
             config.flash_attn = v != "0" && v != "off" && v != "false";
         }
-        if let Ok(v) = std::env::var("SAIL_CACHE_REUSE") {
-            if let Ok(n) = v.parse() {
-                config.cache_reuse = n;
-            }
+        if let Ok(v) = std::env::var("SAIL_CACHE_REUSE")
+            && let Ok(n) = v.parse()
+        {
+            config.cache_reuse = n;
+        }
+        if let Ok(v) = std::env::var("SAIL_MODEL_THREADS_BATCH")
+            && let Ok(n) = v.parse()
+        {
+            config.threads_batch = Some(n);
+        }
+        if let Ok(v) = std::env::var("SAIL_BATCH_SIZE")
+            && let Ok(n) = v.parse()
+        {
+            config.batch_size = n;
+        }
+        if let Ok(v) = std::env::var("SAIL_UBATCH_SIZE")
+            && let Ok(n) = v.parse()
+        {
+            config.ubatch_size = n;
+        }
+        if let Ok(v) = std::env::var("SAIL_NO_MMAP") {
+            config.no_mmap = v == "1" || v == "true";
+        }
+        if let Ok(v) = std::env::var("SAIL_MLOCK") {
+            config.mlock = v == "1" || v == "true";
         }
         config.validate()?;
         Ok(config)
@@ -158,6 +201,9 @@ impl LocalModelConfig {
         if self.name.is_empty()
             || self.threads == 0
             || self.threads > cpus
+            || self.batch_size == 0
+            || self.ubatch_size == 0
+            || self.ubatch_size > self.batch_size
             || !(512..=65536).contains(&self.context_tokens)
             || self.gpu_layers > 128
             || self.startup_timeout.is_zero()
@@ -165,7 +211,15 @@ impl LocalModelConfig {
         {
             return Err(InferenceError::new(
                 ErrorCode::InvalidConfiguration,
-                "Invalid model name, CPU thread/context/GPU budget or deadline",
+                "Invalid model name, CPU thread/context/batch/GPU budget or deadline",
+            ));
+        }
+        if let Some(tb) = self.threads_batch
+            && (tb == 0 || tb > cpus * 2)
+        {
+            return Err(InferenceError::new(
+                ErrorCode::InvalidConfiguration,
+                "Invalid threads_batch budget",
             ));
         }
         if (self.compute == ComputeBackend::Vulkan || self.compute == ComputeBackend::Hybrid)
@@ -189,8 +243,63 @@ impl LocalModelConfig {
         }
         Ok(url)
     }
+    pub fn from_profile(
+        profile: &InferenceProfile,
+        model_path: PathBuf,
+        server_binary: PathBuf,
+        endpoint: String,
+    ) -> Self {
+        let managed = local_endpoint(&endpoint)
+            .map(|u| matches!(u.host_str(), Some("127.0.0.1" | "localhost")))
+            .unwrap_or(true);
+        Self {
+            name: profile.profile_id.clone(),
+            aliases: vec!["local".into()],
+            model_path,
+            server_binary,
+            endpoint,
+            projector: None,
+            managed,
+            compute: profile.backend,
+            device: profile.device.clone(),
+            gpu_layers: profile.gpu_layers,
+            threads: profile.threads,
+            threads_batch: Some(profile.threads_batch),
+            context_tokens: profile.context_tokens,
+            cache_type_k: profile.cache_type_k.clone(),
+            cache_type_v: profile.cache_type_v.clone(),
+            flash_attn: profile.flash_attn,
+            cache_reuse: profile.cache_reuse,
+            batch_size: profile.batch_size,
+            ubatch_size: profile.ubatch_size,
+            no_mmap: profile.no_mmap,
+            mlock: profile.mlock,
+            startup_timeout: Duration::from_secs(120),
+            probe_timeout: Duration::from_secs(3),
+        }
+    }
+    pub fn to_profile(&self) -> InferenceProfile {
+        InferenceProfile {
+            profile_id: self.name.clone(),
+            backend: self.compute,
+            threads: self.threads,
+            threads_batch: self.threads_batch.unwrap_or(self.threads),
+            context_tokens: self.context_tokens,
+            cache_type_k: self.cache_type_k.clone(),
+            cache_type_v: self.cache_type_v.clone(),
+            flash_attn: self.flash_attn,
+            cache_reuse: self.cache_reuse,
+            batch_size: self.batch_size,
+            ubatch_size: self.ubatch_size,
+            mlock: self.mlock,
+            no_mmap: self.no_mmap,
+            gpu_layers: self.gpu_layers,
+            device: self.device.clone(),
+        }
+    }
     pub fn launch_args(&self, parallel: usize) -> Result<Vec<String>> {
         let url = self.validate()?;
+        let threads_batch = self.threads_batch.unwrap_or(self.threads);
         let mut args = vec![
             "-m".into(),
             self.model_path.display().to_string(),
@@ -202,11 +311,15 @@ impl LocalModelConfig {
             "--threads".into(),
             self.threads.to_string(),
             "--threads-batch".into(),
-            self.threads.to_string(),
+            threads_batch.to_string(),
             "--ctx-size".into(),
             (self.context_tokens * parallel).to_string(),
             "--parallel".into(),
             parallel.to_string(),
+            "--batch-size".into(),
+            self.batch_size.to_string(),
+            "--ubatch-size".into(),
+            self.ubatch_size.to_string(),
             "--image-max-tokens".into(),
             "1024".into(),
         ];
@@ -240,6 +353,12 @@ impl LocalModelConfig {
         }
         if self.cache_reuse > 0 {
             args.extend(["--cache-reuse".into(), self.cache_reuse.to_string()]);
+        }
+        if self.no_mmap {
+            args.push("--no-mmap".into());
+        }
+        if self.mlock {
+            args.push("--mlock".into());
         }
         Ok(args)
     }
