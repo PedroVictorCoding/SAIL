@@ -28,12 +28,15 @@ fn spawn_subsystem_worker(
     });
 }
 
+/// Next event explicitly addressed to this receiver's subsystem. Broadcasts (no target) such
+/// as `SystemReady` or Flow's startup `SafetyReviewCompleted` catch-up can arrive at any time
+/// and are not responses to the test's requests, so they are skipped.
 async fn next_business_event(
     rx: &mut sail_common::FilteredReceiver,
 ) -> sail_common::Result<SailEvent> {
     loop {
         let event = rx.recv().await?;
-        if !matches!(event.payload, EventPayload::SystemReady { .. }) {
+        if event.target.is_some() {
             return Ok(event);
         }
     }
@@ -115,6 +118,20 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
     let mut rx_dialogue = bus.subscribe_filtered(SubsystemId::Dialogue);
     let mut rx_canvas = bus.subscribe_filtered(SubsystemId::Canvas);
     let mut rx_flow = bus.subscribe_filtered(SubsystemId::Flow);
+
+    // Unrelated broadcasts (e.g. Flow's startup safety-review catch-up) may reach every
+    // subscriber first; publish one deterministically so the assertions below must skip it.
+    bus.publish(SailEvent::new(
+        SubsystemId::Flow,
+        EventPayload::SafetyReviewCompleted {
+            run_id: "test-broadcast".to_string(),
+            trigger: "catchup".to_string(),
+            findings_count: 0,
+            high_or_critical_count: 0,
+            summary: "unrelated broadcast".to_string(),
+        },
+    ))
+    .unwrap();
 
     // 1. Simulate Dialogue turn from User
     let user_utterance = SailEvent::new(
