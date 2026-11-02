@@ -19,6 +19,7 @@
 pub mod consolidation;
 pub mod model;
 mod read;
+pub mod retrieval;
 pub(crate) mod schema;
 mod write;
 
