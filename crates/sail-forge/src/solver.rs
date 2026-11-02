@@ -11,6 +11,91 @@ use crate::contracts::TestExecutionRecord;
 use crate::edit::{EditBlock, apply_edit_blocks, parse_edit_blocks};
 use crate::worktree::{IsolatedWorktree, WorktreeError};
 
+const DEFAULT_MODEL_TIMEOUT_SECS: u64 = 600;
+
+fn model_timeout(value: Option<&str>) -> std::time::Duration {
+    let seconds = value
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|seconds| (1..=3600).contains(seconds))
+        .unwrap_or(DEFAULT_MODEL_TIMEOUT_SECS);
+    std::time::Duration::from_secs(seconds)
+}
+
+fn model_transport_error(
+    endpoint: &str,
+    error: &reqwest::Error,
+    timeout: std::time::Duration,
+) -> String {
+    if error.is_timeout() {
+        format!(
+            "Model request to {endpoint} timed out (deadline {}s). The server may be busy or generating slowly; configure SAIL_FORGE_MODEL_TIMEOUT_SECS for this host.",
+            timeout.as_secs()
+        )
+    } else if error.is_connect() {
+        format!("Cannot connect to model endpoint {endpoint}: {error}")
+    } else {
+        format!("Model transport failure at {endpoint}: {error}")
+    }
+}
+
+// A queued request or stalled stream must remain cancellable before the next token.
+async fn wait_for_model<T>(
+    future: impl std::future::Future<Output = T>,
+    is_cancelled: &mut impl FnMut() -> bool,
+) -> Option<T> {
+    tokio::pin!(future);
+    let mut poll = tokio::time::interval(std::time::Duration::from_millis(100));
+    loop {
+        tokio::select! {
+            biased;
+            _ = poll.tick() => if is_cancelled() { return None; },
+            result = &mut future => return Some(result),
+        }
+    }
+}
+
+#[derive(Default)]
+struct ModelStreamReply {
+    pending: Vec<u8>,
+    text: String,
+    chunks: u32,
+    complete: bool,
+}
+impl ModelStreamReply {
+    fn push(&mut self, bytes: &[u8]) {
+        self.pending.extend_from_slice(bytes);
+        while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<_> = self.pending.drain(..=end).collect();
+            let line = String::from_utf8_lossy(&line);
+            let Some(data) = line.trim().strip_prefix("data:") else {
+                continue;
+            };
+            if data.trim() == "[DONE]" {
+                self.complete = true;
+                break;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(data.trim()) else {
+                continue;
+            };
+            let choice = &value["choices"][0];
+            if let Some(piece) = choice["delta"]["content"]
+                .as_str()
+                .or_else(|| choice["delta"]["reasoning_content"].as_str())
+            {
+                self.text.push_str(piece);
+                self.chunks += 1;
+            }
+            if choice["finish_reason"].as_str().is_some() {
+                self.complete = true;
+                break;
+            }
+        }
+    }
+    fn into_complete_text(self) -> Option<String> {
+        (self.complete && !self.text.trim().is_empty()).then_some(self.text)
+    }
+}
+
 /// Bounded repository tool call emitted by the local coding model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "tool", rename_all = "snake_case")]
@@ -970,8 +1055,14 @@ impl LocalSolverController {
         F: FnMut() -> bool,
         P: FnMut(SolverProgress),
     {
+        let request_timeout = model_timeout(
+            std::env::var("SAIL_FORGE_MODEL_TIMEOUT_SECS")
+                .ok()
+                .as_deref(),
+        );
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(90))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(request_timeout)
             .build()
             .unwrap_or_default();
 
@@ -1056,8 +1147,9 @@ Rules:
         let mut edit_failures = 0u32;
         let mut parse_failures = 0u32;
 
-        while turns < self.max_turns && iterations < self.max_iterations {
-            if is_cancelled() {
+        let mut cancelled_during_request = false;
+        'solver: loop {
+            if cancelled_during_request || is_cancelled() {
                 let final_diff = worktree.get_diff().unwrap_or_default();
                 let modified_files = extract_modified_files_from_diff(&final_diff);
                 return SolverOutcome {
@@ -1077,6 +1169,9 @@ Rules:
                 };
             }
 
+            if turns >= self.max_turns || iterations >= self.max_iterations {
+                break;
+            }
             turns += 1;
 
             on_progress(SolverProgress {
@@ -1132,7 +1227,17 @@ Rules:
                     "stream": true,
                 });
 
-                match client.post(ep).json(&req_body).send().await {
+                let response =
+                    match wait_for_model(client.post(ep).json(&req_body).send(), &mut is_cancelled)
+                        .await
+                    {
+                        Some(response) => response,
+                        None => {
+                            cancelled_during_request = true;
+                            continue 'solver;
+                        }
+                    };
+                match response {
                     Ok(resp) if resp.status().is_success() => {
                         if active_endpoint.is_none() {
                             active_endpoint = Some(ep.clone());
@@ -1153,80 +1258,83 @@ Rules:
 
                         if is_sse {
                             let mut stream = resp.bytes_stream();
-                            let mut accumulated = String::new();
-                            let mut line_buf = String::new();
-                            let mut token_count = 0u32;
+                            let mut reply = ModelStreamReply::default();
                             let mut last_emit = std::time::Instant::now();
-
-                            while let Some(chunk_res) = stream.next().await {
-                                if is_cancelled() {
+                            let mut stream_failed = false;
+                            loop {
+                                let chunk =
+                                    match wait_for_model(stream.next(), &mut is_cancelled).await {
+                                        Some(Some(chunk)) => chunk,
+                                        Some(None) => break,
+                                        None => {
+                                            cancelled_during_request = true;
+                                            continue 'solver;
+                                        }
+                                    };
+                                let bytes = match chunk {
+                                    Ok(bytes) => bytes,
+                                    Err(error) => {
+                                        turn_endpoint_err = Some(model_transport_error(
+                                            ep,
+                                            &error,
+                                            request_timeout,
+                                        ));
+                                        stream_failed = true;
+                                        break;
+                                    }
+                                };
+                                reply.push(&bytes);
+                                if last_emit.elapsed() > std::time::Duration::from_millis(120)
+                                    || reply.text.ends_with('\n')
+                                {
+                                    on_progress(SolverProgress {
+                                        turn: turns,
+                                        max_turns: self.max_turns,
+                                        iteration: iterations + 1,
+                                        stage: "coding".into(),
+                                        message: format!(
+                                            "Turn {}/{}: Generating code patch ({} chunks)...",
+                                            turns, self.max_turns, reply.chunks
+                                        ),
+                                        live_output: Some(reply.text.clone()),
+                                        model_action: Some("Streaming model output".into()),
+                                        diff: worktree.get_diff().ok(),
+                                        target_file: None,
+                                        logs: None,
+                                    });
+                                    last_emit = std::time::Instant::now();
+                                }
+                                if reply.complete {
                                     break;
                                 }
-                                if let Ok(bytes) = chunk_res {
-                                    line_buf.push_str(&String::from_utf8_lossy(&bytes));
-                                    while let Some(idx) = line_buf.find('\n') {
-                                        let line = line_buf[..idx].trim().to_string();
-                                        line_buf = line_buf[idx + 1..].to_string();
-                                        if let Some(data) = line.strip_prefix("data:") {
-                                            let data = data.trim();
-                                            if data == "[DONE]" {
-                                                break;
-                                            }
-                                            if let Ok(val) =
-                                                serde_json::from_str::<serde_json::Value>(data)
-                                            {
-                                                let delta = val
-                                                    .get("choices")
-                                                    .and_then(|c| c.get(0))
-                                                    .and_then(|c| c.get("delta"));
-                                                let piece = delta
-                                                    .and_then(|d| {
-                                                        d.get("content").and_then(|v| v.as_str())
-                                                    })
-                                                    .or_else(|| {
-                                                        delta.and_then(|d| {
-                                                            d.get("reasoning_content")
-                                                                .and_then(|v| v.as_str())
-                                                        })
-                                                    });
-
-                                                if let Some(text_chunk) = piece {
-                                                    accumulated.push_str(text_chunk);
-                                                    token_count += 1;
-                                                    if last_emit.elapsed()
-                                                        > std::time::Duration::from_millis(120)
-                                                        || text_chunk.contains('\n')
-                                                    {
-                                                        on_progress(SolverProgress {
-                                                            turn: turns,
-                                                            max_turns: self.max_turns,
-                                                            iteration: iterations + 1,
-                                                            stage: "coding".into(),
-                                                            message: format!(
-                                                                "Turn {}/{}: Generating code patch ({} tokens)...",
-                                                                turns, self.max_turns, token_count
-                                                            ),
-                                                            live_output: Some(accumulated.clone()),
-                                                            model_action: Some(
-                                                                "Streaming model output".into(),
-                                                            ),
-                                                            diff: worktree.get_diff().ok(),
-                                                            target_file: None,
-                                                            logs: None,
-                                                        });
-                                                        last_emit = std::time::Instant::now();
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
                             }
-                            if !accumulated.trim().is_empty() {
-                                turn_response_text = Some(accumulated);
+                            if !stream_failed && let Some(text) = reply.into_complete_text() {
+                                turn_response_text = Some(text);
                                 break;
                             }
-                        } else if let Ok(json_val) = resp.json::<serde_json::Value>().await {
+                            if turn_endpoint_err.is_none() {
+                                turn_endpoint_err = Some(format!(
+                                    "Model stream from {ep} ended before a complete response; partial output was discarded"
+                                ));
+                            }
+                        } else {
+                            let json_val = match wait_for_model(
+                                resp.json::<serde_json::Value>(),
+                                &mut is_cancelled,
+                            )
+                            .await
+                            {
+                                Some(Ok(value)) => value,
+                                Some(Err(error)) => {
+                                    turn_endpoint_err =
+                                        Some(model_transport_error(ep, &error, request_timeout));
+                                    continue;
+                                }
+                                None => {
+                                    cancelled_during_request = true;
+                                    continue 'solver;
+                                }
+                            };
                             // If response JSON itself carries a `model` field and identified_model was unknown, capture it
                             if identified_model.model_id == "unknown" {
                                 if let Some(m) = json_val.get("model").and_then(|v| v.as_str()) {
@@ -1266,9 +1374,21 @@ Rules:
                     }
                     Ok(resp) => {
                         let status = resp.status();
-                        let body_snippet = resp.text().await.unwrap_or_default();
+                        let body_snippet =
+                            match wait_for_model(resp.text(), &mut is_cancelled).await {
+                                Some(Ok(text)) => text,
+                                Some(Err(error)) => {
+                                    turn_endpoint_err =
+                                        Some(model_transport_error(ep, &error, request_timeout));
+                                    continue;
+                                }
+                                None => {
+                                    cancelled_during_request = true;
+                                    continue 'solver;
+                                }
+                            };
                         let snippet = if body_snippet.len() > 180 {
-                            format!("{}...", &body_snippet[..180])
+                            format!("{}...", body_snippet.chars().take(180).collect::<String>())
                         } else {
                             body_snippet
                         };
@@ -1278,7 +1398,7 @@ Rules:
                         ));
                     }
                     Err(e) => {
-                        turn_endpoint_err = Some(format!("Endpoint {} unreachable: {}", ep, e));
+                        turn_endpoint_err = Some(model_transport_error(ep, &e, request_timeout));
                     }
                 }
             }
@@ -1781,5 +1901,144 @@ Rules:
             model: identified_model,
             summary: reason,
         }
+    }
+}
+
+#[cfg(test)]
+mod model_transport_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn request_deadline_is_long_enough_for_local_generation_and_bounded() {
+        assert_eq!(model_timeout(None).as_secs(), 600);
+        assert_eq!(model_timeout(Some("900")).as_secs(), 900);
+        for value in ["0", "3601", "invalid", "-1"] {
+            assert_eq!(model_timeout(Some(value)).as_secs(), 600);
+        }
+    }
+
+    #[test]
+    fn partial_stream_is_not_accepted_as_a_patch() {
+        let mut reply = ModelStreamReply::default();
+        reply.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"--- a/file\\n\"}}]}\n\n");
+        assert!(reply.into_complete_text().is_none());
+    }
+
+    #[test]
+    fn fragmented_utf8_and_done_marker_produce_complete_output() {
+        let mut reply = ModelStreamReply::default();
+        let stream =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"café\\n\"}}]}\n\ndata: [DONE]\n\n";
+        for byte in stream.as_bytes() {
+            reply.push(&[*byte]);
+        }
+        assert_eq!(reply.into_complete_text().as_deref(), Some("café\n"));
+    }
+
+    #[test]
+    fn finish_reason_is_supported_without_a_done_marker() {
+        let mut reply = ModelStreamReply::default();
+        reply.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n");
+        assert_eq!(reply.into_complete_text().as_deref(), Some("done"));
+        let mut empty = ModelStreamReply::default();
+        empty.push(b"data: [DONE]\n");
+        assert!(empty.into_complete_text().is_none());
+    }
+
+    #[tokio::test]
+    async fn stalled_model_wait_can_be_cancelled_before_a_token_arrives() {
+        let started = Instant::now();
+        let result = wait_for_model(std::future::pending::<()>(), &mut || {
+            started.elapsed() >= Duration::from_millis(20)
+        })
+        .await;
+        assert!(result.is_none());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    fn delayed_server(delay: Duration) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            std::thread::sleep(delay);
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        });
+        format!("http://{address}/v1/chat/completions")
+    }
+
+    #[tokio::test]
+    async fn timeout_is_reported_as_timeout_instead_of_unreachable() {
+        let endpoint = delayed_server(Duration::from_millis(300));
+        let deadline = Duration::from_millis(50);
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(deadline)
+            .build()
+            .unwrap();
+        let error = client.get(&endpoint).send().await.unwrap_err();
+        assert!(error.is_timeout());
+        let message = model_transport_error(&endpoint, &error, deadline);
+        assert!(message.contains("timed out"), "{message}");
+        assert!(message.contains("SAIL_FORGE_MODEL_TIMEOUT_SECS"));
+        assert!(!message.contains("unreachable"));
+    }
+
+    #[tokio::test]
+    async fn broken_response_body_cannot_become_a_partial_patch() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.read(&mut [0; 4096]);
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 4096\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"partial patch\"}}]}\n\n").unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            // Close before the declared response length or a completion marker.
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let response = client
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        let mut stream = response.bytes_stream();
+        let mut reply = ModelStreamReply::default();
+        let mut failed = false;
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => reply.push(&bytes),
+                Err(_) => {
+                    failed = true;
+                    break;
+                }
+            }
+        }
+        assert!(failed, "mock must actually truncate the HTTP body");
+        assert!(reply.into_complete_text().is_none());
+    }
+
+    #[tokio::test]
+    async fn queued_request_survives_delay_within_its_configured_deadline() {
+        let endpoint = delayed_server(Duration::from_millis(100));
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let response = wait_for_model(client.get(endpoint).send(), &mut || false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "ok");
     }
 }

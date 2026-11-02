@@ -163,3 +163,19 @@ lock protocol. Back up both accounting state and configuration. This change does
 not complete #96's remaining canonical repository identity, CLI authentication,
 read-only review isolation, capacity detection or verdict-validation requirements.
 No UI additions are required; denied reviews use the existing review result pane.
+
+### Local model request deadline
+
+Forge allows up to 600 seconds per model request, including queueing, prompt
+processing, and streamed generation. Set `SAIL_FORGE_MODEL_TIMEOUT_SECS` before
+starting SAIL to override this deadline (1–3600 seconds; missing or invalid values
+use 600). The connection establishment timeout is separately limited to 5 seconds.
+
+A reachable single-slot CPU inference server can exceed the old 90-second limit
+while another turn is generating. A healthy `/health` response does not mean a
+model slot is immediately free. Forge now distinguishes timeout, connection, and
+other transport failures. Operator cancellation is checked while waiting for
+headers and response bodies. An interrupted or incomplete stream is discarded
+instead of being applied as a complete patch; successful streams must include a
+completion marker or finish reason. This does not add inference admission control
+or guarantee that a long-running model request will complete within the deadline.
