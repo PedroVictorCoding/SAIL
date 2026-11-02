@@ -5,6 +5,12 @@ agent-assisted tool working anywhere in this repository, including documentation
 configuration, tests, and scripts. Read this file before making changes. More
 specific instructions may add requirements but must retain this branch/PR workflow.
 
+## UI design requirements
+
+Before creating or changing UI, read and follow [DESIGN.md](DESIGN.md). Its shared
+neumorphism, accessibility, and verification rules are acceptance criteria for
+UI changes by every coding assistant. Apply them within the requested scope.
+
 ## Mandatory branch and pull-request workflow
 
 1. **Inspect the workspace first.** Check the current branch, remotes, and working
