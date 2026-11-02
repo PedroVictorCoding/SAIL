@@ -6,13 +6,27 @@ on:
     branches:
       - main
 
+# PR code runs with a read-only token and never receives repository secrets
+# (`pull_request`, not `pull_request_target`).
+permissions:
+  contents: read
+
+# A new push to a PR supersedes its running check; runs on main always complete.
+concurrency:
+  group: rust-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   rust-ci:
+    # Required status check name for branch protection on main (see CONTRIBUTING.md).
     name: Rust Format, Check & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies (Bubblewrap)
         run: |
@@ -29,8 +43,10 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
+      # Pinned so a new stable release cannot turn CI red without a code change. Bump
+      # deliberately, together with any new lint fixes.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: rustfmt, clippy
 
@@ -43,8 +59,8 @@ jobs:
       - name: Compile workspace
         run: cargo check --workspace --locked
 
-      - name: Clippy (Forge, warnings denied)
-        run: cargo clippy -p sail-forge --all-targets --no-deps --locked -- -D warnings
+      - name: Clippy (workspace, warnings denied)
+        run: cargo clippy --workspace --all-targets --no-deps --locked -- -D warnings
 
       - name: Run workspace unit & integration tests
         # --no-fail-fast: report every failing test binary instead of hiding later crates

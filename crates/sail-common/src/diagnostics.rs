@@ -51,10 +51,10 @@ pub fn redact_json(value: &Value) -> Value {
             Value::String(text) => {
                 // Tool arguments and command plans may themselves be JSON strings.
                 // Decode those before redaction so escaped credential bytes cannot leak.
-                if matches!(text.trim_start().chars().next(), Some('{') | Some('[')) {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(text) {
-                        return Value::String(visit(&parsed, depth + 1).to_string());
-                    }
+                if matches!(text.trim_start().chars().next(), Some('{') | Some('['))
+                    && let Ok(parsed) = serde_json::from_str::<Value>(text)
+                {
+                    return Value::String(visit(&parsed, depth + 1).to_string());
                 }
                 Value::String(redact(text))
             }

@@ -40,10 +40,10 @@ impl MemoryMaintenance {
         if !(self.idle)() {
             return Ok(false);
         }
-        if let Some(job) = k.lease_job(now)? {
-            if let Err(e) = k.run_job(&job, &self.access, now) {
-                tracing::warn!(job=job.id,error=%e,"Memory job did not commit; source retained");
-            }
+        if let Some(job) = k.lease_job(now)?
+            && let Err(e) = k.run_job(&job, &self.access, now)
+        {
+            tracing::warn!(job=job.id,error=%e,"Memory job did not commit; source retained");
         }
         if !(self.idle)() {
             return Ok(false);

@@ -99,7 +99,7 @@ async fn read(
             Read::Export => k.export(&access)?,
         })
     })();
-    result.map(|v| Json(v)).map_err(error)
+    result.map(Json).map_err(error)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

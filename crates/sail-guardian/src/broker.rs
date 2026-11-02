@@ -180,18 +180,18 @@ impl GuardianExecutionBroker {
             }
         }
 
-        if let Capability::Tool(ToolCapability::CliCommand(cmd)) = &capability {
-            if let Err(violation) = self.sandbox.validate_command(cmd) {
-                let reason = format!("Sandbox CLI violation: {violation:?}");
-                self.audit.record_with_correlation(
-                    caller,
-                    capability.clone(),
-                    DecisionOutcome::Denied,
-                    &reason,
-                    correlation_id,
-                );
-                return Err(ExecutionDenied::SandboxViolation(violation));
-            }
+        if let Capability::Tool(ToolCapability::CliCommand(cmd)) = &capability
+            && let Err(violation) = self.sandbox.validate_command(cmd)
+        {
+            let reason = format!("Sandbox CLI violation: {violation:?}");
+            self.audit.record_with_correlation(
+                caller,
+                capability.clone(),
+                DecisionOutcome::Denied,
+                &reason,
+                correlation_id,
+            );
+            return Err(ExecutionDenied::SandboxViolation(violation));
         }
 
         // 2. Risk evaluation and CapabilityToken consumption

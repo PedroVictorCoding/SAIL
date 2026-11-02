@@ -487,11 +487,10 @@ fn test_adversarial_vault_lock_unlock_and_zeroize_memory() {
             ),
             Err(CredentialError::VaultLocked)
         );
-        assert_eq!(
+        assert!(
             vault
                 .get_handle(SubsystemId::Bridge, "postgres_url", "db:write")
-                .is_err(),
-            true
+                .is_err()
         );
 
         // 3. Unlock with wrong key fails
@@ -541,9 +540,8 @@ fn test_adversarial_untrusted_callers_cannot_request_credentials() {
 
     for untrusted in untrusted_callers {
         // 1. Cannot get raw secrets
-        assert_eq!(
+        assert!(
             vault.get_handle(untrusted, "api_key", "api:read").is_err(),
-            true,
             "Untrusted caller {untrusted:?} must never receive raw secrets"
         );
 

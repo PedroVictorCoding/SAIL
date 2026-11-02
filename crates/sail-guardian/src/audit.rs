@@ -186,7 +186,9 @@ impl AuditLedger {
         })
     }
 
-    /// Calculate SHA-256 hash for an audit receipt
+    /// Calculate SHA-256 hash for an audit receipt. Every field is an explicit argument
+    /// because their order defines the hash input; bundling them must not change it.
+    #[allow(clippy::too_many_arguments)]
     fn compute_hash(
         prev_hash: &str,
         sequence: u64,
@@ -290,11 +292,11 @@ impl AuditLedger {
             hash: current_hash,
         };
 
-        if let Some(file) = file_guard.as_mut() {
-            if let Ok(line) = serde_json::to_string(&receipt) {
-                let _ = writeln!(file, "{}", line);
-                let _ = file.flush();
-            }
+        if let Some(file) = file_guard.as_mut()
+            && let Ok(line) = serde_json::to_string(&receipt)
+        {
+            let _ = writeln!(file, "{}", line);
+            let _ = file.flush();
         }
 
         let mut receipts_guard = self.receipts.write().unwrap();
@@ -307,9 +309,7 @@ impl AuditLedger {
     pub fn verify_chain(&self) -> bool {
         let receipts = self.receipts.read().unwrap();
         let mut expected_prev = GENESIS_HASH.to_string();
-        let mut expected_seq = 1u64;
-
-        for r in receipts.iter() {
+        for (expected_seq, r) in (1u64..).zip(receipts.iter()) {
             if r.sequence != expected_seq {
                 return false;
             }
@@ -334,7 +334,6 @@ impl AuditLedger {
             }
 
             expected_prev = r.hash.clone();
-            expected_seq += 1;
         }
 
         true

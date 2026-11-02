@@ -114,10 +114,11 @@ impl ScopedResource {
         if self.resource != "*" && self.resource != target_resource {
             return false;
         }
-        if let Some(account) = &self.account {
-            if account != "*" && target_account != Some(account.as_str()) {
-                return false;
-            }
+        if let Some(account) = &self.account
+            && account != "*"
+            && target_account != Some(account.as_str())
+        {
+            return false;
         }
         if self.operation != "*" && self.operation != target_op {
             return false;
@@ -154,7 +155,7 @@ impl NonceSequence for OneNonce {
         self.0
             .take()
             .ok_or(ring::error::Unspecified)
-            .map(|n| Nonce::assume_unique_for_key(n))
+            .map(Nonce::assume_unique_for_key)
     }
 }
 
@@ -205,12 +206,12 @@ impl CredentialStore {
         let mut key = Zeroizing::new([0u8; 32]);
         key.copy_from_slice(master_key);
         *self.encryption_key.write().unwrap() = Some(key);
-        if let Some(path) = &self.vault_path {
-            if let Err(error) = self.load_from_disk(path) {
-                *self.encryption_key.write().unwrap() = None;
-                self.secrets.write().unwrap().clear();
-                return Err(error);
-            }
+        if let Some(path) = &self.vault_path
+            && let Err(error) = self.load_from_disk(path)
+        {
+            *self.encryption_key.write().unwrap() = None;
+            self.secrets.write().unwrap().clear();
+            return Err(error);
         }
         Ok(())
     }

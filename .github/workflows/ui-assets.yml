@@ -12,10 +12,15 @@ on:
       - 'tools/xtask/**'
       - '.cargo/config.toml'
       - '.github/workflows/ui-assets.yml'
+permissions:
+  contents: read
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.97.0
       - run: CARGO_NET_OFFLINE=true cargo xtask assets verify

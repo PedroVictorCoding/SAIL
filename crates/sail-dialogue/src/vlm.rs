@@ -335,30 +335,29 @@ impl LocalKernelToolBroker {
             0.0
         };
 
-        if let Ok(stat) = fs::read_to_string("/proc/stat") {
-            if let Some(line) = stat.lines().next() {
-                if line.starts_with("cpu ") {
-                    let ticks: Vec<u64> = line
-                        .split_whitespace()
-                        .skip(1)
-                        .filter_map(|s| s.parse().ok())
-                        .collect();
-                    if ticks.len() >= 4 {
-                        let idle = ticks[3] + ticks.get(4).copied().unwrap_or(0);
-                        let total: u64 = ticks.iter().sum();
-                        let work = total.saturating_sub(idle);
-                        if let Ok(mut prev_guard) = PREV_CPU.lock() {
-                            if let Some((prev_work, prev_total)) = *prev_guard {
-                                let d_work = work.saturating_sub(prev_work);
-                                let d_total = total.saturating_sub(prev_total);
-                                if d_total > 0 {
-                                    cpu_percent = ((d_work as f64) / (d_total as f64) * 100.0)
-                                        .clamp(0.0, 100.0);
-                                }
-                            }
-                            *prev_guard = Some((work, total));
+        if let Ok(stat) = fs::read_to_string("/proc/stat")
+            && let Some(line) = stat.lines().next()
+            && line.starts_with("cpu ")
+        {
+            let ticks: Vec<u64> = line
+                .split_whitespace()
+                .skip(1)
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            if ticks.len() >= 4 {
+                let idle = ticks[3] + ticks.get(4).copied().unwrap_or(0);
+                let total: u64 = ticks.iter().sum();
+                let work = total.saturating_sub(idle);
+                if let Ok(mut prev_guard) = PREV_CPU.lock() {
+                    if let Some((prev_work, prev_total)) = *prev_guard {
+                        let d_work = work.saturating_sub(prev_work);
+                        let d_total = total.saturating_sub(prev_total);
+                        if d_total > 0 {
+                            cpu_percent =
+                                ((d_work as f64) / (d_total as f64) * 100.0).clamp(0.0, 100.0);
                         }
                     }
+                    *prev_guard = Some((work, total));
                 }
             }
         }
@@ -1128,14 +1127,13 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
         })
         .collect();
     ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    if has_handles {
-        if let Some(pos) = ranked
+    if has_handles
+        && let Some(pos) = ranked
             .iter()
             .position(|(_, _, tool)| tool["function"]["name"] == MEMORY_RECALL_TOOL)
-        {
-            let recall = ranked.remove(pos);
-            ranked.insert(0, recall);
-        }
+    {
+        let recall = ranked.remove(pos);
+        ranked.insert(0, recall);
     }
     let mut bytes = 2;
     let mut selected = Vec::new();

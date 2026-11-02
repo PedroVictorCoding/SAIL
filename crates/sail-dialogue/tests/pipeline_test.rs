@@ -108,7 +108,7 @@ fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
     let raw_cpu = os_res.output["cpu_usage_raw"]
         .as_f64()
         .expect("cpu_usage_raw is f64");
-    assert!(raw_cpu >= 0.0 && raw_cpu <= 100.0);
+    assert!((0.0..=100.0).contains(&raw_cpu));
     let process_call = KernelToolCall {
         tool: "proc:list".into(),
         params: serde_json::json!({"limit":3}),

@@ -80,10 +80,9 @@ fn extract(kind: &str, body: &str) -> Option<Candidate> {
                 (text, false, ClaimCategory::Fact)
             } else if let Some(text) = user.strip_prefix("Correction: ") {
                 (text, true, ClaimCategory::Fact)
-            } else if let Some(text) = user.strip_prefix("Decision: ") {
-                (text, false, ClaimCategory::Event)
             } else {
-                return None;
+                let text = user.strip_prefix("Decision: ")?;
+                (text, false, ClaimCategory::Event)
             };
             let (name, value) = text.split_once(" is ")?;
             (
