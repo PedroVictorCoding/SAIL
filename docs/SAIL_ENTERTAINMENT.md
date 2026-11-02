@@ -57,3 +57,40 @@ Pause/resume one approved player, remember a book location and restore it on ano
 - [Roadmap and subsystem taxonomy](https://github.com/PedroVictorCoding/SAIL/issues/15)
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
+
+## 10. External product research reference — Taranify (2026-11-02)
+
+**Product reference:** [Taranify](https://www.taranify.com/) · [How it works](https://www.taranify.com/how-it-works) · [About](https://www.taranify.com/about).
+
+**Source status:** Public-facing product website/documentation, **not a verified open-source code repository or licensed software SDK**. Do not cite the site as available source code or copy its implementation, branding, media assets, proprietary recommendation logic, or visual designs. If code is later published, independently verify repository ownership, version, license, integration surface and permission before adding it as a code dependency. This reference should be used to research *product interaction patterns* and define SAIL's original implementation.
+
+### Publicly observable concept
+
+Taranify offers entertainment discovery informed by a *momentary self-report color-choice quiz* and optional mood-related questions, covering Spotify playlists, movies, Netflix shows, books and food. Its home page also describes a group movie-picking flow: share a short join code, have participants answer the quiz and seek a recommendation acceptable to everyone.
+
+Its own [methodology page](https://www.taranify.com/how-it-works) expressly cautions that entertainment mood research **does not validate its particular color quiz as a psychological assessment**. Do not reproduce Taranify's marketing claims about scientific precision or mood detection as established fact. For SAIL, color choice is a playful *preference elicitation* interaction, **never mental-health assessment, emotion inference certainty or physiological measurement**.
+
+### SAIL Entertainment feature specification: Moment Discovery
+
+- **Entry point:** Entertainment Space → **“Find something for now”**. Compact category selector: Music / Film & series / Books; optional Food recommendations should be delegated to Life rather than silently enlarging Entertainment's scope.
+- **Mood direction first:** ask whether the user wants something matching, lifting, calming, energizing or contrasting their current mood. Allow a direct text description, optional playful paired-color preference cards, or **Skip**. No mandatory quiz.
+- **Short, revisable signal:** retain an ephemeral `MomentPreference { modality, selected_signals, desired_effect, optional_context, timestamp, consent }`, not a fabricated “detected emotional state”. Show a human-editable summary before using it.
+- **Ranking:** combine explicit mood direction, format, availability, duration, language, novelty, previous likes/dislikes (only if permissioned) and diversity; provide concise “why this” explanations. On weak data, degrade to a transparent recommendation based on stated preferences instead of claiming calibrated AI predictions.
+- **Interaction:** three to five focused recommendation cards, regenerate, filter, save, dislike, and “not now”; keep source/provider attribution and actionable playback/deep links only where licensed and technically available. Don't promise an accessible Netflix/Spotify catalog or playback without the relevant authorized adapters.
+- **Group recommendation (optional later milestone):** local/consented session with explicit participant join, one-time short code, time-limited identity, per-participant preference summaries, weighted fairness/least-misery balancing and a clear explanation of compromise; no inferred psychological dossiers or automatic account linking.
+- **Feedback and learning:** store explicit feedback separately from transient mood inputs. Use Discover/Arena only for consented durable preferences; ephemeral mood should expire. Offer anonymous/private mode with no history dependency.
+- **Voice:** Dialogue may ask “Do you want something mellow, or something to change your energy?” and present the same results; no microphone-derived emotion recognition without a separate explicit opt-in design.
+- **UI design:** retain SAIL minimal dark/glass UI; use simple accessible color-choice cards and brief single-step flow only if beneficial. Color choice must never be the sole channel for a decision (screen readers, color-vision accessibility). Keep mobile and desktop functionally equivalent.
+- **Research/evaluation:** A/B-test optional color choice versus direct mood text versus no mood prompt using measured click-through, satisfaction and repeat use; assess group fairness and diversity. Neither color selection nor engagement metrics should be claimed to measure psychological wellbeing.
+
+### Implementation / boundary mapping
+
+- **Entertainment:** recommendation orchestration and actionable media cards; existing Audio DNA #72 and release tracker #74 may become candidate features only after their own contracts are implemented.
+- **Discovery:** optional surfacing of new eligible recommendations, respecting attention budget and quiet hours.
+- **Bridge + Guardian:** provider access, local metadata import and auditable permissioned Spotify/other integration; no scraping around DRM, login gates or access restrictions.
+- **Arena:** consented cross-session tastes and provenance; no mandatory media-history tracking.
+- **Mind:** bounded local ranking/explanations; deterministic filter before generative reranking.
+- **Friends/Relay:** group invitations and transient shared decision context if user explicitly enables group mode.
+- **Life:** food recommendations if ever adopted.
+
+**MVP acceptance (after player MVP):** Without any external account, user selects Music, optionally states desired mood, receives grounded recommendations from an available local/public catalog, sees provenance and can regenerate; user can skip/color-mode toggle and clear all transient answers. Separate integration tests for provider unavailable, user opt-out, missing catalog, inaccessible colors, and mobile navigation. Do not claim that Taranify's private source or model has been incorporated.
