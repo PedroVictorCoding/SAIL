@@ -1224,3 +1224,186 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
     margin-top: 8px;
   }
 }
+
+/* ==========================================================================
+   Safety Review Findings & Web Notifications Styling
+   ========================================================================== */
+.safety-review-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.safety-review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--recessed);
+  border: var(--border);
+  box-shadow: var(--depth-inset);
+}
+
+.safety-review-status-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.safety-status-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #4ade80;
+}
+
+.safety-status-badge.has-findings {
+  color: #f87171;
+}
+
+.safety-badge-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f87171;
+  box-shadow: 0 0 6px #f87171;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.safety-findings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 230px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.safety-finding-card {
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: #23282C;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: var(--depth-control);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: all var(--transition-fast);
+}
+
+.safety-finding-card.severity-critical {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: linear-gradient(145deg, #2a2022, #211c1e);
+}
+
+.safety-finding-card.severity-high {
+  border-color: rgba(249, 115, 22, 0.4);
+  background: linear-gradient(145deg, #2a221e, #211d1a);
+}
+
+.safety-finding-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.safety-severity-pill {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 6px;
+}
+
+.safety-severity-pill.critical {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.safety-severity-pill.high {
+  background: rgba(249, 115, 22, 0.2);
+  color: #fdba74;
+  border: 1px solid rgba(249, 115, 22, 0.4);
+}
+
+.safety-severity-pill.medium {
+  background: rgba(234, 179, 8, 0.18);
+  color: #fde047;
+  border: 1px solid rgba(234, 179, 8, 0.35);
+}
+
+.safety-severity-pill.low {
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.safety-finding-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.safety-finding-reason {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.safety-finding-evidence {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+  color: #94a3b8;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 4px 8px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.safety-finding-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.safety-btn {
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  border: var(--border);
+  background: var(--control);
+  color: var(--text);
+  box-shadow: var(--depth-control);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.safety-btn:hover {
+  background: var(--control-hover);
+}
+
+.safety-btn.revoke-btn {
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.safety-btn.narrow-btn {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+.safety-btn.keep-btn {
+  color: #4ade80;
+}

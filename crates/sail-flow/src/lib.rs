@@ -1,5 +1,9 @@
 use async_trait::async_trait;
-use tracing::info;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tracing::{info, warn};
 
 use sail_common::{
     bus::EventBus,
@@ -7,14 +11,87 @@ use sail_common::{
     traits::Subsystem,
     types::{EventPayload, SailEvent, SubsystemId},
 };
+use sail_guardian::safety_review::SafetyReviewRunSummary;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetyReviewScheduleConfig {
+    pub enabled: bool,
+    pub interval_seconds: u64, // Default: 86400 (daily)
+}
+
+impl Default for SafetyReviewScheduleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_seconds: 86400,
+        }
+    }
+}
 
 pub struct FlowSubsystem {
     bus: Option<EventBus>,
+    config: SafetyReviewScheduleConfig,
+    last_evaluation: Arc<Mutex<Option<DateTime<Utc>>>>,
+    shutdown_flag: Arc<tokio::sync::Notify>,
 }
 
 impl FlowSubsystem {
     pub fn new() -> Self {
-        Self { bus: None }
+        Self {
+            bus: None,
+            config: SafetyReviewScheduleConfig::default(),
+            last_evaluation: Arc::new(Mutex::new(None)),
+            shutdown_flag: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    pub fn with_config(config: SafetyReviewScheduleConfig) -> Self {
+        Self {
+            bus: None,
+            config,
+            last_evaluation: Arc::new(Mutex::new(None)),
+            shutdown_flag: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    /// Trigger an immediate manual or scheduled run of the daily learned-rules safety review.
+    pub fn trigger_safety_review(
+        trigger: &str,
+        bus: Option<&EventBus>,
+    ) -> Option<SafetyReviewRunSummary> {
+        let broker = match sail_guardian::global_broker() {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(
+                    "Cannot run safety review: Guardian broker unavailable ({})",
+                    e
+                );
+                return None;
+            }
+        };
+
+        let summary = broker.safety_review().run_review(trigger);
+
+        if let Some(bus) = bus {
+            let event = SailEvent::new(
+                SubsystemId::Flow,
+                EventPayload::SafetyReviewCompleted {
+                    run_id: summary.run_id.to_string(),
+                    trigger: summary.trigger.clone(),
+                    findings_count: summary.findings_count,
+                    high_or_critical_count: summary.high_or_critical_count,
+                    summary: format!(
+                        "Evaluated {} rules: {} findings ({} high/critical)",
+                        summary.rules_evaluated,
+                        summary.findings_count,
+                        summary.high_or_critical_count
+                    ),
+                },
+            );
+            let _ = bus.publish(event);
+        }
+
+        Some(summary)
     }
 }
 
@@ -32,7 +109,9 @@ impl Subsystem for FlowSubsystem {
 
     async fn init(&mut self, bus: &EventBus) -> Result<()> {
         self.bus = Some(bus.clone());
-        info!("SAIL Flow initialized (workflow & trigger orchestration engine)");
+        info!(
+            "SAIL Flow initialized (workflow, daily safety review & trigger orchestration engine)"
+        );
         Ok(())
     }
 
@@ -47,6 +126,47 @@ impl Subsystem for FlowSubsystem {
             );
             let _ = bus.publish(event);
         }
+
+        // Spawn background scheduled evaluation worker with catch-up logic
+        if self.config.enabled {
+            let bus_opt = self.bus.clone();
+            let interval = Duration::from_secs(self.config.interval_seconds.max(1));
+            let last_eval = self.last_evaluation.clone();
+            let notify_shutdown = self.shutdown_flag.clone();
+
+            tokio::spawn(async move {
+                // Initial catch-up run on startup if never evaluated
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let should_run = {
+                    let last = last_eval.lock().unwrap();
+                    last.is_none()
+                };
+
+                if should_run {
+                    info!("SAIL Flow executing initial safety review catch-up pass");
+                    if let Some(summary) = Self::trigger_safety_review("catchup", bus_opt.as_ref())
+                    {
+                        *last_eval.lock().unwrap() = Some(summary.completed_at);
+                    }
+                }
+
+                loop {
+                    tokio::select! {
+                        _ = notify_shutdown.notified() => {
+                            info!("Safety review background worker stopped");
+                            break;
+                        }
+                        _ = tokio::time::sleep(interval) => {
+                            info!("SAIL Flow executing scheduled daily safety review");
+                            if let Some(summary) = Self::trigger_safety_review("scheduled", bus_opt.as_ref()) {
+                                *last_eval.lock().unwrap() = Some(summary.completed_at);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         Ok(())
     }
 
@@ -106,6 +226,7 @@ impl Subsystem for FlowSubsystem {
 
     async fn shutdown(&mut self) -> Result<()> {
         info!("SAIL Flow subsystem shutting down");
+        self.shutdown_flag.notify_waiters();
         Ok(())
     }
 }

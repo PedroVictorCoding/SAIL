@@ -7,6 +7,7 @@ pub mod confined;
 pub mod credentials;
 pub mod policy;
 pub mod runtime;
+pub mod safety_review;
 pub mod sandbox;
 
 use async_trait::async_trait;
@@ -33,6 +34,10 @@ pub use runtime::{
     ActionRequest, AuthorizedAction, AutonomyPreset, CapabilityProfile, ExecutionHandle,
     NonoSecurityRuntime, SecurityCapabilities, SecurityError, SecurityRuntime, SecurityStatus,
     is_sensitive_host_path,
+};
+pub use safety_review::{
+    FindingStatus, RecommendedAction, SafetyFinding, SafetyFindingSeverity, SafetyReviewEngine,
+    SafetyReviewRunSummary,
 };
 pub use sandbox::{SandboxPolicy, SandboxViolation};
 
@@ -112,6 +117,10 @@ impl GuardianSubsystem {
 
     pub fn broker(&self) -> Arc<GuardianExecutionBroker> {
         self.broker.clone()
+    }
+
+    pub fn safety_review(&self) -> Arc<safety_review::SafetyReviewEngine> {
+        self.broker.safety_review().clone()
     }
 
     /// Direct evaluation of a capability request

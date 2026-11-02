@@ -34,6 +34,7 @@ pub struct GuardianExecutionBroker {
     approval: Arc<ApprovalBroker>,
     sandbox: Arc<SandboxPolicy>,
     runtime: Arc<dyn crate::runtime::SecurityRuntime>,
+    safety_review: Arc<crate::safety_review::SafetyReviewEngine>,
 }
 
 impl GuardianExecutionBroker {
@@ -43,18 +44,27 @@ impl GuardianExecutionBroker {
         approval: Arc<ApprovalBroker>,
         sandbox: Arc<SandboxPolicy>,
     ) -> Self {
+        let safety_review = Arc::new(crate::safety_review::SafetyReviewEngine::new(
+            policy.clone(),
+            audit.clone(),
+        ));
         Self {
             policy,
             audit,
             approval,
             sandbox,
             runtime: Arc::new(crate::runtime::NonoSecurityRuntime::new()),
+            safety_review,
         }
     }
 
     pub fn with_runtime(mut self, runtime: Arc<dyn crate::runtime::SecurityRuntime>) -> Self {
         self.runtime = runtime;
         self
+    }
+
+    pub fn safety_review(&self) -> &Arc<crate::safety_review::SafetyReviewEngine> {
+        &self.safety_review
     }
 
     pub fn runtime(&self) -> &Arc<dyn crate::runtime::SecurityRuntime> {
