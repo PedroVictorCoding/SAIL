@@ -17,7 +17,7 @@ The experience should be: user expresses a goal naturally; SAIL knows what is kn
 ### 0.1 Target environment and scope
 
 - Primary host: Ubuntu Desktop 26.04, i5-10400 (6 cores/12 threads), 32 GB nominal RAM, AMD RX 5500; no assumption of ample VRAM. Hardware characteristics must be measured, not guessed.
-- Storage layout: Ubuntu root on ~128 GB SSD; Kingston ~240 GB SSD mounted at \`/srv/sail\` (\`SAIL_RUNTIME\`), Seagate ~8 TB HDD at \`/srv/sail-data\` (\`SAIL_DATA\`). Runtime/model/build data should not saturate the root partition. Verify mounts before writing; service units should require mounts.
+- Storage layout: Ubuntu root on ~128 GB SSD; Kingston ~240 GB SSD mounted at `/srv/sail` (`SAIL_RUNTIME`), Seagate ~8 TB HDD at `/srv/sail-data` (`SAIL_DATA`). Runtime/model/build data should not saturate the root partition. Verify mounts before writing; service units should require mounts.
 - Primary client delivery: **shared Rust/Dioxus Web and Android**. Desktop browser is a first-class way to operate; Android has appropriate responsive and lifecycle behavior. iOS, Windows and macOS packaging are later ambitions, not present blockers.
 - Compute: local inference by default; llama.cpp/OpenAI-compatible loopback adapters, CPU and tested AMD Vulkan offloading. Models are selectable/routed by purpose and budget; do not make a cloud endpoint mandatory.
 - Rust owns the long-running assistant and critical state/permission paths. The intended direction is no required Python runtime, but the current README documents supervised Python-based voice workers. Treat conversion as a migration, **not** as a shipped fact and not as grounds to break working audio.
@@ -161,7 +161,7 @@ Use typed IDs, entity resolution, claim records and explicit evidence. Vector si
 
 Default pipeline:
 
-\`ephemeral conversation / tool observation → candidate extraction → entity resolution → evidence classification → contradiction check → change proposal → deterministic validation → transactional consolidation → permitted source cleanup\`.
+`ephemeral conversation / tool observation → candidate extraction → entity resolution → evidence classification → contradiction check → change proposal → deterministic validation → transactional consolidation → permitted source cleanup`.
 
 Never leave the entire transcript as the authoritative permanent store. If recovery requires temporary event history, specify an expiry, local encryption and deletion controls. Evidence may be kept as bounded receipts with hashes and provenance without retaining raw chat. Watch all accidental raw-content persistence: model traces, logs, swap, caches, screenshots and backup copies.
 
@@ -175,7 +175,7 @@ Never leave the entire transcript as the authoritative permanent store. If recov
 
 ### 4.3 LLM proposals are not database writes
 
-The model creates a proposed \`MemoryChangeSet\` containing create/revise/supersede/link/conflict resolution operations. A deterministic Rust validator checks: schema, evidence support, current revision, permissions, privacy, entity links, duplicated claims, deletion generation and idempotency. Only then may a transaction commit.
+The model creates a proposed `MemoryChangeSet` containing create/revise/supersede/link/conflict resolution operations. A deterministic Rust validator checks: schema, evidence support, current revision, permissions, privacy, entity links, duplicated claims, deletion generation and idempotency. Only then may a transaction commit.
 
 Do not treat “model confidence: 0.95” as evidence. Statements from the same original message, however many times summarized, are not independent observations. An assistant's own optimistic action reports are not external verification.
 
@@ -218,7 +218,7 @@ Vision handles validated images, camera frames and page-aware document parsing; 
 
 ### 7.1 Strict separation of planning and effect
 
-\`user/task → Agents/Flow planner → typed tool request → Guardian policy broker → Bridge sandboxed executor → result receipt → agent verification → UI projection\`
+`user/task → Agents/Flow planner → typed tool request → Guardian policy broker → Bridge sandboxed executor → result receipt → agent verification → UI projection`
 
 - Tool registration has schema, ownership, scope, authorization requirement, version, timeout, cancellation and failure contract.
 - No LLM-authored unrestricted shell is implicit in generic “tool use.”
@@ -248,7 +248,7 @@ Forge's user-visible mission is to accept a scoped coding request/issue, researc
 
 ### 8.1 Coding pipeline
 
-\`issue intake → clarification/contract audit → worktree/permission reservation → context retrieval → plan → local model patch → compile/test/lint → failure diagnosis/retry → independent review → human approval → PR\`
+`issue intake → clarification/contract audit → worktree/permission reservation → context retrieval → plan → local model patch → compile/test/lint → failure diagnosis/retry → independent review → human approval → PR`
 
 For each step persist: task ID, issue/repo identity, state, input revision, model/backend, tool receipts, files changed, test commands, exit codes, logs, blockers and next safe action. Stop or request intervention on missing model, unavailable resources, ambiguous issue or failing tests. Do not equate “nonempty diff” with implementation, or a comment-only patch with a solution.
 
@@ -289,20 +289,20 @@ SAIL's idle behavior should be useful rather than “thinking aloud” randomly.
 
 The user should see a compact Discovery card and, where enabled, an audible notification with **Not now**, snooze, mute topic and quiet-hours controls. A “not now” dismissal must actually suppress near-term recurrence (design preference: at least an hour) and persist across restarts. Multiple perspective/Echo workflows are bounded and scheduled so they do not monopolize local inference.
 
-Background work has durable identity and state, not a detached \`tokio::spawn\` with no recovery path. Checkpoints should resume safely; untrusted external actions cannot be blindly replayed.
+Background work has durable identity and state, not a detached `tokio::spawn` with no recovery path. Checkpoints should resume safely; untrusted external actions cannot be blindly replayed.
 
 ## 13. Hardware, filesystems, deployment and QoS
 
 ### 13.1 Known host failure lessons
 
-The host once reached 100% root disk usage; a large Rust \`target/\` directory (~42 GB) occupied the root filesystem, while the extra \`/srv/sail\` SSD had capacity. Qwen CPU inference consumed ~20 GiB RSS and swap reached 8/8 GiB. Stopping the model recovered memory. This is **design evidence** for stronger resource scheduling and storage placement, not an instruction to run those cleanup commands automatically.
+The host once reached 100% root disk usage; a large Rust `target/` directory (~42 GB) occupied the root filesystem, while the extra `/srv/sail` SSD had capacity. Qwen CPU inference consumed ~20 GiB RSS and swap reached 8/8 GiB. Stopping the model recovered memory. This is **design evidence** for stronger resource scheduling and storage placement, not an instruction to run those cleanup commands automatically.
 
 Baseline storage preference:
 - root SSD: Ubuntu, source and lightweight config;
-- \`/srv/sail\` runtime SSD: active GGUF, Cargo target, task/worktree state and latency-sensitive runtime;
-- \`/srv/sail-data\` HDD: cold models, archives, datasets, histories, logs, backups and bulk artifacts.
+- `/srv/sail` runtime SSD: active GGUF, Cargo target, task/worktree state and latency-sensitive runtime;
+- `/srv/sail-data` HDD: cold models, archives, datasets, histories, logs, backups and bulk artifacts.
 
-Actual paths must be configurable, probed for mounts and free space, and subject to safe shutdown. \`/tmp\` may be a tmpfs; avoid spilling large browser artifacts and model caches into it. Do not blindly expand swap or reboot production tasks.
+Actual paths must be configurable, probed for mounts and free space, and subject to safe shutdown. `/tmp` may be a tmpfs; avoid spilling large browser artifacts and model caches into it. Do not blindly expand swap or reboot production tasks.
 
 ### 13.2 Resource admission
 
@@ -340,7 +340,7 @@ Read this document fully. Identify which product experience the issue enables, i
 
 ### Step 2: Repository audit
 
-Read [AGENTS.md](../AGENTS.md), [DESIGN.md](../DESIGN.md), relevant subsystem docs, \`Cargo.toml\`, actual crates, UI components, tests and issue history. Distinguish shipped from stubbed. Check dependent upstream libraries against pinned versions and licenses. Document conflicts between product intent and current code.
+Read [AGENTS.md](../AGENTS.md), [DESIGN.md](../DESIGN.md), relevant subsystem docs, `Cargo.toml`, actual crates, UI components, tests and issue history. Distinguish shipped from stubbed. Check dependent upstream libraries against pinned versions and licenses. Document conflicts between product intent and current code.
 
 ### Step 3: Write acceptance contract
 
@@ -348,7 +348,7 @@ Before coding, specify: user action, backend state transitions, real side effect
 
 ### Step 4: Task branch and isolated work
 
-Follow [AGENTS.md](../AGENTS.md) exactly: create \`agent/<purpose>\` branch from fresh base, preserve dirty user work, isolate worktrees when needed, never commit directly to main, produce a PR and leave merge to human review.
+Follow [AGENTS.md](../AGENTS.md) exactly: create `agent/<purpose>` branch from fresh base, preserve dirty user work, isolate worktrees when needed, never commit directly to main, produce a PR and leave merge to human review.
 
 ### Step 5: Build with typed contracts
 
@@ -393,7 +393,7 @@ Right: use temporary turn context, extract claims and procedures, validate prove
 
 Wrong: install Playwright as a dependency and give the LLM arbitrary navigation with a shared logged-in profile.
 
-Right: authorize an ephemeral worker, enforce network and path isolation, provide typed \`create/navigate/observe/act/extract/close\` methods, return evidence, handle timeouts/cancellation and optionally show a preview. If user credentials are needed, request separate scoped profile authorization.
+Right: authorize an ephemeral worker, enforce network and path isolation, provide typed `create/navigate/observe/act/extract/close` methods, return evidence, handle timeouts/cancellation and optionally show a preview. If user credentials are needed, request separate scoped profile authorization.
 
 **Issue: “Implement Forge.”**
 
@@ -466,21 +466,20 @@ A first-time user launches SAIL on Web/Android, grants only narrow permissions, 
 | Campus | Probe answer persisted, relevant plan graph projected, lesson check resolved, independent practice scored |
 | Discovery | Sourced useful suggestion delivered once, snooze retained, no quiet-hours notification |
 | Flow | Authorized DAG nodes execute with receipts; restart resumes without replaying committed side effects |
-
-
-
-
-
---------
-
-
-Resources that can be used as adaptables:
-- https://github.com/mahseema/awesome-ai-tools
-- https://learnharness.ai
-- https://github.com/muftiarfan/noop
-- https://github.com/nottelabs/notte
-- 
 | Model routing | Correct local model selected with real memory/latency metrics and available fallback |
 | Media | Actual permitted player action or honest link; resume state verified |
+
+## Appendix C — External references and adaptable candidates
+
+These outside projects may inform SAIL designs or, after review, be adapted into it. Listing a project here is **not** approval to add it as a dependency, copy its code or treat its claims as verified. Before reuse, follow §15 Step 2: check the pinned version, the license and how well it fits the owning subsystem's contracts, then record the decision in that subsystem's spec.
+
+| Resource | Possible use in SAIL | Owner | Status | License / reuse notes |
+|---|---|---|---|---|
+| [nottelabs/notte](https://github.com/nottelabs/notte) | Observe-act-extract browser automation ideas for the headless browser worker (§7.2) | Bridge, authorized by Guardian | Architecture reference only | SSPL-1.0; Python-first SDK with a Node SDK. Do not add as a dependency or copy code. Build browser control as Rust-owned CDP orchestration. |
+| [LearnHarness](https://learnharness.ai) ([source](https://github.com/amosblomqvist/learnharness)) | Teaching workflow (probe → plan → teach/check → practice) and UI reference for Campus (§10) | Life/Campus | Pedagogical/UI reference | AGPL-3.0 source repo; TypeScript/Next.js/Electron. Do not port it as a whole. Audit assets and AGPL obligations before any reuse. See [Campus spec](SAIL_CAMPUS_LEARNING.md). |
+| [muftiarfan/noop](https://github.com/muftiarfan/noop) | Offline WHOOP strap pairing and on-device storage, related to Health ingestion (#105) | Health (Android ingest via Bridge) | Candidate to evaluate | No license file found as of 2026-11-02 (README: "as-is" for personal/educational use). Treat as all rights reserved: study the behavior only, no code reuse unless a license is granted. Swift/macOS app plus a Kotlin Android app; unofficial and not affiliated with WHOOP. |
+| [mahseema/awesome-ai-tools](https://github.com/mahseema/awesome-ai-tools) | List for finding candidate tools; not a component | No single owner (whichever subsystem picks a tool) | Discovery list | MIT applies to the list itself. Each listed tool has its own license and maturity and must be evaluated separately. |
+
+---
 
 *This is a living design contract. Changes to its normative product definitions should be explicit and reviewed, not inferred from whichever model happens to be editing a subsystem.*
