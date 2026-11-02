@@ -673,14 +673,14 @@ fn tool_correlation(session: &str, epoch: u64) -> uuid::Uuid {
     )
 }
 async fn execute_scheduled_tool(
-    name: &str,
+    name: impl Into<String>,
     params: Value,
     token: Option<uuid::Uuid>,
     correlation: Option<uuid::Uuid>,
     tx: &mpsc::Sender<Outbound>,
     current: u64,
 ) -> crate::KernelToolResult {
-    let name = name.replace('_', ":");
+    let name = name.into().replace('_', ":");
     if name == "fs:query" || name == "fs:read" {
         let path = std::path::Path::new(params["path"].as_str().unwrap_or("."));
         if sail_guardian::global_broker()
@@ -1318,33 +1318,75 @@ async fn reason_turn(
                                 output: json!({"error":"Remaining tool calls skipped after a failed or repeated operation"}),
                             }
                         } else {
-                            if publish {
-                                emit(tx,current,json!({"type":"tool_started","channel":"voice:vlm","tool":name})).await;
-                            }
-                            let result = if name == "vision_frame" || name == "vision:frame" {
-                                match &visual_frame {
-                                    Some(frame) => execute_tool_for(
-                                        name,
-                                        serde_json::to_value(frame)?,
-                                        None,
-                                        correlation,
-                                    ),
-                                    None => crate::KernelToolResult {
-                                        tool: name.into(),
-                                        success: false,
-                                        output: json!({"error":"No image attached"}),
-                                    },
-                                }
-                            } else {
-                                execute_scheduled_tool(
-                                    name,
+                            let result = if publish
+                                && name != "vision_frame"
+                                && name != "vision:frame"
+                            {
+                                let locale = crate::staged_ack::StagedAckCatalog::detect_locale(
+                                    prompt, None,
+                                );
+                                let tx_clone = tx.clone();
+                                let emit_fn = move |val: serde_json::Value| {
+                                    let tx_c = tx_clone.clone();
+                                    Box::pin(async move {
+                                        emit(&tx_c, current, val).await;
+                                    })
+                                        as std::pin::Pin<
+                                            Box<dyn std::future::Future<Output = ()> + Send>,
+                                        >
+                                };
+                                let tool_fut = execute_scheduled_tool(
+                                    name.to_string(),
                                     params.clone(),
                                     None,
                                     correlation,
                                     tx,
                                     current,
-                                )
-                                .await
+                                );
+                                let outcome =
+                                    crate::turn_coordinator::TurnCoordinator::execute_staged(
+                                        name,
+                                        &params,
+                                        locale,
+                                        tool_fut,
+                                        current,
+                                        speech_tx,
+                                        &mut chunker,
+                                        &mut reply,
+                                        emit_fn,
+                                        None,
+                                    )
+                                    .await;
+                                outcome.result
+                            } else {
+                                if publish {
+                                    emit(tx,current,json!({"type":"tool_started","channel":"voice:vlm","tool":name})).await;
+                                }
+                                if name == "vision_frame" || name == "vision:frame" {
+                                    match &visual_frame {
+                                        Some(frame) => execute_tool_for(
+                                            name,
+                                            serde_json::to_value(frame)?,
+                                            None,
+                                            correlation,
+                                        ),
+                                        None => crate::KernelToolResult {
+                                            tool: name.into(),
+                                            success: false,
+                                            output: json!({"error":"No image attached"}),
+                                        },
+                                    }
+                                } else {
+                                    execute_scheduled_tool(
+                                        name.to_string(),
+                                        params.clone(),
+                                        None,
+                                        correlation,
+                                        tx,
+                                        current,
+                                    )
+                                    .await
+                                }
                             };
                             guard.record(name, &params, result.clone());
                             result
