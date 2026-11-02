@@ -188,8 +188,9 @@ impl GuardianExecutionBroker {
         if self
             .policy
             .is_explicitly_granted_for(caller, &capability, correlation_id)
+            || self.policy.is_learned_approved(caller, &capability)
         {
-            // Explicitly granted capability (e.g. active device consent)
+            // Explicitly granted capability or learned approval rule
         } else {
             match capability.risk_level() {
                 RiskLevel::Low => {

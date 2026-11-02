@@ -34,6 +34,8 @@ pub fn router_with_token(
         .route("/status", get(guardian_security_status))
         .route("/preset", post(guardian_set_preset))
         .route("/audit", get(guardian_recent_audit))
+        .route("/rules", get(guardian_list_rules))
+        .route("/rules/revoke", post(guardian_revoke_rule))
         .with_state(Arc::new(ApprovalHttpState {
             approval_authority: authority,
             broker,
@@ -116,6 +118,48 @@ async fn guardian_recent_audit(
     ))
 }
 
+async fn guardian_list_rules(
+    State(state): State<Arc<ApprovalHttpState>>,
+    headers: HeaderMap,
+) -> std::result::Result<impl IntoResponse, StatusCode> {
+    authenticate_owner(&state, &headers)?;
+    let broker = state
+        .broker
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let rules = broker.policy().list_learned_rules();
+    Ok((
+        [("cache-control", "no-store")],
+        Json(json!({"rules": rules})),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+struct RevokeRulePayload {
+    rule_id: uuid::Uuid,
+}
+
+async fn guardian_revoke_rule(
+    State(state): State<Arc<ApprovalHttpState>>,
+    headers: HeaderMap,
+    Json(payload): Json<RevokeRulePayload>,
+) -> std::result::Result<impl IntoResponse, StatusCode> {
+    authenticate_owner(&state, &headers)?;
+    let broker = state
+        .broker
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let revoked = broker.policy().revoke_learned_rule(payload.rule_id);
+    if revoked {
+        Ok((
+            [("cache-control", "no-store")],
+            Json(json!({"status": "ok", "revoked": true})),
+        ))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
 async fn owner_token_bootstrap(
     State(state): State<Arc<ApprovalHttpState>>,
 ) -> std::result::Result<impl IntoResponse, StatusCode> {
@@ -161,10 +205,13 @@ async fn owner_pending(
     ))
 }
 #[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ApprovalResolution {
     session_id: uuid::Uuid,
     approved: bool,
+    #[serde(default)]
+    remember: bool,
+    #[serde(default)]
+    scope: Option<String>,
 }
 async fn owner_resolve(
     State(state): State<Arc<ApprovalHttpState>>,
@@ -180,7 +227,27 @@ async fn owner_resolve(
         .approval()
         .resolve_session(input.session_id, input.approved)
     {
-        Ok(token) => Some(token),
+        Ok(token) => {
+            if input.approved && (input.remember || input.scope.as_deref() == Some("always")) {
+                let rule = broker.policy().learn_approval(
+                    token.bound_actor,
+                    &token.bound_capability,
+                    format!(
+                        "Always allowed by owner on {}",
+                        chrono::Utc::now().format("%Y-%m-%d %H:%M")
+                    ),
+                );
+                tracing::info!(rule_id = %rule.id, pattern = ?rule.pattern, "Guardian learned new persistent approval rule");
+            } else if input.approved && input.scope.as_deref() == Some("session") {
+                broker.policy().grant_scoped(
+                    token.bound_actor,
+                    token.bound_capability.clone(),
+                    token.correlation_id,
+                    chrono::Duration::hours(24),
+                );
+            }
+            Some(token)
+        }
         Err(sail_guardian::ApprovalError::Denied) if !input.approved => None,
         Err(_) => return Err(StatusCode::CONFLICT),
     };

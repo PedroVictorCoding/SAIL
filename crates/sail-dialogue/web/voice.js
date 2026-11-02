@@ -283,6 +283,7 @@ function renderToolResult(result) {
   const summary = document.createElement('p'); summary.className = 'result-summary';
   if (Array.isArray(output?.processes)) summary.textContent = `${output.processes.length} ${output.processes.length === 1 ? 'process' : 'processes'} found`;
   else if (Array.isArray(output?.entries)) summary.textContent = `${output.entries.length} ${output.entries.length === 1 ? 'item' : 'items'} in ${String(output.path || 'the selected folder')}`;
+  else if (output?.issue && output?.title) summary.textContent = `GitHub Issue #${output.number || output.issue.number}: ${output.title} (${output.state || 'OPEN'})`;
   else if (Array.isArray(output?.issues)) summary.textContent = `${output.count} GitHub issues retrieved (sorted by priority)`;
   else if (result?.tool === 'forge:enqueue' && output?.job_id) summary.textContent = `Forge job enqueued: ${output.job_id} (Issue #${output.issue_number || '—'})`;
   else if (result?.tool === 'forge:status' && output?.job_id) summary.textContent = `Forge job ${output.job_id}: ${output.state || 'active'} (${output.diff_stat || output.current_step || '—'})`;
@@ -310,6 +311,35 @@ function renderToolResult(result) {
     modalSummary.style.marginBottom = '14px';
     modalSummary.textContent = summary.textContent;
     modalBody.append(modalSummary);
+
+    if (output?.issue && output?.title) {
+      const issueDetails = document.createElement('div');
+      issueDetails.style.marginBottom = '14px';
+      const heading = document.createElement('h3');
+      heading.style.margin = '0 0 8px';
+      heading.textContent = `#${output.number || output.issue.number} ${output.title}`;
+      const meta = document.createElement('p');
+      meta.className = 'sheet-note';
+      meta.textContent = `State: ${output.state || 'OPEN'} · Author: ${output.issue.author?.login || 'unknown'} · Created: ${output.issue.createdAt ? new Date(output.issue.createdAt).toLocaleString() : '—'}`;
+      const body = document.createElement('pre');
+      body.style.whiteSpace = 'pre-wrap';
+      body.style.wordBreak = 'break-word';
+      body.style.background = 'rgba(255,255,255,0.03)';
+      body.style.padding = '10px';
+      body.style.borderRadius = '8px';
+      body.textContent = output.body || output.issue.body || 'No description provided.';
+      const solveBtn = document.createElement('button');
+      solveBtn.className = 'quiet-button mini-btn';
+      solveBtn.style.marginTop = '8px';
+      solveBtn.textContent = 'Solve with Forge';
+      solveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sendAction('forge:enqueue', { issue_number: output.number || output.issue.number, task: output.title });
+        document.getElementById('cardModal')?.close();
+      });
+      issueDetails.append(heading, meta, body, solveBtn);
+      modalBody.append(issueDetails);
+    }
 
     if (Array.isArray(output?.issues)) {
       const issueList = document.createElement('div');
@@ -449,10 +479,33 @@ function renderApprovalCard(data) {
   }
   approveBtn.textContent='Review exact request';
   approveBtn.addEventListener('click',event=>{event.stopPropagation();return reviewOrApprove(approveBtn,details);});
+  const alwaysBtn = document.createElement('button');
+  alwaysBtn.type = 'button';
+  alwaysBtn.className = 'approval-btn always';
+  alwaysBtn.innerHTML = '<span>⚡</span> Always allow';
+  alwaysBtn.title = 'Approve now and automatically allow matching actions in the future';
+  alwaysBtn.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    alwaysBtn.disabled = true;
+    approveBtn.disabled = true;
+    denyBtn.disabled = true;
+    try {
+      await ownerApprovalRequest('resolve', { session_id: data.session_id, approved: true, scope: 'always', remember: true });
+      alwaysBtn.dataset.resolved = 'true';
+      handleApprovalResolved({ session_id: data.session_id, approved: true });
+      refreshLearnedRules();
+    } catch (err) {
+      showError(err.message);
+      alwaysBtn.disabled = false;
+      approveBtn.disabled = false;
+      denyBtn.disabled = false;
+    }
+  });
+
   const denyBtn=document.createElement('button');denyBtn.type='button';denyBtn.className='approval-btn deny';denyBtn.textContent='Deny';
   denyBtn.addEventListener('click',event=>{event.stopPropagation();return denyApproval(denyBtn);});
 
-  actions.append(approveBtn, denyBtn);
+  actions.append(approveBtn, alwaysBtn, denyBtn);
 
   const hint = document.createElement('div');
   hint.className = 'card-expand-hint';
@@ -1075,13 +1128,27 @@ async function refreshOwnerApprovals() {
       card.append(title,exact,scope);
       const action = pendingApprovalActions.get(request.session_id) || { automatic:true };
       if (action) {
-        const approve = document.createElement('button'); approve.className = 'quiet-button'; approve.textContent = action.automatic ? 'Approve and continue' : 'Approve and retry once';
+        const approve = document.createElement('button'); approve.className = 'quiet-button'; approve.textContent = action.automatic ? 'Approve once' : 'Approve & retry';
         approve.addEventListener('click', async () => {
           approve.disabled = true;
           try { const result = await ownerApprovalRequest('resolve',{session_id:request.session_id,approved:true});
             pendingApprovalActions.delete(request.session_id); if (!action.automatic) runKernelTool(action.tool,action.params,result.token.token_id); await refreshOwnerApprovals();
           } catch (error) { showError(error.message); approve.disabled = false; }
         }); card.append(approve);
+
+        const always = document.createElement('button'); always.className = 'quiet-button'; always.textContent = 'Always allow'; always.style.color = '#38bdf8';
+        always.title = 'Approve now and automatically allow matching future actions';
+        always.addEventListener('click', async () => {
+          always.disabled = true;
+          try {
+            const result = await ownerApprovalRequest('resolve', { session_id: request.session_id, approved: true, scope: 'always', remember: true });
+            pendingApprovalActions.delete(request.session_id);
+            if (!action.automatic) runKernelTool(action.tool, action.params, result.token.token_id);
+            await refreshOwnerApprovals();
+            await refreshLearnedRules();
+          } catch (error) { showError(error.message); always.disabled = false; }
+        });
+        card.append(always);
       } else {
         const note = document.createElement('p'); note.className='sheet-note'; note.textContent='This request belongs to another caller. Only its original session can execute it.'; card.append(note);
       }
@@ -1200,3 +1267,48 @@ if (presetSelect) {
 }
 
 fetchSecurityStatus();
+
+async function refreshLearnedRules() {
+  const container = document.getElementById('guardianLearnedRules');
+  if (!container) return;
+  container.textContent = 'Loading rules…';
+  try {
+    const data = await ownerApprovalRequest('rules');
+    container.replaceChildren();
+    if (!data?.rules || !data.rules.length) {
+      container.textContent = 'No learned approval rules yet.';
+      return;
+    }
+    for (const rule of data.rules) {
+      const row = document.createElement('div');
+      row.className = 'learned-rule-item';
+      const info = document.createElement('div');
+      const patternKey = Object.keys(rule.pattern)[0] || 'Rule';
+      const patternVal = rule.pattern[patternKey];
+      const patternLabel = typeof patternVal === 'string' ? `${patternKey}: ${patternVal}` : patternKey;
+      info.innerHTML = `<strong>${rule.requester}</strong> · <span class="rule-pattern">${patternLabel}</span><span class="rule-count">(${rule.auto_approved_count} auto-approvals)</span>`;
+      const revokeBtn = document.createElement('button');
+      revokeBtn.className = 'quiet-button';
+      revokeBtn.style.color = '#f87171';
+      revokeBtn.style.padding = '2px 8px';
+      revokeBtn.style.fontSize = '11px';
+      revokeBtn.textContent = 'Revoke';
+      revokeBtn.addEventListener('click', async () => {
+        revokeBtn.disabled = true;
+        try {
+          await ownerApprovalRequest('rules/revoke', { rule_id: rule.id });
+          await refreshLearnedRules();
+        } catch (err) {
+          showError(err.message);
+          revokeBtn.disabled = false;
+        }
+      });
+      row.append(info, revokeBtn);
+      container.append(row);
+    }
+  } catch (error) {
+    container.textContent = 'Could not load learned rules.';
+  }
+}
+document.getElementById('refreshLearnedRulesBtn')?.addEventListener('click', refreshLearnedRules);
+refreshLearnedRules();

@@ -882,7 +882,7 @@ async fn run_turn(
 - fs_read: read text contents of a file inside the authorized workspace
 - fs_write: create or write a file inside the authorized workspace
 - vision_frame: measure luminance and edge density of attached image
-- github_issues: list recent open GitHub issues in the repository
+- github_issues: list recent open GitHub issues in the repository or fetch full details of a specific issue by number (e.g. issue_number: 125)
 - forge_enqueue: enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting
 - forge_status: check the status, review verdict and diff of a Forge coding job (accepts job_id or issue number, e.g. \"5\" or \"job-5\")
 - forge_list: list active and recent Forge autonomous coding tasks

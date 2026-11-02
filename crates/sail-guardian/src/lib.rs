@@ -28,7 +28,7 @@ pub use credentials::{
     CredentialError, CredentialHandle, CredentialScope, CredentialStore, ScopedResource,
     SecretString, VaultStatus,
 };
-pub use policy::{AuthorizationDecision, PolicyEngine};
+pub use policy::{AuthorizationDecision, LearnedApprovalRule, LearnedPattern, PolicyEngine};
 pub use runtime::{
     ActionRequest, AuthorizedAction, AutonomyPreset, CapabilityProfile, ExecutionHandle,
     NonoSecurityRuntime, SecurityCapabilities, SecurityError, SecurityRuntime, SecurityStatus,
