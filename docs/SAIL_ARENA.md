@@ -1,6 +1,6 @@
 # SAIL ARENA — Product and Technical Specification
 
-**Status:** Proposed / evolving — verify implementation against code · **Domain:** Intelligence & Knowledge · **Roadmap issue:** [#5](https://github.com/PedroVictorCoding/SAIL/issues/5) · **Priority:** P1 · **Platforms:** Ubuntu server, Dioxus Web + Android
+**Status:** Proposed / evolving — verify implementation against code · Implemented memory architecture: [SAIL_COGNITIVE_MEMORY.md](SAIL_COGNITIVE_MEMORY.md) · **Domain:** Intelligence & Knowledge · **Roadmap issue:** [#5](https://github.com/PedroVictorCoding/SAIL/issues/5) · **Priority:** P1 · **Platforms:** Ubuntu server, Dioxus Web + Android
 
 ## 1. Mission
 Privacy-scoped attributed long-term memory and searchable knowledge graph.

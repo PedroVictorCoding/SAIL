@@ -4,7 +4,7 @@ Status: design and implementation reference. These docs describe intended behavi
 
 | Domain | Specifications |
 |---|---|
-| Intelligence & Knowledge | [MIND](SAIL_MIND.md) · [ARENA](SAIL_ARENA.md) · [DISCOVERY](SAIL_DISCOVERY.md) · [LAB](SAIL_LAB.md) |
+| Intelligence & Knowledge | [MIND](SAIL_MIND.md) · [ARENA](SAIL_ARENA.md) ([cognitive memory](SAIL_COGNITIVE_MEMORY.md)) · [DISCOVERY](SAIL_DISCOVERY.md) · [LAB](SAIL_LAB.md) |
 | Interaction & Presence | [DIALOGUE](SAIL_DIALOGUE.md) · [VISION](SAIL_VISION.md) · [SENSE](SAIL_SENSE.md) · [RELAY](SAIL_RELAY.md) |
 | Agency & Creation | [AGENTS](SAIL_AGENTS.md) · [FLOW](SAIL_FLOW.md) · [CANVAS](SAIL_CANVAS.md) · [FORGE](SAIL_FORGE.md) |
 | Personal & Social | [LIFE](SAIL_LIFE.md) · [PULSE](SAIL_PULSE.md) · [FRIENDS](SAIL_FRIENDS.md) · [ENTERTAINMENT](SAIL_ENTERTAINMENT.md) |
