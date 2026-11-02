@@ -1091,8 +1091,13 @@ impl VoiceVlm {
         Ok(result?["content"].as_str().unwrap_or_default().into())
     }
 }
+pub const MEMORY_RECALL_TOOL: &str = "memory_recall";
+
 /// Keep the model service's schema and byte budget bounded as tool packs grow.
+/// `memory_recall` is always offered once the context references archived `mem:` handles,
+/// because compaction relies on the model being able to fetch what was moved out.
 pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::Value {
+    let has_handles = messages.iter().any(|m| m.to_string().contains("mem:"));
     let query = messages
         .iter()
         .rev()
@@ -1123,6 +1128,15 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
         })
         .collect();
     ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    if has_handles {
+        if let Some(pos) = ranked
+            .iter()
+            .position(|(_, _, tool)| tool["function"]["name"] == MEMORY_RECALL_TOOL)
+        {
+            let recall = ranked.remove(pos);
+            ranked.insert(0, recall);
+        }
+    }
     let mut bytes = 2;
     let mut selected = Vec::new();
     for (_, _, tool) in ranked {
@@ -1151,7 +1165,8 @@ pub fn tool_definitions() -> serde_json::Value {
         {"type":"function","function":{"name":"forge_status","description":"Check the status, current step, test outcome, and diff of a Forge autonomous coding job. Accepts exact job IDs (e.g. job-5-61c992ad), prefix (e.g. job-5), or issue numbers (e.g. 5 or #5).","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)"}}}}},
         {"type":"function","function":{"name":"forge_list","description":"List all active, recent, and stored Forge autonomous coding jobs and tasks.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
         {"type":"function","function":{"name":"forge_cancel","description":"Cancel or stop a running or in-progress Forge autonomous coding task.","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID or issue number to cancel"},"reason":{"type":"string","description":"Optional cancellation reason"}}}}},
-        {"type":"function","function":{"name":"forge_clear","description":"Remove, clear, or archive blocked, cancelled, or completed Forge coding jobs from the active queue and delete their local checkpoints. Pass 'all' to clear all finished/blocked jobs, or specify a job_id.","parameters":{"type":"object","properties":{"job_id":{"type":"string","description":"Specific job ID to remove, or 'all' to clear all finished and blocked jobs (defaults to 'all')"}}}}}
+        {"type":"function","function":{"name":"forge_clear","description":"Remove, clear, or archive blocked, cancelled, or completed Forge coding jobs from the active queue and delete their local checkpoints. Pass 'all' to clear all finished/blocked jobs, or specify a job_id.","parameters":{"type":"object","properties":{"job_id":{"type":"string","description":"Specific job ID to remove, or 'all' to clear all finished and blocked jobs (defaults to 'all')"}}}}},
+        {"type":"function","function":{"name":MEMORY_RECALL_TOOL,"description":"Read this conversation's archived memory: an earlier turn or a full tool result by id (mem:N), optionally only the parts matching query or a page from offset; or search the archive by query alone.","parameters":{"type":"object","properties":{"id":{"type":"string","description":"Archive handle such as mem:12"},"query":{"type":"string","maxLength":500,"description":"Words to look for"},"offset":{"type":"integer","minimum":0,"description":"Character offset to page through a long record"},"max_chars":{"type":"integer","minimum":200,"maximum":6000}},"additionalProperties":false}}}
     ])
 }
 pub fn multimodal_content(
@@ -1228,7 +1243,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 17);
 
         let names: Vec<_> = tools
             .iter()
@@ -1251,5 +1266,25 @@ mod schema_selection_tests {
         assert!(names.contains(&"forge_list"));
         assert!(names.contains(&"forge_cancel"));
         assert!(names.contains(&"forge_clear"));
+        assert!(names.contains(&"memory_recall"));
+    }
+
+    #[test]
+    fn memory_recall_is_offered_when_context_has_archive_handles() {
+        let offered = |messages: &[serde_json::Value]| -> Vec<String> {
+            super::selected_tool_definitions(messages)
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["function"]["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let plain = [serde_json::json!({"role":"user","content":"list forge jobs and processes"})];
+        assert!(!offered(&plain).contains(&"memory_recall".to_string()));
+        let with_handles = [
+            serde_json::json!({"role":"system","content":"[\"[mem:4 t2] U: ...\"]"}),
+            plain[0].clone(),
+        ];
+        assert_eq!(offered(&with_handles)[0], "memory_recall");
     }
 }
