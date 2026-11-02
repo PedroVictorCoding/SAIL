@@ -49,13 +49,52 @@ Solve issue #125 using real model output, prove non-empty functional change and 
 - [ ] Show user-visible success/error through the mapped existing UI and preserve user control.
 - [ ] Submit focused tests and a reviewable PR without automatic merge.
 
-## 8. Next steps
+## 8. Autonomous overnight operation
+
+Implemented in `crates/sail-forge/src/{admission,gates,self_review,github,publish,nightly}.rs`.
+
+**Pipeline per issue:**
+1. Admission: the issue is labelled `forge-ready`, has an `## Acceptance` checklist, has no blocking label, and no open PR works on it.
+2. Local solve in an isolated worktree, then `cargo test`.
+3. Deterministic gates: diff size, protected paths, `## Target files` scope, test weakening, new `.unwrap()`.
+4. Local self-review of a review packet capped at about 8k tokens.
+5. Optional external review, only when a provider is installed.
+6. Draft PR on `agent/forge-issue-N`.
+
+If a gate or the self-review rejects the patch, the reason is appended to the issue body as `## Previous attempt feedback` and the issue is retried, up to `SAIL_FORGE_MAX_ATTEMPTS`. Forge never merges, and it never modifies the user's checkout or local branches. Publishing uses a throwaway detached worktree based on `origin/main`.
+
+**Enable in the daemon** (`sail-core`), with defaults shown:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SAIL_FORGE_NIGHTLY` | unset | `1` starts the scheduler (wakes every 10 min, runs once per night) |
+| `SAIL_FORGE_REPO` | `PedroVictorCoding/SAIL` | GitHub slug; must be in the orchestrator allowlist |
+| `SAIL_FORGE_WINDOW` | `1-7` | Local hours `start-end`, wraps past midnight |
+| `SAIL_FORGE_MAX_ISSUES` | `5` | Issues per run |
+| `SAIL_FORGE_MAX_ATTEMPTS` | `2` | Attempts per issue, across runs |
+| `SAIL_FORGE_MAX_PRS_PER_DAY` | `3` | Verified patches beyond this wait for the next run |
+| `SAIL_FORGE_PUBLISH` | `1` | `0` keeps verified patches local (digest only) |
+| `SAIL_FORGE_STATE_DIR` | `~/.local/state/sail/forge` | State, digests, publish scratch |
+
+**Operate:**
+- Kill-switch: `touch $SAIL_FORGE_STATE_DIR/PAUSE` stops new work at the next issue boundary. Remove the file to resume.
+- Morning digest: `$SAIL_FORGE_STATE_DIR/digests/YYYY-MM-DD.md` (worked, blocked and not-admitted issues, with reasons).
+- Manual pass: `cargo run -p sail-forge --bin sail_forge_nightly -- --once [--dry-run]`. A dry run only reads GitHub and writes nothing.
+- Retry an exhausted issue: delete its entry from `nightly_state.json`.
+- Labels Forge expects to exist on GitHub: `forge-ready`, `forge-generated`, and optionally `blocked`, `needs-decision`, `needs-decomposition`, `forge-failed`.
+
+**Known limits:**
+- Gate heuristics work on the diff text.
+- The self-review uses the same local model as the solver.
+- A job interrupted by a daemon restart is resumed by checkpoint recovery, but it is only published if it completes during a later nightly run.
+
+## 9. Next steps
 1. Audit the relevant implementation and the linked roadmap issue; update this spec with confirmed module/file paths and contracts.
 2. Build the MVP vertical slice with real tool/model/provider integrations.
 3. Add security and regression tests before expanding capability breadth.
 4. Record known limitations, operational instructions and migration compatibility.
 
-## 9. Related references
+## 10. Related references
 - [Roadmap and subsystem taxonomy](https://github.com/PedroVictorCoding/SAIL/issues/15)
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)

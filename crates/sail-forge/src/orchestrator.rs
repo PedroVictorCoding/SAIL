@@ -16,11 +16,13 @@ use sail_guardian::sandbox::SandboxPolicy;
 
 use crate::contracts::{
     ForgeBudgetConfig, ForgeJobReport, ForgeTaskState, IssueEnqueueRequest, IssueStatusResponse,
-    PrDraftRequest, PrDraftResult, ReviewPolicyConfig, ReviewRequest, TestExecutionRecord,
+    PrDraftRequest, PrDraftResult, ReviewPolicyConfig, ReviewRequest, ReviewResult, ReviewVerdict,
+    TestExecutionRecord,
 };
 use crate::gates::DiffGatePolicy;
 use crate::persistence::{TaskCheckpoint, TaskCheckpointStore};
 use crate::reviewer::ReviewBroker;
+use crate::self_review::{ReviewPacket, ReviewProvider};
 use crate::worktree::IsolatedWorktree;
 
 /// Configuration options for the Forge Orchestrator.
@@ -83,10 +85,13 @@ pub struct ForgeOrchestrator {
     config: OrchestratorConfig,
     checkpoint_store: Arc<TaskCheckpointStore>,
     review_broker: Arc<ReviewBroker>,
+    self_reviewer: Option<Arc<dyn ReviewProvider>>,
     sandbox_policy: Arc<SandboxPolicy>,
     active_jobs: Arc<Mutex<HashMap<String, ActiveJob>>>,
     concurrency_semaphore: Arc<Semaphore>,
     event_bus: Arc<Mutex<Option<EventBus>>>,
+    /// Jobs driven by a caller (e.g. the nightly runner) rather than the enqueue event handler.
+    managed_jobs: Arc<Mutex<HashSet<String>>>,
 }
 
 impl ForgeOrchestrator {
@@ -101,11 +106,27 @@ impl ForgeOrchestrator {
             config,
             checkpoint_store,
             review_broker,
+            self_reviewer: None,
             sandbox_policy,
             active_jobs: Arc::new(Mutex::new(HashMap::new())),
             concurrency_semaphore: Arc::new(Semaphore::new(max_jobs)),
             event_bus: Arc::new(Mutex::new(None)),
+            managed_jobs: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Run a tier-0 reviewer (normally the local model) on every gated patch.
+    pub fn with_self_reviewer(mut self, reviewer: Arc<dyn ReviewProvider>) -> Self {
+        self.self_reviewer = Some(reviewer);
+        self
+    }
+
+    pub fn config(&self) -> &OrchestratorConfig {
+        &self.config
+    }
+
+    pub fn checkpoint_store(&self) -> Arc<TaskCheckpointStore> {
+        self.checkpoint_store.clone()
     }
 
     pub fn set_event_bus(&self, bus: EventBus) {
@@ -146,6 +167,24 @@ impl ForgeOrchestrator {
     /// Enqueue an issue for autonomous resolution.
     /// Rejects unauthorized repositories per security policy.
     pub fn enqueue_issue(&self, req: IssueEnqueueRequest) -> Result<String, String> {
+        self.enqueue_issue_inner(req, false)
+    }
+
+    /// Enqueue a job whose lifecycle the caller runs itself; the `ForgeIssueEnqueued`
+    /// event is still emitted for the UI but the subsystem will not dispatch a worker.
+    pub fn enqueue_managed_issue(&self, req: IssueEnqueueRequest) -> Result<String, String> {
+        self.enqueue_issue_inner(req, true)
+    }
+
+    pub fn is_managed(&self, job_id: &str) -> bool {
+        self.managed_jobs.lock().unwrap().contains(job_id)
+    }
+
+    fn enqueue_issue_inner(
+        &self,
+        req: IssueEnqueueRequest,
+        managed: bool,
+    ) -> Result<String, String> {
         if !self.config.allowed_repos.contains(&req.repo) {
             return Err(format!(
                 "Repository '{}' is not in the approved Forge allowlist ({:?})",
@@ -199,6 +238,9 @@ impl ForgeOrchestrator {
         {
             let mut jobs = self.active_jobs.lock().unwrap();
             jobs.insert(job_id.clone(), active_job);
+        }
+        if managed {
+            self.managed_jobs.lock().unwrap().insert(job_id.clone());
         }
 
         self.emit_event(EventPayload::ForgeIssueEnqueued {
@@ -1293,7 +1335,7 @@ impl ForgeOrchestrator {
             return Err(reason);
         }
 
-        // 5. Review phase: call reviewer or mark skipped when local-first
+        // 5. Review phase: local self-review first, then the external broker if one can run
         {
             let mut jobs = self.active_jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(job_id) {
@@ -1303,23 +1345,117 @@ impl ForgeOrchestrator {
             }
         }
 
-        let total_test_duration_ms: u64 = outcome.test_records.iter().map(|r| r.duration_ms).sum();
-        let review_req = ReviewRequest {
-            job_id: job_id.to_string(),
-            issue_id: format!("{}#{}", repo, issue_number),
-            base_commit: base_commit.clone(),
-            diff_patch: final_diff.clone(),
-            test_manifest: format!("cargo test passed ({}ms)", total_test_duration_ms),
+        let (issue_body, review_policy) = {
+            let jobs = self.active_jobs.lock().unwrap();
+            jobs.get(job_id)
+                .map(|j| {
+                    (
+                        j.checkpoint.issue_body.clone().unwrap_or_default(),
+                        j.checkpoint.review_policy.clone(),
+                    )
+                })
+                .unwrap_or_default()
         };
 
-        let review_result = self.review_broker.review(&review_req).await;
+        let mut self_review_result = None;
+        if let Some(reviewer) = &self.self_reviewer {
+            let packet = ReviewPacket::build(
+                &format!("{}#{}", repo, issue_number),
+                &issue_body,
+                &final_diff,
+                &outcome.test_records,
+            );
+            let verdict = match reviewer.review(&packet).await {
+                Ok(v) => v,
+                Err(e) => ReviewVerdict {
+                    passed: false,
+                    requirements_covered: false,
+                    untested_edge_cases: vec![],
+                    detected_bugs: vec![format!("self-review unavailable: {e}")],
+                    security_observations: vec![],
+                    suggested_edits: vec![],
+                    confidence_score: 0.0,
+                    raw_feedback: String::new(),
+                },
+            };
+            self.emit_event(EventPayload::ForgeReviewCompleted {
+                job_id: job_id.to_string(),
+                passed: verdict.passed,
+                cost_usd: 0.0,
+                finding_count: verdict.detected_bugs.len(),
+            });
+            if !verdict.passed {
+                let reason = format!(
+                    "Self-review rejected patch: {}",
+                    if verdict.detected_bugs.is_empty() {
+                        "requirements not covered".to_string()
+                    } else {
+                        verdict.detected_bugs.join("; ")
+                    }
+                );
+                {
+                    let mut jobs = self.active_jobs.lock().unwrap();
+                    if let Some(job) = jobs.get_mut(job_id) {
+                        job.checkpoint.failure_reason = Some(reason.clone());
+                        job.checkpoint.verification_status = Some("self_review_rejected".into());
+                        job.checkpoint.transition(ForgeTaskState::Blocked, &reason);
+                        let _ = self.checkpoint_store.save(&job.checkpoint);
+                    }
+                }
+                self.emit_event(EventPayload::ForgeIssueStatusUpdated {
+                    job_id: job_id.to_string(),
+                    state: "blocked".into(),
+                    stage: "self_review".into(),
+                    message: reason.clone(),
+                    diff: Some(final_diff.clone()),
+                    target_file: outcome.target_file.clone(),
+                    logs: Some(verdict.detected_bugs.clone()),
+                    live_output: Some(verdict.raw_feedback.clone()),
+                    model_action: Some("Self-review rejected".into()),
+                    turn: Some(outcome.turns),
+                });
+                return Err(reason);
+            }
+            self_review_result = Some(ReviewResult {
+                verdict,
+                cached: false,
+                dedup_hash: String::new(),
+                input_tokens: 0,
+                output_tokens: 0,
+                cost_usd: 0.0,
+                provider: reviewer.name(),
+            });
+        }
 
-        self.emit_event(EventPayload::ForgeReviewCompleted {
-            job_id: job_id.to_string(),
-            passed: review_result.verdict.passed,
-            cost_usd: review_result.cost_usd,
-            finding_count: review_result.verdict.detected_bugs.len(),
-        });
+        let external_review = if review_policy.enabled && self.review_broker.is_available() {
+            let total_test_duration_ms: u64 =
+                outcome.test_records.iter().map(|r| r.duration_ms).sum();
+            let review_req = ReviewRequest {
+                job_id: job_id.to_string(),
+                issue_id: format!("{}#{}", repo, issue_number),
+                base_commit: base_commit.clone(),
+                diff_patch: final_diff.clone(),
+                test_manifest: format!("cargo test passed ({}ms)", total_test_duration_ms),
+            };
+            let result = self.review_broker.review(&review_req).await;
+            self.emit_event(EventPayload::ForgeReviewCompleted {
+                job_id: job_id.to_string(),
+                passed: result.verdict.passed,
+                cost_usd: result.cost_usd,
+                finding_count: result.verdict.detected_bugs.len(),
+            });
+            Some(result)
+        } else {
+            info!(
+                "External review skipped for {}: no provider configured",
+                job_id
+            );
+            None
+        };
+
+        let ready_to_publish = (self_review_result.is_some() || external_review.is_some())
+            && external_review.as_ref().is_none_or(|r| r.verdict.passed);
+        let review_result = external_review.or(self_review_result);
 
         // 6. Complete phase
         let wall_time_secs = start_time.elapsed().as_secs();
@@ -1332,18 +1468,19 @@ impl ForgeOrchestrator {
             model_hash: outcome.model.model_hash.clone(),
             patch_ref: format!("patches/{}.patch", job_id),
             tests: outcome.test_records.clone(),
-            review_result: Some(review_result.clone()),
+            review_result: review_result.clone(),
             cost_local_estimate: 0.0,
-            api_cost_actual: review_result.cost_usd,
+            api_cost_actual: review_result.as_ref().map_or(0.0, |r| r.cost_usd),
             remaining_risks: vec![],
             status: ForgeTaskState::Completed,
+            ready_to_publish,
         };
 
         {
             let mut jobs = self.active_jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(job_id) {
                 job.checkpoint.wall_time_secs = wall_time_secs;
-                job.checkpoint.review_result = Some(review_result);
+                job.checkpoint.review_result = review_result;
                 job.checkpoint.final_report = Some(report.clone());
                 job.checkpoint
                     .transition(ForgeTaskState::Completed, "Verified by sandbox tests");

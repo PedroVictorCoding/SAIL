@@ -197,6 +197,11 @@ impl ReviewBroker {
         self
     }
 
+    /// Whether an external review can actually run (mock mode or a Codex binary on disk).
+    pub fn is_available(&self) -> bool {
+        self.mock_mode || self.codex_bin.exists()
+    }
+
     pub fn invocation_count(&self) -> usize {
         self.invocation_count.load(Ordering::SeqCst)
     }

@@ -17,8 +17,8 @@ use sail_dialogue::DialogueSubsystem;
 use sail_discovery::DiscoverySubsystem;
 use sail_flow::FlowSubsystem;
 use sail_forge::{
-    ForgeOrchestrator, ForgeSubsystem, OrchestratorConfig, ReviewBroker, ReviewPolicyConfig,
-    TaskCheckpointStore,
+    ForgeNightlyRunner, ForgeOrchestrator, ForgeSubsystem, GhCliClient, LocalModelReviewer,
+    NightlyConfig, OrchestratorConfig, ReviewBroker, ReviewPolicyConfig, TaskCheckpointStore,
 };
 use sail_guardian::GuardianSubsystem;
 use sail_mind::MindSubsystem;
@@ -71,13 +71,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ReviewBroker::new(ReviewPolicyConfig::default()).with_credentials(guardian.credentials()),
     );
     let checkpoint_store = Arc::new(TaskCheckpointStore::default_store());
-    let orchestrator = Arc::new(ForgeOrchestrator::new(
-        OrchestratorConfig::default(),
-        checkpoint_store,
-        review_broker,
-        guardian.sandbox(),
-    ));
-    let mut forge = ForgeSubsystem::new(orchestrator);
+    let orchestrator = Arc::new(
+        ForgeOrchestrator::new(
+            OrchestratorConfig::default(),
+            checkpoint_store,
+            review_broker,
+            guardian.sandbox(),
+        )
+        .with_self_reviewer(Arc::new(LocalModelReviewer::new())),
+    );
+    let mut forge = ForgeSubsystem::new(orchestrator.clone());
+    let nightly_config = NightlyConfig::from_env();
+    if nightly_config.enabled {
+        info!(
+            "Forge nightly runner enabled for {} (publish: {})",
+            nightly_config.repo_slug, nightly_config.publish
+        );
+        forge = forge.with_nightly_runner(Arc::new(ForgeNightlyRunner::new(
+            orchestrator,
+            Arc::new(GhCliClient::new()),
+            nightly_config,
+        )));
+    }
 
     // Call init on each subsystem
     mind.init(&bus).await?;
