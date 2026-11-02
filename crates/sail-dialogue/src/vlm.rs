@@ -278,13 +278,26 @@ impl LocalKernelToolBroker {
             .parse::<f64>()
             .unwrap_or(0.0);
 
-        let loadavg = fs::read_to_string("/proc/loadavg")
-            .unwrap_or_default()
+        let loadavg_raw = fs::read_to_string("/proc/loadavg").unwrap_or_default();
+        let loadavg_parts: Vec<f64> = loadavg_raw
             .split_whitespace()
             .take(3)
-            .map(|s| s.to_string())
-            .collect::<Vec<String>>()
-            .join(" ");
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        let loadavg = if !loadavg_parts.is_empty() {
+            loadavg_parts
+                .iter()
+                .map(|f| format!("{:.2}", f))
+                .collect::<Vec<String>>()
+                .join(" ")
+        } else {
+            loadavg_raw
+                .split_whitespace()
+                .take(3)
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>()
+                .join(" ")
+        };
 
         let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
         let mut mem_total_kb = 0u64;
@@ -308,6 +321,45 @@ impl LocalKernelToolBroker {
 
         let mem_used_gb = ((mem_total_kb.saturating_sub(mem_avail_kb)) as f64) / (1024.0 * 1024.0);
         let mem_total_gb = (mem_total_kb as f64) / (1024.0 * 1024.0);
+        let logical_cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+
+        // Compute CPU utilization from /proc/stat with fallback to normalized load average
+        static PREV_CPU: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
+        let mut cpu_percent = if let Some(first_load) = loadavg_parts.first() {
+            ((*first_load / logical_cpus as f64) * 100.0).clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+
+        if let Ok(stat) = fs::read_to_string("/proc/stat") {
+            if let Some(line) = stat.lines().next() {
+                if line.starts_with("cpu ") {
+                    let ticks: Vec<u64> = line
+                        .split_whitespace()
+                        .skip(1)
+                        .filter_map(|s| s.parse().ok())
+                        .collect();
+                    if ticks.len() >= 4 {
+                        let idle = ticks[3] + ticks.get(4).copied().unwrap_or(0);
+                        let total: u64 = ticks.iter().sum();
+                        let work = total.saturating_sub(idle);
+                        if let Ok(mut prev_guard) = PREV_CPU.lock() {
+                            if let Some((prev_work, prev_total)) = *prev_guard {
+                                let d_work = work.saturating_sub(prev_work);
+                                let d_total = total.saturating_sub(prev_total);
+                                if d_total > 0 {
+                                    cpu_percent = ((d_work as f64) / (d_total as f64) * 100.0)
+                                        .clamp(0.0, 100.0);
+                                }
+                            }
+                            *prev_guard = Some((work, total));
+                        }
+                    }
+                }
+            }
+        }
 
         KernelToolResult {
             tool: "os:status".to_string(),
@@ -316,9 +368,12 @@ impl LocalKernelToolBroker {
                 "os": std::env::consts::OS,
                 "uptime_hours": format!("{:.1}", uptime / 3600.0),
                 "load_average": loadavg,
+                "load_averages": loadavg_parts,
                 "memory_used_gb": format!("{:.2} / {:.2} GB", mem_used_gb, mem_total_gb),
                 "memory_percent": format!("{:.1}%", (mem_used_gb / mem_total_gb.max(1.0)) * 100.0),
-                "logical_cpus": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+                "logical_cpus": logical_cpus,
+                "cpu_percent": format!("{:.1}%", cpu_percent),
+                "cpu_usage_raw": (cpu_percent * 10.0).round() / 10.0,
             }),
         }
     }

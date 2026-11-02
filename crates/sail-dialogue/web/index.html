@@ -37,84 +37,254 @@
       </article>
 
       <section class="workspace-grid" aria-label="Live system and session cards">
-        <article class="workspace-card system-card" id="systemCard">
-          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">⌁</span><div><h3>System</h3><p>Local device status</p></div></div><button class="card-action" id="checkSystemBtn" type="button" aria-label="Check local system status">↻</button></header>
-          <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">Not checked</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">Not checked</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">Not checked</strong></div></div>
-          <p class="card-footnote" id="systemNote">System details are queried only when you ask.</p>
-        </article>
-
-        <article class="workspace-card session-card" id="sessionCard">
-          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">◌</span><div><h3>Voice session</h3><p>Live browser session</p></div></div><span class="mini-state" id="sessionState">Ready</span></header>
-          <div class="session-lines">
-            <div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div>
-            <div><span>Microphone</span><strong id="sessionMic">Off</strong></div>
-            <div><span>State</span><strong id="sessionLiveState">Ready</strong></div>
-            <div><span>Generation speed</span><strong id="sessionTokensPerSec">—</strong></div>
-            <div><span>Time to first token</span><strong id="sessionTtft">—</strong></div>
-            <div><span>Live output</span><strong id="sessionGenStats">—</strong></div>
-            <div><span>VAD confidence</span><strong id="sessionConfidence">—</strong></div>
-            <div><span>Input level</span><strong id="sessionRms">—</strong></div>
-            <div><span>Recorded</span><strong id="sessionDuration">0:00 / 3:00</strong></div>
-          </div>
-          <div class="session-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-        </article>
-
-        <article class="workspace-card models-card" id="modelsCard">
-          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">✳</span><div><h3>Local models</h3><p>Speech and language services</p></div></div><button class="card-action" id="modelsRefreshBtn" type="button" aria-label="Check local model status">↻</button></header>
-          <div class="model-summary" id="modelStatus" role="status">Not checked yet</div>
-          <div class="model-lines"><div><span>Language model</span><strong id="llmStatus">Not checked</strong></div><div><span>Voice workers</span><strong id="speechStatus">Not checked</strong></div><div><span>Capabilities</span><strong id="modelCapabilities">—</strong></div></div>
-        </article>
-
-        <article class="workspace-card tools-card" id="toolsCard">
-          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">⌘</span><div><h3>Local tools</h3><p>Authorized workspace actions</p></div></div></header>
-          <div class="tool-actions">
-            <button type="button" class="tool-action" data-tool="proc:list"><span aria-hidden="true">▤</span>Processes</button>
-            <button type="button" class="tool-action" data-tool="fs:query"><span aria-hidden="true">▱</span>Workspace files</button>
-            <button type="button" class="tool-action" id="chooseVisionBtn"><span aria-hidden="true">▧</span>Analyze an image</button>
-            <button type="button" class="tool-action" id="listIssuesBtn" data-tool="github:issues"><span aria-hidden="true">⌥</span>GitHub issues</button>
-            <button type="button" class="tool-action" id="forgeQuickEnqueueToolBtn"><span aria-hidden="true">⚒</span>Enqueue Forge task</button>
-          </div>
-        </article>
-
-        <article class="workspace-card canvas-card" id="canvasCard">
-          <header class="card-heading"><div class="card-title"><span class="card-icon" aria-hidden="true">▧</span><div><h3>Canvas</h3><p>Visuals & Guardian approvals</p></div></div><button class="card-action" id="canvasClearBtn" type="button" aria-label="Clear Canvas" title="Clear Canvas">×</button></header>
-          <div class="canvas-panel" id="canvasPanel" aria-label="Canvas output"><p class="canvas-empty" id="canvasEmptyState">Diagrams, images, structured results and Guardian approvals appear here.</p></div>
-        </article>
-
-        <article class="workspace-card forge-card" id="forgeCard">
+        <article class="workspace-card system-card" id="systemCard" data-card="systemCard">
           <header class="card-heading">
-            <div class="card-title"><span class="card-icon" aria-hidden="true">⚒</span><div><h3>Forge</h3><p>Autonomous coding agent</p></div></div>
-            <button class="card-action" id="forgeRefreshBtn" type="button" aria-label="Refresh Forge jobs" title="Refresh Forge jobs">↻</button>
-          </header>
-          <div class="forge-pipeline" id="forgePipeline" aria-label="Forge execution pipeline">
-            <span class="forge-chip" data-step="worktree">Worktree</span>
-            <span class="forge-chip" data-step="planning">Plan</span>
-            <span class="forge-chip" data-step="coding">Code</span>
-            <span class="forge-chip" data-step="testing">Sandbox test</span>
-            <span class="forge-chip" data-step="review">Review</span>
-            <span class="forge-chip" data-step="pr">PR draft</span>
-          </div>
-          <div class="forge-active-job" id="forgeActiveJob" aria-live="polite">
-            <p class="forge-empty" id="forgeEmptyState">No active Forge jobs. Ask SAIL or enqueue below.</p>
-          </div>
-          <div class="forge-live-stream" id="forgeLiveStream" hidden>
-            <div class="forge-live-header">
-              <div class="forge-live-badge">
-                <span class="forge-live-dot"></span>
-                <span id="forgeLiveTitle">SAIL Live Code Stream</span>
+            <div class="card-title"><span class="card-icon" aria-hidden="true">⌁</span><div><h3 id="systemCardHeading">System</h3><p id="systemCardSub">Local device status</p></div></div>
+            <div class="card-heading-actions">
+              <div class="card-tabs" role="tablist" aria-label="System tabs">
+                <button type="button" class="card-tab active" data-tab-card="systemCard" data-tab-panel="systemPanelMetrics"><span>Metrics</span></button>
+                <button type="button" class="card-tab" data-tab-card="systemCard" data-tab-panel="systemPanelGuardian"><span>Guardian</span></button>
               </div>
-              <div class="forge-live-actions">
-                <span class="forge-live-file" id="forgeLiveFile" title="Target source file"></span>
-                <button type="button" class="card-expand-btn" id="forgeExpandDiffBtn" title="Expand Full Code Diff in Pop-up" aria-label="Expand Full Code Diff in Pop-up">⤢</button>
-              </div>
+              <button class="card-action card-cycle-btn" data-cycle-card="systemCard" type="button" aria-label="Cycle system view" title="Cycle view (Status / Guardian)">⇋</button>
+              <button class="card-action" id="checkSystemBtn" type="button" aria-label="Check local system status" title="Refresh metrics">↻</button>
             </div>
-            <pre class="forge-live-diff" id="forgeLiveDiff"><code>// Waiting for Forge coding phase...</code></pre>
-            <div class="forge-live-logs" id="forgeLiveLogs"></div>
+          </header>
+          <div class="card-tab-panel active" id="systemPanelMetrics">
+            <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">Not checked</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">Not checked</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">Not checked</strong></div></div>
+            <p class="card-footnote" id="systemNote">System details are queried only when you ask.</p>
           </div>
-          <div class="forge-actions">
-            <button type="button" class="tool-action forge-action-btn" id="forgeQuickEnqueueBtn">
-              <span aria-hidden="true">＋</span>Enqueue Issue / Task
-            </button>
+          <div class="card-tab-panel" id="systemPanelGuardian" hidden>
+            <div class="guardian-summary-lines">
+              <div class="summary-line"><span>Landlock LSM</span><strong class="good-text">Enforcing (nono 0.81.0)</strong></div>
+              <div class="summary-line"><span>Bubblewrap</span><strong class="good-text">Available · Sandboxed</strong></div>
+              <div class="summary-line"><span>Autonomy preset</span><strong id="guardianPresetBadge">Balanced</strong></div>
+              <div class="summary-line"><span>Filesystem write</span><strong class="warn-text">Restricted · Explicit approval</strong></div>
+              <div class="summary-line"><span>Web observation</span><strong class="good-text">Read-only autonomous</strong></div>
+            </div>
+            <p class="card-footnote">Guardian enforces least-privilege boundaries at the kernel level.</p>
+          </div>
+        </article>
+
+        <article class="workspace-card session-card" id="sessionCard" data-card="sessionCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">◌</span><div><h3 id="sessionCardHeading">Voice session</h3><p id="sessionCardSub">Live browser session</p></div></div>
+            <div class="card-heading-actions">
+              <div class="card-tabs" role="tablist" aria-label="Session tabs">
+                <button type="button" class="card-tab active" data-tab-card="sessionCard" data-tab-panel="sessionPanelMain"><span>Session</span></button>
+                <button type="button" class="card-tab" data-tab-card="sessionCard" data-tab-panel="sessionPanelAudio"><span>Audio</span></button>
+              </div>
+              <button class="card-action card-cycle-btn" data-cycle-card="sessionCard" type="button" aria-label="Cycle session view" title="Cycle view (Session / Audio)">⇋</button>
+              <span class="mini-state" id="sessionState">Ready</span>
+            </div>
+          </header>
+          <div class="card-tab-panel active" id="sessionPanelMain">
+            <div class="session-lines">
+              <div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div>
+              <div><span>Microphone</span><strong id="sessionMic">Off</strong></div>
+              <div><span>State</span><strong id="sessionLiveState">Ready</strong></div>
+              <div><span>Generation speed</span><strong id="sessionTokensPerSec">—</strong></div>
+              <div><span>Time to first token</span><strong id="sessionTtft">—</strong></div>
+              <div><span>Live output</span><strong id="sessionGenStats">—</strong></div>
+              <div><span>VAD confidence</span><strong id="sessionConfidence">—</strong></div>
+              <div><span>Input level</span><strong id="sessionRms">—</strong></div>
+              <div><span>Recorded</span><strong id="sessionDuration">0:00 / 3:00</strong></div>
+            </div>
+            <div class="session-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="card-tab-panel" id="sessionPanelAudio" hidden>
+            <div class="audio-diag-lines">
+              <div class="diag-line"><span>Worklet transport</span><strong class="good-text">16 kHz PCM Mono</strong></div>
+              <div class="diag-line"><span>Frame buffer</span><strong>512 samples (32 ms)</strong></div>
+              <div class="diag-line"><span>Resampler ratio</span><strong id="audioResampleRatio">Automatic (Hardware rate)</strong></div>
+              <div class="diag-line"><span>Turn taking mode</span><strong id="audioTurnMode">Automatic VAD</strong></div>
+              <div class="diag-line"><span>Capture state</span><strong id="audioCaptureState">Idle</strong></div>
+            </div>
+            <div class="audio-volume-bar-wrap">
+              <span>Input meter</span>
+              <div class="audio-volume-bar"><div class="audio-volume-fill" id="audioVolumeFill"></div></div>
+            </div>
+            <p class="card-footnote">Stateful area resampler processes raw audio directly on the audio thread.</p>
+          </div>
+        </article>
+
+        <article class="workspace-card models-card" id="modelsCard" data-card="modelsCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">✳</span><div><h3 id="modelsCardHeading">Local models</h3><p id="modelsCardSub">Speech and language services</p></div></div>
+            <div class="card-heading-actions">
+              <div class="card-tabs" role="tablist" aria-label="Model tabs">
+                <button type="button" class="card-tab active" data-tab-card="modelsCard" data-tab-panel="modelsPanelMain"><span>Models</span></button>
+                <button type="button" class="card-tab" data-tab-card="modelsCard" data-tab-panel="modelsPanelGovernor"><span>Governor</span></button>
+              </div>
+              <button class="card-action card-cycle-btn" data-cycle-card="modelsCard" type="button" aria-label="Cycle model view" title="Cycle view (Models / Governor)">⇋</button>
+              <button class="card-action" id="modelsRefreshBtn" type="button" aria-label="Check local model status" title="Refresh model health">↻</button>
+            </div>
+          </header>
+          <div class="card-tab-panel active" id="modelsPanelMain">
+            <div class="model-summary" id="modelStatus" role="status">Not checked yet</div>
+            <div class="model-lines"><div><span>Language model</span><strong id="llmStatus">Not checked</strong></div><div><span>Voice workers</span><strong id="speechStatus">Not checked</strong></div><div><span>Capabilities</span><strong id="modelCapabilities">—</strong></div></div>
+          </div>
+          <div class="card-tab-panel" id="modelsPanelGovernor" hidden>
+            <div class="governor-metrics">
+              <div class="governor-row">
+                <div class="governor-label"><span>Adaptive CPU Load</span><strong id="governorCpuPercent">15%</strong></div>
+                <div class="governor-bar"><div class="governor-fill" id="governorCpuFill" style="width:15%;"></div></div>
+              </div>
+              <div class="governor-row">
+                <div class="governor-label"><span>Vision Feed Update Rate</span><strong id="governorFpsTarget">2.5 FPS (400 ms)</strong></div>
+                <div class="governor-bar"><div class="governor-fill governor-fps-fill" id="governorFpsFill" style="width:40%;"></div></div>
+              </div>
+              <div class="diag-line" style="margin-top:8px;"><span>Scaling policy</span><strong>Inverse CPU Matching</strong></div>
+              <div class="diag-line"><span>Resource state</span><strong id="governorStatusBadge" class="good-text">Optimal autonomy</strong></div>
+            </div>
+            <p class="card-footnote">Image update speeds automatically slow down during model inference or compilation.</p>
+          </div>
+        </article>
+
+        <article class="workspace-card tools-card" id="toolsCard" data-card="toolsCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">⌘</span><div><h3 id="toolsCardHeading">Local tools</h3><p id="toolsCardSub">Authorized workspace actions</p></div></div>
+            <div class="card-heading-actions">
+              <div class="card-tabs" role="tablist" aria-label="Tools tabs">
+                <button type="button" class="card-tab active" data-tab-card="toolsCard" data-tab-panel="toolsPanelMain"><span>Tools</span></button>
+                <button type="button" class="card-tab" data-tab-card="toolsCard" data-tab-panel="toolsPanelActivity"><span>Activity</span></button>
+              </div>
+              <button class="card-action card-cycle-btn" data-cycle-card="toolsCard" type="button" aria-label="Cycle tools view" title="Cycle view (Tools / Activity)">⇋</button>
+            </div>
+          </header>
+          <div class="card-tab-panel active" id="toolsPanelMain">
+            <div class="tool-actions">
+              <button type="button" class="tool-action" data-tool="proc:list"><span aria-hidden="true">▤</span>Processes</button>
+              <button type="button" class="tool-action" data-tool="fs:query"><span aria-hidden="true">▱</span>Workspace files</button>
+              <button type="button" class="tool-action" id="chooseVisionBtn"><span aria-hidden="true">▧</span>Analyze an image</button>
+              <button type="button" class="tool-action" id="listIssuesBtn" data-tool="github:issues"><span aria-hidden="true">⌥</span>GitHub issues</button>
+              <button type="button" class="tool-action" id="forgeQuickEnqueueToolBtn"><span aria-hidden="true">⚒</span>Enqueue Forge task</button>
+            </div>
+          </div>
+          <div class="card-tab-panel" id="toolsPanelActivity" hidden>
+            <div class="tools-activity-list" id="toolsActivityList" aria-live="polite">
+              <p class="canvas-empty" id="toolsActivityEmpty">No kernel actions executed yet this session.</p>
+            </div>
+            <p class="card-footnote">Chronological audit stream of authorized tool executions.</p>
+          </div>
+        </article>
+
+        <article class="workspace-card canvas-card" id="canvasCard" data-card="canvasCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" id="canvasCardIcon" aria-hidden="true">▧</span><div><h3 id="canvasCardTitle">Canvas</h3><p id="canvasCardSub">Visuals & Guardian approvals</p></div></div>
+            <div class="card-heading-actions">
+              <div class="card-tabs" role="tablist" aria-label="Visual workspace tabs">
+                <button type="button" class="card-tab active" data-tab-card="canvasCard" data-tab-panel="canvasPanelMain" title="Canvas Visuals and Approvals"><span>Canvas</span></button>
+                <button type="button" class="card-tab" data-tab-card="canvasCard" data-tab-panel="canvasPanelCamera" title="Live Camera Feed (Adaptive Slow Mode)"><span>Camera</span></button>
+                <button type="button" class="card-tab" data-tab-card="canvasCard" data-tab-panel="canvasPanelDesktop" title="Live Desktop Screen Share (Adaptive Slow Mode)"><span>Desktop</span></button>
+              </div>
+              <button class="card-action card-cycle-btn" data-cycle-card="canvasCard" type="button" aria-label="Cycle canvas view" title="Cycle view (Canvas / Camera / Desktop)">⇋</button>
+              <button class="card-action" id="canvasClearBtn" type="button" aria-label="Clear Canvas" title="Clear Canvas">×</button>
+            </div>
+          </header>
+          <!-- Tab 1: Canvas Output -->
+          <div class="card-tab-panel active" id="canvasPanelMain">
+            <div class="canvas-panel" id="canvasPanel" aria-label="Canvas output"><p class="canvas-empty" id="canvasEmptyState">Diagrams, images, structured results and Guardian approvals appear here.</p></div>
+          </div>
+          <!-- Tab 2: Live Camera Feed (Adaptive slow frame mode) -->
+          <div class="card-tab-panel" id="canvasPanelCamera" hidden>
+            <div class="live-feed-container">
+              <div class="live-feed-toolbar">
+                <div class="live-feed-badges">
+                  <span class="feed-live-indicator inactive" id="cameraStatusIndicator"><i class="feed-dot"></i><span>Camera Off</span></span>
+                  <span class="feed-rate-badge" id="cameraRateBadge">Slow Mode · Idle</span>
+                </div>
+                <div class="feed-toolbar-actions">
+                  <button type="button" class="feed-btn primary" id="cameraToggleBtn">Start Camera</button>
+                  <button type="button" class="feed-btn" id="cameraCaptureBtn" disabled title="Send frame to SAIL">Capture Frame</button>
+                  <button type="button" class="feed-btn" id="cameraFlipBtn" title="Switch Camera" disabled>⇄</button>
+                </div>
+              </div>
+              <div class="live-feed-viewport" id="cameraViewport">
+                <video id="cameraVideo" autoplay muted playsinline hidden></video>
+                <canvas id="cameraCanvas" class="live-feed-canvas" aria-label="Camera live feed"></canvas>
+                <div class="feed-placeholder" id="cameraPlaceholder">
+                  <span class="feed-placeholder-icon" aria-hidden="true">📷</span>
+                  <p>Live camera preview is off</p>
+                  <small>Click "Start Camera" for low-resource adaptive vision</small>
+                </div>
+                <div class="feed-overlay-badge" id="cameraOverlayStats">Adaptive Slow Mode · Inversely matched to CPU</div>
+              </div>
+              <p class="card-footnote">Image update speed inversely matches processor usage to preserve local compute.</p>
+            </div>
+          </div>
+          <!-- Tab 3: Live Desktop Feed (Adaptive slow frame mode) -->
+          <div class="card-tab-panel" id="canvasPanelDesktop" hidden>
+            <div class="live-feed-container">
+              <div class="live-feed-toolbar">
+                <div class="live-feed-badges">
+                  <span class="feed-live-indicator inactive" id="desktopStatusIndicator"><i class="feed-dot"></i><span>Desktop Off</span></span>
+                  <span class="feed-rate-badge" id="desktopRateBadge">Slow Mode · Idle</span>
+                </div>
+                <div class="feed-toolbar-actions">
+                  <button type="button" class="feed-btn primary" id="desktopToggleBtn">Share Screen</button>
+                  <button type="button" class="feed-btn" id="desktopCaptureBtn" disabled title="Send screenshot to SAIL">Capture Screen</button>
+                </div>
+              </div>
+              <div class="live-feed-viewport" id="desktopViewport">
+                <video id="desktopVideo" autoplay muted playsinline hidden></video>
+                <canvas id="desktopCanvas" class="live-feed-canvas" aria-label="Desktop screen live feed"></canvas>
+                <div class="feed-placeholder" id="desktopPlaceholder">
+                  <span class="feed-placeholder-icon" aria-hidden="true">🖥</span>
+                  <p>Screen sharing inactive</p>
+                  <small>Click "Share Screen" to pick a monitor, window, or tab</small>
+                </div>
+                <div class="feed-overlay-badge" id="desktopOverlayStats">Adaptive Slow Mode · Inversely matched to CPU</div>
+              </div>
+              <p class="card-footnote">Local desktop capture throttles dynamically to keep local LLM inference responsive.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="workspace-card forge-card" id="forgeCard" data-card="forgeCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">⚒</span><div><h3 id="forgeCardHeading">Forge</h3><p id="forgeCardSub">Autonomous coding agent</p></div></div>
+            <div class="card-heading-actions">
+              <div class="card-tabs" role="tablist" aria-label="Forge tabs">
+                <button type="button" class="card-tab active" data-tab-card="forgeCard" data-tab-panel="forgePanelMain"><span>Agent</span></button>
+                <button type="button" class="card-tab" data-tab-card="forgeCard" data-tab-panel="forgePanelStream"><span>Stream</span></button>
+              </div>
+              <button class="card-action card-cycle-btn" data-cycle-card="forgeCard" type="button" aria-label="Cycle forge view" title="Cycle view (Agent / Stream)">⇋</button>
+              <button class="card-action" id="forgeRefreshBtn" type="button" aria-label="Refresh Forge jobs" title="Refresh Forge jobs">↻</button>
+            </div>
+          </header>
+          <div class="card-tab-panel active" id="forgePanelMain">
+            <div class="forge-pipeline" id="forgePipeline" aria-label="Forge execution pipeline">
+              <span class="forge-chip" data-step="worktree">Worktree</span>
+              <span class="forge-chip" data-step="planning">Plan</span>
+              <span class="forge-chip" data-step="coding">Code</span>
+              <span class="forge-chip" data-step="testing">Sandbox test</span>
+              <span class="forge-chip" data-step="review">Review</span>
+              <span class="forge-chip" data-step="pr">PR draft</span>
+            </div>
+            <div class="forge-active-job" id="forgeActiveJob" aria-live="polite">
+              <p class="forge-empty" id="forgeEmptyState">No active Forge jobs. Ask SAIL or enqueue below.</p>
+            </div>
+            <div class="forge-actions">
+              <button type="button" class="tool-action forge-action-btn" id="forgeQuickEnqueueBtn">
+                <span aria-hidden="true">＋</span>Enqueue Issue / Task
+              </button>
+            </div>
+          </div>
+          <div class="card-tab-panel" id="forgePanelStream" hidden>
+            <div class="forge-live-stream" id="forgeLiveStream">
+              <div class="forge-live-header">
+                <div class="forge-live-badge">
+                  <span class="forge-live-dot"></span>
+                  <span id="forgeLiveTitle">SAIL Live Code Stream</span>
+                </div>
+                <div class="forge-live-actions">
+                  <span class="forge-live-file" id="forgeLiveFile" title="Target source file"></span>
+                  <button type="button" class="card-expand-btn" id="forgeExpandDiffBtn" title="Expand Full Code Diff in Pop-up" aria-label="Expand Full Code Diff in Pop-up">⤢</button>
+                </div>
+              </div>
+              <pre class="forge-live-diff" id="forgeLiveDiff"><code>// Waiting for Forge coding phase...</code></pre>
+              <div class="forge-live-logs" id="forgeLiveLogs"></div>
+            </div>
           </div>
         </article>
       </section>

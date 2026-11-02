@@ -182,7 +182,7 @@ function connectWs() {
         break;
       }
       case 'tool_started': updateToolActivity(data.tool, true); break;
-      case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); break;
+      case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); logToolActivity(data.result); break;
       case 'canvas': renderArtifact(data.artifact); break;
       case 'approval_required':
         renderApprovalCard(data);
@@ -424,10 +424,51 @@ function renderToolResult(result) {
 }
 
 function updateSystemCard(output) {
-  document.getElementById('systemCpu').textContent = Number.isFinite(output.logical_cpus) ? `${output.logical_cpus} logical CPUs` : 'Unavailable';
+  const cpuText = Number.isFinite(output.logical_cpus)
+    ? `${output.logical_cpus} CPUs${output.cpu_percent ? ` · ${output.cpu_percent}` : ''}`
+    : 'Unavailable';
+  document.getElementById('systemCpu').textContent = cpuText;
   document.getElementById('systemMemory').textContent = output.memory_percent ? `${String(output.memory_percent)} used` : (output.memory_used_gb || 'Unavailable');
-  document.getElementById('systemLoad').textContent = Array.isArray(output.load_average) ? output.load_average.slice(0, 3).map(value => Number(value).toFixed(2)).join(' · ') : 'Unavailable';
+
+  let loadStr = 'Unavailable';
+  if (Array.isArray(output.load_averages) && output.load_averages.length > 0) {
+    loadStr = output.load_averages.map(v => Number(v).toFixed(2)).join(' · ');
+  } else if (Array.isArray(output.load_average)) {
+    loadStr = output.load_average.slice(0, 3).map(value => Number(value).toFixed(2)).join(' · ');
+  } else if (typeof output.load_average === 'string') {
+    loadStr = output.load_average;
+  }
+  document.getElementById('systemLoad').textContent = loadStr;
   document.getElementById('systemNote').textContent = [output.os, output.uptime_hours ? `Uptime ${output.uptime_hours} h` : ''].filter(Boolean).join(' · ') || 'Live status from the local device.';
+
+  if (window.AdaptiveFeedEngine) {
+    const rawCpu = typeof output.cpu_usage_raw === 'number'
+      ? output.cpu_usage_raw
+      : (Array.isArray(output.load_averages) && output.logical_cpus ? (output.load_averages[0] / output.logical_cpus) * 100 : 15);
+    window.AdaptiveFeedEngine.updateCpuUsage(rawCpu);
+  }
+}
+
+function logToolActivity(result) {
+  const list = document.getElementById('toolsActivityList');
+  if (!list || !result) return;
+  document.getElementById('toolsActivityEmpty')?.remove();
+  const item = document.createElement('div');
+  item.className = 'activity-item';
+  const left = document.createElement('div');
+  left.className = 'activity-item-left';
+  const toolName = document.createElement('strong');
+  toolName.textContent = result.tool || 'tool';
+  const status = document.createElement('span');
+  status.className = `activity-status-pill ${result.success ? 'success' : 'error'}`;
+  status.textContent = result.success ? 'OK' : 'ERR';
+  left.append(toolName, status);
+  const time = document.createElement('span');
+  time.className = 'activity-time';
+  time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  item.append(left, time);
+  list.prepend(item);
+  while (list.children.length > 20) list.lastElementChild?.remove();
 }
 
 function renderApprovalCard(data) {
