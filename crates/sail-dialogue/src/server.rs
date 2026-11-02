@@ -38,7 +38,7 @@ use std::{
 };
 use tokio::{
     sync::{Mutex, mpsc},
-    task::JoinHandle,
+    task::{JoinHandle, JoinSet},
 };
 use tracing::{Instrument, debug, error, info, trace, warn};
 
@@ -233,19 +233,46 @@ async fn ws_handler(
         .into_response()
 }
 struct Outbound {
-    epoch: u64,
+    // Session-scoped tool replies survive voice-turn changes.
+    epoch: Option<u64>,
     value: Value,
     wire: Option<Message>,
 }
 async fn emit(tx: &mpsc::Sender<Outbound>, epoch: u64, value: Value) {
     let _ = tx
         .send(Outbound {
-            epoch,
+            epoch: Some(epoch),
             value,
             wire: None,
         })
         .await;
 }
+async fn emit_session(tx: &mpsc::Sender<Outbound>, value: Value) {
+    let _ = tx
+        .send(Outbound {
+            epoch: None,
+            value,
+            wire: None,
+        })
+        .await;
+}
+
+const MAX_CLIENT_TOOLS: usize = 8;
+
+// Own independent client tools until completion; JoinSet aborts them on disconnect.
+#[derive(Default)]
+struct ClientTools(JoinSet<()>);
+impl ClientTools {
+    fn spawn(&mut self, task: impl std::future::Future<Output = ()> + Send + 'static) -> bool {
+        while self.0.try_join_next().is_some() {}
+        if self.0.len() >= MAX_CLIENT_TOOLS {
+            return false;
+        }
+        self.0.spawn(task);
+        true
+    }
+}
+
 struct AbortTask(JoinHandle<()>);
 impl Drop for AbortTask {
     fn drop(&mut self) {
@@ -281,6 +308,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     let (tx, mut rx) = mpsc::channel::<Outbound>(128);
     let mut turn: Option<AbortTask> = None;
     let mut partial: Option<AbortTask> = None;
+    let mut client_tools = ClientTools::default();
     let mut pending = Vec::<i16>::new();
     let mut speech_frames = 0usize;
     let hello = json!({"type":"session","session_id":session,"sample_rate":16000,"frame_samples":512,"control":pipe.control_state()});
@@ -291,11 +319,11 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     let writer_span = tracing::Span::current();
     let mut writer = AbortTask(tokio::spawn(async move {
         while let Some(out) = rx.recv().await {
-            if out.epoch != writer_epoch.load(Ordering::SeqCst) {
-                trace!(event_epoch=out.epoch,current_epoch=writer_epoch.load(Ordering::SeqCst),"Discarding stale voice event");
+            if out.epoch.is_some_and(|epoch| epoch != writer_epoch.load(Ordering::SeqCst)) {
+                trace!(event_epoch=?out.epoch,current_epoch=writer_epoch.load(Ordering::SeqCst),"Discarding stale voice event");
                 continue;
             }
-            trace!(epoch=out.epoch,event_type=?out.value["type"],"Sending voice event to browser");
+            trace!(epoch=?out.epoch,event_type=?out.value["type"],"Sending voice event to browser");
             let message = out
                 .wire
                 .unwrap_or_else(|| Message::Text(out.value.to_string()));
@@ -452,6 +480,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     }));
     loop {
         tokio::select! {
+            _=client_tools.0.join_next(), if !client_tools.0.is_empty()=>{},
             _=&mut writer.0=>break,
             _=&mut bus_forwarder.0=>break,
             incoming=receiver.next()=>{
@@ -507,6 +536,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                         debug!(action,command=%log_json(&value,2048),epoch=epoch.load(Ordering::SeqCst),"Received voice client command");
                         match action {
                             "interrupt"|"reset"=>{
+                                client_tools.0.abort_all();
                                 turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.interrupt();
                                 if action=="reset"{history.lock().await.clear();state.arena.clear_voice_session(&session);pipe.reset();}
                                 state.services.reset_vad(&session).await;
@@ -542,12 +572,12 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 let token=value["approval_token"].as_str().and_then(|id|uuid::Uuid::parse_str(id).ok());
                                 let name=name.to_owned();let params=value.get("params").cloned().unwrap_or(json!({}));
                                 let current=epoch.load(Ordering::SeqCst);let correlation=Some(tool_correlation(&session,current));let tx=tx.clone();
-                                let tool_task=AbortTask(tokio::spawn(async move {
-                                    let result=execute_scheduled_tool(&name,params,token,correlation,&tx,current).await;
-                                    emit(&tx,current,json!({"type":"tool_result","channel":"voice:vlm","result":result})).await;
-                                }));
-                                if turn.is_none() {
-                                    turn=Some(tool_task);
+                                let task_tx=tx.clone();
+                                if !client_tools.spawn(async move {
+                                    let result=execute_scheduled_tool(&name,params,token,correlation,&task_tx,current).await;
+                                    emit_session(&task_tx,json!({"type":"tool_result","channel":"voice:vlm","result":result})).await;
+                                }) {
+                                    emit_session(&tx,json!({"type":"tool_result","result":{"tool":value["tool"],"success":false,"output":{"error":"Too many concurrent client tools; retry after a request completes"}}})).await;
                                 }
                             },
                             "tool_plan"=>{
@@ -631,7 +661,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                         emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"control","channel":"voice:control","control":pipe.control_state()})).await;
                     },
                     Message::Close(_)=>break,
-                    Message::Ping(data)=>{let _=tx.send(Outbound{epoch:epoch.load(Ordering::SeqCst),value:Value::Null,wire:Some(Message::Pong(data))}).await;},
+                    Message::Ping(data)=>{let _=tx.send(Outbound{epoch:Some(epoch.load(Ordering::SeqCst)),value:Value::Null,wire:Some(Message::Pong(data))}).await;},
                     _=>{},
                 }
             }
@@ -640,6 +670,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     info!("Voice client disconnected; cancelling tasks and clearing session context");
     drop(turn);
     drop(partial);
+    drop(client_tools);
     state.services.reset_vad(&session).await;
     state.arena.clear_voice_session(&session);
 }
@@ -1588,6 +1619,77 @@ fn generate_and_persist_token(token_path: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    #[tokio::test]
+    async fn client_tool_completes_while_voice_turn_is_active() {
+        let turn = AbortTask(tokio::spawn(std::future::pending()));
+        let mut tools = ClientTools::default();
+        let (tx, mut rx) = mpsc::channel(1);
+        assert!(tools.spawn(async move {
+            emit_session(
+                &tx,
+                json!({"type":"tool_result","result":{"tool":"os:status"}}),
+            )
+            .await;
+        }));
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reply.value["result"]["tool"], "os:status");
+        assert_eq!(
+            reply.epoch, None,
+            "status results must survive a new voice epoch"
+        );
+        assert!(
+            !turn.0.is_finished(),
+            "telemetry must not interrupt the voice turn"
+        );
+        tools.0.join_next().await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn client_tools_are_bounded_and_completed_slots_are_reusable() {
+        let mut tools = ClientTools::default();
+        let release = Arc::new(tokio::sync::Notify::new());
+        for _ in 0..MAX_CLIENT_TOOLS {
+            let release = release.clone();
+            assert!(tools.spawn(async move {
+                release.notified().await;
+            }));
+        }
+        assert!(!tools.spawn(async {
+            panic!("over-capacity task executed");
+        }));
+        // Let every task start waiting before releasing the batch.
+        tokio::task::yield_now().await;
+        release.notify_waiters();
+        while let Some(result) = tools.0.join_next().await {
+            result.unwrap();
+        }
+        assert!(tools.spawn(async {}));
+        tools.0.join_next().await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn disconnect_aborts_independent_client_tools() {
+        let mut tools = ClientTools::default();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
+        assert!(tools.spawn(async move {
+            let _held = held_tx;
+            started_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+        }));
+        started_rx.await.unwrap();
+        drop(tools);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), held_rx)
+                .await
+                .unwrap()
+                .is_err()
+        );
+    }
+
     struct MockModel {
         replies: Mutex<VecDeque<Value>>,
         requests: Mutex<Vec<Value>>,
