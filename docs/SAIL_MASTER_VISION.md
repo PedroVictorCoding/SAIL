@@ -427,6 +427,7 @@ Right: open a real editable file, use typed selection-based operation, enforce r
 6. **External inspiration versus reusable code:** LearnHarness (AGPL), Notte (SSPL), Craft Anything (MIT/Apache) and Taranify (public product reference) have different licenses, maturity and APIs. Verify before integrating.
 7. **Tool capability versus authority:** adapters may technically be able to read, execute or upload; permission still belongs to Guardian, not the adapter or LLM.
 8. **Browser as runtime versus research context:** a browser can observe a site; it cannot automatically access system files or host credentials.
+9. **Dioxus client versus the current web UI (decided 2026-11-02):** the shared Rust/Dioxus Web/Android client remains the target, but the migration starts once SAIL is stable and hardened. Until then, new UI goes into the existing `sail-dialogue/web` interface under [DESIGN.md](../DESIGN.md).
 
 ## 19. Final north-star acceptance test
 

@@ -207,6 +207,38 @@ impl Subsystem for ArenaSubsystem {
 }
 
 impl ArenaSubsystem {
+    /// Consolidated knowledge relevant to `text`, limited to what `access` may see and to
+    /// `token_budget` bytes of complete JSON records. Returns `None` when nothing is visible
+    /// or the store is unavailable; a memory failure never blocks the conversation.
+    pub fn knowledge_context(
+        &self,
+        text: &str,
+        access: &knowledge::Access,
+        token_budget: usize,
+    ) -> Option<sail_protocol::memory::MemoryReply> {
+        let query = sail_protocol::memory::MemoryQuery {
+            version: sail_protocol::memory::VERSION,
+            text: compaction::clip(text, 4000),
+            limit: 8,
+            token_budget,
+            expand_graph: true,
+        };
+        match self
+            .store
+            .knowledge()
+            .search(&query, access, None, store::now_ms())
+        {
+            Ok(reply) if !reply.hits.is_empty() && !reply.context.is_empty() => Some(reply),
+            Ok(_) => None,
+            Err(error) => {
+                warn!(%error, "SAIL Arena knowledge retrieval failed; continuing without it");
+                None
+            }
+        }
+    }
+}
+
+impl ArenaSubsystem {
     /// Archive a finished exchange and move it into the session's hot window. Exchanges that
     /// no longer fit the hot budget become breadcrumbs. Archival failures are logged and the
     /// turn still enters the hot window, so the conversation keeps working.
