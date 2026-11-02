@@ -466,6 +466,20 @@ A first-time user launches SAIL on Web/Android, grants only narrow permissions, 
 | Campus | Probe answer persisted, relevant plan graph projected, lesson check resolved, independent practice scored |
 | Discovery | Sourced useful suggestion delivered once, snooze retained, no quiet-hours notification |
 | Flow | Authorized DAG nodes execute with receipts; restart resumes without replaying committed side effects |
+
+
+
+
+
+--------
+
+
+Resources that can be used as adaptables:
+- https://github.com/mahseema/awesome-ai-tools
+- https://learnharness.ai
+- https://github.com/muftiarfan/noop
+- https://github.com/nottelabs/notte
+- 
 | Model routing | Correct local model selected with real memory/latency metrics and available fallback |
 | Media | Actual permitted player action or honest link; resume state verified |
 
