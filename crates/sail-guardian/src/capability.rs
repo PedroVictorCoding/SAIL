@@ -77,7 +77,7 @@ impl Capability {
             Capability::System(s) => match s {
                 SystemCapability::OsTelemetry => RiskLevel::Low,
                 SystemCapability::ProcessInspect => RiskLevel::Medium,
-                SystemCapability::ProcessKill => RiskLevel::High,
+                SystemCapability::ProcessKill => RiskLevel::Critical,
                 SystemCapability::NetworkAccess { .. } => RiskLevel::High,
             },
             Capability::Tool(t) => match t {

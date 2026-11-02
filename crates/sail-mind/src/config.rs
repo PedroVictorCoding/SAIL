@@ -41,7 +41,9 @@ impl Default for LocalModelConfig {
                         PathBuf::from("models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
                         PathBuf::from("/home/main/SAIL/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
                         PathBuf::from("models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
-                        PathBuf::from("/home/main/SAIL/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
+                        PathBuf::from(
+                            "/home/main/SAIL/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+                        ),
                         PathBuf::from("models/gemma4-v2-Q4_K_M.gguf"),
                     ];
                     for cand in candidates {
@@ -55,9 +57,7 @@ impl Default for LocalModelConfig {
                 .map(PathBuf::from)
                 .unwrap_or("/home/main/llama.cpp/build/bin/llama-server".into()),
             endpoint,
-            projector: std::env::var("SAIL_MMPROJ")
-                .map(PathBuf::from)
-                .ok(),
+            projector: std::env::var("SAIL_MMPROJ").map(PathBuf::from).ok(),
             managed,
             compute: ComputeBackend::Cpu,
             device: "Vulkan0".into(),

@@ -6,6 +6,7 @@ pub mod capability;
 pub mod confined;
 pub mod credentials;
 pub mod policy;
+pub mod runtime;
 pub mod sandbox;
 
 use async_trait::async_trait;
@@ -28,6 +29,11 @@ pub use credentials::{
     SecretString, VaultStatus,
 };
 pub use policy::{AuthorizationDecision, PolicyEngine};
+pub use runtime::{
+    ActionRequest, AuthorizedAction, AutonomyPreset, CapabilityProfile, ExecutionHandle,
+    NonoSecurityRuntime, SecurityCapabilities, SecurityError, SecurityRuntime, SecurityStatus,
+    is_sensitive_host_path,
+};
 pub use sandbox::{SandboxPolicy, SandboxViolation};
 
 use sail_common::{

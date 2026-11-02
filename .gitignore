@@ -4,6 +4,8 @@ debug
 target
 
 # Large model weights
+models/
+models
 models/*.gguf
 *.gguf
 models/*.sha256
