@@ -5,9 +5,11 @@ pub mod orb;
 pub mod pipeline;
 pub mod server;
 mod speech;
+pub mod staged_ack;
 pub mod stt;
 mod tool_policy;
 pub mod tts;
+pub mod turn_coordinator;
 pub mod vad;
 mod visual_capture;
 pub mod vlm;
@@ -23,8 +25,11 @@ pub use control::{
 pub use orb::{AudioSpectrum8Band, OrbEngine, OrbState, OrbTelemetry};
 pub use pipeline::RealtimeVoicePipeline;
 pub use server::run_dialogue_server;
+pub use speech::SpeechChunker;
+pub use staged_ack::StagedAckCatalog;
 pub use stt::{LocalStreamingStt, StreamingToken, SttConfig};
 pub use tts::{LocalNeuralTts, TtsConfig};
+pub use turn_coordinator::{FAST_PATH_LATENCY_THRESHOLD_MS, StagedToolOutcome, TurnCoordinator};
 pub use vad::{SileroVad, SileroVadConfig, VadEvent, VadTelemetry};
 pub use vlm::{
     KernelToolCall, KernelToolResult, LocalKernelToolBroker, VisionAnalysis, VisionFrameInput,

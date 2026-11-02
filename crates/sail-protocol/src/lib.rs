@@ -337,6 +337,29 @@ pub struct BenchmarkSummary {
     pub p95_ttft_ms: u64,
     pub avg_decode_tok_per_sec: f32,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StagedSpeechPhase {
+    ToolPlanned,
+    AckStarted,
+    ToolStarted,
+    ToolCompleted,
+    GroundedAnswerStarted,
+    SpeechFinished,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagedSpeechEvent {
+    pub turn_id: u64,
+    pub phase: StagedSpeechPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceLimits {
