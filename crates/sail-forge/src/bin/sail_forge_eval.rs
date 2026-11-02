@@ -1,8 +1,9 @@
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
-use sail_forge::eval::{EvalRun, builtin_cases, run_case};
+use sail_forge::eval::{EvalRun, builtin_cases, run_case, wait_for_model};
 use sail_forge::solver::{LocalSolverController, identify_local_model};
 
 fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -72,7 +73,17 @@ async fn main() {
             continue;
         }
         info!("eval case {}: {}", case.id, case.title);
-        let result = run_case(&case, &controller, &scratch).await;
+        let mut result = run_case(&case, &controller, &scratch).await;
+        if result.unavailable {
+            // Ride out a busy or restarting server once before giving up on the run.
+            info!(
+                "eval case {}: model unavailable ({}); waiting up to 15 min to retry",
+                case.id, result.detail
+            );
+            if wait_for_model(&endpoint, Duration::from_secs(900), Duration::from_secs(15)).await {
+                result = run_case(&case, &controller, &scratch).await;
+            }
+        }
         info!(
             "eval case {} -> solved={} claimed={} edit_failures={} turns={} ({}s)",
             result.id,
