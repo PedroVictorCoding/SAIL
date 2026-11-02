@@ -261,9 +261,12 @@ function renderToolResult(result) {
     updateState('approval_required');
     return;
   }
-  const container = document.createElement('article'); container.className = 'artifact-card';
   const output = result?.output ?? {}; const succeeded = Boolean(result?.success);
-  if (result?.tool === 'os:status' && succeeded && output) updateSystemCard(output);
+  if (result?.tool === 'os:status') {
+    if (succeeded && output) updateSystemCard(output);
+    return;
+  }
+  const container = document.createElement('article'); container.className = 'artifact-card';
 
   const heading = document.createElement('div'); heading.className = 'artifact-heading';
   const title = document.createElement('span'); title.textContent = String(result?.tool || 'Local action').replaceAll(':', ' · ');
