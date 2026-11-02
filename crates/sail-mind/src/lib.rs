@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod bench;
 pub mod config;
+pub mod embedding;
 pub mod gemma;
 pub mod hardware;
 pub mod local;

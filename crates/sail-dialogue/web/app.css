@@ -1536,3 +1536,21 @@ a.nav-item { text-decoration:none; color:var(--muted) }
   .top-actions .connection-pill span,.top-actions .privacy-indicator span { overflow:hidden; text-overflow:ellipsis }
   .top-actions .connection-pill i,.top-actions .privacy-indicator i { flex-shrink:0 }
 }
+
+.memory-search,.memory-actions { display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2); margin:var(--space-4) 0 }
+.memory-card label { display:flex; flex-direction:column; gap:var(--space-2); color:var(--muted); font-size:12px }
+.memory-card input { min-width:0; max-width:100%; min-height:40px; padding:8px 12px; background:var(--recessed); color:var(--text); border:var(--border); border-radius:var(--radius-control); box-shadow:var(--depth-inset) }
+.memory-layout { display:grid; grid-template-columns:minmax(140px,1fr) minmax(0,2fr); gap:var(--space-4) }
+#memoryEntities { display:flex; flex-direction:column; gap:var(--space-2); align-items:stretch }
+.memory-entity { text-align:left }
+.memory-card form { display:flex; flex-wrap:wrap; align-items:end; gap:var(--space-2); margin:var(--space-3) 0 }
+.memory-card details { margin:var(--space-3) 0; color:var(--muted); font-size:13px }
+.memory-card summary { min-height:40px; padding:8px 0; cursor:pointer; color:var(--text) }
+.memory-claim { padding:var(--space-3) 0; border-top:var(--border); overflow-wrap:anywhere }
+.memory-claim h4 { margin:var(--space-2) 0; font-size:14px }
+.memory-card p,#memoryHistory { color:var(--muted); font-size:13px; line-height:1.6 }
+.memory-card pre { white-space:pre-wrap; overflow-wrap:anywhere }
+.memory-graph { width:100%; max-height:320px; background:var(--recessed); border-radius:var(--radius-control) }
+.memory-graph line { stroke:var(--muted); stroke-width:1 }
+.memory-graph text { fill:var(--text); font-size:12px }
+@media(max-width:1180px) { .memory-layout { grid-template-columns:minmax(0,1fr) } }

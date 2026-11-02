@@ -38,8 +38,8 @@ const subsystemPages = [
     "icon": "arena",
     "subtitle": "Knowledge and memory",
     "description": "Connect memories, research collections, and semantic relationships.",
-    "card": null,
-    "panel": null,
+    "card": "memoryCard",
+    "panel": "memoryPanelMain",
     "settings": null,
     "details": [
       "Episodic memory",
@@ -227,6 +227,7 @@ function initializeSubsystemPages() {
 
     }
     currentPage = route; requestedPanel = null; workspace.scrollTop = 0;
+    window.dispatchEvent(new CustomEvent('sail:page', {detail:route}));
     if (focus) (item ? title : document.getElementById('welcomeGreeting')).focus({ preventScroll:true });
   }
   window.sailNavigate = (id, panel = null) => {

@@ -1,6 +1,7 @@
 pub mod approval_http;
 pub mod control;
 mod execution;
+pub mod memory_http;
 pub mod orb;
 pub mod pipeline;
 pub mod server;

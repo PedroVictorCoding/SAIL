@@ -61,7 +61,7 @@ def check_pages(page, url, screenshots=None):
         assert page.evaluate("""originalCards.every(card =>
           document.querySelectorAll('#' + card.id).length === 1 &&
           document.getElementById(card.id) === card)""")
-        if subsystem in {"arena", "flow", "discovery"}:
+        if subsystem in {"flow", "discovery"}:
             expect(page.locator("#subsystemNotice")).to_be_visible()
         else:
             expect(page.locator("#subsystemContent .card-tab-panel.active")).to_be_visible()

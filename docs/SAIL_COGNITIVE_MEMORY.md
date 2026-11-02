@@ -141,3 +141,63 @@ Each of these has a test in `crates/sail-arena/tests/knowledge_test.rs`.
 
 Evaluation (spec §10) is added alongside each phase as deterministic datasets. No accuracy
 or latency figures are claimed until they have been measured.
+
+## Phase 2: deterministic consolidation
+
+`KnowledgeStore::consolidate` consumes a bounded batch from one authorized scope.
+Its whole-utterance grammar accepts `Remember: NAME is VALUE`, `Correction: NAME
+is VALUE`, `Decision: NAME is VALUE`, `I prefer VALUE`, and `I now prefer VALUE`.
+Only the user part of an archived turn is eligible. Unsupported or ambiguous
+multiline text stays in the buffer; no general language extraction is claimed.
+Trusted tool adapters can archive a typed `consolidation::Observation` as
+`tool_observation`; ordinary tool-result text cannot promote claims to verified.
+
+Resolution uses a supplied entity id first, then a unique same-kind name/alias in
+the same scope. Multiple matches create a separate entity with
+`possible_duplicate_of` links. There is no automatic embedding or model-based merge.
+Claims, reconciliation, and source/index deletion commit together at the job's
+captured deletion generation. Evidence keeps a bounded receipt and source hash.
+An invalid candidate rolls back the entire batch, including all source deletions.
+Tests in `consolidation_test.rs` cover restart, release, corrections, disputes,
+permissions, injected role text, verified tool observations, and rollback/replay.
+
+## Phase 3: retrieval baseline
+
+Schema v3 indexes entity names, aliases and claim text with FTS5. Index changes
+and vector invalidation follow knowledge mutations and deletion. Retrieval takes
+an `Access`, filters visible/valid claims before ranking, combines keyword and
+same-model/same-revision cosine scores, optionally expands one graph hop, and
+returns typed v1 contracts from `sail-protocol::memory`. Disputed claims retain
+their status; retrieval never upgrades epistemic certainty.
+
+`retrieval::compose` accepts a token counter and emits complete JSON records only.
+The default charges UTF-8 bytes conservatively for byte-level tokenizers; callers
+can supply their actual tokenizer. The budget excludes surrounding instructions.
+Retrieved values remain untrusted data, not executable instructions.
+
+Mind provides an explicitly configured `embedding::EmbeddingClient` for a separate
+worker using llama.cpp's [embedding API](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
+Configure its immutable artifact revision, model id and dimensions. Run that
+worker with `--embedding` and the embedding model's required pooling; do not
+change the active chat worker. Model identity, dimensions, finite/nonzero values,
+input/output sizes and timeouts are checked. Embedding inputs must still match
+when their vectors are committed, and stale deletion generations are rejected.
+No embedding model is downloaded, started, or benchmarked by this change.
+
+## Phase 4: owner memory views
+
+Arena's existing web page now includes entity overview/search, details, evidence
+receipts ("Why remembered"), relationship graph, procedure/project records, change
+history, correction, pin/unpin, privacy, merge/separate, forget and JSON export.
+Controls reuse the dialogue `quiet-button` design. Retrieved text is inserted as
+text nodes, never interpreted as HTML or instructions. No frontend migration is
+required.
+
+The `/api/memory` POST routes require the existing owner bearer authority, enforce
+body limits, return `no-store`, and check deletion generation for mutations. Model
+tool calls cannot choose `Actor::User`. Corrections add user evidence and supersede
+the old claim; they never become tool-verified. Merge requires equal scope/privacy.
+Separation restores the captured assignments/aliases only if no knowledge mutation
+has happened since that merge; otherwise it refuses rather than overwriting later
+edits. Deleting an entity removes its merge snapshots. Export contains knowledge
+and receipts, not the transient transcript archive.

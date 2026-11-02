@@ -153,3 +153,50 @@ CREATE TABLE kn_meta(
 ) STRICT, WITHOUT ROWID;
 INSERT INTO kn_meta(key, value) VALUES('deletion_generation', 0);
 ";
+
+pub(crate) const V3: &str = "
+CREATE VIEW kn_search_documents AS
+SELECT c.id, s.name || ' ' || COALESCE((SELECT group_concat(alias,' ') FROM kn_aliases WHERE entity_id=s.id),'') || ' ' || c.predicate || ' ' || COALESCE(c.object_value,o.name,'') AS text
+FROM kn_claims c JOIN kn_entities s ON s.id=c.subject_id LEFT JOIN kn_entities o ON o.id=c.object_entity_id;
+CREATE VIRTUAL TABLE kn_search USING fts5(text,content='kn_search_documents',content_rowid='id');
+INSERT INTO kn_search(kn_search) VALUES('rebuild');
+CREATE TABLE kn_vectors(
+ claim_id INTEGER NOT NULL REFERENCES kn_claims(id) ON DELETE CASCADE,
+ model TEXT NOT NULL, revision TEXT NOT NULL, text TEXT NOT NULL,
+ vector TEXT NOT NULL, PRIMARY KEY(claim_id,model,revision)
+) STRICT;
+CREATE TRIGGER kn_search_insert AFTER INSERT ON kn_claims BEGIN
+ INSERT INTO kn_search(rowid,text) SELECT id,text FROM kn_search_documents WHERE id=new.id;
+END;
+CREATE TRIGGER kn_search_delete BEFORE DELETE ON kn_claims BEGIN
+ INSERT INTO kn_search(kn_search,rowid,text) SELECT 'delete',id,text FROM kn_search_documents WHERE id=old.id;
+END;
+CREATE TRIGGER kn_search_before_update BEFORE UPDATE ON kn_claims BEGIN
+ INSERT INTO kn_search(kn_search,rowid,text) SELECT 'delete',id,text FROM kn_search_documents WHERE id=old.id;
+ DELETE FROM kn_vectors WHERE claim_id=old.id;
+END;
+CREATE TRIGGER kn_search_update AFTER UPDATE ON kn_claims BEGIN
+ INSERT INTO kn_search(rowid,text) SELECT id,text FROM kn_search_documents WHERE id=new.id;
+END;
+CREATE TRIGGER kn_search_entity_update AFTER UPDATE ON kn_entities BEGIN
+ INSERT INTO kn_search(kn_search) VALUES('rebuild');
+ DELETE FROM kn_vectors WHERE claim_id IN (SELECT id FROM kn_claims WHERE subject_id=new.id OR object_entity_id=new.id);
+END;
+CREATE TRIGGER kn_search_alias_insert AFTER INSERT ON kn_aliases BEGIN
+ INSERT INTO kn_search(kn_search) VALUES('rebuild');
+ DELETE FROM kn_vectors WHERE claim_id IN (SELECT id FROM kn_claims WHERE subject_id=new.entity_id);
+END;
+CREATE TRIGGER kn_search_alias_delete AFTER DELETE ON kn_aliases BEGIN
+ INSERT INTO kn_search(kn_search) VALUES('rebuild');
+ DELETE FROM kn_vectors WHERE claim_id IN (SELECT id FROM kn_claims WHERE subject_id=old.entity_id);
+END;
+";
+
+pub(crate) const V4: &str = "
+CREATE TABLE kn_pins(entity_id INTEGER PRIMARY KEY REFERENCES kn_entities(id) ON DELETE CASCADE,pinned INTEGER NOT NULL CHECK(pinned IN (0,1))) STRICT;
+CREATE TABLE kn_merge_snapshots(
+ from_id INTEGER PRIMARY KEY REFERENCES kn_entities(id) ON DELETE CASCADE,
+ into_id INTEGER NOT NULL REFERENCES kn_entities(id) ON DELETE CASCADE,
+ operation_id INTEGER NOT NULL, snapshot TEXT NOT NULL
+) STRICT;
+";
