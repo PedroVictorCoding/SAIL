@@ -41,6 +41,7 @@ futures-util = "0.3"
 base64 = "0.22"
 bytes = "1.7"
 tokio-util = { version = "0.7", features = ["rt"] }
+nono = "0.81.0"
 
 # Internal workspace crate dependencies
 sail-common = { path = "crates/sail-common" }

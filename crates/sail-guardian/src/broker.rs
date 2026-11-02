@@ -33,6 +33,7 @@ pub struct GuardianExecutionBroker {
     audit: Arc<AuditLedger>,
     approval: Arc<ApprovalBroker>,
     sandbox: Arc<SandboxPolicy>,
+    runtime: Arc<dyn crate::runtime::SecurityRuntime>,
 }
 
 impl GuardianExecutionBroker {
@@ -47,7 +48,17 @@ impl GuardianExecutionBroker {
             audit,
             approval,
             sandbox,
+            runtime: Arc::new(crate::runtime::NonoSecurityRuntime::new()),
         }
+    }
+
+    pub fn with_runtime(mut self, runtime: Arc<dyn crate::runtime::SecurityRuntime>) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
+    pub fn runtime(&self) -> &Arc<dyn crate::runtime::SecurityRuntime> {
+        &self.runtime
     }
 
     pub fn policy(&self) -> &Arc<PolicyEngine> {
@@ -183,6 +194,13 @@ impl GuardianExecutionBroker {
             match capability.risk_level() {
                 RiskLevel::Low => {
                     // Auto-approved low risk (e.g. os:status telemetry)
+                }
+                RiskLevel::Medium | RiskLevel::High
+                    if self.policy.autonomy_preset()
+                        == crate::runtime::AutonomyPreset::Autonomous =>
+                {
+                    // In Autonomous preset, routine medium/high risk actions within sandbox boundary
+                    // proceed autonomously without interactive approval friction.
                 }
                 RiskLevel::Medium | RiskLevel::High | RiskLevel::Critical => {
                     // High/Critical MUST have a valid, unconsumed, unexpired token bound to this actor and capability

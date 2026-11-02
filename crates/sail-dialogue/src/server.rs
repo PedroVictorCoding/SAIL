@@ -1433,7 +1433,10 @@ async fn queue_speech(chunks: Vec<String>, tx: &mpsc::Sender<String>) {
     }
 }
 
-fn resolve_or_generate_owner_token() -> (Option<sail_guardian::authority::ApprovalAuthority>, Option<String>) {
+fn resolve_or_generate_owner_token() -> (
+    Option<sail_guardian::authority::ApprovalAuthority>,
+    Option<String>,
+) {
     let raw_token = if let Ok(val) = std::env::var("SAIL_APPROVAL_TOKEN") {
         let trimmed = val.trim().to_string();
         if trimmed.len() >= 32 {

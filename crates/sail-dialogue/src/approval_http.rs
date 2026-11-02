@@ -6,6 +6,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use sail_guardian::SecurityRuntime;
 use serde_json::json;
 use std::sync::Arc;
 struct ApprovalHttpState {
@@ -30,11 +31,89 @@ pub fn router_with_token(
         .route("/resolve", post(owner_resolve))
         .route("/revoke", post(owner_revoke))
         .route("/token", get(owner_token_bootstrap))
+        .route("/status", get(guardian_security_status))
+        .route("/preset", post(guardian_set_preset))
+        .route("/audit", get(guardian_recent_audit))
         .with_state(Arc::new(ApprovalHttpState {
             approval_authority: authority,
             broker,
             active_token,
         }))
+}
+
+async fn guardian_security_status(
+    State(state): State<Arc<ApprovalHttpState>>,
+) -> impl IntoResponse {
+    let runtime = sail_guardian::runtime::NonoSecurityRuntime::new();
+    let caps = runtime.inspect_capabilities();
+    let preset = state
+        .broker
+        .as_ref()
+        .map(|b| b.policy().autonomy_preset())
+        .unwrap_or_default();
+
+    (
+        [("cache-control", "no-store")],
+        Json(json!({
+            "status": caps.status,
+            "platform": caps.platform,
+            "nono_version": caps.nono_version,
+            "landlock_supported": caps.landlock_supported,
+            "detected_abi": caps.detected_abi,
+            "max_enforced_abi": caps.max_enforced_abi,
+            "bubblewrap_available": caps.bubblewrap_available,
+            "cgroup_limits_available": caps.cgroup_limits_available,
+            "features": caps.features,
+            "autonomy_preset": preset,
+            "status_detail": caps.status_detail,
+        })),
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct SetPresetPayload {
+    preset: String,
+}
+
+async fn guardian_set_preset(
+    State(state): State<Arc<ApprovalHttpState>>,
+    headers: HeaderMap,
+    Json(payload): Json<SetPresetPayload>,
+) -> std::result::Result<impl IntoResponse, StatusCode> {
+    authenticate_owner(&state, &headers)?;
+    let broker = state
+        .broker
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    let preset = match payload.preset.to_lowercase().as_str() {
+        "careful" => sail_guardian::runtime::AutonomyPreset::Careful,
+        "balanced" => sail_guardian::runtime::AutonomyPreset::Balanced,
+        "autonomous" => sail_guardian::runtime::AutonomyPreset::Autonomous,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    broker.policy().set_autonomy_preset(preset);
+    Ok((
+        [("cache-control", "no-store")],
+        Json(json!({"preset": preset, "status": "ok"})),
+    ))
+}
+
+async fn guardian_recent_audit(
+    State(state): State<Arc<ApprovalHttpState>>,
+    headers: HeaderMap,
+) -> std::result::Result<impl IntoResponse, StatusCode> {
+    authenticate_owner(&state, &headers)?;
+    let broker = state
+        .broker
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let entries = broker.audit().list(50);
+    Ok((
+        [("cache-control", "no-store")],
+        Json(json!({"audit": entries})),
+    ))
 }
 
 async fn owner_token_bootstrap(
@@ -261,5 +340,45 @@ mod tests {
         let app_without_token = router_with_token(None, None, None);
         let res_unavail = request(&app_without_token, "/token", None, None).await;
         assert_eq!(res_unavail.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+    #[tokio::test]
+    async fn status_and_preset_endpoints_work() {
+        let approvals = Arc::new(ApprovalBroker::new());
+        let broker = Arc::new(GuardianExecutionBroker::new(
+            Arc::new(PolicyEngine::new()),
+            Arc::new(AuditLedger::new()),
+            approvals.clone(),
+            Arc::new(SandboxPolicy::new()),
+        ));
+        let app = router_with_token(
+            Some(sail_guardian::authority::ApprovalAuthority::new(OWNER).unwrap()),
+            Some(broker.clone()),
+            Some(OWNER.to_string()),
+        );
+
+        let status_res = request(&app, "/status", None, None).await;
+        assert_eq!(status_res.status(), StatusCode::OK);
+        let bytes = to_bytes(status_res.into_body(), 65536).await.unwrap();
+        let status_json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(status_json["nono_version"], "0.81.0");
+        assert_eq!(status_json["autonomy_preset"], "balanced");
+
+        // Set preset to autonomous
+        let set_res = request(
+            &app,
+            "/preset",
+            Some(json!({"preset": "autonomous"})),
+            Some(OWNER),
+        )
+        .await;
+        assert_eq!(set_res.status(), StatusCode::OK);
+        assert_eq!(
+            broker.policy().autonomy_preset(),
+            sail_guardian::runtime::AutonomyPreset::Autonomous
+        );
+
+        // Audit endpoint
+        let audit_res = request(&app, "/audit", None, Some(OWNER)).await;
+        assert_eq!(audit_res.status(), StatusCode::OK);
     }
 }

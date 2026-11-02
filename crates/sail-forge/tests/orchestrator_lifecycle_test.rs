@@ -225,7 +225,10 @@ async fn test_pause_and_resume_for_voice_qos() {
 #[tokio::test]
 async fn test_offline_model_transitions_to_blocked_without_synthetic_patch() {
     unsafe {
-        std::env::set_var("SAIL_FORGE_LLM_URL", "http://127.0.0.1:19999/v1/chat/completions");
+        std::env::set_var(
+            "SAIL_FORGE_LLM_URL",
+            "http://127.0.0.1:19999/v1/chat/completions",
+        );
     }
     let temp_dir = std::env::temp_dir().join(format!("test_orch_offline_{}", Uuid::new_v4()));
     setup_test_git_repo(&temp_dir);

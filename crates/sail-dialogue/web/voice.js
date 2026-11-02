@@ -1141,3 +1141,62 @@ if (tokenInput) {
 document.getElementById('refreshApprovalsBtn')?.addEventListener('click',refreshOwnerApprovals);
 window.addEventListener('pagehide', () => { pendingApprovalActions.clear(); lastToolCalls.clear(); });
 getOrFetchOwnerToken();
+
+async function fetchSecurityStatus() {
+  try {
+    const res = await fetch('/api/guardian/status', { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const badge = document.getElementById('nonoStatusBadge');
+    const note = document.getElementById('nonoDetailNote');
+    const select = document.getElementById('autonomyPresetSelect');
+
+    if (badge && data.status) {
+      const isProtected = data.status === 'protected';
+      const isLimited = data.status === 'limited_protection';
+      badge.style.background = isProtected ? 'rgba(34,197,94,0.15)' : isLimited ? 'rgba(234,179,8,0.15)' : 'rgba(239,68,68,0.15)';
+      badge.style.color = isProtected ? '#4ade80' : isLimited ? '#facc15' : '#f87171';
+      const label = isProtected ? 'Protected' : isLimited ? 'Limited protection' : 'Unavailable';
+      badge.innerHTML = `<span style="width:6px; height:6px; border-radius:50%; background:${badge.style.color};"></span> ${label}`;
+    }
+
+    if (note && data.nono_version) {
+      const abi = data.detected_abi ? `Landlock V${data.detected_abi}` : 'Standard sandbox';
+      const bwrap = data.bubblewrap_available ? ' + Bubblewrap' : '';
+      note.textContent = `${abi}${bwrap} · nono ${data.nono_version}`;
+    }
+
+    if (select && data.autonomy_preset) {
+      select.value = data.autonomy_preset.toLowerCase();
+      updatePresetExplanation(select.value);
+    }
+  } catch (err) {
+    console.debug('Failed to fetch security status:', err);
+  }
+}
+
+function updatePresetExplanation(preset) {
+  const note = document.getElementById('presetExplanationNote');
+  if (!note) return;
+  if (preset === 'careful') {
+    note.textContent = 'High review: all filesystem modifications and external operations require explicit approval.';
+  } else if (preset === 'autonomous') {
+    note.textContent = 'Unattended: routine tasks within strict sandbox boundaries run without approval interruptions.';
+  } else {
+    note.textContent = 'Balanced: routine workspace actions run automatically; elevated actions require approval.';
+  }
+}
+
+const presetSelect = document.getElementById('autonomyPresetSelect');
+if (presetSelect) {
+  presetSelect.addEventListener('change', async (e) => {
+    updatePresetExplanation(e.target.value);
+    try {
+      await ownerApprovalRequest('preset', { preset: e.target.value });
+    } catch (err) {
+      showError(`Failed to update autonomy preset: ${err.message}`);
+    }
+  });
+}
+
+fetchSecurityStatus();

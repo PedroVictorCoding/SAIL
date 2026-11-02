@@ -522,11 +522,13 @@ impl IsolatedWorktree {
         cmd.arg("--bind").arg(&self.root_dir).arg(&self.root_dir);
         cmd.arg("--chdir").arg(&self.root_dir);
 
-        // Security isolation flags
+        // Security isolation flags (defense-in-depth namespace containment)
         cmd.arg("--proc").arg("/proc");
         cmd.arg("--dev").arg("/dev");
         cmd.arg("--unshare-net");
         cmd.arg("--unshare-pid");
+        cmd.arg("--unshare-ipc");
+        cmd.arg("--unshare-uts");
         cmd.arg("--new-session");
         cmd.arg("--die-with-parent");
         cmd.arg("--clearenv");

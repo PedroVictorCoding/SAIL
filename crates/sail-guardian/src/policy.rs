@@ -24,6 +24,7 @@ pub struct PolicyEngine {
     explicit_grants: RwLock<
         HashMap<(SubsystemId, Capability, Option<uuid::Uuid>), chrono::DateTime<chrono::Utc>>,
     >,
+    autonomy_preset: RwLock<crate::runtime::AutonomyPreset>,
 }
 
 impl PolicyEngine {
@@ -31,7 +32,16 @@ impl PolicyEngine {
         Self {
             sandbox: SandboxPolicy::new(),
             explicit_grants: RwLock::new(HashMap::new()),
+            autonomy_preset: RwLock::new(crate::runtime::AutonomyPreset::Balanced),
         }
+    }
+
+    pub fn autonomy_preset(&self) -> crate::runtime::AutonomyPreset {
+        *self.autonomy_preset.read().unwrap()
+    }
+
+    pub fn set_autonomy_preset(&self, preset: crate::runtime::AutonomyPreset) {
+        *self.autonomy_preset.write().unwrap() = preset;
     }
 
     /// Grant a capability explicitly to a subsystem
@@ -140,31 +150,85 @@ impl PolicyEngine {
             }
         }
 
-        // 4. Default policy by risk tier
-        match capability.risk_level() {
-            // Low risk (e.g. os:status telemetry) is auto-granted to recognized subsystems
-            RiskLevel::Low => {
-                audit.record(
-                    requester,
-                    capability.clone(),
-                    DecisionOutcome::Granted,
-                    "Low-risk telemetry auto-approved",
-                );
-                AuthorizationDecision::Allowed
-            }
-            // Medium risk (proc:list, internal fs queries)
-            // High or Critical risk always requires user approval
-            RiskLevel::Medium | RiskLevel::High | RiskLevel::Critical => {
-                let session =
-                    approval_broker.create_session(requester, capability.clone(), justification);
-                AuthorizationDecision::RequiresUserApproval {
-                    session_id: session.session_id,
-                    rationale: format!(
-                        "High risk operation requires explicit user grant: {:?}",
-                        capability
-                    ),
+        // 4. Default policy by risk tier and autonomy preset
+        let preset = self.autonomy_preset();
+        let risk = capability.risk_level();
+
+        match preset {
+            crate::runtime::AutonomyPreset::Careful => {
+                if risk == RiskLevel::Low {
+                    audit.record(
+                        requester,
+                        capability.clone(),
+                        DecisionOutcome::Granted,
+                        "Low-risk telemetry auto-approved in Careful mode",
+                    );
+                    AuthorizationDecision::Allowed
+                } else {
+                    let session = approval_broker.create_session(
+                        requester,
+                        capability.clone(),
+                        justification,
+                    );
+                    AuthorizationDecision::RequiresUserApproval {
+                        session_id: session.session_id,
+                        rationale: format!(
+                            "Careful preset requires explicit owner confirmation for {:?}: {justification}",
+                            capability
+                        ),
+                    }
                 }
             }
+            crate::runtime::AutonomyPreset::Balanced => match risk {
+                RiskLevel::Low => {
+                    audit.record(
+                        requester,
+                        capability.clone(),
+                        DecisionOutcome::Granted,
+                        "Low-risk telemetry auto-approved in Balanced mode",
+                    );
+                    AuthorizationDecision::Allowed
+                }
+                RiskLevel::Medium | RiskLevel::High | RiskLevel::Critical => {
+                    let session = approval_broker.create_session(
+                        requester,
+                        capability.clone(),
+                        justification,
+                    );
+                    AuthorizationDecision::RequiresUserApproval {
+                        session_id: session.session_id,
+                        rationale: format!(
+                            "High risk operation requires explicit user grant: {:?}",
+                            capability
+                        ),
+                    }
+                }
+            },
+            crate::runtime::AutonomyPreset::Autonomous => match risk {
+                RiskLevel::Low | RiskLevel::Medium | RiskLevel::High => {
+                    audit.record(
+                        requester,
+                        capability.clone(),
+                        DecisionOutcome::Granted,
+                        "Autonomous preset auto-approved within sandbox boundary",
+                    );
+                    AuthorizationDecision::Allowed
+                }
+                RiskLevel::Critical => {
+                    let session = approval_broker.create_session(
+                        requester,
+                        capability.clone(),
+                        justification,
+                    );
+                    AuthorizationDecision::RequiresUserApproval {
+                        session_id: session.session_id,
+                        rationale: format!(
+                            "Critical operation requires explicit user grant: {:?}",
+                            capability
+                        ),
+                    }
+                }
+            },
         }
     }
 }
