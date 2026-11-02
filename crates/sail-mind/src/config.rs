@@ -81,10 +81,11 @@ impl LocalModelConfig {
         let compute = match std::env::var("SAIL_MODEL_BACKEND").as_deref() {
             Ok("cpu") | Err(_) => ComputeBackend::Cpu,
             Ok("vulkan") => ComputeBackend::Vulkan,
+            Ok("hybrid") | Ok("gpu+cpu") | Ok("gpu_cpu") => ComputeBackend::Hybrid,
             _ => {
                 return Err(InferenceError::new(
                     ErrorCode::InvalidConfiguration,
-                    "SAIL_MODEL_BACKEND must be cpu or vulkan",
+                    "SAIL_MODEL_BACKEND must be cpu, vulkan, or hybrid",
                 ));
             }
         };
@@ -129,14 +130,14 @@ impl LocalModelConfig {
                 "Invalid model name, CPU thread/context/GPU budget or deadline",
             ));
         }
-        if self.compute == ComputeBackend::Vulkan
+        if (self.compute == ComputeBackend::Vulkan || self.compute == ComputeBackend::Hybrid)
             && (!self.device.starts_with("Vulkan")
                 || self.device.chars().any(char::is_whitespace)
                 || self.gpu_layers == 0)
         {
             return Err(InferenceError::new(
                 ErrorCode::InvalidConfiguration,
-                "Vulkan requires a named Vulkan device and nonzero bounded GPU layers",
+                "Vulkan and Hybrid require a named Vulkan device and nonzero bounded GPU layers",
             ));
         }
         if self.managed
@@ -178,7 +179,7 @@ impl LocalModelConfig {
                 "--gpu-layers".into(),
                 "0".into(),
             ]),
-            ComputeBackend::Vulkan => args.extend([
+            ComputeBackend::Vulkan | ComputeBackend::Hybrid => args.extend([
                 "--device".into(),
                 self.device.clone(),
                 "--gpu-layers".into(),

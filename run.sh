@@ -76,6 +76,34 @@ while [[ $# -gt 0 ]]; do
       export SAIL_MODEL_PATH="$2"
       shift 2
       ;;
+    --backend)
+      export SAIL_MODEL_BACKEND="$2"
+      shift 2
+      ;;
+    --cpu)
+      export SAIL_MODEL_BACKEND="cpu"
+      shift
+      ;;
+    --vulkan)
+      export SAIL_MODEL_BACKEND="vulkan"
+      shift
+      ;;
+    --hybrid)
+      export SAIL_MODEL_BACKEND="hybrid"
+      shift
+      ;;
+    --gpu-layers|-ngl)
+      export SAIL_GPU_LAYERS="$2"
+      shift 2
+      ;;
+    --threads|-t)
+      export SAIL_MODEL_THREADS="$2"
+      shift 2
+      ;;
+    --device)
+      export SAIL_VULKAN_DEVICE="$2"
+      shift 2
+      ;;
     -h|--help)
       cat << 'EOF'
 Usage: ./run.sh [OPTIONS] [-- CARGO_ARGS...]
@@ -92,6 +120,13 @@ Options:
   --cert <path>        Custom TLS certificate file (defaults to .local/tls/voice-cert.pem)
   --key <path>         Custom TLS private key file (defaults to .local/tls/voice-key.pem)
   --model <path>       Specify model GGUF path
+  --backend <mode>     Compute backend (cpu, vulkan, hybrid; default: cpu)
+  --cpu                Shorthand for --backend cpu
+  --vulkan             Shorthand for --backend vulkan
+  --hybrid             Shorthand for --backend hybrid (GPU + CPU hybrid offloading)
+  --gpu-layers, -ngl N Number of layers to offload to GPU in vulkan/hybrid mode
+  --threads, -t N      Number of CPU generation/batch threads (default: min(cores, 6))
+  --device <dev>       Compute device identifier (e.g. Vulkan0)
   --restart            Stop any running SAIL processes before launching
   --stop, --kill       Stop running SAIL and llama processes and exit
   --status             Display active SAIL processes and exit
@@ -234,6 +269,7 @@ fi
 if [[ -n "${SAIL_MODEL_PATH:-}" ]]; then
   echo " LLM Model:    $SAIL_MODEL_PATH"
 fi
+echo " Backend:      ${SAIL_MODEL_BACKEND:-cpu}$([ "${SAIL_MODEL_BACKEND:-cpu}" = "hybrid" ] && echo " (GPU+CPU layers: ${SAIL_GPU_LAYERS:-8})" || true)"
 if [[ -f "$REPO_ROOT/.local/sail_owner_token" ]]; then
   echo " Owner token:  Configured (.local/sail_owner_token)"
 fi

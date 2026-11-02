@@ -38,6 +38,21 @@ fn cpu_and_vulkan_launch_profiles_are_explicit_and_bounded() {
     .unwrap();
     assert!(gpu.windows(2).any(|p| p == ["--device", "Vulkan0"]));
     assert!(gpu.windows(2).any(|p| p == ["--gpu-layers", "8"]));
+
+    let hybrid = LocalModelConfig {
+        compute: ComputeBackend::Hybrid,
+        device: "Vulkan0".into(),
+        gpu_layers: 16,
+        threads: 4,
+        ..Default::default()
+    }
+    .launch_args(1)
+    .unwrap();
+    assert!(hybrid.windows(2).any(|p| p == ["--device", "Vulkan0"]));
+    assert!(hybrid.windows(2).any(|p| p == ["--gpu-layers", "16"]));
+    assert!(hybrid.windows(2).any(|p| p == ["--threads", "4"]));
+    assert!(hybrid.windows(2).any(|p| p == ["--threads-batch", "4"]));
+
     assert!(
         LocalModelConfig {
             threads: 0,
@@ -50,6 +65,26 @@ fn cpu_and_vulkan_launch_profiles_are_explicit_and_bounded() {
         LocalModelConfig {
             compute: ComputeBackend::Vulkan,
             device: "cuda0".into(),
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        LocalModelConfig {
+            compute: ComputeBackend::Hybrid,
+            device: "invalid gpu".into(),
+            gpu_layers: 4,
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        LocalModelConfig {
+            compute: ComputeBackend::Hybrid,
+            device: "Vulkan0".into(),
+            gpu_layers: 0,
             ..Default::default()
         }
         .validate()

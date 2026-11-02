@@ -225,6 +225,8 @@ pub enum InferenceEventPayload {
 pub enum ComputeBackend {
     Cpu,
     Vulkan,
+    #[serde(alias = "gpu+cpu", alias = "gpu_cpu")]
+    Hybrid,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCapabilities {
