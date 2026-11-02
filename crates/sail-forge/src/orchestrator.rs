@@ -443,6 +443,83 @@ impl ForgeOrchestrator {
         Ok(())
     }
 
+    /// Clear/archive/remove a completed, blocked, or cancelled job, or all matching terminal jobs.
+    /// Removes in-memory state and deletes durable checkpoint JSON files from disk.
+    pub fn clear_jobs(&self, job_id_or_all: &str) -> Result<Vec<String>, String> {
+        let is_all = job_id_or_all.is_empty()
+            || job_id_or_all.eq_ignore_ascii_case("all")
+            || job_id_or_all == "*";
+
+        let mut cleared = Vec::new();
+
+        let mut jobs = self.active_jobs.lock().unwrap();
+
+        if is_all {
+            // Find all terminal/completed/blocked/cancelled jobs
+            let candidate_ids: Vec<String> = jobs
+                .iter()
+                .filter(|(_, j)| {
+                    matches!(
+                        j.checkpoint.state,
+                        ForgeTaskState::Completed | ForgeTaskState::Blocked
+                    ) || j.cancelled.load(Ordering::SeqCst)
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+
+            for id in candidate_ids {
+                jobs.remove(&id);
+                let _ = self.checkpoint_store.delete(&id);
+                cleared.push(id);
+            }
+
+            // Also clean up any stale checkpoint files on disk that are in terminal state
+            if let Ok(stored) = self.checkpoint_store.list_all() {
+                for cp in stored {
+                    if (matches!(
+                        cp.state,
+                        ForgeTaskState::Completed | ForgeTaskState::Blocked
+                    )) && !cleared.contains(&cp.job_id)
+                    {
+                        let _ = self.checkpoint_store.delete(&cp.job_id);
+                        cleared.push(cp.job_id);
+                    }
+                }
+            }
+        } else {
+            // Target specific job
+            let resolved_id = if jobs.contains_key(job_id_or_all) {
+                Some(job_id_or_all.to_string())
+            } else if let Some((id, _)) = jobs.iter().find(|(_, j)| {
+                Self::matches_job_identifier(
+                    job_id_or_all,
+                    &j.checkpoint.job_id,
+                    j.checkpoint.issue_number,
+                )
+            }) {
+                Some(id.clone())
+            } else if let Ok(Some(cp)) = self.checkpoint_store.load(job_id_or_all) {
+                Some(cp.job_id)
+            } else if let Ok(all) = self.checkpoint_store.list_all() {
+                all.into_iter()
+                    .find(|cp| {
+                        Self::matches_job_identifier(job_id_or_all, &cp.job_id, cp.issue_number)
+                    })
+                    .map(|cp| cp.job_id)
+            } else {
+                None
+            };
+
+            let id = resolved_id.ok_or_else(|| format!("Job {} not found", job_id_or_all))?;
+            jobs.remove(&id);
+            let _ = self.checkpoint_store.delete(&id);
+            cleared.push(id);
+        }
+
+        info!("Cleared {} Forge jobs: {:?}", cleared.len(), cleared);
+        Ok(cleared)
+    }
+
     /// Check if job is cancelled or paused, yielding or aborting accordingly.
     async fn check_interruption(&self, job_id: &str) -> Result<(), String> {
         let (paused, cancelled) = {

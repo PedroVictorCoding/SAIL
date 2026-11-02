@@ -168,6 +168,7 @@ document.getElementById('listIssuesBtn')?.addEventListener('click', () => runKer
 document.getElementById('forgeQuickEnqueueToolBtn')?.addEventListener('click', () => openForgeEnqueueDialog());
 document.getElementById('forgeQuickEnqueueBtn')?.addEventListener('click', () => openForgeEnqueueDialog());
 document.getElementById('forgeRefreshBtn')?.addEventListener('click', () => sendAction('forge:list'));
+document.getElementById('forgeClearCompletedBtn')?.addEventListener('click', () => sendAction('forge:clear', { job_id: 'all' }));
 document.getElementById('forgeCancelBtn')?.addEventListener('click', () => document.getElementById('forgeEnqueueDialog')?.close());
 document.getElementById('forgeEnqueueForm')?.addEventListener('submit', (e) => {
   e.preventDefault();
