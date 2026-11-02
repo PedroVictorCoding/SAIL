@@ -9,12 +9,14 @@ use sail_common::{
     types::{EventPayload, SailEvent, SubsystemId},
 };
 
+use crate::nightly::ForgeNightlyRunner;
 use crate::orchestrator::ForgeOrchestrator;
 
 /// Forge Autonomous Coding Subsystem integration for SAIL.
 pub struct ForgeSubsystem {
     bus: Option<EventBus>,
     orchestrator: Arc<ForgeOrchestrator>,
+    nightly: Option<Arc<ForgeNightlyRunner>>,
 }
 
 impl ForgeSubsystem {
@@ -23,7 +25,14 @@ impl ForgeSubsystem {
         Self {
             bus: None,
             orchestrator,
+            nightly: None,
         }
+    }
+
+    /// Attach the unattended overnight runner; its scheduler starts with the subsystem.
+    pub fn with_nightly_runner(mut self, runner: Arc<ForgeNightlyRunner>) -> Self {
+        self.nightly = Some(runner);
+        self
     }
 
     pub fn orchestrator(&self) -> Arc<ForgeOrchestrator> {
@@ -64,6 +73,9 @@ impl Subsystem for ForgeSubsystem {
                 }
             }
         }
+        if let Some(runner) = &self.nightly {
+            runner.clone().spawn_scheduler();
+        }
         Ok(())
     }
 
@@ -75,6 +87,9 @@ impl Subsystem for ForgeSubsystem {
                 issue_number: _,
                 priority: _,
             } => {
+                if self.orchestrator.is_managed(job_id) {
+                    return Ok(());
+                }
                 info!(
                     "Forge received ForgeIssueEnqueued event for job {}; dispatching worker",
                     job_id

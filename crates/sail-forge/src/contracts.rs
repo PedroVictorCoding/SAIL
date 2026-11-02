@@ -281,4 +281,7 @@ pub struct ForgeJobReport {
     pub api_cost_actual: f64,
     pub remaining_risks: Vec<String>,
     pub status: ForgeTaskState,
+    /// True only when gates, tests and every reviewer that ran passed.
+    #[serde(default)]
+    pub ready_to_publish: bool,
 }

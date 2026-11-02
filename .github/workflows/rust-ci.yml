@@ -33,6 +33,9 @@ jobs:
       - name: Compile workspace
         run: cargo check --workspace --locked
 
+      - name: Clippy (Forge, warnings denied)
+        run: cargo clippy -p sail-forge --all-targets --no-deps --locked -- -D warnings
+
       - name: Run workspace unit & integration tests
         run: cargo test --workspace --locked
 
