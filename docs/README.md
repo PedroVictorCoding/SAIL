@@ -1,5 +1,7 @@
 # SAIL — Subsystem specification index
 
+**Start here:** [SAIL MASTER VISION](SAIL_MASTER_VISION.md) — authoritative cross-subsystem product and coding contract. Read before implementing any issue.
+
 Status: design and implementation reference. These docs describe intended behavior, not claims that features have shipped. **Source of truth for project history**: [Roadmap issue #15](https://github.com/PedroVictorCoding/SAIL/issues/15). The roadmap began with 20 subsystems / 6 domains and was extended by Health #104 to **21 product subsystems / 7 domains**. Core is shared infrastructure; Studio is an additional user-facing workspace specification and must be reconciled with the taxonomy before formal counting.
 
 | Domain | Specifications |
