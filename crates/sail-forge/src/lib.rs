@@ -2,6 +2,8 @@
 
 pub mod admission;
 pub mod contracts;
+pub mod eval;
+pub mod eval_cases;
 pub mod fixtures;
 pub mod gates;
 pub mod github;

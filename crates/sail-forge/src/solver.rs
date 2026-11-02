@@ -91,6 +91,10 @@ pub struct SolverOutcome {
     pub test_records: Vec<TestExecutionRecord>,
     pub model: IdentifiedModel,
     pub summary: String,
+    /// Edit/patch tool calls that failed to apply (malformed or mismatched edits).
+    pub edit_failures: u32,
+    /// Model replies that contained no parseable tool call or edit.
+    pub parse_failures: u32,
 }
 
 /// Real-time progress update emitted during autonomous solver iterations.
@@ -914,6 +918,8 @@ Rules:
         let mut test_records: Vec<TestExecutionRecord> = Vec::new();
         let mut tests_verified = false;
         let mut last_error: Option<String> = None;
+        let mut edit_failures = 0u32;
+        let mut parse_failures = 0u32;
 
         while turns < self.max_turns && iterations < self.max_iterations {
             if is_cancelled() {
@@ -929,6 +935,8 @@ Rules:
                     iterations,
                     turns,
                     test_records,
+                    edit_failures,
+                    parse_failures,
                     model: identified_model,
                     summary: "Cancelled by operator".into(),
                 };
@@ -1162,6 +1170,8 @@ Rules:
                         iterations,
                         turns,
                         test_records,
+                        edit_failures,
+                        parse_failures,
                         model: identified_model,
                         summary: reason,
                     };
@@ -1198,6 +1208,7 @@ Rules:
             let action = match parse_model_action(&raw_reply) {
                 Some(a) => a,
                 None => {
+                    parse_failures += 1;
                     messages.push(serde_json::json!({
                         "role": "user",
                         "content": "Could not parse a valid tool call or unified diff. Emit a JSON object such as {\"tool\":\"repo:apply_patch\",\"patch\":\"--- a/...\\n+++ b/...\"} or a unified diff block."
@@ -1274,6 +1285,8 @@ Rules:
                         iterations,
                         turns,
                         test_records,
+                        edit_failures,
+                        parse_failures,
                         model: identified_model,
                         summary: summary
                             .clone()
@@ -1316,6 +1329,7 @@ Rules:
                         iterations + 1,
                     );
                     if !patch_res.ok {
+                        edit_failures += 1;
                         last_error = Some(patch_res.output.clone());
                         messages.push(serde_json::json!({
                             "role": "user",
@@ -1408,6 +1422,8 @@ Rules:
                                 iterations,
                                 turns,
                                 test_records,
+                                edit_failures,
+                                parse_failures,
                                 model: identified_model,
                                 summary: "Patch applied and cargo test passed".into(),
                             };
@@ -1516,6 +1532,8 @@ Rules:
                             iterations,
                             turns,
                             test_records,
+                            edit_failures,
+                            parse_failures,
                             model: identified_model,
                             summary: "Sandboxed cargo test passed with verified code diff".into(),
                         };
@@ -1617,6 +1635,8 @@ Rules:
             iterations,
             turns,
             test_records,
+            edit_failures,
+            parse_failures,
             model: identified_model,
             summary: reason,
         }
