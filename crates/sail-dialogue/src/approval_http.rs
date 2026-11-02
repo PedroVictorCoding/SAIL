@@ -36,6 +36,12 @@ pub fn router_with_token(
         .route("/audit", get(guardian_recent_audit))
         .route("/rules", get(guardian_list_rules))
         .route("/rules/revoke", post(guardian_revoke_rule))
+        .route("/safety/review", get(guardian_get_safety_review))
+        .route("/safety/review/run", post(guardian_trigger_safety_review))
+        .route(
+            "/safety/findings/resolve",
+            post(guardian_resolve_safety_finding),
+        )
         .with_state(Arc::new(ApprovalHttpState {
             approval_authority: authority,
             broker,
@@ -157,6 +163,77 @@ async fn guardian_revoke_rule(
         ))
     } else {
         Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn guardian_get_safety_review(
+    State(state): State<Arc<ApprovalHttpState>>,
+    headers: HeaderMap,
+) -> std::result::Result<impl IntoResponse, StatusCode> {
+    authenticate_owner(&state, &headers)?;
+    let broker = state
+        .broker
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let findings = broker.safety_review().list_findings();
+    let last_run = broker.safety_review().last_run_summary();
+    Ok((
+        [("cache-control", "no-store")],
+        Json(json!({
+            "findings": findings,
+            "last_run": last_run,
+        })),
+    ))
+}
+
+async fn guardian_trigger_safety_review(
+    State(state): State<Arc<ApprovalHttpState>>,
+    headers: HeaderMap,
+) -> std::result::Result<impl IntoResponse, StatusCode> {
+    authenticate_owner(&state, &headers)?;
+    let broker = state
+        .broker
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let summary = broker.safety_review().run_review("manual");
+    let findings = broker.safety_review().list_findings();
+    Ok((
+        [("cache-control", "no-store")],
+        Json(json!({
+            "summary": summary,
+            "findings": findings,
+        })),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+struct ResolveFindingPayload {
+    finding_id: uuid::Uuid,
+    action: String,
+}
+
+async fn guardian_resolve_safety_finding(
+    State(state): State<Arc<ApprovalHttpState>>,
+    headers: HeaderMap,
+    Json(payload): Json<ResolveFindingPayload>,
+) -> std::result::Result<impl IntoResponse, StatusCode> {
+    authenticate_owner(&state, &headers)?;
+    let broker = state
+        .broker
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    match broker
+        .safety_review()
+        .resolve_finding(payload.finding_id, &payload.action)
+    {
+        Ok(finding) => Ok((
+            [("cache-control", "no-store")],
+            Json(json!({"status": "ok", "finding": finding})),
+        )),
+        Err(e) => Ok((
+            [("cache-control", "no-store")],
+            Json(json!({"status": "error", "message": e})),
+        )),
     }
 }
 

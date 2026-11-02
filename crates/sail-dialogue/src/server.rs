@@ -425,6 +425,27 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                     )
                     .await;
                 }
+                EventPayload::SafetyReviewCompleted {
+                    run_id,
+                    trigger,
+                    findings_count,
+                    high_or_critical_count,
+                    summary,
+                } => {
+                    emit(
+                        &tx_bus,
+                        current,
+                        json!({
+                            "type": "safety_review_completed",
+                            "run_id": run_id,
+                            "trigger": trigger,
+                            "findings_count": findings_count,
+                            "high_or_critical_count": high_or_critical_count,
+                            "summary": summary,
+                        }),
+                    )
+                    .await;
+                }
                 _ => {}
             }
         }
