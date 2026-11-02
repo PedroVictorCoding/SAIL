@@ -1,5 +1,8 @@
+use std::ffi::CString;
 use std::fs;
 use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -13,6 +16,12 @@ use sail_guardian::sandbox::{CommandOutput, SandboxPolicy, SandboxViolation};
 pub enum WorktreeError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Invalid job ID: expected 1–128 ASCII letters, digits, underscores or hyphens")]
+    InvalidJobId,
+    #[error("Unsafe workspace root {0:?}: {1}")]
+    UnsafeWorkspaceRoot(PathBuf, String),
+    #[error("Workspace destination already exists: {0:?}")]
+    WorkspaceExists(PathBuf),
     #[error("Sandbox boundary violation: {0}")]
     Sandbox(#[from] SandboxViolation),
     #[error("Path traversal detected: {path:?} escapes worktree root {root:?}")]
@@ -39,6 +48,181 @@ pub enum WorktreeError {
     BwrapUnavailable(String),
 }
 
+/// Owns only a freshly allocated directory; cleanup never trusts public path fields.
+#[derive(Debug)]
+struct WorkspaceAllocation {
+    base: fs::File,
+    directory: fs::File,
+    name: CString,
+    path: PathBuf,
+}
+
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
+fn open_directory(parent: i32, name: &CString, resolve: u64) -> std::io::Result<fs::File> {
+    let how = OpenHow {
+        flags: (libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64,
+        mode: 0,
+        resolve,
+    };
+    // SAFETY: name and initialized open_how live for the syscall; own the returned fd.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            parent,
+            name.as_ptr(),
+            &how,
+            std::mem::size_of::<OpenHow>(),
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { fs::File::from_raw_fd(fd as i32) })
+}
+
+fn open_directory_at(parent: &fs::File, name: &CString) -> std::io::Result<fs::File> {
+    // NO_XDEV | NO_MAGICLINKS | NO_SYMLINKS | BENEATH: no mount or link traversal.
+    open_directory(parent.as_raw_fd(), name, 0x01 | 0x02 | 0x04 | 0x08)
+}
+
+fn same_directory(left: &fs::File, right: &fs::File) -> std::io::Result<bool> {
+    let left = left.metadata()?;
+    let right = right.metadata()?;
+    Ok(left.dev() == right.dev() && left.ino() == right.ino())
+}
+
+impl WorkspaceAllocation {
+    fn new(base: &Path, job_id: &str, repo: &Path) -> Result<Self, WorktreeError> {
+        let unsafe_root = |reason: String| WorktreeError::UnsafeWorkspaceRoot(base.into(), reason);
+        // Resolve the parent before creation, rejecting symlinks in every component.
+        if !base.is_absolute()
+            || base
+                .components()
+                .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+        {
+            return Err(unsafe_root("absolute canonical path required".into()));
+        }
+        let mut component = PathBuf::new();
+        for part in base.components() {
+            component.push(part);
+            match fs::symlink_metadata(&component) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return Err(unsafe_root("symlink component denied".into()));
+                }
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && component == base => {}
+                Err(e) => return Err(unsafe_root(e.to_string())),
+            }
+        }
+        if base.starts_with(repo) || repo.starts_with(base) {
+            return Err(WorktreeError::ProductionPathCollision(base.into()));
+        }
+        let parent = base
+            .parent()
+            .ok_or_else(|| unsafe_root("parent required".into()))?;
+        let parent_name =
+            CString::new(parent.as_os_str().as_bytes()).map_err(|e| unsafe_root(e.to_string()))?;
+        let parent_fd = open_directory(libc::AT_FDCWD, &parent_name, 0x02 | 0x04)
+            .map_err(|e| unsafe_root(e.to_string()))?;
+        let basename = base
+            .file_name()
+            .ok_or_else(|| unsafe_root("directory name required".into()))?;
+        let basename = CString::new(basename.as_bytes()).map_err(|e| unsafe_root(e.to_string()))?;
+        // Create relative to a pinned parent, never through a checked-then-reopened pathname.
+        if unsafe { libc::mkdirat(parent_fd.as_raw_fd(), basename.as_ptr(), 0o700) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(unsafe_root(error.to_string()));
+            }
+        }
+        let base_fd =
+            open_directory_at(&parent_fd, &basename).map_err(|e| unsafe_root(e.to_string()))?;
+        let meta = base_fd.metadata()?;
+        if meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+            return Err(unsafe_root(
+                "must be owned by current user with no group/world permissions".into(),
+            ));
+        }
+        let name = CString::new(job_id).map_err(|_| WorktreeError::InvalidJobId)?;
+        // SAFETY: validated single-component name relative to the pinned base.
+        if unsafe { libc::mkdirat(base_fd.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(if error.kind() == std::io::ErrorKind::AlreadyExists {
+                WorktreeError::WorkspaceExists(base.join(job_id))
+            } else {
+                WorktreeError::Io(error)
+            });
+        }
+        let directory = open_directory_at(&base_fd, &name)?;
+        Ok(Self {
+            base: base_fd,
+            directory,
+            name,
+            path: base.join(job_id),
+        })
+    }
+
+    fn cleanup(&self) -> std::io::Result<()> {
+        let current = open_directory_at(&self.base, &self.name)?;
+        if !same_directory(&current, &self.directory)? {
+            return Err(std::io::Error::other(
+                "allocated directory identity changed; leaving replacement untouched",
+            ));
+        }
+        clear_directory(&self.directory)?;
+        // Check again after traversal. Never recursively reopen the caller's path.
+        let current = open_directory_at(&self.base, &self.name)?;
+        if !same_directory(&current, &self.directory)? {
+            return Err(std::io::Error::other("directory replaced during cleanup"));
+        }
+        if unsafe {
+            libc::unlinkat(
+                self.base.as_raw_fd(),
+                self.name.as_ptr(),
+                libc::AT_REMOVEDIR,
+            )
+        } != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+/// Traverse pinned directory descriptors; links are removed as entries, never followed.
+fn clear_directory(directory: &fs::File) -> std::io::Result<()> {
+    for entry in fs::read_dir(format!("/proc/self/fd/{}", directory.as_raw_fd()))? {
+        let entry = entry?;
+        let name = CString::new(entry.file_name().as_bytes())?;
+        let flags = match open_directory_at(directory, &name) {
+            Ok(child) => {
+                // Do not cross a mounted filesystem during cleanup.
+                if child.metadata()?.dev() != directory.metadata()?.dev() {
+                    return Err(std::io::Error::other("mount boundary in workspace"));
+                }
+                clear_directory(&child)?;
+                let current = open_directory_at(directory, &name)?;
+                if !same_directory(&current, &child)? {
+                    return Err(std::io::Error::other("child replaced during cleanup"));
+                }
+                libc::AT_REMOVEDIR
+            }
+            Err(e) if matches!(e.raw_os_error(), Some(libc::ENOTDIR | libc::ELOOP)) => 0,
+            Err(e) => return Err(e),
+        };
+        if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), flags) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Manages an isolated, disposable directory or git worktree for a single Forge task.
 #[derive(Debug)]
 pub struct IsolatedWorktree {
@@ -48,6 +232,7 @@ pub struct IsolatedWorktree {
     pub base_commit: String,
     pub sandbox_policy: Arc<SandboxPolicy>,
     keep_on_drop: bool,
+    allocation: WorkspaceAllocation,
 }
 
 impl IsolatedWorktree {
@@ -63,17 +248,26 @@ impl IsolatedWorktree {
             .map(PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir().join("sail_forge_worktrees"));
 
-        let root_dir = temp_base.join(job_id);
-        fs::create_dir_all(&root_dir)?;
+        Self::create_in(job_id, repo_root, base_commit, &temp_base)
+    }
 
-        let canonical_root = root_dir.canonicalize().unwrap_or_else(|_| root_dir.clone());
-        let canonical_repo = repo_root
-            .canonicalize()
-            .unwrap_or_else(|_| repo_root.to_path_buf());
-
-        if canonical_root.starts_with(&canonical_repo) && canonical_root == canonical_repo {
-            return Err(WorktreeError::ProductionPathCollision(canonical_repo));
+    fn create_in(
+        job_id: &str,
+        repo_root: &Path,
+        base_commit: &str,
+        temp_base: &Path,
+    ) -> Result<Self, WorktreeError> {
+        if job_id.is_empty()
+            || job_id.len() > 128
+            || !job_id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+        {
+            return Err(WorktreeError::InvalidJobId);
         }
+        let canonical_repo = repo_root.canonicalize()?;
+        let allocation = WorkspaceAllocation::new(temp_base, job_id, &canonical_repo)?;
+        let canonical_root = allocation.path.clone();
 
         // Construct a scoped sandbox policy that only allows write access inside canonical_root,
         // and treats the production repo strictly as read-only.
@@ -90,6 +284,7 @@ impl IsolatedWorktree {
             base_commit: base_commit.to_string(),
             sandbox_policy: scoped_policy,
             keep_on_drop: false,
+            allocation,
         };
 
         let pinned_sha = worktree.init_git_workspace(&canonical_repo, base_commit)?;
@@ -687,20 +882,6 @@ impl IsolatedWorktree {
                 return Err(WorktreeError::InvalidBaseCommit(base_commit.to_string()));
             }
 
-            // Ensure root_dir is empty before cloning into it
-            if self.root_dir.exists() {
-                if let Ok(entries) = fs::read_dir(&self.root_dir) {
-                    for entry in entries.flatten() {
-                        let p = entry.path();
-                        if p.is_dir() {
-                            let _ = fs::remove_dir_all(&p);
-                        } else {
-                            let _ = fs::remove_file(&p);
-                        }
-                    }
-                }
-            }
-
             // Create a standalone local clone without hardlinks so `.git` is an independent directory
             let clone_out = Command::new("git")
                 .arg("clone")
@@ -775,12 +956,288 @@ impl IsolatedWorktree {
 impl Drop for IsolatedWorktree {
     fn drop(&mut self) {
         if !self.keep_on_drop {
-            let _ = fs::remove_dir_all(&self.root_dir);
+            if let Err(error) = self.allocation.cleanup() {
+                warn!(
+                    "Refusing or unable to clean workspace {:?}: {}",
+                    self.allocation.path, error
+                );
+            }
         } else {
             warn!(
                 "Retaining failed worktree at {:?} for user inspection",
                 self.root_dir
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+    use std::os::unix::fs::{DirBuilderExt, symlink};
+    use uuid::Uuid;
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("forge-allocation-{}", Uuid::new_v4()));
+            fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+            fs::create_dir(root.join("repo")).unwrap();
+            Self(root)
+        }
+        fn base(&self) -> PathBuf {
+            self.0.join("workspaces")
+        }
+        fn repo(&self) -> PathBuf {
+            self.0.join("repo")
+        }
+        fn create(&self, id: &str, commit: &str) -> Result<IsolatedWorktree, WorktreeError> {
+            IsolatedWorktree::create_in(id, &self.repo(), commit, &self.base())
+        }
+        fn git(&self, args: &[&str]) -> String {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(self.repo())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap().trim().into()
+        }
+        fn init_repo(&self) {
+            self.git(&["init", "-b", "main"]);
+            self.git(&[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ]);
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn invalid_ids_do_not_touch_filesystem() {
+        let f = Fixture::new();
+        for id in [
+            "",
+            ".",
+            "..",
+            "../repo",
+            "/tmp/escape",
+            "a/b",
+            "a\\b",
+            "a.b",
+            "é",
+            &"a".repeat(129),
+        ] {
+            assert!(
+                matches!(f.create(id, "HEAD"), Err(WorktreeError::InvalidJobId)),
+                "{id}"
+            );
+            assert!(!f.base().exists());
+        }
+    }
+
+    #[test]
+    fn roots_reject_permissions_symlinks_and_overlap() {
+        let f = Fixture::new();
+        fs::DirBuilder::new().mode(0o755).create(f.base()).unwrap();
+        assert!(matches!(
+            f.create("job", "HEAD"),
+            Err(WorktreeError::UnsafeWorkspaceRoot(..))
+        ));
+        assert_eq!(fs::metadata(f.base()).unwrap().mode() & 0o777, 0o755);
+        fs::remove_dir(f.base()).unwrap();
+        symlink(f.repo(), f.base()).unwrap();
+        assert!(matches!(
+            f.create("job", "HEAD"),
+            Err(WorktreeError::UnsafeWorkspaceRoot(..))
+        ));
+        for base in [f.repo(), f.repo().join("nested"), f.0.clone()] {
+            assert!(matches!(
+                IsolatedWorktree::create_in("job", &f.repo(), "HEAD", &base),
+                Err(WorktreeError::ProductionPathCollision(_))
+            ));
+        }
+        let alias = f.0.join("alias");
+        symlink(&f.0, &alias).unwrap();
+        assert!(matches!(
+            IsolatedWorktree::create_in("job", &f.repo(), "HEAD", &alias.join("nested")),
+            Err(WorktreeError::UnsafeWorkspaceRoot(..))
+        ));
+    }
+
+    #[test]
+    fn existing_directories_and_symlinks_are_untouched() {
+        let f = Fixture::new();
+        fs::DirBuilder::new().mode(0o700).create(f.base()).unwrap();
+        fs::create_dir(f.base().join("job")).unwrap();
+        fs::write(f.base().join("job/sentinel"), "keep").unwrap();
+        assert!(matches!(
+            f.create("job", "HEAD"),
+            Err(WorktreeError::WorkspaceExists(_))
+        ));
+        symlink(f.repo(), f.base().join("link")).unwrap();
+        assert!(matches!(
+            f.create("link", "HEAD"),
+            Err(WorktreeError::WorkspaceExists(_))
+        ));
+        assert_eq!(
+            fs::read_to_string(f.base().join("job/sentinel")).unwrap(),
+            "keep"
+        );
+        assert!(
+            fs::symlink_metadata(f.base().join("link"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn concurrent_duplicate_allocation_has_one_owner() {
+        let f = Fixture::new();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let base = f.base();
+                let repo = f.repo();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    WorkspaceAllocation::new(&base, "job", &repo)
+                })
+            })
+            .collect();
+        let mut winners = Vec::new();
+        let mut losers = 0;
+        for handle in handles {
+            match handle.join().unwrap() {
+                Ok(allocation) => winners.push(allocation),
+                Err(WorktreeError::WorkspaceExists(_)) => losers += 1,
+                other => panic!("unexpected allocation result: {other:?}"),
+            }
+        }
+        assert_eq!(winners.len(), 1);
+        assert_eq!(losers, 1);
+        assert_eq!(
+            winners[0].directory.metadata().unwrap().mode() & 0o777,
+            0o700
+        );
+        winners[0].cleanup().unwrap();
+    }
+
+    #[test]
+    fn creation_failure_cleans_only_fresh_allocation() {
+        let f = Fixture::new();
+        f.init_repo();
+        assert!(matches!(
+            f.create("job", "missing-commit"),
+            Err(WorktreeError::InvalidBaseCommit(_))
+        ));
+        assert!(!f.base().join("job").exists());
+        // A non-repository also fails after allocation and must not leak it.
+        fs::remove_dir_all(f.repo().join(".git")).unwrap();
+        assert!(f.create("job", "HEAD").is_err());
+        assert!(!f.base().join("job").exists());
+    }
+
+    #[test]
+    fn clone_is_pinned_independent_and_retained_on_request() {
+        let f = Fixture::new();
+        f.init_repo();
+        let sha = f.git(&["rev-parse", "HEAD"]);
+        // Boundary-length IDs are valid and allocation remains private after Git setup.
+        let boundary = f.create(&"a".repeat(128), &sha).unwrap();
+        assert_eq!(
+            fs::metadata(&boundary.root_dir).unwrap().mode() & 0o777,
+            0o700
+        );
+        drop(boundary);
+        let mut worktree = f.create("Job_123-test", &sha).unwrap();
+        assert_eq!(worktree.base_commit, sha);
+        assert!(worktree.root_dir.join(".git").is_dir());
+        assert_ne!(
+            fs::metadata(f.repo().join(".git/objects")).unwrap().ino(),
+            fs::metadata(worktree.root_dir.join(".git/objects"))
+                .unwrap()
+                .ino()
+        );
+        worktree
+            .write_file(Path::new("nested/file"), "data")
+            .unwrap();
+        let root = worktree.root_dir.clone();
+        worktree.retain_for_inspection();
+        drop(worktree);
+        assert_eq!(
+            fs::read_to_string(root.join("nested/file")).unwrap(),
+            "data"
+        );
+        let worktree = f.create("cleanup", &sha).unwrap();
+        let root = worktree.root_dir.clone();
+        drop(worktree);
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn substituted_directory_or_symlink_is_never_cleaned() {
+        for replace_with_link in [false, true] {
+            let f = Fixture::new();
+            f.init_repo();
+            let worktree = f.create("job", "HEAD").unwrap();
+            let original = f.base().join("original");
+            fs::rename(&worktree.root_dir, &original).unwrap();
+            fs::write(f.repo().join("sentinel"), "keep").unwrap();
+            if replace_with_link {
+                symlink(f.repo(), &worktree.root_dir).unwrap();
+            } else {
+                fs::create_dir(&worktree.root_dir).unwrap();
+                fs::write(worktree.root_dir.join("sentinel"), "keep").unwrap();
+            }
+            assert!(worktree.allocation.cleanup().is_err());
+            let replacement = worktree.root_dir.clone();
+            drop(worktree);
+            assert_eq!(
+                fs::read_to_string(replacement.join("sentinel")).unwrap(),
+                "keep"
+            );
+            assert!(original.join(".git").exists());
+        }
+    }
+
+    #[test]
+    fn cleanup_uses_pinned_base_and_ignores_mutable_public_path() {
+        let f = Fixture::new();
+        f.init_repo();
+        let mut worktree = f.create("job", "HEAD").unwrap();
+        symlink(f.repo(), worktree.root_dir.join("external")).unwrap();
+        fs::write(f.repo().join("sentinel"), "keep").unwrap();
+        fs::rename(f.base(), f.0.join("moved")).unwrap();
+        fs::create_dir(f.base()).unwrap();
+        fs::create_dir(f.base().join("job")).unwrap();
+        fs::write(f.base().join("job/sentinel"), "replacement").unwrap();
+        worktree.root_dir = f.repo();
+        drop(worktree);
+        assert!(!f.0.join("moved/job").exists());
+        assert_eq!(
+            fs::read_to_string(f.base().join("job/sentinel")).unwrap(),
+            "replacement"
+        );
+        assert_eq!(
+            fs::read_to_string(f.repo().join("sentinel")).unwrap(),
+            "keep"
+        );
     }
 }

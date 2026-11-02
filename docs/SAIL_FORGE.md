@@ -59,3 +59,22 @@ Solve issue #125 using real model output, prove non-empty functional change and 
 - [Roadmap and subsystem taxonomy](https://github.com/PedroVictorCoding/SAIL/issues/15)
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
+
+## Workspace allocation safety
+
+Forge uses `SAIL_FORGE_WORKTREE_ROOT`, defaulting to `/tmp/sail_forge_worktrees`.
+The base must be an absolute path without symlink components, owned by the Forge process
+user, with no group/world permissions (normally `0700`). Its parent must already
+exist. Forge creates a missing base privately but refuses unsafe existing bases;
+it never changes their permissions automatically. If an older installation has
+an unsafe base, stop Forge and inspect its contents before explicitly repairing
+ownership/permissions or configuring a fresh private directory.
+
+The base cannot contain or be contained by the source repository. Job IDs accept
+1–128 ASCII letters, digits, underscores or hyphens. Each destination is allocated
+exclusively: an existing directory or symlink is an error, never cleared for reuse.
+Cleanup uses pinned descriptors and verifies directory identity; substituted
+entries are left untouched with a warning. Retained jobs require manual inspection
+and removal before their ID can be reused. Linux `openat2` support is required;
+unsupported confinement fails closed. This allocation fix addresses part of #94;
+command-runner integration and remaining execution isolation are separate work.
