@@ -13,3 +13,6 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+ring.workspace = true
+rusqlite = { version = "0.37", features = ["bundled"] }
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }

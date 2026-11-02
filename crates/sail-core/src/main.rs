@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let mut mind = MindSubsystem::try_new(model_path)?;
     let model_service = mind.model_service()?;
-    let mut arena = ArenaSubsystem::new();
+    let mut arena = ArenaSubsystem::open_default();
     let mut bridge = BridgeSubsystem::new();
     let mut canvas = CanvasSubsystem::new();
     let mut dialogue = DialogueSubsystem::new().with_model_services(mind.voice_services());
