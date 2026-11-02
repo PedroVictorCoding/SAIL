@@ -427,6 +427,8 @@ impl InferenceBackend for BlockingBackend {
             owned_process: false,
             process_id: None,
             last_error: None,
+            active_profile: None,
+            hardware: None,
         }
     }
     async fn infer(
@@ -662,6 +664,8 @@ impl InferenceBackend for NamedBackend {
             owned_process: false,
             process_id: None,
             last_error: None,
+            active_profile: None,
+            hardware: None,
         }
     }
     async fn infer(
