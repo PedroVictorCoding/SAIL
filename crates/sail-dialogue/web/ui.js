@@ -40,7 +40,7 @@ function renderSpaces(filter = '') {
   const query = filter.trim().toLocaleLowerCase();
   for (const space of spaces.filter(item => `${item.name} ${item.subtitle}`.toLocaleLowerCase().includes(query))) {
     const button = document.createElement('button'); button.type = 'button';
-    button.className = 'space-card'; button.dataset.space = space.id;
+    button.className = 'quiet-button space-card'; button.dataset.space = space.id;
     button.setAttribute('aria-label', space.available ? `${space.name}: ${space.subtitle}` : `${space.name}: Not connected`);
     const icon = document.createElement('span'); icon.className = 'space-icon'; icon.setAttribute('aria-hidden', 'true');
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true');
