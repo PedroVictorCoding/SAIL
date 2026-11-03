@@ -36,3 +36,7 @@ rustc-ice-*.txt
 models/voice/
 .local/
 __pycache__/
+
+# Agent scratch state (worktrees live here) and runtime job logs
+.claude/
+logs/
