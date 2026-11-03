@@ -37,7 +37,7 @@ pub struct NightlyConfig {
     pub base_branch: String,
 }
 
-fn default_state_dir() -> PathBuf {
+pub fn default_state_dir() -> PathBuf {
     std::env::var("SAIL_FORGE_STATE_DIR")
         .map(PathBuf::from)
         .or_else(|_| {

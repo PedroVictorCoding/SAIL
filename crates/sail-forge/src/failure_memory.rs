@@ -240,15 +240,10 @@ impl FailureMemory {
         Self { path }
     }
 
-    /// `$SAIL_FORGE_STATE_DIR/failure_memory.jsonl`, defaulting to `~/.local/state/sail/forge`.
+    /// `failure_memory.jsonl` in Forge's state directory (`SAIL_FORGE_STATE_DIR`, else the
+    /// nightly runner's default), beside the digests and nightly state.
     pub fn open_default() -> Self {
-        let dir = std::env::var_os("SAIL_FORGE_STATE_DIR")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state/sail/forge"))
-            })
-            .unwrap_or_else(|| PathBuf::from(".sail-forge-state"));
-        Self::new(dir.join("failure_memory.jsonl"))
+        Self::new(crate::nightly::default_state_dir().join("failure_memory.jsonl"))
     }
 
     /// The default store, unless `SAIL_FORGE_FAILURE_MEMORY` is `0`/`false`/`off`.
