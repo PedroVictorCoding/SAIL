@@ -136,6 +136,9 @@ impl SandboxPolicy {
                 "git".into(),
                 "cargo".into(),
                 "rustc".into(),
+                // Forge's symbol index (`rust-analyzer scip`); runs build scripts and proc
+                // macros like `cargo build`, so it gets the same sandbox.
+                "rust-analyzer".into(),
                 "ls".into(),
                 "grep".into(),
                 "find".into(),
@@ -190,6 +193,9 @@ impl SandboxPolicy {
                 "git".into(),
                 "cargo".into(),
                 "rustc".into(),
+                // Forge's symbol index (`rust-analyzer scip`); runs build scripts and proc
+                // macros like `cargo build`, so it gets the same sandbox.
+                "rust-analyzer".into(),
                 "ls".into(),
                 "grep".into(),
                 "find".into(),

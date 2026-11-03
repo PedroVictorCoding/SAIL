@@ -138,6 +138,18 @@ pub enum RepoToolCall {
     /// Ranked repository map of item signatures relevant to `query`.
     #[serde(rename = "repo:map", alias = "map")]
     Map { query: String },
+    /// Definitions of a symbol from the rust-analyzer index (`symbol_index.rs`).
+    #[serde(rename = "code:find_symbol", alias = "find_symbol")]
+    FindSymbol {
+        #[serde(alias = "symbol", alias = "query")]
+        name: String,
+    },
+    /// Every use of a symbol from the rust-analyzer index.
+    #[serde(rename = "code:find_references", alias = "find_references")]
+    FindReferences {
+        #[serde(alias = "symbol", alias = "query")]
+        name: String,
+    },
     #[serde(rename = "repo:test", alias = "test")]
     Test {
         #[serde(default)]
@@ -324,6 +336,22 @@ pub fn execute_repo_tool(
                 } else {
                     map
                 },
+                modified_files: Vec::new(),
+                test_record: None,
+            }
+        }
+        RepoToolCall::FindSymbol { name } | RepoToolCall::FindReferences { name } => {
+            let refs = matches!(call, RepoToolCall::FindReferences { .. });
+            let (ok, output) = crate::symbol_index::run_tool(worktree, refs, name);
+            RepoToolResult {
+                tool: if refs {
+                    "code:find_references"
+                } else {
+                    "code:find_symbol"
+                }
+                .into(),
+                ok,
+                output,
                 modified_files: Vec::new(),
                 test_record: None,
             }
@@ -1253,9 +1281,11 @@ Tools (JSON):
 2. {"tool": "repo:search", "query": "function_or_symbol"}
 3. {"tool": "repo:read_range", "path": "src/lib.rs", "start_line": 1, "end_line": 120}
 4. {"tool": "repo:map", "query": "words from the issue"}  (ranked item signatures with line numbers)
-5. {"tool": "repo:diff"}
-6. {"tool": "repo:test"}  (sandboxed cargo test)
-7. {"tool": "done", "summary": "what changed"}  (only after repo:test passes)
+5. {"tool": "code:find_symbol", "name": "fn_or_type_name"}  (where it is defined, its signature)
+6. {"tool": "code:find_references", "name": "fn_or_type_name"}  (every caller and test that uses it)
+7. {"tool": "repo:diff"}
+8. {"tool": "repo:test"}  (sandboxed cargo test)
+9. {"tool": "done", "summary": "what changed"}  (only after repo:test passes)
 
 Edits (preferred; no JSON escaping needed). Write the file path on its own line, then:
 src/lib.rs
@@ -2097,6 +2127,10 @@ Rules:
                             format!("repo:list {}", path.as_deref().unwrap_or("."))
                         }
                         RepoToolCall::Diff => "repo:diff".into(),
+                        RepoToolCall::FindSymbol { name } => format!("code:find_symbol {name}"),
+                        RepoToolCall::FindReferences { name } => {
+                            format!("code:find_references {name}")
+                        }
                         _ => "tool_call".into(),
                     };
                     on_progress(SolverProgress {

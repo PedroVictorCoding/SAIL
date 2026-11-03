@@ -101,7 +101,13 @@ If a gate or the self-review rejects the patch, the reason is appended to the is
 2. the numbered contents of the issue's `## Target files` (8k chars)
 3. a ranked repo map of item signatures (`repo_map.rs`, 4k chars), with targets pinned first and the rest ranked by how well their identifiers match the issue text
 
-`repo:map {"query": ...}` re-ranks on demand. The history budget is 36k chars, sized for the 16k-token llama-server context.
+`repo:map {"query": ...}` re-ranks on demand.
+
+**Symbol tools (#119).** `code:find_symbol {"name": ...}` returns definitions: signature, `file:line`, reference count and the first doc line. `code:find_references {"name": ...}` lists every use of the best match, grouped by file, with test files marked. Both read a SCIP index that `rust-analyzer scip` builds inside the job's sandbox on the first `code:*` call (`crates/sail-forge/src/symbol_index.rs`).
+- Measured on this container (4 cores): about 112 s to index the SAIL workspace, then about 40 ms per query.
+- The index is not rebuilt after edits. Results in files changed since indexing say so, so the model re-reads them.
+- Without rust-analyzer (`rustup component add rust-analyzer`), the tools answer "symbol index unavailable" and point to `repo:search`.
+- `SAIL_FORGE_SYMBOL_INDEX_TIMEOUT_SECS`: default 600. The history budget is 36k chars, sized for the 16k-token llama-server context.
 
 **Measurement.** `cargo run -p sail-forge --bin sail_forge_eval -- --label <name> [--only 201,202] [--compare <prev.json>]` runs the real solver on the validated cases in `eval_cases.rs` and grades each with hidden tests the solver never sees.
 - Results go to `$SAIL_FORGE_STATE_DIR/eval/<label>.{json,md}`.

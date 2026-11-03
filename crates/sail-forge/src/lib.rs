@@ -18,6 +18,7 @@ pub mod reviewer;
 pub mod self_review;
 pub mod solver;
 pub mod subsystem;
+pub mod symbol_index;
 pub mod worktree;
 
 pub use admission::{AdmissionDecision, AdmissionPolicy, IssueCandidate, parse_target_files};
