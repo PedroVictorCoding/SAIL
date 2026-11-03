@@ -92,16 +92,18 @@ async fn test_full_autonomous_issue_resolution_lifecycle() {
     let kinds: Vec<&str> = activity.iter().map(|a| a.kind.as_str()).collect();
     assert_eq!(
         kinds,
-        vec!["outcome", "gates", "review", "outcome"],
+        // The mutation gate runs in its default advisory mode and records a result even
+        // when cargo-mutants is missing.
+        vec!["outcome", "gates", "mutation", "review", "outcome"],
         "{activity:?}"
     );
     assert!(activity[1].title.contains("gates passed"));
-    assert!(activity[3].title.starts_with("Completed"));
+    assert!(activity[4].title.starts_with("Completed"));
     let stored = checkpoint_store.load(&job_id).unwrap().unwrap();
     assert_eq!(stored.activity.len(), activity.len());
     let status_json = serde_json::to_value(orchestrator.get_status(&job_id).unwrap()).unwrap();
     assert!(status_json.get("activity").is_none());
-    assert_eq!(orchestrator.get_activity("90").map(|a| a.len()), Some(4));
+    assert_eq!(orchestrator.get_activity("90").map(|a| a.len()), Some(5));
 
     // Verify logs and patches written to disk
     assert!(

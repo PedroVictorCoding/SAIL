@@ -34,16 +34,35 @@ Its single job, **`Rust Format, Check & Test`**, runs these steps:
 - `cargo fmt --check`
 - `cargo check --workspace`
 - `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace --no-fail-fast`
+- `cargo nextest run --workspace --profile ci` (every test in its own process; every
+  failure reported; JUnit report uploaded as the `junit-report` artifact)
+- `cargo test --workspace --doc` (nextest does not run doc tests)
 
 It uses a pinned Rust toolchain. Bump that version deliberately, in a PR that also fixes
-any new lints.
+any new lints. Nextest and cargo-mutants versions are pinned in the workflow too.
+
+Two more jobs run beside it:
+
+- **`Dependency licenses & advisories`** runs `cargo deny check` against
+  [`deny.toml`](deny.toml): permissive licenses only, no RustSec vulnerabilities or yanked
+  crates, crates.io as the only source. A new dependency with another license fails until
+  the license is added to `deny.toml` with the reason. Make this a required check.
+- **`Mutation testing (changed code)`** runs on pull requests only. It runs
+  `cargo mutants --in-diff` on the Rust lines the PR changes and lists *missed* mutants:
+  changed functions that can be broken without any test failing. The job summary shows the
+  counts. It is advisory for now. Make it required once its run time on typical PRs is
+  known.
+
+To run the same checks locally: `cargo install --locked cargo-nextest cargo-deny cargo-mutants`,
+then `cargo nextest run --workspace`, `cargo deny check`, and
+`git diff origin/main... > pr.diff && cargo mutants --in-diff pr.diff --test-tool nextest`.
 
 To make CI a merge gate, a repository admin configures branch protection (or a ruleset)
 for `main` under **Settings → Branches**:
 
 1. **Require a pull request before merging.**
-2. **Require status checks to pass**, and add `Rust Format, Check & Test` as a required check.
+2. **Require status checks to pass**, and add `Rust Format, Check & Test` and
+   `Dependency licenses & advisories` as required checks.
    Also add `verify` (UI asset integrity) if asset changes should block merging. It only
    runs when asset paths change.
 3. **Require branches to be up to date before merging.** This makes a check result describe

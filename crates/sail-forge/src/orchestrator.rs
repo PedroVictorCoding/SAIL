@@ -1658,6 +1658,57 @@ impl ForgeOrchestrator {
             return Err(reason);
         }
 
+        // 4c. Mutation gate: do the tests fail when the patched code is broken?
+        let mutation_mode = crate::mutation::MutationGateMode::from_env();
+        if mutation_mode != crate::mutation::MutationGateMode::Off {
+            self.check_interruption(job_id).await?;
+            let timeout = std::env::var("SAIL_FORGE_MUTATION_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|v| (60..=14_400).contains(v))
+                .unwrap_or(1_800);
+            let mutation_outcome = crate::mutation::run(&worktree, &final_diff, timeout);
+            let verdict = crate::mutation::judge(mutation_mode, &mutation_outcome);
+            self.record_activity(
+                job_id,
+                ForgeActivityEntry::new(
+                    outcome.turns,
+                    "mutation",
+                    verdict.summary.clone(),
+                    verdict.details.join("\n"),
+                ),
+            );
+            if verdict.blocks {
+                let reason = if verdict.details.is_empty() {
+                    verdict.summary.clone()
+                } else {
+                    format!("{}: {}", verdict.summary, verdict.details.join("; "))
+                };
+                {
+                    let mut jobs = self.active_jobs.lock().unwrap();
+                    if let Some(job) = jobs.get_mut(job_id) {
+                        job.checkpoint.failure_reason = Some(reason.clone());
+                        job.checkpoint.verification_status = Some("mutation_gate_failed".into());
+                        job.checkpoint.transition(ForgeTaskState::Blocked, &reason);
+                        let _ = self.checkpoint_store.save(&job.checkpoint);
+                    }
+                }
+                self.emit_event(EventPayload::ForgeIssueStatusUpdated {
+                    job_id: job_id.to_string(),
+                    state: "blocked".into(),
+                    stage: "mutation".into(),
+                    message: reason.clone(),
+                    diff: Some(final_diff.clone()),
+                    target_file: outcome.target_file.clone(),
+                    logs: Some(verdict.details),
+                    live_output: None,
+                    model_action: Some("Mutation gate failed".into()),
+                    turn: Some(outcome.turns),
+                });
+                return Err(format!("Pre-review gates failed: {reason}"));
+            }
+        }
+
         // 5. Review phase: local self-review first, then the external broker if one can run
         {
             let mut jobs = self.active_jobs.lock().unwrap();

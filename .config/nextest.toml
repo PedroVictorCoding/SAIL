@@ -1,0 +1,36 @@
+# cargo-nextest configuration. CI uses `--profile ci`; Forge uses `--profile forge`.
+#
+# Nextest runs each test in its own process, so a panic or leaked global in one test
+# cannot affect another, and it writes JUnit XML that tools (CI annotations, Forge's
+# failure diagnosis) read instead of scraping `cargo test` text.
+#
+# Never add `retries` to hide a flaky test. Fix the test, or report it.
+
+[profile.default]
+# A test running longer than this is reported as slow; after 4 periods it is killed.
+slow-timeout = { period = "60s", terminate-after = 4 }
+
+[profile.ci]
+fail-fast = false
+failure-output = "immediate-final"
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+# Forge runs tests inside the Bubblewrap sandbox and parses the JUnit report to tell the
+# model exactly which tests failed and why.
+[profile.forge]
+fail-fast = false
+failure-output = "final"
+success-output = "never"
+status-level = "fail"
+final-status-level = "fail"
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[profile.forge.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
