@@ -145,6 +145,7 @@ async fn low_host_memory_prevents_managed_model_process_launch() {
                 swap_used_bytes: 0,
                 swap_total_bytes: 0,
                 logical_cpus: 12,
+                memory_pressure_avg10: None,
             })
         }
     }

@@ -26,6 +26,10 @@ pub struct HostSample {
     pub swap_used_bytes: u64,
     pub swap_total_bytes: u64,
     pub logical_cpus: usize,
+    /// Linux memory pressure (PSI `some avg10`): percent of the last 10 s in which a task
+    /// stalled waiting for memory, swap-in included. `None` where the kernel lacks PSI.
+    #[serde(default)]
+    pub memory_pressure_avg10: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

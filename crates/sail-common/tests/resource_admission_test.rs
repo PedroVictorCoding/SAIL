@@ -23,6 +23,7 @@ fn host() -> HostSample {
         swap_used_bytes: 0,
         swap_total_bytes: 8 * GIB,
         logical_cpus: 12,
+        memory_pressure_avg10: None,
     }
 }
 fn setup() -> (Arc<Probe>, Arc<ResourceScheduler>) {
@@ -303,4 +304,67 @@ async fn voice_idle_returns_after_the_quiet_period_when_no_voice() {
         .await;
     assert!(start.elapsed() >= std::time::Duration::from_millis(500));
     assert!(!scheduler.voice_active());
+}
+
+#[test]
+fn idle_swapped_pages_do_not_block_work_but_real_memory_pressure_does() {
+    let (probe, scheduler) = setup();
+    // Swap in use but no stall on memory: pages swapped out long ago and left there.
+    *probe.0.lock().unwrap() = Some(HostSample {
+        swap_used_bytes: 3 * GIB,
+        memory_pressure_avg10: Some(0.0),
+        ..host()
+    });
+    let lease = scheduler.try_admit(ResourceClaim::build(), Default::default());
+    assert!(lease.is_ok(), "{:?}", lease.err());
+    drop(lease);
+
+    // Tasks stalling on memory: refused, whatever the swap reading, voice included.
+    *probe.0.lock().unwrap() = Some(HostSample {
+        swap_used_bytes: 0,
+        memory_pressure_avg10: Some(25.0),
+        ..host()
+    });
+    let Err(error) = scheduler.try_admit(
+        ResourceClaim::inference(WorkPriority::Voice),
+        Default::default(),
+    ) else {
+        panic!("admitted under memory pressure");
+    };
+    assert!(error.to_string().contains("memory pressure"), "{error}");
+
+    // Kernel without PSI: the swap-used limit still applies.
+    *probe.0.lock().unwrap() = Some(HostSample {
+        swap_used_bytes: 3 * GIB,
+        memory_pressure_avg10: None,
+        ..host()
+    });
+    assert!(
+        scheduler
+            .try_admit(ResourceClaim::build(), Default::default())
+            .is_err()
+    );
+}
+
+#[test]
+fn memory_pressure_is_parsed_from_proc_pressure_memory() {
+    let text = "some avg10=12.50 avg60=3.10 avg300=0.40 total=149591882\nfull avg10=1.00 avg60=0.00 avg300=0.00 total=146955704\n";
+    assert_eq!(parse_memory_pressure(text), Some(12.5));
+    assert_eq!(parse_memory_pressure("full avg10=1.00\n"), None);
+    assert_eq!(parse_memory_pressure("some avg10=nan\n"), None);
+    assert_eq!(parse_memory_pressure("some avg10=250\n"), None);
+    assert_eq!(parse_memory_pressure(""), None);
+}
+
+#[test]
+fn real_linux_host_reports_memory_pressure_when_the_kernel_has_psi() {
+    let sample = ProcHostProbe.sample().unwrap();
+    if std::path::Path::new("/proc/pressure/memory").exists() {
+        let pressure = sample
+            .memory_pressure_avg10
+            .expect("PSI present but not read");
+        assert!((0.0..=100.0).contains(&pressure));
+    } else {
+        assert!(sample.memory_pressure_avg10.is_none());
+    }
 }

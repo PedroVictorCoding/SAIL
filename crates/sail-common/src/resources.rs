@@ -21,11 +21,25 @@ pub trait HostProbe: Send + Sync {
 pub struct ProcHostProbe;
 impl HostProbe for ProcHostProbe {
     fn sample(&self) -> io::Result<HostSample> {
-        parse_meminfo(
+        let mut sample = parse_meminfo(
             &std::fs::read_to_string("/proc/meminfo")?,
             std::thread::available_parallelism()?.get(),
-        )
+        )?;
+        sample.memory_pressure_avg10 = std::fs::read_to_string("/proc/pressure/memory")
+            .ok()
+            .and_then(|text| parse_memory_pressure(&text));
+        Ok(sample)
     }
+}
+/// `some avg10` from `/proc/pressure/memory`, in percent. `None` if absent or malformed.
+pub fn parse_memory_pressure(text: &str) -> Option<f32> {
+    let line = text.lines().find(|l| l.starts_with("some "))?;
+    let value = line
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("avg10="))?
+        .parse::<f32>()
+        .ok()?;
+    (value.is_finite() && (0.0..=100.0).contains(&value)).then_some(value)
 }
 /// Missing/malformed readings fail closed; unknown is never displayed as zero.
 pub fn parse_meminfo(text: &str, logical_cpus: usize) -> io::Result<HostSample> {
@@ -58,12 +72,17 @@ pub fn parse_meminfo(text: &str, logical_cpus: usize) -> io::Result<HostSample> 
         swap_used_bytes: swap_total - swap_free,
         swap_total_bytes: swap_total,
         logical_cpus,
+        memory_pressure_avg10: None,
     })
 }
 
 #[derive(Debug, Clone)]
 pub struct AdmissionPolicy {
     pub ram_headroom_bytes: u64,
+    /// Refuse background work while memory pressure (PSI `some avg10`) is above this.
+    pub max_memory_pressure_pct: f32,
+    /// Used only where the kernel reports no memory pressure. Swap in use is not itself
+    /// pressure: idle pages stay swapped out long after memory is free again.
     pub max_swap_used_bytes: u64,
     pub cpu_headroom: usize,
     pub max_heavy_models: usize,
@@ -74,6 +93,7 @@ impl Default for AdmissionPolicy {
     fn default() -> Self {
         Self {
             ram_headroom_bytes: 2 * GIB,
+            max_memory_pressure_pct: 10.0,
             max_swap_used_bytes: GIB,
             cpu_headroom: 2,
             max_heavy_models: 1,
@@ -255,8 +275,20 @@ impl ResourceScheduler {
             if sample.available_ram_bytes < needed {
                 return Err("insufficient available RAM after voice/OS headroom".into());
             }
-            if sample.swap_used_bytes > self.policy.max_swap_used_bytes {
-                return Err("host swap pressure exceeds admission limit".into());
+            match sample.memory_pressure_avg10 {
+                Some(pressure) if pressure > self.policy.max_memory_pressure_pct => {
+                    return Err(format!(
+                        "host memory pressure {pressure:.1}% exceeds admission limit"
+                    ));
+                }
+                Some(_) => {}
+                None if sample.swap_used_bytes > self.policy.max_swap_used_bytes => {
+                    return Err(
+                        "host swap pressure exceeds admission limit (memory pressure unmeasured)"
+                            .into(),
+                    );
+                }
+                None => {}
             }
             let cpu = state
                 .entries
