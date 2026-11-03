@@ -65,7 +65,7 @@ async fn test_twenty_parallel_review_requests_for_same_issue_invokes_at_most_onc
     assert_eq!(
         ledger
             .issue_review_counts
-            .get("PedroVictorCoding/SAIL#90")
+            .get("pedrovictorcoding/sail#90")
             .copied()
             .unwrap_or(0),
         1
@@ -73,7 +73,7 @@ async fn test_twenty_parallel_review_requests_for_same_issue_invokes_at_most_onc
     assert!(
         ledger
             .canonical_issue_reviews
-            .contains_key("PedroVictorCoding/SAIL#90")
+            .contains_key("pedrovictorcoding/sail#90")
     );
 
     let _ = fs::remove_file(&temp_ledger);

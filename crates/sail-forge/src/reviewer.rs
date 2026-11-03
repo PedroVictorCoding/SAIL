@@ -83,6 +83,28 @@ impl ReviewUsageLedger {
         dt.year() as u32 * 100 + dt.month()
     }
 
+    /// Rewrite issue keys written by older versions (mixed case, URLs) to the canonical
+    /// form. Variants of one issue merge: an attempt or a stored review under any spelling
+    /// keeps the issue's slot consumed.
+    pub fn canonicalize_issue_keys(&mut self) {
+        fn rekey<V>(map: &mut HashMap<String, V>, merge: impl Fn(&mut V, V)) {
+            let old = std::mem::take(map);
+            for (k, v) in old {
+                let key = ReviewBroker::normalize_canonical_issue_key(&k);
+                match map.get_mut(&key) {
+                    Some(existing) => merge(existing, v),
+                    None => {
+                        map.insert(key, v);
+                    }
+                }
+            }
+        }
+        rekey(&mut self.canonical_issue_attempts, |_, _| {});
+        rekey(&mut self.canonical_issue_reviews, |_, _| {});
+        rekey(&mut self.issue_last_diff_hash, |_, _| {});
+        rekey(&mut self.issue_review_counts, |a, b| *a += b);
+    }
+
     pub fn roll_windows_if_needed(&mut self, now: &DateTime<Utc>) {
         let day_ts = Self::calc_day_ts(now);
         if self.day_timestamp != day_ts {
@@ -145,13 +167,43 @@ impl ReviewBroker {
         PathBuf::from("codex")
     }
 
-    pub fn normalize_canonical_issue_key(raw: &str) -> String {
-        let clean = raw.trim().replace("/#", "#");
-        if let Some((repo, num)) = clean.split_once('#') {
-            format!("{}#{}", repo.trim_matches('/'), num.trim())
-        } else {
-            clean
+    /// The identity that owns an issue's single lifetime review slot: `owner/repo#N`,
+    /// lowercase (GitHub owner and repository names are case-insensitive).
+    ///
+    /// Accepts `owner/repo#N`, `https://github.com/owner/repo#N`, `github.com/owner/repo.git#N`,
+    /// `git@github.com:owner/repo#N` and `owner/repo/#N`, so a different spelling of the same
+    /// issue cannot open a second slot. Returns `None` when there is no numeric issue number
+    /// or the repository part is empty or has unexpected characters.
+    pub fn canonical_issue_key(raw: &str) -> Option<String> {
+        let (repo, num) = raw.trim().rsplit_once('#')?;
+        let num: u64 = num.trim().parse().ok().filter(|n| *n > 0)?;
+        let mut repo = repo.trim().trim_end_matches('/').to_ascii_lowercase();
+        for prefix in ["https://", "http://", "ssh://", "git@"] {
+            if let Some(rest) = repo.strip_prefix(prefix) {
+                repo = rest.to_string();
+            }
         }
+        for host in ["github.com/", "github.com:", "www.github.com/"] {
+            if let Some(rest) = repo.strip_prefix(host) {
+                repo = rest.to_string();
+            }
+        }
+        let repo = repo.trim_end_matches(".git").trim_matches('/');
+        let valid = !repo.is_empty()
+            && repo.split('/').count() <= 2
+            && repo.split('/').all(|seg| {
+                !seg.is_empty()
+                    && seg
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            });
+        valid.then(|| format!("{repo}#{num}"))
+    }
+
+    /// Canonical key when the identity parses, otherwise the trimmed input. Kept for callers
+    /// that only need a stable label; review dispatch uses [`Self::canonical_issue_key`].
+    pub fn normalize_canonical_issue_key(raw: &str) -> String {
+        Self::canonical_issue_key(raw).unwrap_or_else(|| raw.trim().to_string())
     }
 
     pub fn new(config: ReviewPolicyConfig) -> Self {
@@ -224,6 +276,7 @@ impl ReviewBroker {
                 let mut ledger: ReviewUsageLedger = serde_json::from_slice(&content)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 ledger.roll_windows_if_needed(&Utc::now());
+                ledger.canonicalize_issue_keys();
                 Ok(ledger)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(ReviewUsageLedger::default()),
@@ -359,9 +412,18 @@ impl ReviewBroker {
     /// Primary entry point: review an issue change with strict atomic quota checks and honest fallback.
     /// Strictly guarantees AT MOST ONE process invocation per canonical repo+issue across retries/reboots/branches.
     pub async fn review(&self, req: &ReviewRequest) -> ReviewResult {
-        let canonical_key = Self::normalize_canonical_issue_key(&req.issue_id);
         let sanitized_diff = self.sanitize_payload(&req.diff_patch);
         let sanitized_manifest = self.sanitize_payload(&req.test_manifest);
+        let Some(canonical_key) = Self::canonical_issue_key(&req.issue_id) else {
+            // Without a canonical identity the one-review cap cannot be enforced.
+            let hash = Self::compute_dedup_hash(
+                req.issue_id.trim(),
+                &req.base_commit,
+                &sanitized_diff,
+                &sanitized_manifest,
+            );
+            return self.run_local_fallback(req, hash, "invalid_issue_identity");
+        };
 
         let dedup_hash = Self::compute_dedup_hash(
             &canonical_key,
@@ -451,6 +513,17 @@ impl ReviewBroker {
             return result;
         }
 
+        // Pre-flight checks that start no review. Failing one leaves the slot unused, so a
+        // later attempt (after `codex login`, or once the CLI is installed) can still run.
+        if !self.mock_mode {
+            if let Err(reason) = self.codex_preflight() {
+                warn!(%reason, "Codex review not started; slot left unused");
+                let result = self.run_local_fallback(req, dedup_hash, &reason);
+                self.finish_in_flight(&canonical_key, &result);
+                return result;
+            }
+        }
+
         // Reload under a cross-process lock: constructor snapshots and single-flight
         // are insufficient when multiple daemon/broker instances share this ledger.
         let reservation = self.ledger_transaction(|ledger| {
@@ -535,6 +608,30 @@ impl ReviewBroker {
         self.finish_in_flight(&canonical_key, &result);
 
         result
+    }
+
+    /// Checks that start no review: the CLI exists and is signed in with ChatGPT.
+    /// Returns the reason to report when it is not usable.
+    fn codex_preflight(&self) -> Result<(), String> {
+        if !self.codex_bin.is_file() {
+            return Err("codex_cli_not_installed".into());
+        }
+        let output = std::process::Command::new(&self.codex_bin)
+            .args(["login", "status"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("codex_login_status_failed: {e}"))?;
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        match classify_codex_login_status(output.status.success(), &text) {
+            CodexAuth::ChatGpt => Ok(()),
+            CodexAuth::ApiKey => Err("codex_api_key_auth_refused".into()),
+            CodexAuth::NotLoggedIn => Err("codex_not_logged_in".into()),
+            CodexAuth::Unknown => Err("codex_auth_unverified".into()),
+        }
     }
 
     fn finish_in_flight(&self, canonical_key: &str, result: &ReviewResult) {
@@ -627,41 +724,30 @@ impl ReviewBroker {
         }
 
         let feedback = stdout.trim().to_string();
-        let upper = feedback.to_uppercase();
-
-        let explicit_approved = upper.contains("VERDICT: APPROVED")
-            || upper.contains("VERDICT: PASS")
-            || upper.contains("VERDICT: PASSED");
-        let changes_requested = upper.contains("CHANGES_REQUESTED")
-            || upper.contains("VERDICT: REJECT")
-            || upper.contains("VERDICT: REJECTED")
-            || upper.contains("CRITICAL")
-            || upper.contains("BLOCKING ISSUE");
-        let reqs_covered = upper.contains("REQUIREMENTS_COVERED: YES");
-
-        let mut confidence = 0.0f32;
-        for line in feedback.lines() {
-            if let Some(rest) = line.to_uppercase().strip_prefix("CONFIDENCE:") {
-                if let Ok(val) = rest.trim().parse::<f32>() {
-                    confidence = val.clamp(0.0, 1.0);
+        let (passed, requirements_covered, confidence, detected_bugs) =
+            match parse_codex_verdict(&feedback) {
+                Ok(v) => {
+                    let passed = v.approved;
+                    (
+                        passed,
+                        passed && v.requirements_covered,
+                        v.confidence.unwrap_or(0.0),
+                        if passed {
+                            vec![]
+                        } else {
+                            vec!["Codex requested changes".to_string()]
+                        },
+                    )
                 }
-            }
-        }
-
-        let passed = explicit_approved && !changes_requested;
-        let requirements_covered = passed && reqs_covered;
-        if passed && confidence == 0.0 {
-            confidence = 0.95;
-        }
-
-        let detected_bugs = if passed {
-            vec![]
-        } else {
-            vec![
-                "Structured review indicates issues, requested changes, or inconclusive approval"
-                    .into(),
-            ]
-        };
+                // The review ran (the slot is consumed) but its verdict is unusable:
+                // record it as inconclusive, never as a pass.
+                Err(why) => (
+                    false,
+                    false,
+                    0.0,
+                    vec![format!("Codex review output was inconclusive: {why}")],
+                ),
+            };
 
         Ok(ReviewResult {
             verdict: ReviewVerdict {
@@ -719,5 +805,90 @@ impl ReviewBroker {
             cost_usd: 0.0,
             provider: format!("local_deterministic_review:{}", reason),
         }
+    }
+}
+
+/// Structured verdict parsed from Codex review output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodexVerdict {
+    pub approved: bool,
+    pub requirements_covered: bool,
+    /// `None` when Codex reported no confidence; never invented.
+    pub confidence: Option<f32>,
+}
+
+/// Parse the `VERDICT:` / `REQUIREMENTS_COVERED:` / `CONFIDENCE:` lines the review prompt
+/// asks for. Each must start a line. Exactly one `VERDICT` (`APPROVED` or
+/// `CHANGES_REQUESTED`) and one `REQUIREMENTS_COVERED` (`YES` or `NO`) are required; anything
+/// else, including a quoted diff that repeats a verdict line, is an error.
+pub fn parse_codex_verdict(output: &str) -> Result<CodexVerdict, String> {
+    fn field<'a>(output: &'a str, name: &str) -> Vec<&'a str> {
+        output
+            .lines()
+            .filter_map(|l| {
+                let t = l.trim().trim_start_matches(['*', '-', ' ']);
+                let (k, v) = t.split_once(':')?;
+                k.trim()
+                    .eq_ignore_ascii_case(name)
+                    .then(|| v.trim().trim_matches('*').trim())
+            })
+            .collect()
+    }
+    let verdicts = field(output, "VERDICT");
+    let approved = match verdicts.as_slice() {
+        [v] if v.eq_ignore_ascii_case("APPROVED") => true,
+        [v] if v.eq_ignore_ascii_case("CHANGES_REQUESTED") => false,
+        [v] => return Err(format!("unknown VERDICT value `{v}`")),
+        [] => return Err("no VERDICT line".into()),
+        _ => return Err(format!("{} VERDICT lines", verdicts.len())),
+    };
+    let covered = field(output, "REQUIREMENTS_COVERED");
+    let requirements_covered = match covered.as_slice() {
+        [v] if v.eq_ignore_ascii_case("YES") => true,
+        [v] if v.eq_ignore_ascii_case("NO") => false,
+        [v] => return Err(format!("unknown REQUIREMENTS_COVERED value `{v}`")),
+        [] => return Err("no REQUIREMENTS_COVERED line".into()),
+        _ => return Err(format!("{} REQUIREMENTS_COVERED lines", covered.len())),
+    };
+    let confidence = match field(output, "CONFIDENCE").as_slice() {
+        [] => None,
+        [v] => Some(
+            v.parse::<f32>()
+                .ok()
+                .filter(|c| (0.0..=1.0).contains(c))
+                .ok_or_else(|| format!("CONFIDENCE `{v}` is not between 0 and 1"))?,
+        ),
+        many => return Err(format!("{} CONFIDENCE lines", many.len())),
+    };
+    Ok(CodexVerdict {
+        approved,
+        requirements_covered,
+        confidence,
+    })
+}
+
+/// How the Codex CLI is signed in, from `codex login status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexAuth {
+    ChatGpt,
+    ApiKey,
+    NotLoggedIn,
+    Unknown,
+}
+
+/// Classify `codex login status` output. Only an explicit ChatGPT sign-in counts; anything
+/// mentioning an API key is treated as API-key sign-in even if it also mentions ChatGPT.
+pub fn classify_codex_login_status(exit_ok: bool, output: &str) -> CodexAuth {
+    let lower = output.to_ascii_lowercase();
+    if lower.contains("api key") || lower.contains("api_key") || lower.contains("apikey") {
+        CodexAuth::ApiKey
+    } else if lower.contains("not logged in") || lower.contains("logged out") {
+        CodexAuth::NotLoggedIn
+    } else if exit_ok && lower.contains("logged in") && lower.contains("chatgpt") {
+        CodexAuth::ChatGpt
+    } else if !exit_ok {
+        CodexAuth::NotLoggedIn
+    } else {
+        CodexAuth::Unknown
     }
 }
