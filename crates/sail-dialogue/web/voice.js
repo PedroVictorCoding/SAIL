@@ -1,4 +1,5 @@
 'use strict';
+let learningSession = null, learningEnabled = false, learningBusy = false;
 let ws, audioCtx, micStream, processor, micSource;
 let workletLoaded=false;
 const playbackTimers=new Set();
@@ -94,6 +95,7 @@ function connectWs() {
   };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
+    learningSession = null; learningEnabled = false; renderLearning();
     pendingApprovalActions.clear(); lastToolCalls.clear();
     cancelVisualCapture(); captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
@@ -105,9 +107,12 @@ function connectWs() {
       case 'capture_required':
         setCaptureHeld(false); turnInProgress = false; stopPlayback(); requestVisualCapture(data); break;
       case 'session':
+        learningSession = data.session_id; learningEnabled = data.learning === true; renderLearning();
         cancelVisualCapture();
         document.getElementById('conversation').replaceChildren(); responseNode = null;
         applyControl(data.control); break;
+      case 'learning_state':
+        learningEnabled = data.enabled === true; renderLearning(); break;
       case 'telemetry':
         document.getElementById('sessionConfidence').textContent = `${(data.confidence * 100).toFixed(0)}%`;
         document.getElementById('sessionRms').textContent = Number(data.rms).toFixed(3);
@@ -807,4 +812,28 @@ window.addEventListener('sail:orb-telemetry', event => {
 window.sailUi = Object.freeze({
   setOrbTelemetry: data => window.dispatchEvent(new CustomEvent('sail:orb-telemetry', { detail:data })),
   resumeOrbAnimation: () => { orbFrozen = false; },
+});
+
+function renderLearning() {
+  const indicator = document.getElementById('learningIndicator');
+  indicator.hidden = !learningSession || learningEnabled === false;
+  indicator.textContent = learningEnabled === null ? 'Learning state unknown' : 'Learning enabled';
+  const button = document.getElementById('learningBtn');
+  button.disabled = !learningSession || learningBusy;
+  button.setAttribute('aria-pressed', String(learningEnabled));
+  button.textContent = learningEnabled !== false ? 'Disable learning' : 'Enable learning';
+  document.getElementById('learningStatus').textContent = !learningSession ? 'Disconnected · learning off' : learningEnabled === null ? 'State unavailable · disable learning or reconnect' : learningEnabled ? 'Learning enabled for this conversation' : 'Learning off';
+}
+document.getElementById('learningBtn').addEventListener('click', async () => {
+  if (!learningSession || learningBusy) return;
+  const session = learningSession;
+  learningBusy = true; renderLearning();
+  try {
+    const token = await getOrFetchOwnerToken();
+    const response = await fetch('/api/memory/learning', {method:'POST', cache:'no-store', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`}, body:JSON.stringify({session, enabled:learningEnabled === false})});
+    if (!response.ok) throw new Error('Learning change failed. Check owner authorization and retry.');
+    const result = await response.json();
+    if (session === learningSession) learningEnabled = result.enabled === true;
+  } catch (error) { if (session === learningSession) learningEnabled = null; showError(error.message); }
+  finally { learningBusy = false; renderLearning(); }
 });

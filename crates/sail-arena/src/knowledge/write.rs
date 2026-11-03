@@ -59,6 +59,27 @@ struct ClaimRow {
 }
 
 impl<'t> KnowledgeTx<'t> {
+    /// Atomically erase pending source text and invalidate proposals already reading it.
+    /// Previously consolidated claims remain until explicitly forgotten by the owner.
+    pub fn discard_session_sources(&self, scope: &str, session: &str) -> KnowledgeResult<()> {
+        if !matches!(self.actor, Actor::User) {
+            return Err(invalid("owner action required"));
+        }
+        self.bump_generation()?;
+        self.conn.execute("DELETE FROM records_fts WHERE rowid IN (SELECT id FROM records WHERE scope=?1 AND session=?2)", params![scope, session])?;
+        self.conn.execute(
+            "DELETE FROM records WHERE scope=?1 AND session=?2",
+            params![scope, session],
+        )?;
+        self.log(
+            "discard_sources",
+            "session",
+            None,
+            Some("owner disabled conversation learning"),
+            json!({"scope":scope, "session":session}),
+        )
+    }
+
     pub(crate) fn new(conn: &'t Connection, actor: Actor) -> Self {
         Self {
             conn,

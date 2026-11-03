@@ -13,9 +13,26 @@ use std::sync::Arc;
 struct MemoryState {
     store: Arc<MemoryStore>,
     authority: Option<ApprovalAuthority>,
+    arena: Option<Arc<sail_arena::ArenaSubsystem>>,
 }
 pub fn router(store: Arc<MemoryStore>, authority: Option<ApprovalAuthority>) -> Router {
+    build_router(store, authority, None)
+}
+
+pub fn router_with_arena(
+    arena: Arc<sail_arena::ArenaSubsystem>,
+    authority: Option<ApprovalAuthority>,
+) -> Router {
+    build_router(arena.store().clone(), authority, Some(arena))
+}
+
+fn build_router(
+    store: Arc<MemoryStore>,
+    authority: Option<ApprovalAuthority>,
+    arena: Option<Arc<sail_arena::ArenaSubsystem>>,
+) -> Router {
     Router::new()
+        .route("/learning", post(learning))
         .route("/read", post(read))
         .route("/change", post(change))
         .layer(axum::extract::DefaultBodyLimit::max(64000))
@@ -28,7 +45,11 @@ pub fn router(store: Arc<MemoryStore>, authority: Option<ApprovalAuthority>) -> 
                 response
             },
         ))
-        .with_state(Arc::new(MemoryState { store, authority }))
+        .with_state(Arc::new(MemoryState {
+            store,
+            authority,
+            arena,
+        }))
 }
 fn authorize(s: &MemoryState, h: &HeaderMap) -> Result<(), StatusCode> {
     let a = s
@@ -194,4 +215,32 @@ fn now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Learning {
+    session: String,
+    enabled: bool,
+}
+
+async fn learning(
+    State(s): State<Arc<MemoryState>>,
+    h: HeaderMap,
+    Json(request): Json<Learning>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    authorize(&s, &h)
+        .map_err(|code| (code, Json(json!({"error":"Owner authentication required"}))))?;
+    let arena = s.arena.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"Voice sessions unavailable"})),
+        )
+    })?;
+    arena
+        .set_session_learning(&request.session, request.enabled)
+        .map_err(error)?;
+    Ok(Json(
+        json!({"session":request.session,"enabled":request.enabled}),
+    ))
 }

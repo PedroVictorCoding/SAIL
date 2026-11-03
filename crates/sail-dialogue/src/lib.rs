@@ -140,7 +140,7 @@ impl Subsystem for DialogueSubsystem {
                 info!(
                     session_id = %session_id,
                     speaker = %speaker,
-                    content = %content,
+                    content_chars = content.chars().count(),
                     is_final = %is_final,
                     "SAIL Dialogue processing speech turn -> routing to Agents"
                 );

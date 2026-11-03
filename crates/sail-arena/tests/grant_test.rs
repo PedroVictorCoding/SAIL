@@ -15,6 +15,7 @@ fn grant(scopes: &[&str], max_sensitivity: MemorySensitivity) -> MemoryGrant {
 fn grants_bound_retrieval_by_scope_and_sensitivity_and_empty_sees_nothing() {
     let store = Arc::new(MemoryStore::open_in_memory().unwrap());
     let arena = ArenaSubsystem::with_store(store.clone());
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 1, "Remember: Boat name is Sail", "ok");
     store
         .knowledge()
@@ -40,4 +41,16 @@ fn grants_bound_retrieval_by_scope_and_sensitivity_and_empty_sees_nothing() {
     assert!(arena.knowledge_context("boat name", &empty, 1500).is_none());
     // A budget too small for one complete record yields no partial record.
     assert!(arena.knowledge_context("boat name", &visible, 8).is_none());
+}
+
+trait TestLearning {
+    fn ensure_test_learning(&self, session: &str);
+}
+impl TestLearning for sail_arena::ArenaSubsystem {
+    fn ensure_test_learning(&self, session: &str) {
+        if self.learning_epoch(session).is_none() {
+            self.begin_voice_session(session);
+            self.set_session_learning(session, true).unwrap();
+        }
+    }
 }

@@ -20,7 +20,6 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
-use sail_common::diagnostics::log_json;
 use sail_common::{
     bus::EventBus,
     error::{Result, SailError},
@@ -72,8 +71,8 @@ pub async fn run_dialogue_server_with_services(
     };
     let services = services.with_inference(inference.clone());
     let (owner_authority, active_token) = resolve_or_generate_owner_token();
-    let memory_routes = crate::memory_http::router(
-        arena.store().clone(),
+    let memory_routes = crate::memory_http::router_with_arena(
+        arena.clone(),
         active_token
             .as_deref()
             .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok()),
@@ -339,6 +338,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
         frame_samples = 512,
         "Voice client connected; creating isolated session"
     );
+    state.arena.begin_voice_session(&session);
     let mut pipe = RealtimeVoicePipeline::with_services(state.services.clone(), session.clone());
     let warm_tts = pipe.tts.clone();
     let _warmup=AbortTask(tokio::spawn(async move {
@@ -353,7 +353,9 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     let mut client_tools = ClientTools::default();
     let mut pending = Vec::<i16>::new();
     let mut speech_frames = 0usize;
-    let hello = json!({"type":"session","session_id":session,"sample_rate":16000,"frame_samples":512,"control":pipe.control_state()});
+    let mut capture_learning_epoch = None;
+    let mut previous_learning_epoch = None;
+    let hello = json!({"type":"session","session_id":session,"sample_rate":16000,"frame_samples":512,"learning":false,"control":pipe.control_state()});
     if sender.send(Message::Text(hello.to_string())).await.is_err() {
         return;
     }
@@ -531,6 +533,15 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                     Message::Binary(bytes)=>{
                         if bytes.len()>8192 || bytes.len()%2!=0 {emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"PCM packets must be even-sized, at most 8192 bytes"})).await;continue;}
                         if pipe.control_state().is_muted{continue;}
+                        let frame_learning_epoch = state.arena.learning_epoch(&session);
+                        if frame_learning_epoch != previous_learning_epoch {
+                            // Discard buffered audio (including VAD pre-roll) across consent
+                            // boundaries. Never relabel earlier capture with a later grant.
+                            partial.take(); pending.clear(); pipe.reset_capture();
+                            state.services.reset_vad(&session).await;
+                            capture_learning_epoch = None;
+                            previous_learning_epoch = frame_learning_epoch;
+                        }
                         pending.extend(bytes.as_chunks::<2>().0.iter().map(|c|i16::from_le_bytes([c[0],c[1]])));
                         while pending.len()>=512 {
                             let frame:Vec<_>=pending.drain(..512).collect();
@@ -538,6 +549,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                             match pipe.ingest_frame(&frame).await {
                                 Ok((audio,vad,orb))=>{
                                     if vad.event==VadEvent::SpeechStart {
+                                        capture_learning_epoch = frame_learning_epoch;
                                         info!(confidence=vad.confidence,inference_us=vad.inference_us,"Speech onset detected; cancelling previous response for barge-in");
                                         turn.take();partial.take();epoch.fetch_add(1,Ordering::SeqCst);speech_frames=0;
                                         emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"interruption","state":"listening"})).await;
@@ -565,7 +577,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                         info!(turn_id=current,samples=audio.len(),audio_ms=audio.len()/16,"Speech boundary finalized; scheduling STT and assistant turn");
                                         partial.take();turn.take();pipe.advance_turn();
                                         emit(&tx,current,json!({"type":"turn_committed","cause":"silence","audio_ms":audio.len()/16})).await;
-                                        turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio),epoch.clone()));
+                                        turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone()));
                                     }
                                 },
                                 Err(error)=>{error!(%error,"PCM/VAD processing failed");pending.clear();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":error.to_string()})).await;break;}
@@ -575,12 +587,12 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                     Message::Text(text)=>{
                         let value:Value=match serde_json::from_str(&text){Ok(v)=>v,Err(_)=>{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Invalid JSON command"})).await;continue;}};
                         let action=value["action"].as_str().unwrap_or_default();
-                        debug!(action,command=%log_json(&value,2048),epoch=epoch.load(Ordering::SeqCst),"Received voice client command");
+                        debug!(action,epoch=epoch.load(Ordering::SeqCst),"Received voice client command");
                         match action {
                             "interrupt"|"reset"=>{
                                 client_tools.0.abort_all();
                                 turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.interrupt();
-                                if action=="reset"{state.arena.clear_voice_session(&session);pipe.reset();}
+                                if action=="reset"{state.arena.clear_voice_session(&session);state.arena.begin_voice_session(&session);pipe.reset();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"learning_state","enabled":false})).await;}
                                 state.services.reset_vad(&session).await;
                                 emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"interruption","state":"interrupted"})).await;
                             },
@@ -599,14 +611,14 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 if let Some(language)=language{pipe.tts.set_voice(voice,language);}else{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Unsupported voice"})).await;}
                             },
                             "end_turn"=>{
-                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio),epoch.clone()));}
+                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone()));}
                             },
                             "text"=>{
                                 let prompt=value["text"].as_str().unwrap_or_default();
                                 if prompt.trim().is_empty()||prompt.len()>16000{continue;}
                                 let vision=match parse_vision(&value["vision"]) {Ok(v)=>v,Err(e)=>{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":e.to_string()})).await;continue;}};
                                 turn.take();partial.take();pipe.reset_capture();pipe.advance_turn();pending.clear();let current=epoch.fetch_add(1,Ordering::SeqCst)+1;
-                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision),epoch.clone()));
+                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision,state.arena.learning_epoch(&session)),epoch.clone()));
                             },
                             "kernel_tool"=>{
                                 let name=value["tool"].as_str().unwrap_or_default();
@@ -875,7 +887,7 @@ fn execute_tool_for(
         tool = name,
         "Authorizing local kernel operation via Guardian"
     );
-    debug!(tool=name,arguments=%log_json(&params,2048),"Kernel tool arguments");
+    debug!(tool = name, "Kernel tool arguments");
     let mut result = match sail_agents::authorize_voice_operation(name) {
         Ok(tool) => {
             let call = KernelToolCall {
@@ -899,15 +911,15 @@ fn execute_tool_for(
     if result.success {
         info!(tool=%result.tool,elapsed_ms=start.elapsed().as_millis(),"Local tool completed");
     } else {
-        warn!(tool=%result.tool,elapsed_ms=start.elapsed().as_millis(),result=%log_json(&result.output,4096),"Local tool failed or was denied");
+        warn!(tool=%result.tool,elapsed_ms=start.elapsed().as_millis(),"Local tool failed or was denied");
     }
-    debug!(tool=%result.tool,result=%log_json(&result.output,4096),"Local kernel observation returned to coordinator");
+    debug!(tool=%result.tool,"Local kernel observation returned to coordinator");
     result
 }
 
 enum TurnInput {
-    Audio(Vec<i16>),
-    Text(String, Option<VisionFrameInput>),
+    Audio(Vec<i16>, Option<u64>),
+    Text(String, Option<VisionFrameInput>, Option<u64>),
 }
 #[allow(clippy::too_many_arguments)]
 fn start_turn(
@@ -964,8 +976,12 @@ async fn run_turn(
     epoch: Arc<AtomicU64>,
 ) -> Result<()> {
     let start = Instant::now();
+    let learning_epoch = match &input {
+        TurnInput::Audio(_, consent) => *consent,
+        TurnInput::Text(_, _, consent) => *consent,
+    };
     let (prompt, vision) = match input {
-        TurnInput::Audio(audio) => {
+        TurnInput::Audio(audio, _) => {
             let (text, tokens) = stt.transcribe(&audio, false).await?;
             emit(
                 &tx,
@@ -975,7 +991,7 @@ async fn run_turn(
             .await;
             (text, None)
         }
-        TurnInput::Text(text, vision) => (text, vision),
+        TurnInput::Text(text, vision, _) => (text, vision),
     };
     if prompt.trim().is_empty() {
         emit(&tx, current, json!({"type":"turn_finished","state":"idle"})).await;
@@ -1001,7 +1017,6 @@ async fn run_turn(
         has_image = vision.is_some(),
         "User turn ready for reasoning"
     );
-    debug!(prompt=%prompt,"Final user transcript/text");
     let visual_frame = vision
         .as_ref()
         .map(crate::vlm::raw_vision_frame)
@@ -1013,7 +1028,6 @@ async fn run_turn(
         breadcrumbs = conversation.memory.breadcrumbs.len(),
         recalled = conversation.memory.recalled.len(),
         memory_chars = conversation.memory.chars(),
-        records=%log_json(&json!(memory_lines),4096),
         "Arena prepared compacted conversation context"
     );
     let root = std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into());
@@ -1130,6 +1144,7 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         Some(MemoryScope {
             arena: &state.arena,
             session: &session,
+            learning_epoch,
         }),
     )
     .await?;
@@ -1160,7 +1175,9 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         return Ok(());
     }
     // Arena archives the exchange and keeps only a bounded hot window verbatim.
-    state.arena.record_turn(&session, current, &prompt, &reply);
+    state
+        .arena
+        .record_turn_at_epoch(&session, current, &prompt, &reply, learning_epoch);
     for artifact in sail_canvas::voice_artifacts(&reply) {
         debug!(artifact_type=%artifact.artifact_type,content_chars=artifact.content.chars().count(),"Publishing Canvas artifact alongside the conversation");
         emit(
@@ -1184,7 +1201,7 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
     info!(
         elapsed_ms = start.elapsed().as_millis(),
         response_chars = reply.chars().count(),
-        "Voice turn complete; history stored and Canvas delivered"
+        "Voice turn complete; context updated and Canvas delivered"
     );
     emit(
         &tx,
@@ -1218,6 +1235,7 @@ pub struct GenerationStats {
 struct MemoryScope<'a> {
     arena: &'a sail_arena::ArenaSubsystem,
     session: &'a str,
+    learning_epoch: Option<u64>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1420,7 +1438,7 @@ async fn reason_turn(
                 let mut publish = true;
                 let result = match params {
                     Ok(params) => {
-                        debug!(round,tool=name,arguments=%log_json(&params,2048),"Model proposed tool arguments");
+                        debug!(round, tool = name, "Model proposed tool arguments");
                         if let Some(cached) = guard.cached(name, &params) {
                             publish = false;
                             warn!(
@@ -1567,13 +1585,16 @@ async fn reason_turn(
                 let content = serde_json::to_string(&result)?;
                 let content = match &memory {
                     // Recall output is already bounded; re-archiving it would loop.
-                    Some(scope) if name != "memory_recall" => scope.arena.offload_tool_result(
-                        scope.session,
-                        current,
-                        name,
-                        result.success,
-                        &content,
-                    ),
+                    Some(scope) if name != "memory_recall" => {
+                        scope.arena.offload_tool_result_at_epoch(
+                            scope.session,
+                            current,
+                            name,
+                            result.success,
+                            &content,
+                            scope.learning_epoch,
+                        )
+                    }
                     _ => content,
                 };
                 messages.push(

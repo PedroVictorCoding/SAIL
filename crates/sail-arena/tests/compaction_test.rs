@@ -34,6 +34,7 @@ fn long_conversation_stays_small_and_recalls_old_facts() {
             format!("Question {i} about the weekly plan and the garden budget?")
         };
         let answer = reply(i);
+        arena.ensure_test_learning("s1");
         arena.record_turn("s1", i as u64, &user, &answer);
         turns.push((user, answer));
     }
@@ -80,9 +81,11 @@ fn large_tool_results_are_offloaded_and_recallable_only_in_session() {
         diff.push_str(&format!("+ line {i} of an unrelated change\n"));
     }
     let content = json!({"tool":"forge_status","success":true,"output":{"diff":diff}}).to_string();
+    arena.ensure_test_learning("s1");
     let small = arena.offload_tool_result("s1", 3, "local_time", true, "{\"utc\":\"now\"}");
     assert_eq!(small, "{\"utc\":\"now\"}");
 
+    arena.ensure_test_learning("s1");
     let stub = arena.offload_tool_result("s1", 3, "forge_status", true, &content);
     assert!(
         stub.len() < arena.budget().tool_inline_chars + 600,
@@ -112,7 +115,9 @@ fn large_tool_results_are_offloaded_and_recallable_only_in_session() {
 #[test]
 fn reset_forgets_everything_but_disconnect_keeps_the_archive() {
     let arena = ArenaSubsystem::new();
+    arena.ensure_test_learning("keep");
     arena.record_turn("keep", 1, "The boat is called Andorinha", "Noted.");
+    arena.ensure_test_learning("wipe");
     arena.record_turn("wipe", 1, "The boat is called Andorinha", "Noted.");
 
     arena.release_session("keep");
@@ -140,8 +145,11 @@ fn hot_window_spills_oversized_turns_to_breadcrumbs() {
         ..ContextBudget::default()
     };
     let arena = ArenaSubsystem::new().with_budget(budget);
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 1, "short", "ok");
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 2, "long", &"x".repeat(900));
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 3, "again", &"y".repeat(900));
     let ctx = arena.conversation_context("s", "anything");
     assert_eq!(ctx.hot.len(), 1, "a single over-budget turn is still kept");
@@ -155,4 +163,16 @@ fn hot_window_spills_oversized_turns_to_breadcrumbs() {
         vec![2, 1]
     );
     assert_eq!(arena.last_user_prompt("s").as_deref(), Some("again"));
+}
+
+trait TestLearning {
+    fn ensure_test_learning(&self, session: &str);
+}
+impl TestLearning for sail_arena::ArenaSubsystem {
+    fn ensure_test_learning(&self, session: &str) {
+        if self.learning_epoch(session).is_none() {
+            self.begin_voice_session(session);
+            self.set_session_learning(session, true).unwrap();
+        }
+    }
 }
