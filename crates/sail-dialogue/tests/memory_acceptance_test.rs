@@ -42,7 +42,9 @@ fn conversation_becomes_scoped_correctable_knowledge_that_stays_deleted() {
     let (store, arena) = open(&db);
 
     // 1. An ordinary turn plus a statement SAIL should remember.
+    arena.ensure_test_learning("s1");
     arena.record_turn("s1", 1, "What's the weather like?", "I can't see outside.");
+    arena.ensure_test_learning("s1");
     arena.record_turn("s1", 2, "Remember: Thesis deadline is June 30", "Noted.");
     let report = consolidate(&store, "voice");
     assert_eq!(
@@ -107,6 +109,7 @@ fn conversation_becomes_scoped_correctable_knowledge_that_stays_deleted() {
     );
 
     // 4. Contradicting new evidence supersedes the old value.
+    arena.ensure_test_learning("s2");
     arena.record_turn(
         "s2",
         1,
@@ -151,4 +154,16 @@ fn conversation_becomes_scoped_correctable_knowledge_that_stays_deleted() {
     // Re-running consolidation after restart cannot resurrect it: its sources were released.
     assert!(consolidate(&store, "voice").claims.is_empty());
     assert!(owner_knowledge_context(&arena, "When is my thesis deadline?").is_none());
+}
+
+trait TestLearning {
+    fn ensure_test_learning(&self, session: &str);
+}
+impl TestLearning for sail_arena::ArenaSubsystem {
+    fn ensure_test_learning(&self, session: &str) {
+        if self.learning_epoch(session).is_none() {
+            self.begin_voice_session(session);
+            self.set_session_learning(session, true).unwrap();
+        }
+    }
 }

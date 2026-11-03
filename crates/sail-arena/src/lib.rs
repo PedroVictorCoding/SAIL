@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicU64, Ordering},
+};
 use tracing::{info, warn};
 
 use sail_common::{
@@ -36,6 +39,9 @@ pub struct HotTurn {
 
 #[derive(Debug, Default)]
 struct SessionLedger {
+    /// Consent is ephemeral and never restored on reconnect.
+    learning_epoch: u64,
+    learning: bool,
     /// Verbatim recent exchanges, oldest first.
     hot: VecDeque<HotTurn>,
     /// Archived turns that left the hot window, newest last.
@@ -54,6 +60,7 @@ pub struct ArenaSubsystem {
     store: Arc<MemoryStore>,
     budget: ContextBudget,
     sessions: RwLock<HashMap<String, SessionLedger>>,
+    consent_epoch: AtomicU64,
 }
 
 impl ArenaSubsystem {
@@ -69,6 +76,7 @@ impl ArenaSubsystem {
             store,
             budget: ContextBudget::from_env(),
             sessions: RwLock::new(HashMap::new()),
+            consent_epoch: AtomicU64::new(1),
         }
     }
 
@@ -178,7 +186,6 @@ impl Subsystem for ArenaSubsystem {
             info!(
                 record_id = %record_id,
                 collection = %collection,
-                summary = %summary,
                 "SAIL Arena stored memory record"
             );
         }
@@ -224,6 +231,50 @@ impl ArenaSubsystem {
 }
 
 impl ArenaSubsystem {
+    /// Register a connection with learning disabled. Reconnection always requires consent.
+    pub fn begin_voice_session(&self, session: &str) {
+        if let Ok(mut sessions) = self.sessions.write() {
+            sessions.insert(session.to_string(), SessionLedger::default());
+        }
+    }
+
+    pub fn learning_epoch(&self, session: &str) -> Option<u64> {
+        let sessions = self.sessions.read().ok()?;
+        let ledger = sessions.get(session)?;
+        ledger.learning.then_some(ledger.learning_epoch)
+    }
+
+    /// Called only by the authenticated owner HTTP boundary. Serializes revocation with
+    /// archival. Clearing pending sources also invalidates in-flight consolidation proposals.
+    pub fn set_session_learning(
+        &self,
+        session: &str,
+        enabled: bool,
+    ) -> knowledge::KnowledgeResult<()> {
+        let mut sessions = self
+            .sessions
+            .write()
+            .map_err(|_| knowledge::KnowledgeError::Invalid("session lock unavailable".into()))?;
+        let ledger = sessions
+            .get_mut(session)
+            .ok_or_else(|| knowledge::KnowledgeError::Invalid("session is disconnected".into()))?;
+        if !enabled {
+            // Revoke first, even if cleanup fails. An error must never leave learning enabled.
+            ledger.learning = false;
+            ledger.learning_epoch = self.consent_epoch.fetch_add(1, Ordering::SeqCst);
+            self.store.knowledge().write(knowledge::Actor::User, |tx| {
+                tx.discard_session_sources(VOICE_SCOPE, session)?;
+                Ok(())
+            })?;
+            ledger.crumbs.clear();
+        } else if !ledger.learning {
+            ledger.learning_epoch = self.consent_epoch.fetch_add(1, Ordering::SeqCst);
+            ledger.learning = true;
+        }
+        info!(session, enabled, "Conversation learning consent updated");
+        Ok(())
+    }
+
     /// Archive a finished exchange and move it into the session's hot window. Exchanges that
     /// no longer fit the hot budget become breadcrumbs. Archival failures are logged and the
     /// turn still enters the hot window, so the conversation keeps working.
@@ -234,25 +285,43 @@ impl ArenaSubsystem {
         user: &str,
         assistant: &str,
     ) -> Option<i64> {
+        self.record_turn_at_epoch(session, turn, user, assistant, self.learning_epoch(session))
+    }
+
+    /// A turn may persist only if consent existed at its start and still has the same epoch.
+    pub fn record_turn_at_epoch(
+        &self,
+        session: &str,
+        turn: u64,
+        user: &str,
+        assistant: &str,
+        epoch: Option<u64>,
+    ) -> Option<i64> {
+        let Ok(mut sessions) = self.sessions.write() else {
+            return None;
+        };
+        let ledger = sessions.get_mut(session)?;
+        let may_store = ledger.learning && epoch == Some(ledger.learning_epoch);
         let gist = compaction::turn_gist(user, assistant, self.budget.gist_chars);
         let body = format!("User: {user}\nSAIL: {assistant}");
-        let id = self
-            .store
-            .put(&NewRecord {
-                scope: VOICE_SCOPE,
-                session,
-                kind: "turn",
-                turn: Some(turn),
-                gist: &gist,
-                body: &body,
-                provenance: None,
+        let id = may_store
+            .then(|| {
+                self.store
+                    .put(&NewRecord {
+                        scope: VOICE_SCOPE,
+                        session,
+                        kind: "turn",
+                        turn: Some(turn),
+                        gist: &gist,
+                        body: &body,
+                        provenance: None,
+                    })
+                    .map_err(
+                        |error| warn!(%error, session, turn, "SAIL Arena could not archive turn"),
+                    )
+                    .ok()
             })
-            .map_err(|error| warn!(%error, session, turn, "SAIL Arena could not archive turn"))
-            .ok();
-        let Ok(mut sessions) = self.sessions.write() else {
-            return id;
-        };
-        let ledger = sessions.entry(session.to_string()).or_default();
+            .flatten();
         ledger.hot.push_back(HotTurn {
             id,
             turn,
@@ -370,8 +439,36 @@ impl ArenaSubsystem {
         success: bool,
         content: &str,
     ) -> String {
+        self.offload_tool_result_at_epoch(
+            session,
+            turn,
+            tool,
+            success,
+            content,
+            self.learning_epoch(session),
+        )
+    }
+
+    pub fn offload_tool_result_at_epoch(
+        &self,
+        session: &str,
+        turn: u64,
+        tool: &str,
+        success: bool,
+        content: &str,
+        epoch: Option<u64>,
+    ) -> String {
         if content.chars().count() <= self.budget.tool_inline_chars {
             return content.to_string();
+        }
+        let Ok(sessions) = self.sessions.read() else {
+            return compaction::tool_truncated(tool, success, content, &self.budget);
+        };
+        if !sessions
+            .get(session)
+            .is_some_and(|ledger| ledger.learning && epoch == Some(ledger.learning_epoch))
+        {
+            return compaction::tool_truncated(tool, success, content, &self.budget);
         }
         let gist = compaction::tool_gist(tool, success, content, self.budget.gist_chars);
         match self.store.put(&NewRecord {
@@ -476,9 +573,16 @@ impl ArenaSubsystem {
 
     /// Forget a conversation completely: in-RAM context, archived records and index entries.
     pub fn clear_voice_session(&self, session: &str) {
-        self.release_session(session);
-        if let Err(error) = self.store.delete_session(VOICE_SCOPE, session) {
-            warn!(%error, session, "SAIL Arena could not delete archived session records");
+        // Also works for archived sessions no longer present in the live ledger.
+        // Hold the session lock across cleanup so an in-flight turn cannot reinsert text.
+        let Ok(mut sessions) = self.sessions.write() else {
+            return;
+        };
+        sessions.remove(session);
+        if let Err(error) = self.store.knowledge().write(knowledge::Actor::User, |tx| {
+            tx.discard_session_sources(VOICE_SCOPE, session)
+        }) {
+            warn!(%error, session, "SAIL Arena could not discard pending session sources");
         }
     }
 
@@ -491,6 +595,12 @@ impl ArenaSubsystem {
 
     /// Archive free-form text for a session; it is reachable by recall and as a breadcrumb.
     pub fn remember_voice_turn(&self, session: &str, turn: u64, text: String) {
+        let Ok(mut sessions) = self.sessions.write() else {
+            return;
+        };
+        if !sessions.get(session).is_some_and(|l| l.learning) {
+            return;
+        }
         let gist = compaction::clip(&text, self.budget.gist_chars);
         let stored = self.store.put(&NewRecord {
             scope: VOICE_SCOPE,
@@ -503,12 +613,10 @@ impl ArenaSubsystem {
         });
         match stored {
             Ok(id) => {
-                if let Ok(mut sessions) = self.sessions.write() {
-                    let ledger = sessions.entry(session.to_string()).or_default();
-                    ledger.crumbs.push_back(Breadcrumb { id, turn, gist });
-                    while ledger.crumbs.len() > MAX_LEDGER_TURNS {
-                        ledger.crumbs.pop_front();
-                    }
+                let ledger = sessions.entry(session.to_string()).or_default();
+                ledger.crumbs.push_back(Breadcrumb { id, turn, gist });
+                while ledger.crumbs.len() > MAX_LEDGER_TURNS {
+                    ledger.crumbs.pop_front();
                 }
             }
             Err(error) => warn!(%error, session, "SAIL Arena could not archive text"),

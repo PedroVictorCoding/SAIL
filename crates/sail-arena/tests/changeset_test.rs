@@ -73,8 +73,11 @@ fn apply(
 #[test]
 fn grounded_proposal_commits_an_inferred_claim_and_releases_its_turn() {
     let (store, arena) = arena();
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 1, "Remember: Boat is blue", "ok");
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 2, "My sister Ana lives in Porto now.", "Nice!");
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 3, "What time is it?", "Noon.");
     deterministic_pass(&store, now());
 
@@ -137,6 +140,7 @@ fn grounded_proposal_commits_an_inferred_claim_and_releases_its_turn() {
 #[test]
 fn ungrounded_or_assistant_sourced_proposals_commit_nothing() {
     let (store, arena) = arena();
+    arena.ensure_test_learning("s");
     arena.record_turn(
         "s",
         1,
@@ -214,6 +218,7 @@ fn ungrounded_or_assistant_sourced_proposals_commit_nothing() {
 #[test]
 fn proposals_can_correct_existing_knowledge_but_not_resurrect_deleted_knowledge() {
     let (store, arena) = arena();
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 1, "Remember: Thesis deadline is June 30", "ok");
     deterministic_pass(&store, now());
     let old = store
@@ -226,6 +231,8 @@ fn proposals_can_correct_existing_knowledge_but_not_resurrect_deleted_knowledge(
         .claims_about(old, &Access::owner(), false)
         .unwrap()[0]
         .id;
+
+    arena.ensure_test_learning("s");
 
     arena.record_turn(
         "s",
@@ -265,6 +272,7 @@ fn proposals_can_correct_existing_knowledge_but_not_resurrect_deleted_knowledge(
             tx.delete_claim(report.claims[0], "owner forgot it")
         })
         .unwrap();
+    arena.ensure_test_learning("s");
     arena.record_turn(
         "s",
         3,
@@ -295,7 +303,9 @@ fn proposals_can_correct_existing_knowledge_but_not_resurrect_deleted_knowledge(
 #[test]
 fn a_deletion_during_proposal_invalidates_it_and_the_turn_is_offered_again() {
     let (store, arena) = arena();
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 1, "Remember: Boat is blue", "ok");
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 2, "My sister Ana lives in Porto now.", "Nice!");
     deterministic_pass(&store, now());
     let turns = offered(&store);
@@ -338,6 +348,7 @@ fn a_deletion_during_proposal_invalidates_it_and_the_turn_is_offered_again() {
 #[test]
 fn proposals_need_private_access_to_the_source_scope() {
     let (store, arena) = arena();
+    arena.ensure_test_learning("s");
     arena.record_turn("s", 1, "My sister Ana lives in Porto now.", "Nice!");
     deterministic_pass(&store, now());
     let narrow = Access::scoped(&["life"], Sensitivity::Sensitive);
@@ -363,4 +374,16 @@ fn proposals_need_private_access_to_the_source_scope() {
             )
             .is_err()
     );
+}
+
+trait TestLearning {
+    fn ensure_test_learning(&self, session: &str);
+}
+impl TestLearning for sail_arena::ArenaSubsystem {
+    fn ensure_test_learning(&self, session: &str) {
+        if self.learning_epoch(session).is_none() {
+            self.begin_voice_session(session);
+            self.set_session_learning(session, true).unwrap();
+        }
+    }
 }

@@ -13,6 +13,7 @@
   <header class="dashboard-header">
     <a class="brand" href="#home" aria-label="SAIL Home"><span class="brand-orb" aria-hidden="true"></span><span><strong>SAIL</strong><small>LOCAL ASSISTANT</small></span></a>
     <div class="top-actions">
+      <span class="privacy-indicator" id="learningIndicator" role="status" hidden>Learning enabled</span>
       <span class="privacy-indicator" id="micLiveIndicator" hidden><i></i><span>Mic on</span></span>
       <span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span>
       <button class="icon-button mobile-spaces" id="spacesTop" type="button" aria-label="Open Spaces"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#spaces"></use></svg></button>
@@ -516,6 +517,17 @@
           </div>
         </div>
         <p class="sheet-note" id="turnDetectionNote">Waits 3 seconds of silence. Send turn submits immediately. A recording can hold up to 3 minutes.</p>
+
+        <div class="vscode-setting-item" data-search-terms="memory learn learning conversation privacy">
+          <div class="vscode-setting-info">
+            <label for="learningBtn" class="vscode-setting-name">Learn from this conversation</label>
+            <p class="vscode-setting-desc" id="learningDescription">Off on every connection. When enabled, voice and text turns and large tool results enter local memory processing. Pending transcripts await scheduled cleanup (30-day default retention) and are not encrypted by SAIL. Turning off discards pending raw turns; saved knowledge can be corrected or forgotten in Arena. This does not authorize actions.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <button class="quiet-button" id="learningBtn" type="button" aria-pressed="false" aria-describedby="learningDescription" disabled>Enable learning</button>
+            <span id="learningStatus" role="status" aria-live="polite">Disconnected · learning off</span>
+          </div>
+        </div>
 
         <div class="vscode-setting-item" data-search-terms="microphone mic mute audio input record hardware">
           <div class="vscode-setting-info">

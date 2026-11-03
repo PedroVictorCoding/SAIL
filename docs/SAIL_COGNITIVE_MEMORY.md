@@ -322,3 +322,62 @@ Tests:
   - No model call while busy.
   - Retry after a model failure.
   - Commit, and no re-proposal of unusable replies.
+
+## Conversation learning consent (November 2026)
+
+The next accompaniment slice is an explicit, connection-scoped learning choice in the
+existing Dialogue interface. It reuses Arena extraction/reconciliation, Guardian owner
+bearer authority, Flow maintenance, and the existing evidence/correct/forget views.
+It adds no model, process, database, navigation tab, or external dependency.
+
+Acceptance contract:
+
+- Connect: learning is off. Voice/text interaction still has the bounded in-RAM hot
+  window; turns and large tool bodies are not automatically archived.
+- In Settings → Voice, the authenticated owner enables **Learn from this conversation**.
+  The backend registers consent only for a live session. A header indicator reflects
+  the acknowledged state. Permission to use the microphone is independent; this grant
+  does not authorize proactive actions or recording other people.
+- Subsequent turns enter the existing local evidence buffer and maintenance pipeline.
+  Deterministic extraction works without a model. Natural-language proposals remain
+  opt-in through `SAIL_MEMORY_MODEL_PROPOSALS=1`; unavailable inference keeps sources
+  pending under the existing retention policy. No extraction-quality claim is made.
+- Consent has an epoch. Text dispatch and voice capture preserve their starting epoch;
+  archival of turns and tool bodies rechecks it under the session lock. PCM processing
+  discards capture/pre-roll when the epoch changes. An earlier turn cannot become
+  persistent after consent is enabled or re-enabled.
+- Disable: revoke consent before cleanup, atomically delete that session's pending
+  archive/FTS rows and advance the deletion generation. Previously leased proposals/jobs
+  cannot commit those sources. Already consolidated knowledge remains available for
+  explicit correction or forgetting in Arena. SQL deletion is not forensic erasure of
+  filesystem/WAL/backup bytes.
+- Reset/reconnect/restart: require new consent. Disconnect releases live context; sources
+  recorded while consent was valid may finish consolidation after disconnect. Consent
+  is never saved in localStorage or restored from disk. No retroactive migration of
+  historical archives is performed.
+- Failure: no owner authority denies changes; disconnected sessions refuse consent;
+  storage cleanup failure leaves learning revoked and reports an error. The browser
+  shows an unknown state on failed requests and its next action disables learning.
+- Logging: Dialogue command bodies, prompts, recalled records, tool arguments/results,
+  Arena bus summaries, and Mind speech-worker request/response bodies are removed from
+  these diagnostic paths. Existing logs are not rewritten.
+
+Verification: `cargo test -p sail-arena -p sail-dialogue -p sail-flow`; browser-control
+state tests: `node --test crates/sail-dialogue/tests/voice_learning_ui_test.cjs`.
+The consent tests exercise real SQLite source/FTS cleanup, leased-job invalidation,
+revocation/re-enable, and on-disk restart. The owner endpoint test uses a real HTTP
+listener. The existing Dialogue memory acceptance sequence explicitly opts in and
+continues to verify consolidation, corrections, scoped recall and deletion after restart.
+These tests do not substitute for live microphone/model quality or Web/Android testing.
+
+### Remaining migration toward ambient accompaniment
+
+The existing SQLite evidence buffer is compressed, **not encrypted by SAIL**. The UI
+states this before opt-in. Raw sources not released by consolidation are eligible for
+cleanup after `SAIL_MEMORY_RETENTION_DAYS` (30 days by default); maintenance currently
+runs only when foreground inference/coding permits. Application-level encrypted,
+short-lived evidence and cleanup independent of inference admission remain prerequisites
+for the broader always-on ambient collection described by master vision §4.2. Learning
+off is the default; this change does not enable ambient/background microphone capture,
+speaker attribution, Sense ingestion, Life planning, Discovery suggestions, or model
+weight training. It establishes the consent boundary for the existing interactive path.

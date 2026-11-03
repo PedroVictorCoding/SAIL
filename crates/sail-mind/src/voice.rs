@@ -1,6 +1,5 @@
 //! Local speech model access. Workers are persistent, bounded and isolated by engine.
 use base64::{Engine, engine::general_purpose::STANDARD};
-use sail_common::diagnostics::log_json;
 use sail_common::error::{Result, SailError};
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -40,9 +39,9 @@ impl WorkerClient {
         let span = tracing::Span::current();
         let queued = Instant::now();
         if self.mode == "vad" {
-            trace!(engine=self.mode,request=%log_json(&request,1024),"Queued VAD worker request");
+            trace!(engine = self.mode, "Queued VAD worker request");
         } else {
-            debug!(engine=self.mode,request=%log_json(&request,2048),"Queued speech worker request");
+            debug!(engine = self.mode, "Queued speech worker request");
         }
         // The task drains the response even when its caller is cancelled, preserving framing.
         tokio::spawn(async move {
@@ -115,8 +114,8 @@ impl WorkerClient {
             let result = tokio::time::timeout(Duration::from_secs(120), operation).await;
             match result {
                 Ok(Ok(value)) => {
-                    if this.mode=="vad"{trace!(engine=this.mode,elapsed_us=started.elapsed().as_micros(),result=%log_json(&value,1024),"VAD worker response received");}
-                    else{debug!(engine=this.mode,elapsed_ms=started.elapsed().as_millis(),result=%log_json(&value,4096),"Speech worker response received");}
+                    if this.mode=="vad"{trace!(engine=this.mode,elapsed_us=started.elapsed().as_micros(),"VAD worker response received");}
+                    else{debug!(engine=this.mode,elapsed_ms=started.elapsed().as_millis(),"Speech worker response received");}
                     Ok(value)
                 },
                 error => {

@@ -174,7 +174,9 @@ fn kernel_tools_validate_real_pixels_and_reject_workspace_escape() {
 #[test]
 fn arena_context_never_crosses_sessions() {
     let arena = sail_arena::ArenaSubsystem::new();
+    arena.ensure_test_learning("alice");
     arena.remember_voice_turn("alice", 1, "Alice likes bicycles".into());
+    arena.ensure_test_learning("bob");
     arena.remember_voice_turn("bob", 1, "Bob likes bicycles".into());
     let context = arena.retrieve_voice_context("alice", "bicycles", 3);
     assert_eq!(context, vec!["Alice likes bicycles"]);
@@ -194,4 +196,16 @@ fn plain_dialogue_never_creates_canvas_artifacts() {
         "I have checked the system status. Everything is running smoothly and memory is within limits.",
     );
     assert!(artifacts.is_empty());
+}
+
+trait TestLearning {
+    fn ensure_test_learning(&self, session: &str);
+}
+impl TestLearning for sail_arena::ArenaSubsystem {
+    fn ensure_test_learning(&self, session: &str) {
+        if self.learning_epoch(session).is_none() {
+            self.begin_voice_session(session);
+            self.set_session_learning(session, true).unwrap();
+        }
+    }
 }
