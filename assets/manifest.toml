@@ -22,5 +22,6 @@ license = "MIT OR Apache-2.0"
 dark = true
 light = false
 fallback = "Reduced-motion static orb in the same Canvas2D renderer"
-# This source also contains the unified Forge and authenticated approval UI.
+# Orb renderer plus the voice/WebSocket core. Forge UI lives in forge.js and owner approvals in
+# approvals.js so this budget tracks the orb, not unrelated panels.
 max_bytes = 60000

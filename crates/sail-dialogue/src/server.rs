@@ -109,6 +109,24 @@ pub async fn run_dialogue_server_with_services(
             }),
         )
         .route(
+            "/forge.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/forge.js"),
+                )
+            }),
+        )
+        .route(
+            "/approvals.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/approvals.js"),
+                )
+            }),
+        )
+        .route(
             "/app.css",
             get(|| async {
                 (
