@@ -91,6 +91,34 @@ impl ToolRegistry {
         Ok(())
     }
     /// Lexical fast path, no model call. Only available, registered adapters appear.
+    /// The registered descriptor of `id`.
+    pub fn descriptor(&self, id: &str) -> Option<ToolDescriptor> {
+        self.entries
+            .read()
+            .unwrap()
+            .get(id)
+            .map(|entry| entry.descriptor.clone())
+    }
+    /// Every registered descriptor, by id.
+    pub fn descriptors(&self) -> Vec<ToolDescriptor> {
+        self.entries
+            .read()
+            .unwrap()
+            .values()
+            .map(|entry| entry.descriptor.clone())
+            .collect()
+    }
+    /// Check `input` against the tool's input schema, exactly as execution will.
+    pub fn validate_input(&self, id: &str, input: &Value) -> Result<(), String> {
+        let schema = self
+            .entries
+            .read()
+            .unwrap()
+            .get(id)
+            .map(|entry| entry.descriptor.input_schema.clone())
+            .ok_or_else(|| format!("unknown tool {id}"))?;
+        validate(&schema, input)
+    }
     pub fn select(&self, query: &str, max_tools: usize, max_bytes: usize) -> Vec<ToolDescriptor> {
         let words: Vec<_> = query
             .split_whitespace()
