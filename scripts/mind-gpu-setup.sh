@@ -51,8 +51,7 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 run() { if [[ $DRY_RUN == 1 ]]; then printf 'would run:'; printf ' %q' "$@"; printf '\n'; else "$@"; fi; }
 
 if [[ ${#MODELS[@]} -eq 0 ]]; then
-  for m in "$RUNTIME/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf" \
-           "$RUNTIME/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"; do
+  for m in "$RUNTIME/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"; do
     [[ -f $m ]] && MODELS+=("$m")
   done
 fi

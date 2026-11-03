@@ -17,3 +17,7 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+
+[dev-dependencies]
+# Paused-clock tests of voice_idle.
+tokio = { workspace = true, features = ["test-util"] }

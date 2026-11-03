@@ -100,27 +100,7 @@ impl Default for LocalModelConfig {
                 "gemma4".into(),
                 "gemma-4".into(),
             ],
-            model_path: std::env::var("SAIL_MODEL_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| {
-                    let candidates = [
-                        PathBuf::from("models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
-                        PathBuf::from("/home/main/SAIL/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
-                        PathBuf::from("/srv/sail/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
-                        PathBuf::from("models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
-                        PathBuf::from(
-                            "/home/main/SAIL/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
-                        ),
-                        PathBuf::from("/srv/sail/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
-                        PathBuf::from("models/gemma4-v2-Q4_K_M.gguf"),
-                    ];
-                    for cand in candidates {
-                        if cand.is_file() {
-                            return cand;
-                        }
-                    }
-                    PathBuf::from("models/Qwen3.6-35B-A3B-Q4_K_M.gguf")
-                }),
+            model_path: sail_common::models::primary_model_path(),
             server_binary: std::env::var("SAIL_LLAMA_SERVER")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {

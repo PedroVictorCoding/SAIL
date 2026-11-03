@@ -265,3 +265,42 @@ async fn raw_inference_wrapper_is_not_polled_when_denied_and_drops_on_voice_pree
     );
     assert_eq!(scheduler.status().admitted_inference, 0);
 }
+
+#[tokio::test(start_paused = true)]
+async fn voice_idle_waits_for_the_turn_and_a_quiet_period() {
+    let (_, scheduler) = setup();
+    let quiet = std::time::Duration::from_secs(2);
+    let before = scheduler.voice_epoch();
+    let turn = scheduler.voice_turn();
+    assert!(scheduler.voice_active());
+    assert_ne!(scheduler.voice_epoch(), before, "a turn advances the epoch");
+
+    let waiter = {
+        let scheduler = scheduler.clone();
+        tokio::spawn(async move { scheduler.voice_idle(quiet).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    assert!(!waiter.is_finished(), "returned while voice was active");
+
+    drop(turn);
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert!(!waiter.is_finished(), "returned before the quiet period");
+    // A follow-up question within the quiet period restarts the wait.
+    let follow_up = scheduler.voice_turn();
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(!waiter.is_finished(), "returned during a follow-up turn");
+    drop(follow_up);
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(waiter.is_finished(), "still waiting after voice went quiet");
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_idle_returns_after_the_quiet_period_when_no_voice() {
+    let (_, scheduler) = setup();
+    let start = tokio::time::Instant::now();
+    scheduler
+        .voice_idle(std::time::Duration::from_millis(500))
+        .await;
+    assert!(start.elapsed() >= std::time::Duration::from_millis(500));
+    assert!(!scheduler.voice_active());
+}

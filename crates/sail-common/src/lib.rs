@@ -1,6 +1,7 @@
 pub mod bus;
 pub mod diagnostics;
 pub mod error;
+pub mod models;
 pub mod storage;
 pub mod traits;
 pub mod types;

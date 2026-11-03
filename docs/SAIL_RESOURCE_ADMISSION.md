@@ -13,10 +13,19 @@ and new background inference/build/browser claims are refused. Priority lasts ac
 capture, STT, model output, tool calls and TTS; capture-limit, mute, reset, disconnect,
 completion and cancellation release their guards. Already accepted speech requests
 retain priority while their worker drains the response, even if the caller disconnects.
-No partial Forge model response becomes a patch. Resource denial/preemption produces
-an unsuccessful `resource_blocked` solver outcome, preserving the workspace and the
-existing blocked-job projection. A retry is explicit; this slice does not schedule
-automatic resumption or replay tool effects.
+No partial Forge model response becomes a patch.
+
+**Voice pauses Forge; it does not fail it.** When voice preempts a Forge model turn or
+refuses it admission, the solver discards the partial reply (it never entered the
+conversation), shows a `paused` stage, waits in `ResourceScheduler::voice_idle` until no
+voice turn has run for a quiet period (`SAIL_FORGE_VOICE_QUIET_SECS`, default 5 s; a
+follow-up question restarts the wait), and runs the same turn again without spending
+one. A sandboxed build or test run that voice kills or refuses is run again the same
+way and is not recorded as a test result. Should a voice-preemption error still reach
+the nightly runner (for example from self-review), the attempt is not counted, its
+text never becomes model feedback, and the issue is retried after the pause. Operator
+cancellation still applies while paused. Denials for RAM, swap or CPU are unchanged:
+they produce an unsuccessful `resource_blocked` outcome that preserves the workspace.
 
 Before execution, the shared broker reads Linux `MemAvailable`, total RAM, swap
 used/total, and available logical CPUs. Unknown or inconsistent readings deny work.

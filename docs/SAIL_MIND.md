@@ -48,6 +48,20 @@ Route one text request to a local model, stream tokens, cancel it, report actual
 - [ ] Show user-visible success/error through the mapped existing UI and preserve user control.
 - [ ] Submit focused tests and a reviewable PR without automatic merge.
 
+## One resident model
+
+SAIL keeps **one** large general model loaded, Qwen3.6-35B-A3B (decided 2026-11-03).
+Voice, agents, memory and Forge all use it; Mind's scheduler orders their requests and
+live voice goes first. A second large model does not fit beside it in the host's RAM,
+and swapping to a separate coding model would take the main model away from voice
+while Forge runs. Forge therefore never selects a model of its own.
+
+`sail_common::models::primary_model_path()` is the single resolver used by Core, Mind,
+Forge and `run.sh`: `SAIL_MODEL_PATH` if set, else the primary model in `models/` or
+`$SAIL_RUNTIME/models`. It never falls back to another model; missing weights produce an
+error that names the file to install. A different model is a deliberate change of
+`SAIL_MODEL_PATH`, measured with Forge's eval before adoption.
+
 ## Host admission and voice priority
 
 Mind shares Core's process-wide resource broker with Forge and speech workers. Owned
@@ -58,7 +72,7 @@ status fields, verification and remaining browser/VRAM/eviction limitations.
 
 ## 7a. GPU offload for MoE models (#34)
 
-The host has an AMD RX 5500 with little VRAM. Both local models are mixture-of-experts with about 3B parameters active per token (Qwen3-Coder-30B-A3B, Qwen3.6-35B-A3B). Most of their weights are experts, and only a few run for each token. The useful split is therefore **every layer's attention and KV cache on the GPU, expert weights in system RAM**, not "the first N whole layers on the GPU". The latter fills VRAM with rarely used experts.
+The host has an AMD RX 5500 with little VRAM. The resident model, Qwen3.6-35B-A3B, is a mixture-of-experts with about 3B parameters active per token. Most of their weights are experts, and only a few run for each token. The useful split is therefore **every layer's attention and KV cache on the GPU, expert weights in system RAM**, not "the first N whole layers on the GPU". The latter fills VRAM with rarely used experts.
 
 | Setting | Meaning |
 |---|---|

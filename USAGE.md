@@ -146,7 +146,7 @@ The current workspace already has the speech environment and downloaded weights.
 
 - A Rust toolchain compatible with the workspace and Python 3.11 with virtual-environment support.
 - A compatible local `llama-server` binary.
-- The Gemma weights at `models/gemma4-v2-Q4_K_M.gguf`. The speech setup script does not download these main LLM weights.
+- The resident model's weights at `models/Qwen3.6-35B-A3B-Q4_K_M.gguf` (or `/srv/sail/models/`). The speech setup script does not download these main LLM weights.
 
 From the repository root, run:
 
