@@ -62,8 +62,139 @@ jobs:
       - name: Clippy (workspace, warnings denied)
         run: cargo clippy --workspace --all-targets --no-deps --locked -- -D warnings
 
+      # Forge runs tests with nextest and gates patches with cargo-mutants; its end-to-end
+      # tests for both need the real tools (SAIL_REQUIRE_VERIFICATION_TOOLS below).
+      - name: Install cargo-nextest and cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.151,cargo-mutants@27.1.0
+
       - name: Run workspace unit & integration tests
-        # --no-fail-fast: report every failing test binary instead of hiding later crates
-        # behind the first failure. The step still fails if any test fails.
-        run: cargo test --workspace --locked --no-fail-fast
+        env:
+          SAIL_REQUIRE_VERIFICATION_TOOLS: "1"
+        # Nextest runs each test in its own process and, with the `ci` profile, reports every
+        # failure instead of stopping at the first one (`.config/nextest.toml`). The step
+        # still fails if any test fails.
+        run: cargo nextest run --workspace --locked --profile ci
+
+      - name: Run doc tests
+        # Nextest does not run doc tests.
+        run: cargo test --workspace --locked --doc
+
+      - name: Upload JUnit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-report
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  supply-chain:
+    # Licenses, RustSec advisories, yanked crates and dependency sources (`deny.toml`).
+    name: Dependency licenses & advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: cargo deny check
+        run: cargo deny --locked check
+
+  mutation:
+    # Checks that the tests actually catch changes to the code this PR touches: cargo-mutants
+    # breaks each changed function in turn (for example, replaces its body with a default
+    # value) and expects at least one test to fail. A "missed" mutant means the new or changed
+    # code is not really tested, even though the suite passes.
+    #
+    # Advisory for now: not a required check. Make it required once its run time on typical
+    # PRs is known (see CONTRIBUTING.md).
+    name: Mutation testing (changed code)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Compute the PR diff
+        id: diff
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git diff "origin/${BASE_REF}...HEAD" -- '*.rs' > "$RUNNER_TEMP/pr.diff"
+          if [ -s "$RUNNER_TEMP/pr.diff" ]; then
+            echo "has_rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No Rust changes; nothing to mutate." >> "$GITHUB_STEP_SUMMARY"
+            echo "has_rust=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install system dependencies (Bubblewrap)
+        if: steps.diff.outputs.has_rust == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.diff.outputs.has_rust == 'true'
+        uses: dtolnay/rust-toolchain@1.97.0
+
+      - name: Cache Cargo registry and target
+        if: steps.diff.outputs.has_rust == 'true'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-mutants and cargo-nextest
+        if: steps.diff.outputs.has_rust == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0,cargo-nextest@0.9.151
+
+      - name: Mutate changed code
+        if: steps.diff.outputs.has_rust == 'true'
+        run: |
+          cargo mutants --in-diff "$RUNNER_TEMP/pr.diff" --test-tool nextest \
+            --no-shuffle --jobs 2 --timeout-multiplier 3 --output "$RUNNER_TEMP"
+
+      - name: Summarize surviving mutants
+        if: always() && steps.diff.outputs.has_rust == 'true'
+        run: |
+          out="$RUNNER_TEMP/mutants.out"
+          {
+            echo "### Mutation testing"
+            for kind in caught missed timeout unviable; do
+              n=$(wc -l < "$out/$kind.txt" 2>/dev/null || echo 0)
+              echo "- $kind: $n"
+            done
+            if [ -s "$out/missed.txt" ]; then
+              echo
+              echo "Missed mutants (no test failed when this code was broken):"
+              echo '```'
+              head -50 "$out/missed.txt"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload mutation report
+        if: always() && steps.diff.outputs.has_rust == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: ${{ runner.temp }}/mutants.out
+          if-no-files-found: ignore
+          retention-days: 14
 

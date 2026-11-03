@@ -88,6 +88,22 @@ If a gate or the self-review rejects the patch, the reason is appended to the is
 - The self-review uses the same local model as the solver.
 - A job interrupted by a daemon restart is resumed by checkpoint recovery, but it is only published if it completes during a later nightly run.
 
+### Test runner and mutation gate
+
+**Test runner.** When `cargo-nextest` is installed, the solver's `repo:test` step runs `cargo nextest run` instead of `cargo test` (`crates/sail-forge/src/test_report.rs`).
+- Nextest writes a JUnit report. Forge parses it and puts the failed tests at the top of the output the model sees: the test's name, then its panic location and message.
+- An unfiltered run also runs `cargo test --doc`, because nextest skips doc tests.
+- Forge passes its own nextest config (`target/sail-forge/nextest.toml`), so a repository's nextest settings do not change Forge's report.
+- `SAIL_FORGE_TEST_TOOL`: `auto` (default; nextest if installed), `nextest` (fail if missing) or `cargo`.
+
+**Mutation gate.** After the tests and diff gates pass, Forge runs `cargo mutants --in-diff` on the patch inside the sandbox (`crates/sail-forge/src/mutation.rs`). cargo-mutants breaks each function the patch touched and runs the tests again. A *missed* mutant means no test failed with that function broken.
+- `SAIL_FORGE_MUTATION_GATE`: `advisory` (default) records the result in the job's activity and never blocks. `required` blocks the patch on a missed mutant, and also when cargo-mutants is missing or its run cannot be trusted. The missed mutants become the retry feedback. `off` skips it.
+- `SAIL_FORGE_MUTATION_TIMEOUT_SECS`: default 1800 (accepted range 60–14400).
+- It mutates the private worktree in place to reuse the build. If the worktree differs from the patch afterwards, the result is inconclusive.
+- Move to `required` once nightly digests show its run time and missed-mutant rate are acceptable.
+
+Install both tools on the host for the account that runs Forge: `cargo install --locked cargo-nextest cargo-mutants`.
+
 ### Solver: edits, context and measurement
 
 **Edits.** The solver prefers Aider-style SEARCH/REPLACE blocks (`crates/sail-forge/src/edit.rs`): a path line, then `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE`.
