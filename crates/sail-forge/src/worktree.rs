@@ -632,37 +632,16 @@ impl IsolatedWorktree {
             )));
         }
 
-        // Clean PATH including ~/.cargo/bin and standard system paths
-        let clean_path = if let Ok(path) = std::env::var("PATH") {
-            if path.contains(".cargo/bin") {
-                path
-            } else {
-                format!(
-                    "{}:/home/main/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
-                    path
-                )
-            }
-        } else {
-            "/home/main/.cargo/bin:/usr/local/bin:/usr/bin:/bin".to_string()
-        };
-
-        let rustup_home = std::env::var("RUSTUP_HOME").ok().or_else(|| {
-            let p = PathBuf::from("/home/main/.rustup");
-            if p.exists() {
-                Some(p.to_string_lossy().to_string())
-            } else {
-                None
-            }
-        });
-
-        let cargo_home = std::env::var("CARGO_HOME").ok().or_else(|| {
-            let p = PathBuf::from("/home/main/.cargo");
-            if p.exists() {
-                Some(p.to_string_lossy().to_string())
-            } else {
-                None
-            }
-        });
+        let toolchain = SandboxToolchain::from_env();
+        let clean_path = toolchain.sandbox_path(std::env::var("PATH").ok().as_deref());
+        let rustup_home = toolchain
+            .rustup_home
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string());
+        let cargo_home = toolchain
+            .cargo_home
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string());
 
         let mut cmd = Command::new(&bwrap_bin);
         // Minimal confidential allowlisted filesystem:
@@ -698,10 +677,16 @@ impl IsolatedWorktree {
         cmd.arg("--tmpfs").arg("/tmp");
         cmd.arg("--tmpfs").arg("/home");
         cmd.arg("--tmpfs").arg("/home/main");
-        if let Some(ref cargo) = cargo_home {
-            let cargo_p = Path::new(cargo);
-            if cargo_p.exists() {
-                cmd.arg("--ro-bind").arg(cargo).arg(cargo);
+        // Only the parts of CARGO_HOME a build needs: binaries and the offline package
+        // cache. Never `credentials.toml` (registry tokens) or `config.toml` (which can
+        // hold tokens too): build scripts run in here, and anything they can read they can
+        // write into the patch.
+        if let Some(ref cargo) = toolchain.cargo_home {
+            for sub in SANDBOX_CARGO_HOME_ENTRIES {
+                let src = cargo.join(sub);
+                if src.exists() {
+                    cmd.arg("--ro-bind").arg(&src).arg(&src);
+                }
             }
         }
         if let Some(ref rustup) = rustup_home {
@@ -740,12 +725,21 @@ impl IsolatedWorktree {
         cmd.arg("--setenv").arg("CARGO_NET_OFFLINE").arg("true");
         cmd.arg("--setenv").arg("RUST_BACKTRACE").arg("1");
 
+        // The binary Guardian resolved (for example `$HOME/.cargo/bin/cargo`) may sit outside
+        // the directories mounted above; mount that one file read-only so it can run.
+        if sandboxed_cmd.binary_path.is_absolute() && sandboxed_cmd.binary_path.is_file() {
+            cmd.arg("--ro-bind")
+                .arg(&sandboxed_cmd.binary_path)
+                .arg(&sandboxed_cmd.binary_path);
+        }
+
         // Binary and arguments to execute
         cmd.arg(&sandboxed_cmd.binary_path);
         for a in &sandboxed_cmd.args {
             cmd.arg(a);
         }
 
+        cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -753,6 +747,12 @@ impl IsolatedWorktree {
         {
             use std::os::unix::process::CommandExt;
             cmd.process_group(0);
+            let limits = SandboxLimits::from_env().clamped_to_current();
+            // SAFETY: only async-signal-safe syscalls on stack data run between fork and
+            // exec. bwrap and everything it starts inherit these limits.
+            unsafe {
+                cmd.pre_exec(move || limits.apply());
+            }
         }
 
         let mut child = cmd.spawn()?;
@@ -968,6 +968,207 @@ impl Drop for IsolatedWorktree {
                 self.root_dir
             );
         }
+    }
+}
+
+/// `CARGO_HOME` entries mounted (read-only) into the sandbox.
+pub const SANDBOX_CARGO_HOME_ENTRIES: [&str; 3] = ["bin", "registry", "git"];
+
+/// Where the Rust toolchain lives on the host, as mounted into the sandbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxToolchain {
+    pub cargo_home: Option<PathBuf>,
+    pub rustup_home: Option<PathBuf>,
+}
+
+impl SandboxToolchain {
+    /// `CARGO_HOME`/`RUSTUP_HOME`, else `$HOME/.cargo` and `$HOME/.rustup`, else the
+    /// original `/home/main` defaults. Only existing absolute directories are used.
+    pub fn from_env() -> Self {
+        Self::resolve(
+            std::env::var_os("CARGO_HOME").map(PathBuf::from),
+            std::env::var_os("RUSTUP_HOME").map(PathBuf::from),
+            std::env::var_os("HOME").map(PathBuf::from),
+        )
+    }
+
+    fn resolve(cargo: Option<PathBuf>, rustup: Option<PathBuf>, home: Option<PathBuf>) -> Self {
+        let pick = |explicit: Option<PathBuf>, dot: &str| {
+            explicit
+                .into_iter()
+                .chain(home.as_ref().map(|h| h.join(dot)))
+                .chain(std::iter::once(Path::new("/home/main").join(dot)))
+                .find(|p| p.is_absolute() && p.is_dir())
+        };
+        Self {
+            cargo_home: pick(cargo, ".cargo"),
+            rustup_home: pick(rustup, ".rustup"),
+        }
+    }
+
+    /// PATH inside the sandbox: the host PATH plus the cargo bin directory and system dirs.
+    pub fn sandbox_path(&self, host_path: Option<&str>) -> String {
+        let mut parts: Vec<String> = host_path
+            .unwrap_or("")
+            .split(':')
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+            .collect();
+        if let Some(cargo) = &self.cargo_home {
+            let bin = cargo.join("bin").to_string_lossy().to_string();
+            if !parts.contains(&bin) {
+                parts.push(bin);
+            }
+        }
+        for sys in ["/usr/local/bin", "/usr/bin", "/bin"] {
+            if !parts.iter().any(|p| p == sys) {
+                parts.push(sys.to_string());
+            }
+        }
+        parts.join(":")
+    }
+}
+
+/// Resource limits applied to every sandboxed command (and inherited by its children).
+///
+/// Memory and process-count limits need cgroups, which this synchronous Bubblewrap path
+/// does not have; the dedicated runner service (`sail-runner`) applies those.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SandboxLimits {
+    /// Largest file a command may write (`RLIMIT_FSIZE`).
+    pub max_file_bytes: u64,
+    /// Open file descriptors (`RLIMIT_NOFILE`).
+    pub max_open_files: u64,
+}
+
+impl SandboxLimits {
+    pub const DEFAULT_MAX_FILE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+    pub const DEFAULT_MAX_OPEN_FILES: u64 = 16_384;
+
+    /// Defaults, overridden by `SAIL_FORGE_SANDBOX_MAX_FILE_BYTES` and
+    /// `SAIL_FORGE_SANDBOX_MAX_OPEN_FILES` when they parse as positive integers.
+    pub fn from_env() -> Self {
+        let read = |name: &str, default: u64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(default)
+        };
+        Self {
+            max_file_bytes: read(
+                "SAIL_FORGE_SANDBOX_MAX_FILE_BYTES",
+                Self::DEFAULT_MAX_FILE_BYTES,
+            ),
+            max_open_files: read(
+                "SAIL_FORGE_SANDBOX_MAX_OPEN_FILES",
+                Self::DEFAULT_MAX_OPEN_FILES,
+            ),
+        }
+    }
+
+    /// Never ask for more than the current hard limits: an unprivileged process cannot
+    /// raise them, and `setrlimit` would fail.
+    #[cfg(unix)]
+    pub fn clamped_to_current(self) -> Self {
+        let hard = |resource| {
+            let mut cur = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: getrlimit only writes into the provided struct.
+            if unsafe { libc::getrlimit(resource, &mut cur) } == 0 {
+                cur.rlim_max
+            } else {
+                libc::RLIM_INFINITY
+            }
+        };
+        Self {
+            max_file_bytes: self.max_file_bytes.min(hard(libc::RLIMIT_FSIZE)),
+            max_open_files: self.max_open_files.min(hard(libc::RLIMIT_NOFILE)),
+        }
+    }
+
+    /// Apply in the forked child before exec. Async-signal-safe.
+    #[cfg(unix)]
+    fn apply(self) -> std::io::Result<()> {
+        // SAFETY: plain syscalls on stack values.
+        unsafe {
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            for (resource, value) in [
+                (libc::RLIMIT_CORE, 0),
+                (libc::RLIMIT_FSIZE, self.max_file_bytes),
+                (libc::RLIMIT_NOFILE, self.max_open_files),
+            ] {
+                let bound = libc::rlimit {
+                    rlim_cur: value,
+                    rlim_max: value,
+                };
+                if libc::setrlimit(resource, &bound) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod sandbox_config_tests {
+    use super::*;
+
+    #[test]
+    fn toolchain_prefers_explicit_then_home() {
+        let tmp = std::env::temp_dir().join(format!("sail-tc-{}", uuid::Uuid::new_v4()));
+        let explicit = tmp.join("cargo");
+        let home = tmp.join("home");
+        fs::create_dir_all(&explicit).unwrap();
+        fs::create_dir_all(home.join(".cargo")).unwrap();
+        fs::create_dir_all(home.join(".rustup")).unwrap();
+
+        let tc = SandboxToolchain::resolve(Some(explicit.clone()), None, Some(home.clone()));
+        assert_eq!(tc.cargo_home.as_deref(), Some(explicit.as_path()));
+        assert_eq!(tc.rustup_home, Some(home.join(".rustup")));
+
+        // A missing or relative explicit directory falls through to $HOME.
+        let tc = SandboxToolchain::resolve(Some("rel".into()), None, Some(home.clone()));
+        assert_eq!(tc.cargo_home, Some(home.join(".cargo")));
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn sandbox_path_adds_cargo_bin_once() {
+        let tc = SandboxToolchain {
+            cargo_home: Some("/opt/cargo".into()),
+            rustup_home: None,
+        };
+        let p = tc.sandbox_path(Some("/opt/cargo/bin:/usr/bin"));
+        assert_eq!(p, "/opt/cargo/bin:/usr/bin:/usr/local/bin:/bin");
+        assert_eq!(
+            SandboxToolchain {
+                cargo_home: None,
+                rustup_home: None
+            }
+            .sandbox_path(None),
+            "/usr/local/bin:/usr/bin:/bin"
+        );
+    }
+
+    #[test]
+    fn limits_never_exceed_current_hard_limits() {
+        let l = SandboxLimits {
+            max_file_bytes: u64::MAX,
+            max_open_files: u64::MAX,
+        }
+        .clamped_to_current();
+        let mut cur = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut cur) };
+        assert_eq!(l.max_open_files, cur.rlim_max);
     }
 }
 

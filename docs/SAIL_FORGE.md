@@ -139,6 +139,23 @@ and removal before their ID can be reused. Linux `openat2` support is required;
 unsupported confinement fails closed. This allocation fix addresses part of #94;
 command-runner integration and remaining execution isolation are separate work.
 
+### Sandbox mounts, limits and adversarial tests (#94)
+
+Every command Forge runs in a worktree (`cargo test`, nextest, cargo-mutants) runs under Bubblewrap with no network and a private PID namespace. The worktree is the only writable host directory.
+
+**Toolchain mounts.** Only `bin/`, `registry/` and `git/` from `CARGO_HOME` are mounted, read-only. `credentials.toml` and `config.toml` are never mounted: build scripts run in the sandbox, and anything they can read they could copy into the patch. Before this change the whole `CARGO_HOME` was mounted. The toolchain location comes from `CARGO_HOME`/`RUSTUP_HOME`, then `$HOME/.cargo`/`$HOME/.rustup`, then the old `/home/main` defaults. The binary Guardian resolved is also mounted read-only, so the command runs even when it sits outside those directories.
+
+**Limits.** Each command gets `PR_SET_NO_NEW_PRIVS`, no core dumps, and:
+
+| Variable | Default | Limit |
+|---|---|---|
+| `SAIL_FORGE_SANDBOX_MAX_FILE_BYTES` | 8 GiB | Largest file a command may write (`RLIMIT_FSIZE`; the writer gets `SIGXFSZ`) |
+| `SAIL_FORGE_SANDBOX_MAX_OPEN_FILES` | 16384 | Open descriptors (`RLIMIT_NOFILE`) |
+
+Values above the current hard limit are lowered to it. Memory, CPU-share and process-count limits need cgroups. This synchronous path has none; the dedicated runner (`sail-runner`) does, and moving Forge onto it is still open in #94.
+
+**Verified by** `cargo test -p sail-forge --test sandbox_adversarial_test`. A crate's `build.rs` tries to read registry credentials, read and write the source repository and its `.git`, connect to a host loopback listener and to the internet, and keep processes running after the command ends or times out. Every attempt is denied, the source repository's file hashes are unchanged, and no background process survives. Run against the previous mount code, the same test shows both credential files readable.
+
 ### Durable external-review accounting (#96)
 
 Review dispatch reloads the JSON ledger under an exclusive Linux `flock` on a
