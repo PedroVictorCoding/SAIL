@@ -4,6 +4,8 @@ use crate::{
     local::{LocalGemmaBackend, emit},
     validation::{validate_limits, validate_request},
 };
+use sail_common::resources::{self, ResourceClaim, ResourceScheduler};
+use sail_protocol::resources::WorkPriority;
 use sail_protocol::*;
 use std::{
     collections::HashMap,
@@ -18,6 +20,7 @@ pub struct MindService {
     inner: Arc<Inner>,
 }
 struct Inner {
+    scheduler: Arc<ResourceScheduler>,
     backends: Vec<Arc<dyn InferenceBackend>>,
     limits: ResourceLimits,
     semaphore: Arc<Semaphore>,
@@ -81,6 +84,13 @@ impl MindService {
         backends: Vec<Arc<dyn InferenceBackend>>,
         limits: ResourceLimits,
     ) -> Result<Self> {
+        Self::with_scheduler(backends, limits, resources::global())
+    }
+    pub fn with_scheduler(
+        backends: Vec<Arc<dyn InferenceBackend>>,
+        limits: ResourceLimits,
+        scheduler: Arc<ResourceScheduler>,
+    ) -> Result<Self> {
         validate_limits(&limits)?;
         if backends.is_empty() {
             return Err(InferenceError::new(
@@ -103,6 +113,7 @@ impl MindService {
         }
         Ok(Self {
             inner: Arc::new(Inner {
+                scheduler,
                 backends,
                 lifecycle: CancellationToken::new(),
                 semaphore: Arc::new(Semaphore::new(limits.max_parallel)),
@@ -152,6 +163,7 @@ impl MindService {
         metrics.queued = state.jobs.len() - metrics.active;
         let hardware = models.iter().find_map(|m| m.hardware.clone());
         MindStatus {
+            resources: Some(self.inner.scheduler.status()),
             version: VERSION,
             accepting_requests: state.accepting,
             models,
@@ -165,6 +177,17 @@ impl MindService {
         request: InferenceRequest,
         cancel: CancellationToken,
         events: Option<mpsc::Sender<InferenceEvent>>,
+    ) -> Result<InferenceResponse> {
+        self.infer_with_priority(request, cancel, events, WorkPriority::Background)
+            .await
+    }
+    /// Priority is selected by trusted subsystem code, never model-supplied JSON.
+    pub async fn infer_with_priority(
+        &self,
+        request: InferenceRequest,
+        cancel: CancellationToken,
+        events: Option<mpsc::Sender<InferenceEvent>>,
+        priority: WorkPriority,
     ) -> Result<InferenceResponse> {
         if let Err(error) = validate_request(&request, &self.inner.limits) {
             self.reject();
@@ -185,6 +208,7 @@ impl MindService {
                 "Requested model is not explicitly registered",
             ));
         };
+        let _voice = (priority == WorkPriority::Voice).then(|| self.inner.scheduler.voice_turn());
         {
             let mut state = self.inner.state.lock().unwrap_or_else(|p| p.into_inner());
             if !state.accepting {
@@ -201,7 +225,11 @@ impl MindService {
                     "Request ID is already active",
                 ));
             }
-            if state.jobs.len() >= self.inner.limits.max_parallel + self.inner.limits.max_queued {
+            if state.jobs.len()
+                >= self.inner.limits.max_parallel
+                    + self.inner.limits.max_queued
+                    + usize::from(priority == WorkPriority::Voice)
+            {
                 state.metrics.rejected += 1;
                 return Err(InferenceError::new(
                     ErrorCode::Busy,
@@ -224,10 +252,43 @@ impl MindService {
             started: None,
         };
         let queued = Instant::now();
-        let permit = tokio::select! {biased;_ = cancel.cancelled()=>Err(InferenceError::new(ErrorCode::Cancelled,"Cancelled while queued")),result=tokio::time::timeout(Duration::from_millis(self.inner.limits.queue_timeout_ms),self.inner.semaphore.clone().acquire_owned())=>match result{Ok(Ok(permit))=>Ok(permit),_=>Err(InferenceError::new(ErrorCode::QueueTimeout,"Inference queue deadline exceeded"))}};
-        let result = match permit {
-            Err(error) => Err(error),
-            Ok(_permit) => {
+        let admission = loop {
+            let mut claim = ResourceClaim::inference(priority);
+            claim.cpu_slots = backend.cpu_slots();
+            let result = self.inner.scheduler.try_admit(claim, cancel.clone());
+            if result.is_ok()
+                || priority != WorkPriority::Voice
+                || cancel.is_cancelled()
+                || queued.elapsed() >= Duration::from_millis(self.inner.limits.queue_timeout_ms)
+            {
+                break result;
+            }
+            // Let cancellation release preempted work before admitting voice. Resource
+            // pressure still has a bounded wait and is never overridden by priority.
+            tokio::select! {
+                _ = cancel.cancelled() => {},
+                _ = tokio::time::sleep(Duration::from_millis(20)) => {},
+            }
+        };
+        let permit = if admission.is_err() {
+            Err(InferenceError::new(
+                ErrorCode::ResourceLimit,
+                "Host admission denied",
+            ))
+        } else {
+            tokio::select! {biased;_ = cancel.cancelled()=>Err(InferenceError::new(ErrorCode::Cancelled,"Cancelled while queued")),result=tokio::time::timeout(Duration::from_millis(self.inner.limits.queue_timeout_ms).saturating_sub(queued.elapsed()),self.inner.semaphore.clone().acquire_owned())=>match result{Ok(Ok(permit))=>Ok(permit),_=>Err(InferenceError::new(ErrorCode::QueueTimeout,"Inference queue deadline exceeded"))}}
+        };
+        let result = match (admission, permit) {
+            (Err(_), _) if cancel.is_cancelled() => Err(InferenceError::new(
+                ErrorCode::Cancelled,
+                "Cancelled during host admission",
+            )),
+            (Err(error), _) => Err(InferenceError::new(
+                ErrorCode::ResourceLimit,
+                error.to_string(),
+            )),
+            (Ok(_lease), Err(error)) => Err(error),
+            (Ok(_lease), Ok(_permit)) => {
                 guard.started = Some(Instant::now());
                 self.inner
                     .state

@@ -133,3 +133,42 @@ async fn shutdown_cancels_in_progress_startup_without_waiting_for_loading_deadli
     );
     assert!(!service.status().await.accepting_requests);
 }
+
+#[tokio::test]
+async fn low_host_memory_prevents_managed_model_process_launch() {
+    struct LowMemory;
+    impl sail_common::resources::HostProbe for LowMemory {
+        fn sample(&self) -> std::io::Result<sail_protocol::resources::HostSample> {
+            Ok(sail_protocol::resources::HostSample {
+                total_ram_bytes: 32 * sail_common::resources::GIB,
+                available_ram_bytes: sail_common::resources::GIB,
+                swap_used_bytes: 0,
+                swap_total_bytes: 0,
+                logical_cpus: 12,
+            })
+        }
+    }
+    let (mut config, files) = config_script(None);
+    let marker = files.root.join("launched");
+    std::fs::write(
+        &config.server_binary,
+        format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
+    )
+    .unwrap();
+    config.compute = ComputeBackend::Cpu;
+    let scheduler = std::sync::Arc::new(sail_common::resources::ResourceScheduler::new(
+        std::sync::Arc::new(LowMemory),
+        Default::default(),
+    ));
+    let backend = LocalGemmaBackend::with_scheduler(config, 1, scheduler.clone()).unwrap();
+    assert_eq!(
+        backend.start().await.unwrap_err().code,
+        ErrorCode::ResourceLimit
+    );
+    assert!(
+        !marker.exists(),
+        "rejected model must not execute its binary"
+    );
+    assert_eq!(scheduler.status().pending_ram_bytes, 0);
+    backend.shutdown().await.unwrap();
+}

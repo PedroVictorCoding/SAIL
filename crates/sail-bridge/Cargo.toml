@@ -18,3 +18,13 @@ uuid.workspace = true
 sail-agents.workspace = true
 sail-guardian.workspace = true
 tokio-util.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+url.workspace = true
+ring.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+url.workspace = true

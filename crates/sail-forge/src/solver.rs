@@ -173,6 +173,8 @@ fn default_end_line() -> usize {
 /// Result of executing a bounded repository tool inside an `IsolatedWorktree`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoToolResult {
+    #[serde(default)]
+    pub resource_blocked: bool,
     pub tool: String,
     pub ok: bool,
     pub output: String,
@@ -301,6 +303,7 @@ pub fn execute_repo_tool(
     if let Some(blocks) = call.edit_blocks() {
         return match apply_edit_blocks(worktree, &blocks) {
             Ok(files) => RepoToolResult {
+                resource_blocked: false,
                 tool: "repo:edit".into(),
                 ok: true,
                 output: format!(
@@ -312,6 +315,7 @@ pub fn execute_repo_tool(
                 test_record: None,
             },
             Err(e) => RepoToolResult {
+                resource_blocked: false,
                 tool: "repo:edit".into(),
                 ok: false,
                 output: format!("Error: {e}"),
@@ -329,6 +333,7 @@ pub fn execute_repo_tool(
             let ranked = crate::repo_map::rank(&files, query, &[]);
             let map = crate::repo_map::render_map(&ranked, REPO_MAP_CHARS);
             RepoToolResult {
+                resource_blocked: false,
                 tool: "repo:map".into(),
                 ok: true,
                 output: if map.is_empty() {
@@ -344,6 +349,7 @@ pub fn execute_repo_tool(
             let refs = matches!(call, RepoToolCall::FindReferences { .. });
             let (ok, output) = crate::symbol_index::run_tool(worktree, refs, name);
             RepoToolResult {
+                resource_blocked: false,
                 tool: if refs {
                     "code:find_references"
                 } else {
@@ -363,6 +369,7 @@ pub fn execute_repo_tool(
                 Ok(p) => p,
                 Err(e) => {
                     return RepoToolResult {
+                        resource_blocked: false,
                         tool: "repo:list".into(),
                         ok: false,
                         output: format!("Error: {}", e),
@@ -376,6 +383,7 @@ pub fn execute_repo_tool(
             collect_files_bounded(&worktree.root_dir, &target, &mut entries, 200);
             entries.sort();
             RepoToolResult {
+                resource_blocked: false,
                 tool: "repo:list".into(),
                 ok: true,
                 output: if entries.is_empty() {
@@ -390,6 +398,7 @@ pub fn execute_repo_tool(
         RepoToolCall::Search { query, path } => {
             if query.trim().is_empty() {
                 return RepoToolResult {
+                    resource_blocked: false,
                     tool: "repo:search".into(),
                     ok: false,
                     output: "Error: search query must not be empty".into(),
@@ -402,6 +411,7 @@ pub fn execute_repo_tool(
                 Ok(p) => p,
                 Err(e) => {
                     return RepoToolResult {
+                        resource_blocked: false,
                         tool: "repo:search".into(),
                         ok: false,
                         output: format!("Error: {}", e),
@@ -431,6 +441,7 @@ pub fn execute_repo_tool(
             }
 
             RepoToolResult {
+                resource_blocked: false,
                 tool: "repo:search".into(),
                 ok: true,
                 output: if matches.is_empty() {
@@ -451,6 +462,7 @@ pub fn execute_repo_tool(
                 Ok(c) => c,
                 Err(e) => {
                     return RepoToolResult {
+                        resource_blocked: false,
                         tool: "repo:read_range".into(),
                         ok: false,
                         output: format!("Error reading '{}': {}", path, e),
@@ -470,6 +482,7 @@ pub fn execute_repo_tool(
 
             if lines.is_empty() {
                 return RepoToolResult {
+                    resource_blocked: false,
                     tool: "repo:read_range".into(),
                     ok: true,
                     output: format!("{} (empty file)", path),
@@ -490,6 +503,7 @@ pub fn execute_repo_tool(
                 rendered.push(format!("{:4}: {}", line_no, lines[line_no - 1]));
             }
             RepoToolResult {
+                resource_blocked: false,
                 tool: "repo:read_range".into(),
                 ok: true,
                 output: rendered.join("\n"),
@@ -499,6 +513,7 @@ pub fn execute_repo_tool(
         }
         RepoToolCall::Diff => match worktree.get_diff() {
             Ok(diff) => RepoToolResult {
+                resource_blocked: false,
                 tool: "repo:diff".into(),
                 ok: true,
                 output: if diff.trim().is_empty() {
@@ -510,6 +525,7 @@ pub fn execute_repo_tool(
                 test_record: None,
             },
             Err(e) => RepoToolResult {
+                resource_blocked: false,
                 tool: "repo:diff".into(),
                 ok: false,
                 output: format!("Error computing diff: {}", e),
@@ -521,6 +537,7 @@ pub fn execute_repo_tool(
             let cleaned = extract_unified_diff(patch);
             if !is_meaningful_code_diff(&cleaned) {
                 return RepoToolResult {
+                    resource_blocked: false,
                     tool: "repo:apply_patch".into(),
                     ok: false,
                     output: "Error: patch is empty or modifies only comments/whitespace".into(),
@@ -534,6 +551,7 @@ pub fn execute_repo_tool(
                     let current_diff = worktree.get_diff().unwrap_or_default();
                     let files = extract_modified_files_from_diff(&current_diff);
                     RepoToolResult {
+                        resource_blocked: false,
                         tool: "repo:apply_patch".into(),
                         ok: true,
                         output: format!(
@@ -546,6 +564,7 @@ pub fn execute_repo_tool(
                     }
                 }
                 Err(e) => RepoToolResult {
+                    resource_blocked: false,
                     tool: "repo:apply_patch".into(),
                     ok: false,
                     output: format!("Failed to apply patch: {}", e),
@@ -564,6 +583,7 @@ pub fn execute_repo_tool(
             );
             match rec {
                 Ok((record, combined_output)) => RepoToolResult {
+                    resource_blocked: false,
                     tool: "repo:test".into(),
                     ok: record.exit_code == 0,
                     output: combined_output,
@@ -571,6 +591,7 @@ pub fn execute_repo_tool(
                     test_record: Some(record),
                 },
                 Err(e) => RepoToolResult {
+                    resource_blocked: matches!(&e, WorktreeError::ResourceAdmission(_)),
                     tool: "repo:test".into(),
                     ok: false,
                     output: format!("Sandbox execution error: {}", e),
@@ -580,6 +601,7 @@ pub fn execute_repo_tool(
             }
         }
         RepoToolCall::Done { summary } => RepoToolResult {
+            resource_blocked: false,
             tool: "done".into(),
             ok: true,
             output: summary.clone().unwrap_or_else(|| "Done".into()),
@@ -1159,6 +1181,7 @@ pub struct LocalSolverController {
     pub model_timeouts: ModelTimeouts,
     /// Explicit endpoints instead of `candidate_endpoints()` (environment-based).
     pub endpoint_override: Option<Vec<String>>,
+    resource_scheduler: std::sync::Arc<sail_common::resources::ResourceScheduler>,
 }
 
 impl LocalSolverController {
@@ -1175,7 +1198,16 @@ impl LocalSolverController {
             configured_model_path,
             model_timeouts: ModelTimeouts::default(),
             endpoint_override: None,
+            resource_scheduler: sail_common::resources::global(),
         }
+    }
+
+    pub fn with_resource_scheduler(
+        mut self,
+        scheduler: std::sync::Arc<sail_common::resources::ResourceScheduler>,
+    ) -> Self {
+        self.resource_scheduler = scheduler;
+        self
     }
 
     pub fn with_model_timeouts(mut self, timeouts: ModelTimeouts) -> Self {
@@ -1410,6 +1442,7 @@ Rules:
         let mut edit_failures = 0u32;
         let mut parse_failures = 0u32;
 
+        let mut resource_blocked = false;
         let mut cancelled_during_request = false;
         'solver: loop {
             if cancelled_during_request || is_cancelled() {
@@ -1483,6 +1516,21 @@ Rules:
                 }
             });
 
+            let model_cancel = tokio_util::sync::CancellationToken::new();
+            let model_lease = match self.resource_scheduler.try_admit(
+                sail_common::resources::ResourceClaim::inference(
+                    sail_protocol::resources::WorkPriority::Background,
+                ),
+                model_cancel.clone(),
+            ) {
+                Ok(lease) => lease,
+                Err(error) => {
+                    resource_blocked = true;
+                    last_error = Some(error.to_string());
+                    break 'solver;
+                }
+            };
+            let mut inference_cancelled = || model_cancel.is_cancelled() || is_cancelled();
             'model_retry: loop {
                 model_attempts += 1;
                 endpoint_failures.clear();
@@ -1497,12 +1545,17 @@ Rules:
 
                     let response = match wait_for_model(
                         client.post(ep).json(&req_body).send(),
-                        &mut is_cancelled,
+                        &mut inference_cancelled,
                     )
                     .await
                     {
                         Some(response) => response,
                         None => {
+                            if model_cancel.is_cancelled() {
+                                resource_blocked = true;
+                                last_error = Some("Background inference preempted for live voice; retry when idle".into());
+                                break 'solver;
+                            }
                             cancelled_during_request = true;
                             continue 'solver;
                         }
@@ -1534,13 +1587,18 @@ Rules:
                                 loop {
                                     let chunk = match wait_for_model(
                                         stream.next(),
-                                        &mut is_cancelled,
+                                        &mut inference_cancelled,
                                     )
                                     .await
                                     {
                                         Some(Some(chunk)) => chunk,
                                         Some(None) => break,
                                         None => {
+                                            if model_cancel.is_cancelled() {
+                                                resource_blocked = true;
+                                                last_error = Some("Background inference preempted for live voice; retry when idle".into());
+                                                break 'solver;
+                                            }
                                             cancelled_during_request = true;
                                             continue 'solver;
                                         }
@@ -1594,12 +1652,17 @@ Rules:
                                 }
                             } else if let Ok(json_val) = match wait_for_model(
                                 resp.json::<serde_json::Value>(),
-                                &mut is_cancelled,
+                                &mut inference_cancelled,
                             )
                             .await
                             {
                                 Some(result) => result,
                                 None => {
+                                    if model_cancel.is_cancelled() {
+                                        resource_blocked = true;
+                                        last_error = Some("Background inference preempted for live voice; retry when idle".into());
+                                        break 'solver;
+                                    }
                                     cancelled_during_request = true;
                                     continue 'solver;
                                 }
@@ -1655,9 +1718,16 @@ Rules:
                         }
                         Ok(resp) => {
                             let status = resp.status();
-                            let body = match wait_for_model(resp.text(), &mut is_cancelled).await {
+                            let body = match wait_for_model(resp.text(), &mut inference_cancelled)
+                                .await
+                            {
                                 Some(result) => result.unwrap_or_default(),
                                 None => {
+                                    if model_cancel.is_cancelled() {
+                                        resource_blocked = true;
+                                        last_error = Some("Background inference preempted for live voice; retry when idle".into());
+                                        break 'solver;
+                                    }
                                     cancelled_during_request = true;
                                     continue 'solver;
                                 }
@@ -1674,7 +1744,7 @@ Rules:
                     }
                 }
 
-                if turn_response_text.is_some() || is_cancelled() {
+                if turn_response_text.is_some() || inference_cancelled() {
                     break 'model_retry;
                 }
                 // A busy or loading server is worth waiting for; a refused connection gets a
@@ -1722,7 +1792,7 @@ Rules:
                 // Sleep in short steps so cancellation stays responsive.
                 let deadline = Instant::now() + wait;
                 while Instant::now() < deadline {
-                    if is_cancelled() {
+                    if inference_cancelled() {
                         break 'model_retry;
                     }
                     let step = deadline
@@ -1731,6 +1801,16 @@ Rules:
                     tokio::time::sleep(step).await;
                 }
             }
+
+            if model_cancel.is_cancelled() {
+                resource_blocked = true;
+                last_error = Some(
+                    "Background inference preempted for live voice; partial output discarded"
+                        .into(),
+                );
+                break 'solver;
+            }
+            drop(model_lease);
 
             let raw_reply = match turn_response_text {
                 Some(t) => t,
@@ -1847,6 +1927,11 @@ Rules:
                             self.command_timeout_secs,
                             iterations,
                         );
+                        if test_res.resource_blocked {
+                            resource_blocked = true;
+                            last_error = Some(test_res.output.clone());
+                            break 'solver;
+                        }
                         if let Some(rec) = test_res.test_record.clone() {
                             test_records.push(rec);
                         }
@@ -1981,6 +2066,11 @@ Rules:
                             self.command_timeout_secs,
                             iterations,
                         );
+                        if test_res.resource_blocked {
+                            resource_blocked = true;
+                            last_error = Some(test_res.output.clone());
+                            break 'solver;
+                        }
                         if let Some(rec) = test_res.test_record.clone() {
                             test_records.push(rec);
                         }
@@ -2100,6 +2190,11 @@ Rules:
                         self.command_timeout_secs,
                         iterations,
                     );
+                    if test_res.resource_blocked {
+                        resource_blocked = true;
+                        last_error = Some(test_res.output.clone());
+                        break 'solver;
+                    }
                     if let Some(rec) = test_res.test_record.clone() {
                         test_records.push(rec);
                     }
@@ -2230,7 +2325,12 @@ Rules:
         });
         SolverOutcome {
             success: false,
-            verification_status: "tests_failed".into(),
+            verification_status: if resource_blocked {
+                "resource_blocked"
+            } else {
+                "tests_failed"
+            }
+            .into(),
             failure_reason: Some(reason.clone()),
             target_file: modified_files.first().cloned(),
             final_diff,

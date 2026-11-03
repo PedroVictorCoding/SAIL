@@ -41,7 +41,7 @@ Use the existing SAIL design: compact dark UI, contextual cards, ambient Orb, pr
 ## 7. MVP vertical slice
 Restart a durable queued task and restore state without duplicate effects; expose real health and resource metrics.
 
-The durable-task half of this slice is specified and implemented in [SAIL Continuity](SAIL_CONTINUITY.md), with Forge as its first consumer. Health and resource metrics remain open.
+The durable-task half of this slice is specified and implemented in [SAIL Continuity](SAIL_CONTINUITY.md), with Forge as its first consumer. The first host resource-admission slice and measured status are described in [Host resource admission](SAIL_RESOURCE_ADMISSION.md); full host QoS remains open.
 
 ### Acceptance checklist
 - [ ] Confirm existing source files, interfaces and dependency versions before changing architecture.

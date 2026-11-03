@@ -1,6 +1,8 @@
 use crate::{backend::InferenceBackend, config::LocalModelConfig, validation::validate_request};
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use sail_common::resources::{self, GIB, MIB, ResourceClaim, ResourceLease, ResourceScheduler};
+use sail_protocol::resources::{WorkKind, WorkPriority};
 use sail_protocol::*;
 use serde_json::{Value, json};
 use std::{
@@ -15,11 +17,28 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+// The residency lease lives exactly as long as the owned child handle.
+struct OwnedModel {
+    child: Child,
+    lease: ResourceLease,
+}
+impl std::ops::Deref for OwnedModel {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.child
+    }
+}
+impl std::ops::DerefMut for OwnedModel {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+}
 pub struct LocalGemmaBackend {
     config: LocalModelConfig,
     client: reqwest::Client,
     endpoint: reqwest::Url,
-    process: AsyncMutex<Option<Child>>,
+    process: AsyncMutex<Option<OwnedModel>>,
+    scheduler: Arc<ResourceScheduler>,
     startup: AsyncMutex<()>,
     snapshot: Arc<Mutex<ModelStatus>>,
     parallel: usize,
@@ -32,6 +51,13 @@ fn protocol(message: impl Into<String>) -> InferenceError {
 }
 impl LocalGemmaBackend {
     pub fn new(config: LocalModelConfig, parallel: usize) -> Result<Self> {
+        Self::with_scheduler(config, parallel, resources::global())
+    }
+    pub fn with_scheduler(
+        config: LocalModelConfig,
+        parallel: usize,
+        scheduler: Arc<ResourceScheduler>,
+    ) -> Result<Self> {
         let endpoint = config.validate()?;
         let mut builder = reqwest::Client::builder()
             .no_proxy()
@@ -66,6 +92,7 @@ impl LocalGemmaBackend {
         };
         Ok(Self {
             config,
+            scheduler,
             client,
             endpoint,
             process: AsyncMutex::new(None),
@@ -167,7 +194,12 @@ impl LocalGemmaBackend {
             }
         }
         match self.probe().await {
-            Ok(status) => return Ok(status),
+            Ok(status) => {
+                if let Some(owned) = self.process.lock().await.as_ref() {
+                    owned.lease.settled();
+                }
+                return Ok(status);
+            }
             Err(error) if error.code == ErrorCode::UnknownModel => return Err(error),
             Err(_) => {}
         }
@@ -256,6 +288,36 @@ impl LocalGemmaBackend {
                     .open(".local/llama-server.log")
                     .map_err(|e| unavailable(e.to_string()))?;
                 let args = self.config.launch_args(self.parallel)?;
+                // GGUF bytes plus a conservative context/working allowance. This is an
+                // estimate; ready process memory is subsequently reflected by the OS.
+                let weights = std::fs::metadata(&self.config.model_path)
+                    .map_err(|e| unavailable(e.to_string()))?
+                    .len();
+                let projector = self
+                    .config
+                    .projector
+                    .as_ref()
+                    .map(|p| std::fs::metadata(p).map(|m| m.len()))
+                    .transpose()
+                    .map_err(|e| unavailable(e.to_string()))?
+                    .unwrap_or(0);
+                let ram_bytes = weights
+                    .saturating_add(projector)
+                    .saturating_add(512 * MIB)
+                    .saturating_add((self.config.context_tokens as u64).saturating_mul(256 * 1024));
+                let lease = self
+                    .scheduler
+                    .try_admit(
+                        ResourceClaim {
+                            kind: WorkKind::Model,
+                            priority: WorkPriority::Interactive,
+                            ram_bytes,
+                            cpu_slots: 0,
+                            heavy_model: weights >= GIB,
+                        },
+                        CancellationToken::new(),
+                    )
+                    .map_err(|e| InferenceError::new(ErrorCode::ResourceLimit, e.to_string()))?;
                 tracing::info!(model=%self.config.name,backend=?self.config.compute,threads=self.config.threads,args=?args,"Starting Rust-supervised local model");
                 let mut child = Command::new(&self.config.server_binary)
                     .args(args)
@@ -281,14 +343,19 @@ impl LocalGemmaBackend {
                     s.process_id = child.id();
                     s.observed_backend = Some(self.config.compute);
                 });
-                *process = Some(child);
+                *process = Some(OwnedModel { child, lease });
             }
         }
         drop(process);
         let deadline = Instant::now() + self.config.startup_timeout;
         loop {
             match self.probe().await {
-                Ok(status) => return Ok(status),
+                Ok(status) => {
+                    if let Some(owned) = self.process.lock().await.as_ref() {
+                        owned.lease.settled();
+                    }
+                    return Ok(status);
+                }
                 Err(error) if error.code == ErrorCode::UnknownModel => return Err(error),
                 Err(_) => {}
             }
@@ -636,6 +703,11 @@ pub(crate) async fn emit(
 }
 #[async_trait]
 impl InferenceBackend for LocalGemmaBackend {
+    fn cpu_slots(&self) -> usize {
+        self.config
+            .threads
+            .max(self.config.threads_batch.unwrap_or(self.config.threads))
+    }
     fn name(&self) -> &str {
         &self.config.name
     }

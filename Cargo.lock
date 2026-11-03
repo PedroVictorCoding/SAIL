@@ -2356,14 +2356,21 @@ name = "sail-bridge"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
+ "chrono",
+ "futures-util",
+ "ring",
  "sail-agents",
  "sail-common",
  "sail-guardian",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -2391,6 +2398,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -2523,6 +2531,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "uuid",

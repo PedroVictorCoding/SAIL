@@ -57,45 +57,50 @@ impl EmbeddingClient {
         if text.trim().is_empty() || text.len() > 32000 {
             return Err("embedding input must be 1–32000 bytes".into());
         }
-        let mut response = self
+        sail_common::resources::global()
+            .background_inference(async {
+                let mut response = self
             .client
             .post(&self.endpoint)
             .json(&serde_json::json!({"model":self.model,"input":text,"encoding_format":"float"}))
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        if !response.status().is_success() {
-            return Err(format!("embedding worker HTTP {}", response.status()));
-        }
-        if response.content_length().is_some_and(|n| n > 1024 * 1024) {
-            return Err("embedding response too large".into());
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-            if bytes.len() + chunk.len() > 1024 * 1024 {
-                return Err("embedding response too large".into());
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        let r: Reply = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if r.model != self.model
-            || r.data.len() != 1
-            || r.data[0].index != 0
-            || r.data[0].embedding.len() != self.dimensions
-        {
-            return Err(
+                if !response.status().is_success() {
+                    return Err(format!("embedding worker HTTP {}", response.status()));
+                }
+                if response.content_length().is_some_and(|n| n > 1024 * 1024) {
+                    return Err("embedding response too large".into());
+                }
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+                    if bytes.len() + chunk.len() > 1024 * 1024 {
+                        return Err("embedding response too large".into());
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
+                let r: Reply = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                if r.model != self.model
+                    || r.data.len() != 1
+                    || r.data[0].index != 0
+                    || r.data[0].embedding.len() != self.dimensions
+                {
+                    return Err(
                 "embedding model identity, count or dimensions differ from pinned configuration"
                     .into(),
             );
-        }
-        let embedding = Embedding {
-            model: self.model.clone(),
-            revision: self.revision.clone(),
-            values: r.data.into_iter().next().expect("validated item").embedding,
-        };
-        if !embedding.valid() {
-            return Err("embedding worker returned a non-finite or zero vector".into());
-        }
-        Ok(embedding)
+                }
+                let embedding = Embedding {
+                    model: self.model.clone(),
+                    revision: self.revision.clone(),
+                    values: r.data.into_iter().next().expect("validated item").embedding,
+                };
+                if !embedding.valid() {
+                    return Err("embedding worker returned a non-finite or zero vector".into());
+                }
+                Ok(embedding)
+            })
+            .await
+            .map_err(|e| e.to_string())?
     }
 }

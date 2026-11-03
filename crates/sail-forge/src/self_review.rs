@@ -209,40 +209,45 @@ impl ReviewProvider for LocalModelReviewer {
     }
 
     async fn review(&self, packet: &ReviewPacket) -> Result<ReviewVerdict, ReviewError> {
-        let client = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .build()
-            .map_err(|e| ReviewError::ProviderError(e.to_string()))?;
-        let body = serde_json::json!({
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": packet.render()},
-            ],
-            "temperature": 0.0,
-            "max_tokens": 1024,
-            "stream": false,
-        });
+        sail_common::resources::global()
+            .background_inference(async {
+                let client = reqwest::Client::builder()
+                    .timeout(self.timeout)
+                    .build()
+                    .map_err(|e| ReviewError::ProviderError(e.to_string()))?;
+                let body = serde_json::json!({
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": packet.render()},
+                    ],
+                    "temperature": 0.0,
+                    "max_tokens": 1024,
+                    "stream": false,
+                });
 
-        let mut last_err = String::from("no local model endpoints configured");
-        for ep in &self.endpoints {
-            match client.post(ep).json(&body).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    let v: serde_json::Value = resp
-                        .json()
-                        .await
-                        .map_err(|e| ReviewError::InvalidResponse(e.to_string()))?;
-                    let content = v
-                        .pointer("/choices/0/message/content")
-                        .and_then(|c| c.as_str())
-                        .unwrap_or_default();
-                    return Ok(parse_verdict(content));
+                let mut last_err = String::from("no local model endpoints configured");
+                for ep in &self.endpoints {
+                    match client.post(ep).json(&body).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            let v: serde_json::Value = resp
+                                .json()
+                                .await
+                                .map_err(|e| ReviewError::InvalidResponse(e.to_string()))?;
+                            let content = v
+                                .pointer("/choices/0/message/content")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or_default();
+                            return Ok(parse_verdict(content));
+                        }
+                        Ok(resp) => last_err = format!("{ep} returned HTTP {}", resp.status()),
+                        Err(e) => last_err = format!("{ep}: {e}"),
+                    }
                 }
-                Ok(resp) => last_err = format!("{ep} returned HTTP {}", resp.status()),
-                Err(e) => last_err = format!("{ep}: {e}"),
-            }
-        }
-        Err(ReviewError::ProviderError(last_err))
+                Err(ReviewError::ProviderError(last_err))
+            })
+            .await
+            .map_err(|e| ReviewError::ProviderError(e.to_string()))?
     }
 }
 
