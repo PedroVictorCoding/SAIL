@@ -115,28 +115,13 @@ impl ArenaSubsystem {
     }
 }
 
-/// Where the durable store lives: `SAIL_ARENA_DB`, else the large data disk
-/// (`/srv/sail-data/arena/arena.db`) when it is writable, else `~/.local/share/sail/arena`.
+/// Where the durable store lives: `SAIL_ARENA_DB`, else `arena/arena.db` under the SAIL
+/// data root (`/srv/sail-data` when mounted; see `sail_common::storage`).
 pub fn default_store_path() -> PathBuf {
     if let Ok(path) = std::env::var("SAIL_ARENA_DB") {
         return PathBuf::from(path);
     }
-    let data_disk = PathBuf::from("/srv/sail-data/arena");
-    if writable_dir(&data_disk) {
-        return data_disk.join("arena.db");
-    }
-    let base = std::env::var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(|_| std::env::temp_dir());
-    base.join("sail/arena/arena.db")
-}
-
-fn writable_dir(dir: &std::path::Path) -> bool {
-    let probe = dir.join(format!(".sail-write-probe-{}", std::process::id()));
-    let ok = std::fs::write(&probe, b"").is_ok();
-    let _ = std::fs::remove_file(&probe);
-    ok
+    sail_common::storage::data_path("arena").join("arena.db")
 }
 
 impl Default for ArenaSubsystem {

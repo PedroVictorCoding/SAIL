@@ -347,31 +347,51 @@ pub fn default_path() -> PathBuf {
     state_dir().join("continuity.db")
 }
 
-/// Directory for durable runtime task state: the runtime SSD when writable, otherwise the
-/// user's data directory. Never the system temp directory, which may be tmpfs.
+/// Directory for durable task state: `SAIL_STATE_DIR`, else `state/` under the SAIL data
+/// root (`/srv/sail-data` when mounted; see `sail_common::storage`). Never the system temp
+/// directory, which may be tmpfs.
 pub fn state_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("SAIL_STATE_DIR") {
         return PathBuf::from(dir);
     }
-    let runtime = std::env::var("SAIL_RUNTIME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/srv/sail"));
-    let runtime_state = runtime.join("state");
-    if std::fs::create_dir_all(&runtime_state).is_ok() && writable_dir(&runtime_state) {
-        return runtime_state;
-    }
-    std::env::var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("sail")
+    sail_common::storage::data_path("state")
 }
 
-fn writable_dir(dir: &Path) -> bool {
-    let probe = dir.join(format!(".sail-write-probe-{}", std::process::id()));
-    let ok = std::fs::write(&probe, b"").is_ok();
-    let _ = std::fs::remove_file(&probe);
-    ok
+/// Where earlier versions kept task state by default: `$SAIL_RUNTIME/state` (the runtime
+/// SSD, `/srv/sail/state`).
+pub fn legacy_state_dir() -> PathBuf {
+    std::env::var("SAIL_RUNTIME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/srv/sail"))
+        .join("state")
+}
+
+/// Copy a store left at the old default location into `new` with `VACUUM INTO` (a
+/// consistent copy that includes the WAL), then rename the old files to
+/// `*.migrated-to-sail-data`. Does nothing when `new` exists or `old` does not.
+pub fn migrate_legacy_store(old: &Path, new: &Path) -> Result<bool> {
+    if new.exists() || !old.is_file() || old == new {
+        return Ok(false);
+    }
+    if let Some(parent) = new.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| ContinuityError::Storage(format!("{}: {e}", parent.display())))?;
+    }
+    let tmp = new.with_extension("db.migrating");
+    let _ = std::fs::remove_file(&tmp);
+    {
+        let conn = Connection::open(old)?;
+        conn.execute("VACUUM INTO ?1", [tmp.to_string_lossy().as_ref()])?;
+    }
+    std::fs::rename(&tmp, new).map_err(|e| ContinuityError::Storage(e.to_string()))?;
+    for suffix in ["", "-wal", "-shm"] {
+        let from = PathBuf::from(format!("{}{suffix}", old.display()));
+        if from.exists() {
+            let _ = std::fs::rename(&from, format!("{}.migrated-to-sail-data", from.display()));
+        }
+    }
+    info!(old = %old.display(), new = %new.display(), "Continuity store migrated to the SAIL data root");
+    Ok(true)
 }
 
 fn now() -> DateTime<Utc> {
@@ -502,6 +522,14 @@ impl Continuity {
     /// daemon still starts; [`Continuity::is_durable`] then reports `false`.
     pub fn open_default() -> Self {
         let path = default_path();
+        let explicit = std::env::var_os("SAIL_CONTINUITY_DB").is_some()
+            || std::env::var_os("SAIL_STATE_DIR").is_some();
+        if !explicit {
+            let legacy = legacy_state_dir().join("continuity.db");
+            if let Err(error) = migrate_legacy_store(&legacy, &path) {
+                tracing::error!(old = %legacy.display(), %error, "Could not migrate the Continuity store; the old one is left untouched");
+            }
+        }
         match Self::open(&path) {
             Ok(store) => {
                 info!(path = %path.display(), "SAIL Continuity store opened");
