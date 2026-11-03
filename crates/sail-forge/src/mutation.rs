@@ -136,8 +136,10 @@ pub fn run(worktree: &IsolatedWorktree, diff: &str, timeout_secs: u64) -> Mutati
     if let Err(e) = worktree.write_file(&diff_rel, diff) {
         return MutationOutcome::NotRun(format!("could not stage the diff: {e}"));
     }
-    let out_dir = worktree.root_dir.join(scratch).join("mutants.out");
-    let _ = fs::remove_dir_all(&out_dir);
+    let out_dir = scratch.join("mutants.out");
+    if let Err(e) = worktree.remove_output(&out_dir) {
+        return MutationOutcome::NotRun(format!("could not clear old results: {e}"));
+    }
 
     let diff_arg = diff_rel.to_string_lossy().into_owned();
     let out_arg = scratch.to_string_lossy().into_owned();
@@ -190,13 +192,23 @@ pub fn run(worktree: &IsolatedWorktree, diff: &str, timeout_secs: u64) -> Mutati
             tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
         ));
     }
-    MutationOutcome::Completed(read_counts(&out_dir))
+    // The sandbox wrote these files; read them without following symlinks out of it.
+    MutationOutcome::Completed(counts_from(|name| {
+        worktree
+            .read_output(&out_dir.join(name))
+            .ok()
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+    }))
 }
 
 /// Read cargo-mutants' per-outcome list files from its output directory.
 pub fn read_counts(out_dir: &Path) -> MutationCounts {
+    counts_from(|name| fs::read_to_string(out_dir.join(name)).ok())
+}
+
+fn counts_from(read: impl Fn(&str) -> Option<String>) -> MutationCounts {
     let lines = |name: &str| -> Vec<String> {
-        fs::read_to_string(out_dir.join(name))
+        read(name)
             .map(|s| {
                 s.lines()
                     .map(str::trim)

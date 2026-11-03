@@ -105,12 +105,58 @@ poisoning. That run is historical context, not a full-suite rerun for this
 documentation change. No dedicated-UID service, privileged host setup, destructive
 production probe, real reviewer dispatch or deployed-host security test was run.
 
+## Update 2026-11-03: host Git and sandbox outputs
+
+The 2026-11-02 inventory treated the sandbox and the host-side helpers as separate
+rows. Their combination was exploitable. Bubblewrap bound the whole worktree
+writable, `.git` included, and Forge then ran host `git diff` there after every
+sandboxed `cargo test` (and `git apply` for model edits). A build script could
+append `core.fsmonitor` or `diff.external` to `.git/config`. Host Git then ran that
+command as the SAIL user, outside every sandbox. Reproduced on this host through
+`IsolatedWorktree::run_command` and `get_diff`; the test below failed on `main`
+with both markers written.
+
+Related paths found in the same review:
+
+- `resolve_safe_path` did not refuse `.git`. The model's host-side edit tools
+  (`write_file`, the `apply_patch` fallback) could write `.git/config` directly,
+  or through an in-worktree symlink such as `alias -> .git`.
+- A repository the build creates at a submodule path makes `git diff` run
+  `git status` inside it. That status applies the nested repository's own clean
+  filter on the host. `-c` overrides on the outer Git do not reach this.
+- Forge read sandbox outputs (JUnit report, symbol index, mutation lists) and
+  cleared old ones with symlink-following calls. A planted symlink could put a
+  host file into model context or reports, or delete host data.
+
+Fixes, each covered by `crates/sail-forge/tests/sandbox_adversarial_test.rs`:
+
+| Defense | Where |
+| --- | --- |
+| `.git` is a read-only bind mount inside the sandbox. As a mount point it cannot be renamed or replaced, and hardlinks across it fail. | `IsolatedWorktree::run_command` |
+| Host Git refuses to run if `.git/config` differs from setup (`GitConfigTampered`), and runs with fsmonitor, hooks, pager and submodule recursion off; `get_diff` also passes `--no-ext-diff --no-textconv --ignore-submodules=all`. | `IsolatedWorktree::host_git`, `get_diff`, `apply_patch` |
+| Host-side edits refuse any `.git` component in any case, and any path that resolves into `.git` (`GitMetadataPath`). | `resolve_safe_path` |
+| Sandbox outputs are read and removed only through `read_output`/`remove_output`, which refuse symlinks out of the worktree. | `solver.rs`, `mutation.rs`, `symbol_index.rs` |
+
+Each layer was checked by removing it: without the read-only mount the config
+check fails closed; without `--ignore-submodules` the nested filter runs on the
+host and the test fails.
+
+| Command | Passed | What it establishes |
+| --- | ---: | --- |
+| `cargo test -p sail-forge --test sandbox_adversarial_test --locked` | 7 | Through the real `run_command` path on this host (Ubuntu 26.04, Bubblewrap 0.11.1): a build script cannot read Cargo credentials or the source repository, write the source repository or its `.git`, reach host loopback or the internet, outlive a timeout or a finished command, exceed the file-size limit, plant Git commands that run on the host, steer host edits into `.git`, or redirect output reads/removals out of the worktree. |
+| `cargo test -p sail-forge --locked` | 181 | No regressions in the rest of Forge (unit, integration and doc tests). |
+
+Not covered by this update: the dedicated `sail-runner` service (#43 rows above
+are unchanged), host Git in the publisher (it applies only patch text in a fresh
+checkout of the production repository), the reviewer's Codex process, and the
+benchmark grading helper.
+
 ## Remaining work in the existing issues
 
 - [ ] **#43: Apply nono enforcement and report it truthfully.** Apply constructed rules in a disposable worker; distinguish detected support, configured mechanisms and successfully verified enforcement. Test permitted operations and denied filesystem/network/process access without restricting the daemon itself.
 - [ ] **#94: Integrate Forge with the dedicated runner.** Define confined source/artifact exchange, vetted offline dependencies and mounts; enforce resource limits and active-job cancellation without host fallback or broad credential mounts.
 - [ ] **#94: Use descriptor-bound editing.** Cover reads, writes, patch application and cleanup across symlink/hardlink/mount substitution and races; preserve existing files on denial.
-- [ ] **#43/#94: Separate trusted host operations.** Review Git configuration/hooks/environment, reviewer credentials and execution, publisher allocation/shared metadata, and exact artifact-export approval. Restrict benchmark grading before admitting untrusted source.
+- [ ] **#43/#94: Separate trusted host operations.** Host Git on coding worktrees and host reads of sandbox outputs are done (update above); the rest remains. Review Git configuration/hooks/environment, reviewer credentials and execution, publisher allocation/shared metadata, and exact artifact-export approval. Restrict benchmark grading before admitting untrusted source.
 - [ ] **#43/#94: Verify actual workers.** On a disposable provisioned host, run allowed/failing commands plus production sentinel hashes, malicious build scripts, credential reads, network/DNS, output flood, resource exhaustion, cancellation/descendants, interrupted execution, restart cleanup and audit reconciliation. Require the relevant CI evidence; unavailable infrastructure is not a pass.
 
 Suggested next step: apply the existing nono capability sets inside a disposable
