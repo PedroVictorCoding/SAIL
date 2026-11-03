@@ -30,19 +30,45 @@ speech-worker bridge; removing Python remains an explicit later migration.
 ## Installation and demo
 
 1. Accept the [Community-1 model conditions](https://huggingface.co/pyannote/speaker-diarization-community-1)
-   in your own Hugging Face account. SAIL does not accept terms or download gated
-   weights on your behalf. The pipeline model is CC-BY-4.0; pyannote.audio is MIT.
+   in your own Hugging Face account. SAIL never accepts terms or starts model downloads automatically. The pipeline model is CC-BY-4.0; pyannote.audio is MIT.
 2. Create a separate Python environment on writable runtime storage, install a
    CPU-only PyTorch distribution using its official installer, then install
    `scripts/voice/requirements-speaker.txt` in that environment. Keep model and pip
    caches off the small root filesystem. This optional dependency does not change
    the working VAD/STT/TTS environment.
-3. Download an offline copy of Community-1, including all referenced model assets,
-   following its model card. Configure the SAIL service with:
+3. Use the setup downloader after your account has model access. The existing
+   `.venv-voice` already includes `huggingface-hub`; this does not require installing
+   the speaker/PyTorch runtime just to download weights:
+
+   ```sh
+   .venv-voice/bin/python scripts/voice/download_speaker.py --check-access
+   .venv-voice/bin/python scripts/voice/download_speaker.py \
+     --destination /path/to/writable/models/community-1 --prompt-token
+   .venv-voice/bin/python scripts/voice/download_speaker.py \
+     --destination /path/to/writable/models/community-1 --verify
+   ```
+
+   Replace the destination with a writable directory on runtime/data storage with
+   enough free space. The host's `/srv/sail` may require service-user permissions;
+   the helper does not use sudo or silently fall back to the nearly full root disk.
+   `--prompt-token` reads a read-access token invisibly and does not save it. You
+   may instead use an existing `hf auth login` session or `HF_TOKEN`; no token is
+   accepted as a command-line argument. Tokens with write access are unnecessary.
+   Access denial prints the model's acceptance/request-access link. A script cannot
+   approve a gated account or bypass its license conditions.
+
+   The helper pins a full commit SHA, reserves snapshot space plus 512 MiB headroom,
+   resumes interrupted staging, checks file sizes and available LFS checksums, and
+   writes a SHA-256 manifest. Only a complete verified directory is promoted.
+   Existing unmanaged directories are refused. `--revision <full-commit-sha>` pins
+   a specific release; `--verify` works offline without importing the Hub SDK.
+   Installing the optional speaker runtime remains step 2.
+
+   Configure the SAIL service with the downloaded path and that runtime:
 
    ```sh
    SAIL_SPEAKER_PYTHON=/path/to/speaker-environment/bin/python
-   SAIL_SPEAKER_MODEL_DIR=/path/to/offline-community-1
+   SAIL_SPEAKER_MODEL_DIR=/path/to/writable/models/community-1
    ```
 
 4. Rebuild/restart SAIL through the normal deployment workflow. Open Settings →
@@ -84,6 +110,7 @@ Python bridge.
 - `cargo test -p sail-dialogue --lib speakers::tests`
 - `cargo test -p sail-common --test resource_admission_test`
 - `python scripts/voice/speaker_worker_test.py`
+- `python scripts/voice/download_speaker_test.py` (fixture-only downloads)
 - With the existing Playwright test environment:
   `python scripts/voice/speakers_browser_test.py`
 - `cargo check -p sail-dialogue`, `cargo fmt --all --check`, `git diff --check`
