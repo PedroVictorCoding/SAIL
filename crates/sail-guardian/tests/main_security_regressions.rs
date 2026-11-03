@@ -697,7 +697,15 @@ fn test_adversarial_zeroize_debug_and_audit_receipt_redaction() {
     assert!(!json_str.contains(secret));
     assert!(!json_str.contains("unencrypted_pass"));
 
-    // 4. Audit ledger automatically scrubs sensitive tokens in reasons and capabilities
+    // 4. Audit ledger automatically scrubs sensitive tokens in reasons and capabilities.
+    // The ledger redacts through the process-wide redactor, which the daemon registers from
+    // the vault in `GuardianSubsystem::new()`. Register it here the same way: under nextest
+    // this test runs in its own process and must not rely on another test having done it.
+    let vault = std::sync::Arc::new(vault);
+    let registered = vault.clone();
+    sail_common::diagnostics::register_redactor(std::sync::Arc::new(move |text| {
+        registered.redact_text(text)
+    }));
     let ledger = AuditLedger::open_persistent(&harness.audit_file).unwrap();
     let receipt = ledger.record(
         SubsystemId::Bridge,
