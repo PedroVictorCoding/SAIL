@@ -258,6 +258,67 @@ run on an on-disk store through the production Dialogue helper:
 Not done yet:
 - **Forge integration.** Forge does not consume its grant yet.
 - **Agents integration.** Agents does not consume a grant yet.
-- **Model-proposed change sets** (vision §4.3). Consolidation still uses only the narrow
-  Phase 2 grammar, so ordinary conversation produces no knowledge.
+- **Model-proposed change sets** (vision §4.3): implemented separately; see the next section.
 - **Embeddings in live retrieval.** Embeddings are not wired into it.
+
+## Model-proposed change sets (vision §4.3)
+
+Phase 2's grammar only catches fixed phrasings, so ordinary conversation produced no
+knowledge. Now a local model may **propose** a `MemoryChangeSet`
+(`knowledge::changeset`). A deterministic validator decides whether any of it is committed.
+
+**Operations.** There are two:
+- `assert`: a fact, an Owner preference, or an event.
+- `correct`: names an existing claim id from the known-claims list.
+
+Each operation cites one offered source turn and quotes the user's exact words.
+
+**Validation.** The validator checks schema and limits first:
+- Version, at most 16 operations, size bounds, and snake_case predicates.
+- No capability or question categories from a model, and preferences only for `Owner`.
+
+Then it checks grounding:
+- The quote must be a verbatim substring of that turn's **user** side. Assistant prose is
+  never offered or accepted.
+- The value must appear in the quote.
+- The subject must appear in the quote, or be `Owner`.
+
+**Commit.** One invalid operation refuses the whole set. Accepted sets commit in one
+transaction at the deletion generation captured before the model call. A deletion during
+the call returns `StaleGeneration`, and the turns are proposed again later.
+
+Entity resolution, supersession and dispute rules are Phase 2's own
+(`consolidation::apply_candidate`). Tombstones still prevent resurrecting deleted claims.
+
+Model-extracted claims are `inferred`. The quote is the evidence receipt, and model
+confidence is never recorded as evidence.
+
+**Turn lifecycle.**
+- A turn is offered only after the deterministic pass, with no consolidation job pending
+  in its scope.
+- A turn is offered at most once, marked in `kn_source_progress` as version 1001.
+- Consumed turns are released. Unconsumed turns stay until retention expires them.
+- If the model fails, turns stay queued. If the reply is unusable or rejected, turns are
+  marked as offered.
+
+**Scheduling.** Flow's maintenance makes at most one model call per tick, only while
+idle. Core wires it to `MindService` with temperature 0, 768 output tokens and a 180 s
+timeout.
+
+**Opt-in.** It is off by default: set `SAIL_MEMORY_MODEL_PROPOSALS=1`.
+
+**Not measured.** Extraction quality on the target host's local model has not been
+measured; that is the condition for turning it on by default.
+
+Tests:
+- `crates/sail-arena/tests/changeset_test.rs` covers:
+  - A grounded commit.
+  - Rejecting hallucinated values, assistant-sourced quotes and partially invalid sets.
+  - Corrections.
+  - No resurrection of deleted knowledge.
+  - Stale generation.
+  - Scope permission.
+- `crates/sail-flow/tests/memory_maintenance_test.rs` covers:
+  - No model call while busy.
+  - Retry after a model failure.
+  - Commit, and no re-proposal of unusable replies.
