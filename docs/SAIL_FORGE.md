@@ -74,7 +74,7 @@ If a gate or the self-review rejects the patch, the reason is appended to the is
 | `SAIL_FORGE_MAX_ATTEMPTS` | `2` | Attempts per issue, across runs |
 | `SAIL_FORGE_MAX_PRS_PER_DAY` | `3` | Verified patches beyond this wait for the next run |
 | `SAIL_FORGE_PUBLISH` | `1` | `0` keeps verified patches local (digest only) |
-| `SAIL_FORGE_STATE_DIR` | `~/.local/state/sail/forge` | State, digests, publish scratch |
+| `SAIL_FORGE_STATE_DIR` | `forge/` under the SAIL data root (`/srv/sail-data/forge`) | State, digests, publish scratch, review ledger |
 
 **Operate:**
 - Kill-switch: `touch $SAIL_FORGE_STATE_DIR/PAUSE` stops new work at the next issue boundary. Remove the file to resume.

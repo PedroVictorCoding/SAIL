@@ -37,13 +37,35 @@ pub struct NightlyConfig {
     pub base_branch: String,
 }
 
+/// `SAIL_FORGE_STATE_DIR`, else `forge/` under the SAIL data root.
 pub fn default_state_dir() -> PathBuf {
     std::env::var("SAIL_FORGE_STATE_DIR")
         .map(PathBuf::from)
-        .or_else(|_| {
-            std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/state/sail/forge"))
-        })
-        .unwrap_or_else(|_| std::env::temp_dir().join("sail_forge_state"))
+        .unwrap_or_else(|_| sail_common::storage::data_path("forge"))
+}
+
+/// Move Forge data from the old defaults (`~/.local/state/sail/forge` and the review ledger
+/// in `~/.sail/forge`) into the data root, once. Explicit overrides are left alone. Call at
+/// startup of the daemon and the nightly runner, before any store opens.
+pub fn migrate_legacy_forge_data() {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return;
+    };
+    let mut moves = Vec::new();
+    if std::env::var_os("SAIL_FORGE_STATE_DIR").is_none() {
+        moves.push((home.join(".local/state/sail/forge"), default_state_dir()));
+    }
+    if std::env::var_os("SAIL_DATA_DIR").is_none() {
+        let dir = sail_common::storage::data_path("forge");
+        for name in ["review_ledger.json", "review_ledger.lock"] {
+            moves.push((home.join(".sail/forge").join(name), dir.join(name)));
+        }
+    }
+    for (old, new) in moves {
+        if let Err(error) = sail_common::storage::migrate_legacy(&old, &new) {
+            tracing::error!(old = %old.display(), new = %new.display(), %error, "Forge data migration failed; the old copy is untouched");
+        }
+    }
 }
 
 fn env_num<T: std::str::FromStr>(key: &str, default: T) -> T {

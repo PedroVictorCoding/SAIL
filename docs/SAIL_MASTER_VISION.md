@@ -299,8 +299,8 @@ The host once reached 100% root disk usage; a large Rust `target/` directory (~4
 
 Baseline storage preference:
 - root SSD: Ubuntu, source and lightweight config;
-- `/srv/sail` runtime SSD: active GGUF, Cargo target, task/worktree state and latency-sensitive runtime;
-- `/srv/sail-data` HDD: cold models, archives, datasets, histories, logs, backups and bulk artifacts.
+- `/srv/sail` runtime SSD: active GGUF, Cargo target, Forge worktrees and latency-sensitive runtime;
+- `/srv/sail-data` HDD: **all persistent SAIL data** (Continuity task state, Arena, Forge state, review ledger, Guardian learned rules, logs, indexes), plus cold models, archives, datasets, histories and backups. It is owned by the SAIL service user and a `sail-data` group (mode `2770`), not root-only; the sandbox runner user is never in that group (decision 10 below).
 
 Actual paths must be configurable, probed for mounts and free space, and subject to safe shutdown. `/tmp` may be a tmpfs; avoid spilling large browser artifacts and model caches into it. Do not blindly expand swap or reboot production tasks.
 
@@ -428,6 +428,7 @@ Right: open a real editable file, use typed selection-based operation, enforce r
 7. **Tool capability versus authority:** adapters may technically be able to read, execute or upload; permission still belongs to Guardian, not the adapter or LLM.
 8. **Browser as runtime versus research context:** a browser can observe a site; it cannot automatically access system files or host credentials.
 9. **Dioxus client versus the current web UI (decided 2026-11-02):** the shared Rust/Dioxus Web/Android client remains the target, but the migration starts once SAIL is stable and hardened. Until then, new UI goes into the existing `sail-dialogue/web` interface under [DESIGN.md](../DESIGN.md).
+10. **Persistent data placement (decided 2026-11-03):** all persistent data goes under `/srv/sail-data` (`SAIL_DATA`), resolved by `sail_common::storage` and used only when it is a mounted filesystem. Hot paths (Forge worktrees, Cargo `target/`, active GGUF) stay on the `/srv/sail` SSD. The mount is group-owned (`sail-data`, `2770`) so the owner can manage it without root; `scripts/setup-sail-data.sh` sets this up. This replaces the earlier placement of task state on the runtime SSD.
 
 ## 19. Final north-star acceptance test
 

@@ -37,6 +37,8 @@ async fn main() {
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from);
 
+    sail_common::storage::log_data_root();
+    sail_forge::nightly::migrate_legacy_forge_data();
     let mut config = OrchestratorConfig::default();
     if let Some(root) = repo_root {
         config.workspace_root = root;

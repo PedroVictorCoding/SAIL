@@ -58,6 +58,16 @@ impl GuardianExecutionBroker {
         }
     }
 
+    /// Persist safety-review findings at `path` instead of the default.
+    pub fn with_safety_review_path(mut self, path: std::path::PathBuf) -> Self {
+        self.safety_review = Arc::new(crate::safety_review::SafetyReviewEngine::with_persistence(
+            self.policy.clone(),
+            self.audit.clone(),
+            path,
+        ));
+        self
+    }
+
     pub fn with_runtime(mut self, runtime: Arc<dyn crate::runtime::SecurityRuntime>) -> Self {
         self.runtime = runtime;
         self
