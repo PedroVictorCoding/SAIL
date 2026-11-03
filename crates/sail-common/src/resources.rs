@@ -91,10 +91,14 @@ pub struct AdmissionPolicy {
 }
 impl Default for AdmissionPolicy {
     fn default() -> Self {
+        let max_swap_used_bytes = std::env::var("SAIL_MAX_SWAP_USED_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(GIB);
         Self {
             ram_headroom_bytes: 2 * GIB,
             max_memory_pressure_pct: 10.0,
-            max_swap_used_bytes: GIB,
+            max_swap_used_bytes,
             cpu_headroom: 2,
             max_heavy_models: 1,
             max_browsers: 1,

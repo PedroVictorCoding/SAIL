@@ -8,6 +8,7 @@ pub mod server;
 mod speech;
 pub mod staged_ack;
 pub mod stt;
+pub mod terminal;
 mod tool_policy;
 pub mod tts;
 pub mod turn_coordinator;
