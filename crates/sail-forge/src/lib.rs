@@ -9,6 +9,7 @@ pub mod fixtures;
 pub mod gates;
 pub mod github;
 pub mod model_bench;
+pub mod mutation;
 pub mod nightly;
 pub mod orchestrator;
 pub mod persistence;
@@ -19,6 +20,7 @@ pub mod self_review;
 pub mod solver;
 pub mod subsystem;
 pub mod symbol_index;
+pub mod test_report;
 pub mod worktree;
 
 pub use admission::{AdmissionDecision, AdmissionPolicy, IssueCandidate, parse_target_files};

@@ -88,6 +88,22 @@ If a gate or the self-review rejects the patch, the reason is appended to the is
 - The self-review uses the same local model as the solver.
 - A job interrupted by a daemon restart is resumed by checkpoint recovery, but it is only published if it completes during a later nightly run.
 
+### Test runner and mutation gate
+
+**Test runner.** When `cargo-nextest` is installed, the solver's `repo:test` step runs `cargo nextest run` instead of `cargo test` (`crates/sail-forge/src/test_report.rs`).
+- Nextest writes a JUnit report. Forge parses it and puts the failed tests at the top of the output the model sees: the test's name, then its panic location and message.
+- An unfiltered run also runs `cargo test --doc`, because nextest skips doc tests.
+- Forge passes its own nextest config (`target/sail-forge/nextest.toml`), so a repository's nextest settings do not change Forge's report.
+- `SAIL_FORGE_TEST_TOOL`: `auto` (default; nextest if installed), `nextest` (fail if missing) or `cargo`.
+
+**Mutation gate.** After the tests and diff gates pass, Forge runs `cargo mutants --in-diff` on the patch inside the sandbox (`crates/sail-forge/src/mutation.rs`). cargo-mutants breaks each function the patch touched and runs the tests again. A *missed* mutant means no test failed with that function broken.
+- `SAIL_FORGE_MUTATION_GATE`: `advisory` (default) records the result in the job's activity and never blocks. `required` blocks the patch on a missed mutant, and also when cargo-mutants is missing or its run cannot be trusted. The missed mutants become the retry feedback. `off` skips it.
+- `SAIL_FORGE_MUTATION_TIMEOUT_SECS`: default 1800 (accepted range 60–14400).
+- It mutates the private worktree in place to reuse the build. If the worktree differs from the patch afterwards, the result is inconclusive.
+- Move to `required` once nightly digests show its run time and missed-mutant rate are acceptable.
+
+Install both tools on the host for the account that runs Forge: `cargo install --locked cargo-nextest cargo-mutants`.
+
 ### Solver: edits, context and measurement
 
 **Edits.** The solver prefers Aider-style SEARCH/REPLACE blocks (`crates/sail-forge/src/edit.rs`): a path line, then `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE`.
@@ -146,6 +162,23 @@ and removal before their ID can be reused. Linux `openat2` support is required;
 unsupported confinement fails closed. This allocation fix addresses part of #94;
 command-runner integration and remaining execution isolation are separate work.
 
+### Sandbox mounts, limits and adversarial tests (#94)
+
+Every command Forge runs in a worktree (`cargo test`, nextest, cargo-mutants) runs under Bubblewrap with no network and a private PID namespace. The worktree is the only writable host directory.
+
+**Toolchain mounts.** Only `bin/`, `registry/` and `git/` from `CARGO_HOME` are mounted, read-only. `credentials.toml` and `config.toml` are never mounted: build scripts run in the sandbox, and anything they can read they could copy into the patch. Before this change the whole `CARGO_HOME` was mounted. The toolchain location comes from `CARGO_HOME`/`RUSTUP_HOME`, then `$HOME/.cargo`/`$HOME/.rustup`, then the old `/home/main` defaults. The binary Guardian resolved is also mounted read-only, so the command runs even when it sits outside those directories.
+
+**Limits.** Each command gets `PR_SET_NO_NEW_PRIVS`, no core dumps, and:
+
+| Variable | Default | Limit |
+|---|---|---|
+| `SAIL_FORGE_SANDBOX_MAX_FILE_BYTES` | 8 GiB | Largest file a command may write (`RLIMIT_FSIZE`; the writer gets `SIGXFSZ`) |
+| `SAIL_FORGE_SANDBOX_MAX_OPEN_FILES` | 16384 | Open descriptors (`RLIMIT_NOFILE`) |
+
+Values above the current hard limit are lowered to it. Memory, CPU-share and process-count limits need cgroups. This synchronous path has none; the dedicated runner (`sail-runner`) does, and moving Forge onto it is still open in #94.
+
+**Verified by** `cargo test -p sail-forge --test sandbox_adversarial_test`. A crate's `build.rs` tries to read registry credentials, read and write the source repository and its `.git`, connect to a host loopback listener and to the internet, and keep processes running after the command ends or times out. Every attempt is denied, the source repository's file hashes are unchanged, and no background process survives. Run against the previous mount code, the same test shows both credential files readable.
+
 ### Durable external-review accounting (#96)
 
 Review dispatch reloads the JSON ledger under an exclusive Linux `flock` on a
@@ -163,12 +196,18 @@ logs the persistence failure. Existing ledger JSON remains compatible;
 `persist_ledger`/`persist_ledger_sync` now return I/O errors to their trusted
 callers. These snapshot APIs are administrative operations, not review dispatch.
 
+**Issue identity.** The slot belongs to the canonical `owner/repo#N`, lowercased. Slugs, `https://github.com/…`, `github.com/….git`, `git@github.com:…` and a trailing `/` all map to the same key. So do leading zeros in the issue number. An identity without a positive numeric issue number, or with unexpected characters, is refused (`invalid_issue_identity`) and gets no slot. Ledgers written by older versions are re-keyed on load. If any spelling of an issue was attempted or reviewed, the issue stays consumed.
+
+**Pre-flight, before the slot is reserved.** The Codex binary must exist, and `codex login status` must report a ChatGPT sign-in. API-key sign-in (`codex_api_key_auth_refused`), not logged in, or an unrecognized status all stop here without starting a review, so the slot stays unused for a later attempt. A missing binary no longer consumes the slot.
+
+**Verdict.** The output must contain exactly one `VERDICT: APPROVED|CHANGES_REQUESTED` line and one `REQUIREMENTS_COVERED: YES|NO` line, each starting a line. `CONFIDENCE` is optional and stays 0.0 when absent. Anything else (no verdict, two verdicts, an unknown value) is recorded as an inconclusive, failed review. The slot is still consumed, because Codex ran.
+
 Use one stable absolute ledger path on a local filesystem supporting `flock`,
 atomic rename and `fsync`, in a trusted service-owned directory. Do not remove the
 ledger/sidecar or run older daemons concurrently: older versions do not honor the
-lock protocol. Back up both accounting state and configuration. This change does
-not complete #96's remaining canonical repository identity, CLI authentication,
-read-only review isolation, capacity detection or verdict-validation requirements.
+lock protocol. Back up both accounting state and configuration. Still open in #96: read-only review isolation (running `codex review` from a
+read-only copy of the proposed patch), subscription-capacity detection
+(`waiting_for_subscription_capacity`) and the review pane's `0/1` display.
 No UI additions are required; denied reviews use the existing review result pane.
 
 ### Local model request deadline

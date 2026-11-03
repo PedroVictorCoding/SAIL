@@ -589,7 +589,12 @@ pub fn execute_repo_tool(
     }
 }
 
-/// Run a confined `cargo test --offline` inside the isolated worktree and write full stdout/stderr to `log_dir`.
+/// Run the tests inside the isolated worktree and write full stdout/stderr to `log_dir`.
+///
+/// Uses `cargo nextest run` when available (see [`crate::test_report::TestTool`]) and
+/// puts the structured failure list from its JUnit report at the top of the output the
+/// model sees. Otherwise runs `cargo test --offline`. An unfiltered nextest run also runs
+/// doc tests, which nextest skips, so both runners verify the same tests.
 pub fn run_staged_test_command(
     worktree: &IsolatedWorktree,
     log_dir: &Path,
@@ -597,31 +602,66 @@ pub fn run_staged_test_command(
     step_idx: u32,
     filter: Option<&str>,
 ) -> Result<(TestExecutionRecord, String), WorktreeError> {
+    use crate::test_report::{self, TestTool};
+
     let start = Instant::now();
-    let mut args = vec!["test", "--offline"];
-    if let Some(f) = filter {
-        if !f.trim().is_empty() {
-            args.push(f.trim());
+    let tool = TestTool::from_env();
+    let filter = filter.map(str::trim).filter(|f| !f.is_empty());
+    let args: Vec<String> = match tool {
+        TestTool::Nextest => {
+            worktree.write_file(
+                &test_report::nextest_config_rel(),
+                test_report::FORGE_NEXTEST_CONFIG,
+            )?;
+            // A stale report from an earlier step must never be read as this run's result.
+            let _ = fs::remove_file(worktree.root_dir.join(test_report::junit_report_rel()));
+            test_report::nextest_args(filter)
+        }
+        TestTool::CargoTest => {
+            let mut a = vec!["test".to_string(), "--offline".to_string()];
+            if let Some(f) = filter {
+                a.push(f.to_string());
+            }
+            a
+        }
+    };
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut output = worktree.run_command("cargo", &arg_refs, timeout_secs)?;
+
+    let mut junit_summary = None;
+    if tool == TestTool::Nextest {
+        let report = worktree.root_dir.join(test_report::junit_report_rel());
+        junit_summary = fs::read_to_string(&report)
+            .ok()
+            .and_then(|xml| test_report::parse_junit(&xml).ok());
+
+        if output.status == 0 && filter.is_none() {
+            let remaining = timeout_secs
+                .saturating_sub(start.elapsed().as_secs())
+                .max(30);
+            let doc = worktree.run_command("cargo", &["test", "--offline", "--doc"], remaining)?;
+            let no_lib = doc.stderr.contains("no library targets found");
+            output.stdout.push_str("\n--- DOC TESTS ---\n");
+            output.stdout.push_str(&doc.stdout);
+            output.stderr.push_str(&doc.stderr);
+            if doc.status != 0 && !no_lib {
+                output.status = doc.status;
+            }
         }
     }
-
-    let output = worktree.run_command("cargo", &args, timeout_secs)?;
     let duration_ms = start.elapsed().as_millis() as u64;
+    let command = format!("cargo {}", args.join(" "));
 
     let _ = fs::create_dir_all(log_dir);
     let log_path = log_dir.join(format!("test_step_{}.log", step_idx));
     let full_log = format!(
-        "COMMAND: cargo {}\nEXIT_CODE: {}\nDURATION_MS: {}\n--- STDOUT ---\n{}\n--- STDERR ---\n{}\n",
-        args.join(" "),
-        output.status,
-        duration_ms,
-        output.stdout,
-        output.stderr
+        "COMMAND: {}\nEXIT_CODE: {}\nDURATION_MS: {}\n--- STDOUT ---\n{}\n--- STDERR ---\n{}\n",
+        command, output.status, duration_ms, output.stdout, output.stderr
     );
     let _ = fs::write(&log_path, &full_log);
 
     let record = TestExecutionRecord {
-        command: format!("cargo {}", args.join(" ")),
+        command,
         status: if output.status == 0 {
             "passed".into()
         } else {
@@ -634,16 +674,30 @@ pub fn run_staged_test_command(
         stderr_log_path: Some(log_path),
     };
 
-    // Truncate returned tool output to keep model context concise while preserving compiler/test errors
+    // Keep the model's context concise while preserving compiler and test errors.
     let mut summary = format!("exit_code: {} ({} ms)\n", output.status, duration_ms);
-    if !output.stdout.trim().is_empty() {
-        summary.push_str("stdout:\n");
-        summary.push_str(&tail_lines(&output.stdout, 60));
-        summary.push('\n');
-    }
-    if !output.stderr.trim().is_empty() {
-        summary.push_str("stderr:\n");
-        summary.push_str(&tail_lines(&output.stderr, 80));
+    match &junit_summary {
+        Some(j) if j.failures > 0 => {
+            // The JUnit list says which tests failed and why; a short tail keeps any
+            // compiler or doc-test errors that are not in the report.
+            summary.push_str(&test_report::format_for_model(j, 8));
+            summary.push_str("output tail:\n");
+            summary.push_str(&tail_lines(&output.stderr, 30));
+        }
+        _ => {
+            if let Some(j) = &junit_summary {
+                summary.push_str(&test_report::format_for_model(j, 0));
+            }
+            if !output.stdout.trim().is_empty() {
+                summary.push_str("stdout:\n");
+                summary.push_str(&tail_lines(&output.stdout, 60));
+                summary.push('\n');
+            }
+            if !output.stderr.trim().is_empty() {
+                summary.push_str("stderr:\n");
+                summary.push_str(&tail_lines(&output.stderr, 80));
+            }
+        }
     }
 
     Ok((record, summary))

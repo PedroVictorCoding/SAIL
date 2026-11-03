@@ -3,6 +3,7 @@ name = "sail-runner"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 [dependencies]
 sail-common.workspace = true
 sail-protocol.workspace = true
