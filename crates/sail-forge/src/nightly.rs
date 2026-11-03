@@ -224,6 +224,28 @@ impl NightlyDigest {
         if let Some(h) = &self.halted {
             md.push_str(&format!("**Run halted:** {h}\n\n"));
         }
+        if self.entries.is_empty() {
+            md.push_str(&format!(
+                "**Summary:** 0 worked, {} not admitted\n\n",
+                self.rejected.len()
+            ));
+        } else {
+            let mut counts: std::collections::BTreeMap<&str, usize> =
+                std::collections::BTreeMap::new();
+            for entry in &self.entries {
+                *counts.entry(&entry.outcome).or_default() += 1;
+            }
+            let outcome_parts: Vec<String> = counts
+                .iter()
+                .map(|(outcome, count)| format!("{count} {outcome}"))
+                .collect();
+            md.push_str(&format!(
+                "**Summary:** {} worked ({}), {} not admitted\n\n",
+                self.entries.len(),
+                outcome_parts.join(", "),
+                self.rejected.len()
+            ));
+        }
         md.push_str("## Worked issues\n");
         if self.entries.is_empty() {
             md.push_str("_none_\n");
@@ -730,5 +752,77 @@ mod tests {
         ] {
             assert!(!is_infrastructure_failure(reason), "{reason}");
         }
+    }
+
+    #[test]
+    fn to_markdown_empty_digest() {
+        let digest = NightlyDigest {
+            date: "2026-11-03".into(),
+            dry_run: false,
+            halted: None,
+            entries: vec![],
+            rejected: vec![
+                (10, vec!["missing label".into()]),
+                (11, vec!["blocked".into()]),
+            ],
+        };
+        let md = digest.to_markdown();
+        assert!(md.starts_with(
+            "# Forge nightly digest 2026-11-03\n\n**Summary:** 0 worked, 2 not admitted\n\n## Worked issues\n_none_\n"
+        ));
+    }
+
+    #[test]
+    fn to_markdown_mixed_outcomes() {
+        let digest = NightlyDigest {
+            date: "2026-11-03".into(),
+            dry_run: true,
+            halted: None,
+            entries: vec![
+                DigestEntry {
+                    issue: 101,
+                    title: "Issue 101".into(),
+                    outcome: "pr_created".into(),
+                    detail: "opened PR".into(),
+                },
+                DigestEntry {
+                    issue: 102,
+                    title: "Issue 102".into(),
+                    outcome: "failure".into(),
+                    detail: "gates failed".into(),
+                },
+                DigestEntry {
+                    issue: 103,
+                    title: "Issue 103".into(),
+                    outcome: "pr_created".into(),
+                    detail: "opened PR".into(),
+                },
+            ],
+            rejected: vec![(104, vec!["no targets".into()])],
+        };
+        let md = digest.to_markdown();
+        assert!(md.contains(
+            "# Forge nightly digest 2026-11-03 (dry run)\n\n**Summary:** 3 worked (1 failure, 2 pr_created), 1 not admitted\n\n## Worked issues\n"
+        ));
+    }
+
+    #[test]
+    fn to_markdown_halted_run() {
+        let digest = NightlyDigest {
+            date: "2026-11-03".into(),
+            dry_run: false,
+            halted: Some("Local model unavailable".into()),
+            entries: vec![DigestEntry {
+                issue: 50,
+                title: "Issue 50".into(),
+                outcome: "infra_failure".into(),
+                detail: "timeout".into(),
+            }],
+            rejected: vec![],
+        };
+        let md = digest.to_markdown();
+        assert!(md.starts_with(
+            "# Forge nightly digest 2026-11-03\n\n**Run halted:** Local model unavailable\n\n**Summary:** 1 worked (1 infra_failure), 0 not admitted\n\n## Worked issues\n"
+        ));
     }
 }
