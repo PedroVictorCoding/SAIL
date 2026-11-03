@@ -12,6 +12,13 @@ permissions:
   contents: read
 
 # A new push to a PR supersedes its running check; runs on main always complete.
+# Full debug info makes the workspace's test binaries large enough to fill the runner's
+# disk (lld then dies with SIGBUS while linking). Line tables keep panic locations and
+# backtrace line numbers.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
 concurrency:
   group: rust-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -76,6 +83,10 @@ jobs:
         # failure instead of stopping at the first one (`.config/nextest.toml`). The step
         # still fails if any test fails.
         run: cargo nextest run --workspace --locked --profile ci
+
+      - name: Disk space after tests
+        if: always()
+        run: df -h . /tmp
 
       - name: Run doc tests
         # Nextest does not run doc tests.
