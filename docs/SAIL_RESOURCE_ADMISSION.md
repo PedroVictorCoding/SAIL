@@ -28,9 +28,10 @@ cancellation still applies while paused. Denials for RAM, swap or CPU are unchan
 they produce an unsuccessful `resource_blocked` outcome that preserves the workspace.
 
 Before execution, the shared broker reads Linux `MemAvailable`, total RAM, swap
-used/total, and available logical CPUs. Unknown or inconsistent readings deny work.
+used/total, memory pressure (PSI `some avg10` from `/proc/pressure/memory`) and available
+logical CPUs. Unknown or inconsistent memory readings deny work.
 It atomically considers other leases, headroom, CPU demand and concurrency limits.
-Voice priority never overrides RAM or swap checks. Voice inference has one extra
+Voice priority never overrides RAM or memory-pressure checks. Voice inference has one extra
 bounded queue place and waits within the existing queue deadline for preempted work
 to release its leases. Failed admission emits the normal typed failure event, without
 emitting a model-started event or calling the inference backend.
@@ -38,10 +39,27 @@ emitting a model-started event or calling the inference backend.
 ## Current policy and boundaries
 
 Defaults in `AdmissionPolicy` reserve 2 GiB RAM for the OS/audio, reject new admitted
-work above 1 GiB swap usage, leave two logical CPU slots outside admitted work, and
+work while memory pressure is above 10% (tasks stalled on memory, swap-in included, for
+more than a tenth of the last 10 s), leave two logical CPU slots outside admitted work, and
 permit one owned heavy model, one browser claim and one Forge build. The policy is a
 typed constructor argument, allowing deterministic deployment composition and tests;
 this initial slice does not expose policy editing in the frontend.
+
+**CPU slots are demand, not exclusive lanes.** A claim states how many threads the admitted
+process will use; the OS schedules those threads. Each reservation is capped at the
+admission capacity (`logical CPUs - 2`, at least 1), so a model server that asks for one
+thread per CPU is still admissible on a modest 4-core host, while a second CPU-heavy
+consumer is still refused. Without that cap, any host with six or fewer logical CPUs denied
+every inference outright. Tests must not depend on the runner's live CPU, RAM or PSI: they
+inject a `ResourceScheduler` over a fixed `HostProbe` (see `sail-mind/tests/inference_test.rs`
+and the dialogue protocol tests) instead of the process-global broker.
+
+**Swap in use is not pressure.** Linux keeps idle pages in swap long after memory is free
+again; on the target host 2–3 GB stayed swapped out with 20 GB of RAM available, zero
+memory pressure and no swap traffic, and an earlier rule (refuse above 1 GiB of swap
+used) blocked every background job and the speech workers. Pressure is therefore judged
+by PSI. Only on a kernel without PSI does the 1 GiB swap-used limit still apply, so an
+unmeasured host never fails open.
 
 | Boundary | Admission and lifetime |
 | --- | --- |

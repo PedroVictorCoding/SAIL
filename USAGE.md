@@ -156,6 +156,14 @@ From the repository root, run:
 
 This installs speech dependencies into `.venv-voice` and downloads Silero, Whisper, Kokoro and the Gemma vision projector into `models/voice`. Internet access is needed for setup. Missing runtime models produce errors rather than being downloaded automatically.
 
+To let browsers run speech on their own device (freeing the host for the language model), also run:
+
+```bash
+python3 scripts/voice/download_web.py
+```
+
+This downloads the same speech models as ONNX, plus pinned browser runtimes, into `$SAIL_RUNTIME/models/voice/web` (about 0.7 GB). Each browser measures its own speed and only takes over speech if it is fast enough; Settings → Voice & Audio → *Where Speech Runs* shows the result. See [On-device speech](docs/SAIL_DIALOGUE.md#6a-on-device-speech-decided-2026-11-03).
+
 The default llama-server binary is `/home/main/llama.cpp/build/bin/llama-server`. For a different installation:
 
 ```bash

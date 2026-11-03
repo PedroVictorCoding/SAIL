@@ -15,6 +15,7 @@
     <div class="top-actions">
       <span class="privacy-indicator" id="learningIndicator" role="status" hidden>Learning enabled</span>
       <span class="privacy-indicator" id="micLiveIndicator" hidden><i></i><span>Mic on</span></span>
+      <span class="loading-indicator" id="speechLoadIndicator" hidden><span id="speechLoadLabel">Loading voice models</span><progress id="speechLoadBar" max="100" aria-labelledby="speechLoadLabel" aria-describedby="speechLoadValue"></progress><span id="speechLoadValue" aria-live="off"></span></span>
       <span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span>
       <button class="icon-button" id="terminalHeaderBtn" type="button" aria-label="Open Terminal" title="Terminal (Ctrl+`)"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#terminal"></use></svg></button>
       <button class="icon-button mobile-spaces" id="spacesTop" type="button" aria-label="Open Spaces"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#spaces"></use></svg></button>
@@ -525,6 +526,20 @@
           </div>
         </div>
 
+        <div class="vscode-setting-item" data-search-terms="speech device browser webgpu host whisper kokoro silero offload">
+          <div class="vscode-setting-info">
+            <label for="speechPlacementSelect" class="vscode-setting-name">Where Speech Runs</label>
+            <p class="vscode-setting-desc">Listening, transcription and the spoken voice can run on this device, leaving the SAIL host free for the language model. Same models as the host; nothing is downloaded from the internet.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <select id="speechPlacementSelect" aria-label="Where speech runs" aria-describedby="speechPlacementStatus">
+              <option value="device">This device when available</option>
+              <option value="host">SAIL host</option>
+            </select>
+            <span id="speechPlacementStatus" role="status" aria-live="polite">Checking this device…</span>
+          </div>
+        </div>
+
         <div class="vscode-setting-item" data-search-terms="turn taking mode automatic manual silence speech send">
           <div class="vscode-setting-info">
             <label for="turnModeSelect" class="vscode-setting-name">Turn Taking Mode</label>
@@ -810,6 +825,7 @@
 </dialog>
 <script src="/mermaid.js" defer></script>
 <script src="/card-modal.js" defer></script>
+<script src="/client-speech.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/forge.js" defer></script>
 <script src="/approvals.js" defer></script>

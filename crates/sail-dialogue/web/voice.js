@@ -110,7 +110,7 @@ function connectWs() {
         learningSession = data.session_id; learningEnabled = data.learning === true; renderLearning();
         cancelVisualCapture();
         document.getElementById('conversation').replaceChildren(); responseNode = null;
-        applyControl(data.control); break;
+        applyControl(data.control); announceClientSpeech(); break;
       case 'learning_state':
         learningEnabled = data.enabled === true; renderLearning(); break;
       case 'telemetry':
@@ -161,6 +161,8 @@ function connectWs() {
         updateState('speaking');
         break;
       case 'audio_chunk': queueAudio(data); break;
+      case 'speech_text': queueClientSpeech(data); break;
+      case 'client_speech': clientSpeechActive = { stt:data.stt === true, tts:data.tts === true }; renderSpeechPlacement(); break;
       case 'turn_finished':
         setCaptureHeld(false);
         turnInProgress = false;
@@ -246,6 +248,7 @@ function applyControl(control) {
   document.getElementById('endTurnBtn').hidden = !isRecording && !captureHeld;
   const settings = control.turn_detection || { mode:'automatic', pause_ms:3000 };
   maxRecordingMs = control.max_recording_ms || 180000;
+  SailClientSpeech.configure({ mode:settings.mode, pauseMs:settings.pause_ms, maxRecordingMs });
   document.getElementById('turnModeSelect').value = settings.mode;
   document.getElementById('turnPauseInput').value = settings.pause_ms / 1000;
   document.getElementById('turnPauseInput').disabled = settings.mode === 'manual';
@@ -520,20 +523,132 @@ function queueAudio(data) {
     const bytes = Uint8Array.from(atob(data.audio_base64), c => c.charCodeAt(0));
     const buffer = await context.decodeAudioData(bytes.buffer);
     if (generation !== playbackGeneration) return;
-    const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination);
-    const when = Math.max(context.currentTime + 0.015, nextAudioTime); nextAudioTime = when + buffer.duration;
-    playingSources.add(source); pendingAudio--;
-    // Drive the Orb from audio that is actually playing, instead of packets received early.
-    const timer = setTimeout(() => {
-      playbackTimers.delete(timer);
-      if (generation !== playbackGeneration) return;
-      updateState('speaking'); currentAmplitude = data.telemetry.rms_level; wavePhase = data.telemetry.wave_phase;
-      const s = data.telemetry.spectrum; spectrum8 = [s.sub_bass,s.bass,s.low_mid,s.mid,s.high_mid,s.presence,s.brilliance,s.air];
-    }, Math.max(0, (when - context.currentTime) * 1000));
-    playbackTimers.add(timer);
-    source.onended = () => { clearTimeout(timer); playbackTimers.delete(timer); source.disconnect(); playingSources.delete(source); if (turnFinished && !pendingAudio && !playingSources.size) finishPlayback(); };
-    source.start(when);
+    const s = data.telemetry.spectrum;
+    schedulePlayback(context, buffer, generation, { rms:data.telemetry.rms_level, phase:data.telemetry.wave_phase, spectrum:[s.sub_bass,s.bass,s.low_mid,s.mid,s.high_mid,s.presence,s.brilliance,s.air] });
+    pendingAudio--;
   }).catch(error => { if (generation === playbackGeneration) { pendingAudio = Math.max(0, pendingAudio - 1); showError(`Audio playback: ${error.message}`); } });
+}
+// Play `buffer` after everything already scheduled. The Orb follows audio that is
+// actually playing, not packets received early.
+function schedulePlayback(context, buffer, generation, telemetry) {
+  const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination);
+  const when = Math.max(context.currentTime + 0.015, nextAudioTime); nextAudioTime = when + buffer.duration;
+  playingSources.add(source);
+  const timer = setTimeout(() => {
+    playbackTimers.delete(timer);
+    if (generation !== playbackGeneration) return;
+    updateState('speaking'); currentAmplitude = telemetry.rms; wavePhase = telemetry.phase; spectrum8 = telemetry.spectrum;
+  }, Math.max(0, (when - context.currentTime) * 1000));
+  playbackTimers.add(timer);
+  source.onended = () => { clearTimeout(timer); playbackTimers.delete(timer); source.disconnect(); playingSources.delete(source); if (turnFinished && !pendingAudio && !playingSources.size) finishPlayback(); };
+  source.start(when);
+}
+
+// ---- Speech on this device (client-speech.js) ----
+let clientSpeechActive = { stt:false, tts:false };
+let clientFrames = Promise.resolve(), clientCapturing = false, clientCaptureSerial = 0;
+const selectedVoice = () => document.getElementById('voiceSelect')?.value || 'af_heart';
+// Tell the server what this browser runs. TTS only for voices the browser engine has
+// (kokoro-js speaks English); other voices keep host synthesis.
+function announceClientSpeech() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const engine = SailClientSpeech.engine;
+  sendAction('client_speech', { stt:SailClientSpeech.sttOnDevice(), tts:SailClientSpeech.ttsOnDevice(selectedVoice()), engine:{ device:engine.device, measured:engine.measured } });
+}
+// Loading bar beside "Mic on": real download progress, then an indeterminate bar while
+// the device times itself; hidden once speech has settled on the device or the host.
+function renderSpeechLoad() {
+  const indicator = document.getElementById('speechLoadIndicator'); if (!indicator) return;
+  const loading = SailClientSpeech.engine.loading;
+  indicator.hidden = !loading; if (!loading) return;
+  const bar = document.getElementById('speechLoadBar'), value = document.getElementById('speechLoadValue');
+  const where = loading.device === 'webgpu' ? ' · WebGPU' : loading.device === 'wasm' ? ' · CPU' : '';
+  if (loading.phase === 'measuring') {
+    document.getElementById('speechLoadLabel').textContent = `Checking speed${where}`;
+    bar.removeAttribute('value'); value.textContent = '';
+    return;
+  }
+  document.getElementById('speechLoadLabel').textContent = `Loading voice models${where}`;
+  if (loading.total > 0) {
+    const percent = Math.min(100, Math.floor(loading.loaded * 100 / loading.total));
+    bar.value = percent; value.textContent = `${percent}%`;
+  } else { bar.removeAttribute('value'); value.textContent = ''; }
+}
+function renderSpeechPlacement() {
+  renderSpeechLoad();
+  const status = document.getElementById('speechPlacementStatus'); if (!status) return;
+  const engine = SailClientSpeech.engine;
+  const parts = [engine.detail];
+  if (engine.status === 'ready' && engine.tts && !clientSpeechActive.tts) parts.push('This voice is synthesized on the SAIL host.');
+  status.textContent = parts.join(' ');
+  document.getElementById('speechPlacementSelect').value = SailClientSpeech.preferred() ? 'device' : 'host';
+}
+async function loadClientSpeech() {
+  await SailClientSpeech.load(renderSpeechPlacement);
+  announceClientSpeech(); renderSpeechPlacement();
+}
+async function handleClientFrame(frame) {
+  if (!clientSpeechActive.stt || !isRecording || isMuted) return;
+  let result;
+  try { result = await SailClientSpeech.frame(frame); }
+  catch (error) { failClientSpeech(error); return; }
+  let rms = 0; for (const v of frame) rms += (v / 32768) ** 2; rms = Math.sqrt(rms / frame.length);
+  if (!playingSources.size) {
+    currentAmplitude = rms; wavePhase = (wavePhase + 0.12) % (Math.PI * 2); spectrum8 = Array(8).fill(Math.min(1, rms * 4));
+    if (!captureHeld && !turnInProgress && pendingAudio === 0) updateState(clientCapturing ? 'listening' : (isRecording ? 'listening' : 'idle'));
+  }
+  document.getElementById('sessionConfidence').textContent = `${(result.probability * 100).toFixed(0)}%`;
+  document.getElementById('sessionRms').textContent = rms.toFixed(3);
+  document.getElementById('sessionDuration').textContent = `${formatCaptureTime(result.capturedMs)} / ${formatCaptureTime(maxRecordingMs)}`;
+  document.getElementById('telVad').textContent = `VAD inference on this device: ${result.inferenceMs.toFixed(2)}ms`;
+  if (result.event === 'start') {
+    // Barge-in, as the host VAD does: stop playback and let the server preempt background work.
+    clientCapturing = true; clientCaptureSerial++; stopPlayback(); sendAction('speech_start');
+  } else if (result.event === 'end') {
+    // Not awaited: the VAD keeps running during transcription so barge-in still works.
+    void commitClientCapture();
+  } else if (result.event === 'limit') {
+    stopMic(false); setCaptureHeld(true); updateState('holding');
+    transcriptBox.textContent = 'Recording limit reached. Your audio is held; send the turn or start a new conversation to discard it.';
+  }
+}
+// Transcribe the captured turn here and send the text. A newer speech onset supersedes it,
+// as barge-in cancels a turn on the host.
+async function commitClientCapture() {
+  const samples = SailClientSpeech.takeCapture(); const serial = clientCaptureSerial; clientCapturing = false;
+  if (!samples) { sendAction('speech_cancel'); return; }
+  setCaptureHeld(false); updateState('transcribing');
+  try {
+    const { text } = await SailClientSpeech.transcribe(samples);
+    if (serial !== clientCaptureSerial) return;
+    if (text) sendAction('voice_text', { text }); else { sendAction('speech_cancel'); updateState(isRecording ? 'listening' : 'idle'); }
+  } catch (error) { sendAction('speech_cancel'); failClientSpeech(error); }
+}
+// Synthesize a reply fragment here and queue it behind earlier audio, in order.
+function queueClientSpeech(data) {
+  const generation = playbackGeneration; pendingAudio++;
+  playbackQueue = playbackQueue.then(async () => {
+    if (generation !== playbackGeneration) return;
+    const [context, speech] = await Promise.all([ensureAudio(), SailClientSpeech.speak(data.text, selectedVoice())]);
+    if (generation !== playbackGeneration) return;
+    const pause = Math.round(speech.sampling_rate * (data.pause_ms || 0) / 1000);
+    const pcm = new Float32Array(speech.audio.length + pause); pcm.set(speech.audio);
+    // 100 ms buffers, so the Orb follows the loudness of what is playing.
+    const step = Math.round(speech.sampling_rate / 10);
+    for (let offset = 0; offset < pcm.length; offset += step) {
+      const part = pcm.subarray(offset, Math.min(pcm.length, offset + step));
+      const buffer = context.createBuffer(1, part.length, speech.sampling_rate); buffer.copyToChannel(part, 0);
+      let rms = 0; for (const v of part) rms += v * v; rms = Math.sqrt(rms / part.length);
+      schedulePlayback(context, buffer, generation, { rms, phase:(offset / step) * 0.4 % (Math.PI * 2), spectrum:Array(8).fill(Math.min(1, rms * 4)) });
+    }
+    pendingAudio--;
+  }).catch(error => { if (generation === playbackGeneration) { pendingAudio = Math.max(0, pendingAudio - 1); failClientSpeech(error); } });
+}
+// Hand speech back to the host workers and say so; never fail silently.
+function failClientSpeech(error) {
+  SailClientSpeech.stop(`On-device speech stopped (${error.message}); the SAIL host handles speech.`);
+  clientCapturing = false; announceClientSpeech(); renderSpeechPlacement();
+  showError('On-device speech stopped; the SAIL host handles speech now.');
 }
 function finishPlayback() { updateState(isRecording ? 'listening' : 'idle'); currentAmplitude = 0; spectrum8 = Array(8).fill(0); sendAction('playback_finished'); }
 function updateState(state) {
@@ -612,6 +727,12 @@ async function submitVoiceTurn(stopAfter = false) {
       });
       if (processor !== capture || !isRecording) return;
     }
+    if (clientSpeechActive.stt) {
+      await clientFrames;
+      if (stopAfter) stopMic(false);
+      await commitClientCapture();
+      return;
+    }
     if (stopAfter) stopMic();
     sendAction('end_turn');
   } catch(error) { showError(error.message); }
@@ -638,6 +759,10 @@ async function startMic() {
         return;
       }
       if (!(data instanceof ArrayBuffer)) return;
+      if (clientSpeechActive.stt) {
+        if (isRecording && !isMuted) { const frame = new Int16Array(data); clientFrames = clientFrames.then(() => handleClientFrame(frame)); }
+        return;
+      }
       if (isRecording && !isMuted && ws?.readyState === WebSocket.OPEN) {
         if (ws.bufferedAmount > 64000) { showError('Audio connection is too slow; microphone stopped.'); stopMic(); return; }
         ws.send(data);
@@ -648,8 +773,9 @@ async function startMic() {
   } catch (error) { stopMic(); showError(error.name === 'NotAllowedError' ? 'Microphone permission denied. Allow microphone access in browser settings.' : `Microphone: ${error.message}`); }
   finally { micBtn.disabled = false; }
 }
-function stopMic() {
+function stopMic(discardClientCapture = true) {
   if (pendingCaptureFlush) { const pending = pendingCaptureFlush; pendingCaptureFlush = null; pending.reject(); }
+  if (discardClientCapture && clientSpeechActive.stt && clientCapturing) { clientCapturing = false; clientCaptureSerial++; SailClientSpeech.resetCapture(); sendAction('speech_cancel'); }
   isRecording = false; micStream?.getTracks().forEach(track => track.stop());
   if (processor) { processor.port.onmessage = null; processor.disconnect(); processor = null; }
   micSource?.disconnect(); micSource = null; micStream = null;
@@ -794,7 +920,7 @@ function renderVisuals() {
 
 // Connect once every deferred script has run, so incoming messages always find their
 // handlers (forge.js, approvals.js and the rest load after this file).
-document.addEventListener('DOMContentLoaded', connectWs, { once: true });
+document.addEventListener('DOMContentLoaded', () => { connectWs(); loadClientSpeech(); }, { once: true });
 renderVisuals();
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { if (animationFrame) cancelAnimationFrame(animationFrame); animationFrame = 0; }

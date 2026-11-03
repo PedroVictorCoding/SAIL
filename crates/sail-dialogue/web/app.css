@@ -1707,3 +1707,14 @@ a.nav-item { text-decoration:none; color:var(--muted) }
   max-height: none;
 }
 
+/* On-device voice model loading, beside the microphone indicator. */
+.loading-indicator { display:flex; align-items:center; gap:8px; min-height:36px; padding:0 12px; border:var(--border); border-radius:var(--radius-pill); background:#12151cbf; color:var(--muted); font-size:12px; white-space:nowrap }
+.loading-indicator progress { appearance:none; width:72px; height:6px; border:0; border-radius:var(--radius-pill); background:#0d1016; box-shadow:inset 1px 1px 2px #0009, inset -1px -1px 1px #ffffff0d; overflow:hidden; color:var(--accent) }
+.loading-indicator progress::-webkit-progress-bar { background:transparent }
+.loading-indicator progress::-webkit-progress-value { background:var(--accent); border-radius:var(--radius-pill); transition:width .2s }
+.loading-indicator progress::-moz-progress-bar { background:var(--accent); border-radius:var(--radius-pill) }
+.loading-indicator #speechLoadValue { min-width:3ch; font-variant-numeric:tabular-nums; color:var(--text) }
+/* Narrow screens: just the bar (its value is still exposed to assistive technology). */
+@media (max-width:640px) { .loading-indicator { padding:0 10px } .loading-indicator #speechLoadLabel,.loading-indicator #speechLoadValue { display:none } .loading-indicator progress { width:32px } }
+.loading-indicator progress:indeterminate { background:linear-gradient(90deg,#0d1016 0,var(--accent) 50%,#0d1016 100%) 0 0/200% 100%; animation:load-sweep 1.4s linear infinite }
+@keyframes load-sweep { to { background-position:-200% 0 } }

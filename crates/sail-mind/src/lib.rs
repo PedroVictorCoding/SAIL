@@ -81,6 +81,21 @@ impl MindSubsystem {
         }
         self
     }
+    /// Same as [`MindSubsystem::with_gemma_config`], but admission is decided by `scheduler`
+    /// instead of the process-global broker. Tests and embedders need host measurements they
+    /// control; the daemon keeps using the shared broker.
+    pub fn with_gemma_config_and_scheduler(
+        mut self,
+        config: GemmaConfig,
+        scheduler: std::sync::Arc<sail_common::resources::ResourceScheduler>,
+    ) -> Self {
+        self.model_path = config.model_path.clone();
+        self.runner = GemmaRunner::with_scheduler(config, scheduler);
+        if let Ok(service) = self.runner.service() {
+            self.voice = self.voice.clone().with_inference(service);
+        }
+        self
+    }
     pub fn voice_services(&self) -> VoiceModelServices {
         self.voice.clone()
     }
