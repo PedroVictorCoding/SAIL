@@ -113,15 +113,25 @@ async fn generate(
         .unwrap()
 }
 fn service(server: &TestServer, limits: ResourceLimits) -> MindService {
-    MindService::new(
+    let scheduler = Arc::new(sail_common::resources::ResourceScheduler::new(
+        Arc::new(AdmissionProbe(std::sync::Mutex::new(
+            24 * sail_common::resources::GIB,
+        ))),
+        Default::default(),
+    ));
+    let backend = sail_mind::local::LocalGemmaBackend::with_scheduler(
         LocalModelConfig {
             endpoint: server.url.clone(),
             managed: false,
+            threads: 1,
+            threads_batch: Some(1),
             ..Default::default()
         },
-        limits,
+        limits.max_parallel,
+        scheduler.clone(),
     )
-    .unwrap()
+    .unwrap();
+    MindService::with_scheduler(vec![Arc::new(backend)], limits, scheduler).unwrap()
 }
 #[tokio::test]
 async fn typed_local_text_and_vision_routing_preserve_version_ids_usage_and_unicode() {
@@ -725,5 +735,213 @@ async fn routing_is_explicit_and_ambiguous_model_registrations_are_rejected() {
             Default::default()
         )
         .is_err()
+    );
+}
+
+struct AdmissionProbe(std::sync::Mutex<u64>);
+impl sail_common::resources::HostProbe for AdmissionProbe {
+    fn sample(&self) -> std::io::Result<sail_protocol::resources::HostSample> {
+        Ok(sail_protocol::resources::HostSample {
+            total_ram_bytes: 32 * sail_common::resources::GIB,
+            available_ram_bytes: *self.0.lock().unwrap(),
+            swap_used_bytes: 0,
+            swap_total_bytes: 0,
+            logical_cpus: 12,
+        })
+    }
+}
+fn admitted_service(server: &TestServer) -> (MindService, Arc<AdmissionProbe>) {
+    let probe = Arc::new(AdmissionProbe(std::sync::Mutex::new(
+        24 * sail_common::resources::GIB,
+    )));
+    let scheduler = Arc::new(sail_common::resources::ResourceScheduler::new(
+        probe.clone(),
+        Default::default(),
+    ));
+    let backend = sail_mind::local::LocalGemmaBackend::with_scheduler(
+        LocalModelConfig {
+            endpoint: server.url.clone(),
+            managed: false,
+            threads: 1,
+            threads_batch: Some(1),
+            ..Default::default()
+        },
+        1,
+        scheduler.clone(),
+    )
+    .unwrap();
+    (
+        MindService::with_scheduler(
+            vec![Arc::new(backend)],
+            ResourceLimits {
+                max_parallel: 1,
+                max_queued: 1,
+                queue_timeout_ms: 1000,
+                ..Default::default()
+            },
+            scheduler,
+        )
+        .unwrap(),
+        probe,
+    )
+}
+#[tokio::test]
+async fn host_admission_denies_before_http_and_recovers_with_real_stream_and_status() {
+    let server = fixture(false, 8192).await;
+    let (mind, probe) = admitted_service(&server);
+    *probe.0.lock().unwrap() = sail_common::resources::GIB;
+    let (tx, mut rx) = mpsc::channel(8);
+    let error = mind
+        .infer(
+            InferenceRequest::text("bounded"),
+            CancellationToken::new(),
+            Some(tx),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::ResourceLimit);
+    assert_eq!(server.state.requests.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        rx.recv().await.unwrap().payload,
+        InferenceEventPayload::Failed { .. }
+    ));
+    assert!(rx.recv().await.is_none());
+    *probe.0.lock().unwrap() = 24 * sail_common::resources::GIB;
+    let result = mind
+        .infer(
+            InferenceRequest::text("recover"),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.message.content.text(), Some("Olá mundo"));
+    let status = mind.status().await;
+    assert_eq!(status.metrics.failed, 1);
+    assert_eq!(status.metrics.completed, 1);
+    assert_eq!(status.resources.unwrap().admitted_inference, 0);
+}
+#[tokio::test]
+async fn voice_preempts_a_real_background_http_stream_and_completes_its_own_request() {
+    let server = fixture(false, 8192).await;
+    *server.state.mode.lock().await = Mode::Slow;
+    let (mind, _) = admitted_service(&server);
+    let (tx, mut rx) = mpsc::channel(8);
+    let background = tokio::spawn({
+        let mind = mind.clone();
+        async move {
+            mind.infer(
+                InferenceRequest::text("background"),
+                CancellationToken::new(),
+                Some(tx),
+            )
+            .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !matches!(
+            rx.recv().await.unwrap().payload,
+            InferenceEventPayload::TextDelta { .. }
+        ) {}
+    })
+    .await
+    .unwrap();
+    *server.state.mode.lock().await = Mode::Normal;
+    let result = mind
+        .infer_with_priority(
+            InferenceRequest::text("voice"),
+            CancellationToken::new(),
+            None,
+            sail_protocol::resources::WorkPriority::Voice,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.message.content.text(), Some("Olá mundo"));
+    assert_eq!(
+        background.await.unwrap().unwrap_err().code,
+        ErrorCode::Cancelled
+    );
+    let status = mind.status().await;
+    assert_eq!(status.metrics.cancelled, 1);
+    assert_eq!(status.resources.as_ref().unwrap().preemptions, 1);
+    assert_eq!(status.resources.unwrap().voice_turns, 0);
+}
+#[tokio::test]
+async fn voice_can_enter_a_full_background_queue_and_drop_releases_priority() {
+    use sail_common::resources::*;
+    use sail_protocol::resources::WorkPriority;
+    let scheduler = Arc::new(ResourceScheduler::new(
+        Arc::new(AdmissionProbe(std::sync::Mutex::new(24 * GIB))),
+        Default::default(),
+    ));
+    let backend = Arc::new(BlockingBackend {
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    let mind = MindService::with_scheduler(
+        vec![backend.clone()],
+        ResourceLimits {
+            max_parallel: 1,
+            max_queued: 1,
+            queue_timeout_ms: 1000,
+            ..Default::default()
+        },
+        scheduler.clone(),
+    )
+    .unwrap();
+    let first = tokio::spawn({
+        let mind = mind.clone();
+        async move {
+            mind.infer(InferenceRequest::text("first"), Default::default(), None)
+                .await
+        }
+    });
+    backend.entered.notified().await;
+    let queued = tokio::spawn({
+        let mind = mind.clone();
+        async move {
+            mind.infer(InferenceRequest::text("queued"), Default::default(), None)
+                .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while mind.status().await.metrics.submitted != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let voice = tokio::spawn({
+        let mind = mind.clone();
+        async move {
+            mind.infer_with_priority(
+                InferenceRequest::text("voice"),
+                Default::default(),
+                None,
+                WorkPriority::Voice,
+            )
+            .await
+        }
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        backend.entered.notified(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.await.unwrap().unwrap_err().code, ErrorCode::Cancelled);
+    assert_eq!(
+        queued.await.unwrap().unwrap_err().code,
+        ErrorCode::Cancelled
+    );
+    assert_eq!(scheduler.status().voice_turns, 1);
+    voice.abort();
+    let _ = voice.await;
+    assert_eq!(scheduler.status().voice_turns, 0);
+    assert_eq!(scheduler.status().admitted_inference, 0);
+    assert!(
+        scheduler
+            .try_admit(ResourceClaim::build(), Default::default())
+            .is_ok()
     );
 }

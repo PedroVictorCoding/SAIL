@@ -137,7 +137,12 @@ impl GemmaRunner {
         }
         let mut forward = Forward(forward);
         let response = service
-            .infer(request, CancellationToken::new(), Some(events))
+            .infer_with_priority(
+                request,
+                CancellationToken::new(),
+                Some(events),
+                sail_protocol::resources::WorkPriority::Voice,
+            )
             .await
             .map_err(legacy)?;
         let _ = (&mut forward.0).await;

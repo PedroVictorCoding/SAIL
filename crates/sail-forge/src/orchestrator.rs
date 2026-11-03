@@ -988,19 +988,30 @@ impl ForgeOrchestrator {
                     &legacy_payload
                 };
 
-                if let Ok(resp) = c.post(&url).json(payload).send().await {
-                    if resp.status().is_success() {
-                        if let Ok(res_json) = resp.json::<serde_json::Value>().await {
-                            let text = res_json["content"]
-                                .as_str()
-                                .or_else(|| res_json["choices"][0]["message"]["content"].as_str());
-                            if let Some(content) = text {
-                                if let Some(diff) = Self::extract_diff_from_model_output(content) {
-                                    return Ok(diff);
+                if let Some(diff) = sail_common::resources::global()
+                    .background_inference(async {
+                        if let Ok(resp) = c.post(&url).json(payload).send().await {
+                            if resp.status().is_success() {
+                                if let Ok(res_json) = resp.json::<serde_json::Value>().await {
+                                    let text = res_json["content"].as_str().or_else(|| {
+                                        res_json["choices"][0]["message"]["content"].as_str()
+                                    });
+                                    if let Some(content) = text {
+                                        if let Some(diff) =
+                                            Self::extract_diff_from_model_output(content)
+                                        {
+                                            return Some(diff);
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
+                        None
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    return Ok(diff);
                 }
             }
         }
@@ -1081,19 +1092,30 @@ impl ForgeOrchestrator {
                 &legacy_payload
             };
 
-            if let Ok(resp) = client.post(&url).json(payload).send().await {
-                if resp.status().is_success() {
-                    if let Ok(res_json) = resp.json::<serde_json::Value>().await {
-                        let text = res_json["content"]
-                            .as_str()
-                            .or_else(|| res_json["choices"][0]["message"]["content"].as_str());
-                        if let Some(content) = text {
-                            if let Some(diff) = Self::extract_diff_from_model_output(content) {
-                                return Ok(diff);
+            if let Some(diff) = sail_common::resources::global()
+                .background_inference(async {
+                    if let Ok(resp) = client.post(&url).json(payload).send().await {
+                        if resp.status().is_success() {
+                            if let Ok(res_json) = resp.json::<serde_json::Value>().await {
+                                let text = res_json["content"].as_str().or_else(|| {
+                                    res_json["choices"][0]["message"]["content"].as_str()
+                                });
+                                if let Some(content) = text {
+                                    if let Some(diff) =
+                                        Self::extract_diff_from_model_output(content)
+                                    {
+                                        return Some(diff);
+                                    }
+                                }
                             }
                         }
                     }
-                }
+                    None
+                })
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                return Ok(diff);
             }
         }
 

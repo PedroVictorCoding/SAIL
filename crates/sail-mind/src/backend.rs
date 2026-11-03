@@ -6,6 +6,10 @@ use tokio_util::sync::CancellationToken;
 #[async_trait]
 pub trait InferenceBackend: Send + Sync {
     fn name(&self) -> &str;
+    /// Peak configured generation/prefill thread demand; not observed utilization.
+    fn cpu_slots(&self) -> usize {
+        1
+    }
     fn aliases(&self) -> Vec<String>;
     async fn start(&self) -> Result<ModelStatus>;
     async fn status(&self) -> ModelStatus;
