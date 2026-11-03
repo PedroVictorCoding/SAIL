@@ -126,6 +126,9 @@ fn test_safety_review_detects_broad_write_and_injection() {
     );
 }
 
+// The std mutex serializes tests that share the process-global Guardian broker. Each test has
+// its own runtime thread, so holding it across an await only delays the other tests.
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn test_flow_scheduled_safety_review_execution() {
     let _lock = SAFETY_TEST_MUTEX.lock().unwrap();

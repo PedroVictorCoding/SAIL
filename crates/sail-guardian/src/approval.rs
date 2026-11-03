@@ -119,15 +119,14 @@ impl ApprovalBroker {
         let mut state = self.state.lock().unwrap();
         state.pending.retain(|_, s| s.expires_at > now);
         state.tokens.retain(|_, (t, _)| t.expires_at > now);
-        if state.pending.len() >= 1024 {
-            if let Some(oldest) = state
+        if state.pending.len() >= 1024
+            && let Some(oldest) = state
                 .pending
                 .values()
                 .min_by_key(|s| s.requested_at)
                 .map(|s| s.session_id)
-            {
-                state.pending.remove(&oldest);
-            }
+        {
+            state.pending.remove(&oldest);
         }
         state.pending.insert(session.session_id, session.clone());
         session

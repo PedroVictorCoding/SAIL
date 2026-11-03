@@ -349,22 +349,22 @@ impl SecurityRuntime for NonoSecurityRuntime {
         }
 
         // 3. Prevent arbitrary out-of-tree writes or access to host secrets
-        if let Some(target) = &request.target_path {
-            if is_sensitive_host_path(target) {
-                let reason = format!(
-                    "Target path {:?} is a protected host credential or system resource",
-                    target
-                );
-                self.audit(
-                    audit,
-                    request.caller,
-                    request.capability.clone(),
-                    DecisionOutcome::Denied,
-                    &reason,
-                    request.correlation_id,
-                );
-                return Ok(AuthorizationDecision::Denied { reason });
-            }
+        if let Some(target) = &request.target_path
+            && is_sensitive_host_path(target)
+        {
+            let reason = format!(
+                "Target path {:?} is a protected host credential or system resource",
+                target
+            );
+            self.audit(
+                audit,
+                request.caller,
+                request.capability.clone(),
+                DecisionOutcome::Denied,
+                &reason,
+                request.correlation_id,
+            );
+            return Ok(AuthorizationDecision::Denied { reason });
         }
 
         // 4. Evaluate risk according to the active AutonomyPreset

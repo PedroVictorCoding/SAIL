@@ -301,35 +301,36 @@ impl SandboxPolicy {
 
         // 2. Check for system mount points using normalized path components
         let comps: Vec<_> = target.components().collect();
-        if comps.len() >= 2 && comps[0] == Component::RootDir {
-            if let Component::Normal(first_part) = comps[1] {
-                let first_str = first_part.to_string_lossy();
+        if comps.len() >= 2
+            && comps[0] == Component::RootDir
+            && let Component::Normal(first_part) = comps[1]
+        {
+            let first_str = first_part.to_string_lossy();
 
-                // Telemetry exception for /proc (strictly read-only and constrained to allowed proc paths)
-                if first_str == "proc" {
-                    if is_write {
-                        return Err(SandboxViolation::WriteToReadOnlyRoot {
-                            path: target.to_path_buf(),
-                        });
-                    }
-                    if self.is_allowed_proc_path(target) {
-                        return Ok(target.to_path_buf());
-                    } else {
-                        return Err(SandboxViolation::SensitivePathBlocked {
-                            path: target.to_path_buf(),
-                        });
-                    }
+            // Telemetry exception for /proc (strictly read-only and constrained to allowed proc paths)
+            if first_str == "proc" {
+                if is_write {
+                    return Err(SandboxViolation::WriteToReadOnlyRoot {
+                        path: target.to_path_buf(),
+                    });
                 }
-
-                // Deny all sensitive host mounts
-                if matches!(
-                    first_str.as_ref(),
-                    "sys" | "dev" | "etc" | "root" | "boot" | "run" | "var"
-                ) {
+                if self.is_allowed_proc_path(target) {
+                    return Ok(target.to_path_buf());
+                } else {
                     return Err(SandboxViolation::SensitivePathBlocked {
                         path: target.to_path_buf(),
                     });
                 }
+            }
+
+            // Deny all sensitive host mounts
+            if matches!(
+                first_str.as_ref(),
+                "sys" | "dev" | "etc" | "root" | "boot" | "run" | "var"
+            ) {
+                return Err(SandboxViolation::SensitivePathBlocked {
+                    path: target.to_path_buf(),
+                });
             }
         }
 
@@ -432,50 +433,47 @@ impl SandboxPolicy {
 
         // 6. Handle-based descriptor verification with openat2 (RESOLVE_BENEATH) on Linux
         #[cfg(all(unix, target_os = "linux"))]
-        if let Some(root) = matched_root {
-            if let Ok(rel) = canonical_target.strip_prefix(root) {
-                if let Ok(root_c) = std::ffi::CString::new(root.as_os_str().as_bytes()) {
-                    let dfd = unsafe {
-                        libc::open(
-                            root_c.as_ptr(),
-                            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-                        )
+        if let Some(root) = matched_root
+            && let Ok(rel) = canonical_target.strip_prefix(root)
+            && let Ok(root_c) = std::ffi::CString::new(root.as_os_str().as_bytes())
+        {
+            let dfd = unsafe {
+                libc::open(
+                    root_c.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+                )
+            };
+            if dfd >= 0 {
+                let rel_bytes = if rel.as_os_str().is_empty() {
+                    b".".as_slice()
+                } else {
+                    rel.as_os_str().as_bytes()
+                };
+
+                if let Ok(rel_c) = std::ffi::CString::new(rel_bytes) {
+                    let how = linux_openat2::OpenHow {
+                        flags: (libc::O_PATH | libc::O_CLOEXEC) as u64,
+                        mode: 0,
+                        resolve: linux_openat2::RESOLVE_BENEATH
+                            | linux_openat2::RESOLVE_NO_MAGICLINKS,
                     };
-                    if dfd >= 0 {
-                        let rel_bytes = if rel.as_os_str().is_empty() {
-                            b".".as_slice()
-                        } else {
-                            rel.as_os_str().as_bytes()
-                        };
 
-                        if let Ok(rel_c) = std::ffi::CString::new(rel_bytes) {
-                            let how = linux_openat2::OpenHow {
-                                flags: (libc::O_PATH | libc::O_CLOEXEC) as u64,
-                                mode: 0,
-                                resolve: linux_openat2::RESOLVE_BENEATH
-                                    | linux_openat2::RESOLVE_NO_MAGICLINKS,
-                            };
+                    let res = unsafe { linux_openat2::sys_openat2(dfd, rel_c.as_ptr(), &how) };
+                    unsafe { libc::close(dfd) };
 
-                            let res =
-                                unsafe { linux_openat2::sys_openat2(dfd, rel_c.as_ptr(), &how) };
-                            unsafe { libc::close(dfd) };
-
-                            if res >= 0 {
-                                unsafe { libc::close(res) };
-                            } else {
-                                let err =
-                                    std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-                                if err == libc::EXDEV || err == libc::ELOOP {
-                                    return Err(SandboxViolation::PathEscapesRoot {
-                                        path: target.to_path_buf(),
-                                        target: canonical_target,
-                                    });
-                                }
-                            }
-                        } else {
-                            unsafe { libc::close(dfd) };
+                    if res >= 0 {
+                        unsafe { libc::close(res) };
+                    } else {
+                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                        if err == libc::EXDEV || err == libc::ELOOP {
+                            return Err(SandboxViolation::PathEscapesRoot {
+                                path: target.to_path_buf(),
+                                target: canonical_target,
+                            });
                         }
                     }
+                } else {
+                    unsafe { libc::close(dfd) };
                 }
             }
         }

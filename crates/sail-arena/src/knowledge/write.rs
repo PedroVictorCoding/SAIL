@@ -1156,7 +1156,7 @@ impl KnowledgeTx<'_> {
             }
         }
         // Recompute fingerprints under the restored identity assignments.
-        let rows: Vec<(i64, i64, String, Option<i64>, Option<String>)> = {
+        let rows: Vec<ClaimIdentityRow> = {
             let mut stmt = self.conn.prepare(
                 "SELECT id,subject_id,predicate,object_entity_id,object_value FROM kn_claims",
             )?;
@@ -1190,3 +1190,6 @@ impl KnowledgeTx<'_> {
         )
     }
 }
+
+/// `(id, subject_id, predicate, object_entity_id, object_value)` of a claim.
+type ClaimIdentityRow = (i64, i64, String, Option<i64>, Option<String>);

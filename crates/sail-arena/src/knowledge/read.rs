@@ -568,9 +568,8 @@ impl KnowledgeStore<'_> {
                     let mut score=*lexical.get(&claim.id).unwrap_or(&0.0);
                     if let Some(q)=embedding {
                         let vector:Option<String>=conn.query_row("SELECT vector FROM kn_vectors WHERE claim_id=?1 AND model=?2 AND revision=?3",rusqlite::params![claim.id,q.model,q.revision],|r|r.get(0)).optional()?;
-                        if let Some(v)=vector.and_then(|v|serde_json::from_str::<Vec<f32>>(&v).ok()) {
-                            if let Some(cos)=super::retrieval::cosine(&v,&q.values) {score+=cos.max(0.0);}
-                        }
+                        if let Some(v)=vector.and_then(|v|serde_json::from_str::<Vec<f32>>(&v).ok())
+                            && let Some(cos)=super::retrieval::cosine(&v,&q.values) {score+=cos.max(0.0);}
                     }
                     if query.text.trim().is_empty() {score=0.1;}
                     if let ClaimObject::Entity(target)=&claim.object {edges.push((claim.subject,*target));}

@@ -309,24 +309,24 @@ impl SafetyReviewEngine {
                     });
                 }
             }
-            LearnedPattern::SystemOperation { operation } => {
-                if operation == "*" || operation == "network_all" {
-                    findings.push(SafetyFinding {
-                        finding_id: Uuid::new_v4(),
-                        rule_id: rule.id,
-                        rule_version: rule.auto_approved_count + 1,
-                        severity: SafetyFindingSeverity::High,
-                        title: "Unrestricted system or network capability".into(),
-                        reason: format!("Rule allows unrestricted operation '{}'", operation),
-                        affected_capabilities: vec!["system:operation".into()],
-                        evidence: vec![format!("Operation: '{}'", operation)],
-                        recommended_action: RecommendedAction::Revoke,
-                        status: FindingStatus::Unread,
-                        evaluated_at,
-                        evaluator_version: Self::EVALUATOR_VERSION.into(),
-                        policy_version: Self::POLICY_VERSION.into(),
-                    });
-                }
+            LearnedPattern::SystemOperation { operation }
+                if (operation == "*" || operation == "network_all") =>
+            {
+                findings.push(SafetyFinding {
+                    finding_id: Uuid::new_v4(),
+                    rule_id: rule.id,
+                    rule_version: rule.auto_approved_count + 1,
+                    severity: SafetyFindingSeverity::High,
+                    title: "Unrestricted system or network capability".into(),
+                    reason: format!("Rule allows unrestricted operation '{}'", operation),
+                    affected_capabilities: vec!["system:operation".into()],
+                    evidence: vec![format!("Operation: '{}'", operation)],
+                    recommended_action: RecommendedAction::Revoke,
+                    status: FindingStatus::Unread,
+                    evaluated_at,
+                    evaluator_version: Self::EVALUATOR_VERSION.into(),
+                    policy_version: Self::POLICY_VERSION.into(),
+                });
             }
             _ => {}
         }
@@ -513,10 +513,10 @@ impl SafetyReviewEngine {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            if let Ok(findings) = self.findings.read() {
-                if let Ok(json) = serde_json::to_string_pretty(&*findings) {
-                    let _ = std::fs::write(path, json);
-                }
+            if let Ok(findings) = self.findings.read()
+                && let Ok(json) = serde_json::to_string_pretty(&*findings)
+            {
+                let _ = std::fs::write(path, json);
             }
         }
     }

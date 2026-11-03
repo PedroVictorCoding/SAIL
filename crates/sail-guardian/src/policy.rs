@@ -133,11 +133,12 @@ pub enum AuthorizationDecision {
     },
 }
 
+/// An explicit grant: who, which capability, and optionally which correlated task.
+type GrantKey = (SubsystemId, Capability, Option<uuid::Uuid>);
+
 pub struct PolicyEngine {
     sandbox: SandboxPolicy,
-    explicit_grants: RwLock<
-        HashMap<(SubsystemId, Capability, Option<uuid::Uuid>), chrono::DateTime<chrono::Utc>>,
-    >,
+    explicit_grants: RwLock<HashMap<GrantKey, chrono::DateTime<chrono::Utc>>>,
     autonomy_preset: RwLock<crate::runtime::AutonomyPreset>,
     learned_rules: RwLock<Vec<LearnedApprovalRule>>,
     persistence_path: Option<PathBuf>,
@@ -253,10 +254,10 @@ impl PolicyEngine {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            if let Ok(rules) = self.learned_rules.read() {
-                if let Ok(json) = serde_json::to_string_pretty(&*rules) {
-                    let _ = std::fs::write(path, json);
-                }
+            if let Ok(rules) = self.learned_rules.read()
+                && let Ok(json) = serde_json::to_string_pretty(&*rules)
+            {
+                let _ = std::fs::write(path, json);
             }
         }
     }
@@ -340,18 +341,17 @@ impl PolicyEngine {
             }
         }
 
-        if let Capability::Tool(ToolCapability::CliCommand(cmd)) = capability {
-            if !self.sandbox.is_command_safe(cmd) {
-                let reason =
-                    format!("Prohibited command contains unsafe privilege escalation: {cmd}");
-                audit.record(
-                    requester,
-                    capability.clone(),
-                    DecisionOutcome::Denied,
-                    &reason,
-                );
-                return AuthorizationDecision::Denied { reason };
-            }
+        if let Capability::Tool(ToolCapability::CliCommand(cmd)) = capability
+            && !self.sandbox.is_command_safe(cmd)
+        {
+            let reason = format!("Prohibited command contains unsafe privilege escalation: {cmd}");
+            audit.record(
+                requester,
+                capability.clone(),
+                DecisionOutcome::Denied,
+                &reason,
+            );
+            return AuthorizationDecision::Denied { reason };
         }
 
         // 2. Check learned approval rules

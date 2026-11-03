@@ -120,7 +120,7 @@ impl ToolRegistry {
         let mut result = Vec::new();
         for (_, entry) in ranked {
             let size = serde_json::to_vec(&entry.descriptor).unwrap().len();
-            if bytes + size + 1 <= max_bytes.min(16384) && result.len() < max_tools.min(8) {
+            if bytes + size < max_bytes.min(16384) && result.len() < max_tools.min(8) {
                 bytes += size + 1;
                 result.push(entry.descriptor.clone());
             }
@@ -150,13 +150,12 @@ fn schema_supported(schema: &Value, depth: usize) -> Result<(), String> {
     if object.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err("unsupported schema keyword".into());
     }
-    if let Some(values) = schema.get("enum") {
-        if values
+    if let Some(values) = schema.get("enum")
+        && values
             .as_array()
             .is_none_or(|items| items.is_empty() || items.len() > 32)
-        {
-            return Err("enum bound".into());
-        }
+    {
+        return Err("enum bound".into());
     }
     match schema["type"].as_str() {
         Some("object") => {
@@ -219,13 +218,12 @@ fn validate(schema: &Value, value: &Value) -> Result<(), String> {
             if object.keys().any(|key| !properties.contains_key(key)) {
                 return Err("unknown input field".into());
             }
-            if let Some(required) = schema.get("required").and_then(Value::as_array) {
-                if required
+            if let Some(required) = schema.get("required").and_then(Value::as_array)
+                && required
                     .iter()
                     .any(|field| !object.contains_key(field.as_str().unwrap()))
-                {
-                    return Err("required field missing".into());
-                }
+            {
+                return Err("required field missing".into());
             }
             for (key, value) in object {
                 validate(&properties[key], value)?;
@@ -687,23 +685,23 @@ impl ToolScheduler {
             Ok(output) => {
                 let output = sail_common::diagnostics::redact_json(&output);
                 let bytes = bounded_json(&output, 1024 * 1024);
-                if bytes.is_err() {
-                    observation.error = Some("tool_output_limit".into());
-                } else {
-                    let bytes = bytes.unwrap();
-                    observation.success = true;
-                    if bytes.len() > 4096 {
-                        let length = bytes.len();
-                        let id = self.content.lock().unwrap().put(
-                            context.correlation_id,
-                            context.actor,
-                            bytes,
-                            now_ms(),
-                        );
-                        observation.data = json!({"payload_ref":id,"bytes":length});
-                        observation.evidence_refs.push(id);
-                    } else {
-                        observation.data = output;
+                match bytes {
+                    Err(_) => observation.error = Some("tool_output_limit".into()),
+                    Ok(bytes) => {
+                        observation.success = true;
+                        if bytes.len() > 4096 {
+                            let length = bytes.len();
+                            let id = self.content.lock().unwrap().put(
+                                context.correlation_id,
+                                context.actor,
+                                bytes,
+                                now_ms(),
+                            );
+                            observation.data = json!({"payload_ref":id,"bytes":length});
+                            observation.evidence_refs.push(id);
+                        } else {
+                            observation.data = output;
+                        }
                     }
                 }
             }
