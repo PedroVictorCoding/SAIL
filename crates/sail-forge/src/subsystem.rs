@@ -55,7 +55,11 @@ impl Subsystem for ForgeSubsystem {
 
     async fn start(&mut self) -> Result<()> {
         info!("SAIL Forge Subsystem starting; recovering durable task checkpoints...");
-        if let Ok(recovered_ids) = self.orchestrator.recover_from_checkpoints() {
+        let recovered = self
+            .orchestrator
+            .recover_from_checkpoints()
+            .inspect_err(|e| error!("SAIL Forge recovery failed: {e}"));
+        if let Ok(recovered_ids) = recovered {
             if !recovered_ids.is_empty() {
                 info!(
                     "SAIL Forge recovered {} tasks across daemon restart: {:?}",

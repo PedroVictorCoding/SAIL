@@ -12,6 +12,7 @@ members = [
     "crates/sail-flow",
     "crates/sail-guardian",
     "crates/sail-runner",
+    "crates/sail-continuity",
     "crates/sail-forge",
     "crates/sail-core",
 ]
@@ -55,4 +56,5 @@ sail-canvas = { path = "crates/sail-canvas" }
 sail-discovery = { path = "crates/sail-discovery" }
 sail-flow = { path = "crates/sail-flow" }
 sail-guardian = { path = "crates/sail-guardian" }
+sail-continuity = { path = "crates/sail-continuity" }
 sail-forge = { path = "crates/sail-forge" }

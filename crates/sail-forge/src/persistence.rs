@@ -173,11 +173,53 @@ impl TaskCheckpointStore {
         Self { base_dir }
     }
 
+    /// `SAIL_FORGE_CHECKPOINT_DIR`, else `forge-checkpoints` in Continuity's durable state
+    /// directory. Checkpoints left in the old temp-dir default are copied there once.
     pub fn default_store() -> Self {
-        let dir = std::env::var("SAIL_FORGE_CHECKPOINT_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir().join("sail_forge_checkpoints"));
-        Self::new(dir)
+        if let Ok(dir) = std::env::var("SAIL_FORGE_CHECKPOINT_DIR") {
+            return Self::new(PathBuf::from(dir));
+        }
+        let dir = sail_continuity::state_dir().join("forge-checkpoints");
+        let store = Self::new(dir);
+        store.import_legacy(&std::env::temp_dir().join("sail_forge_checkpoints"));
+        store
+    }
+
+    /// Copy checkpoints this store does not have yet from `legacy`. The legacy files are
+    /// left in place.
+    pub fn import_legacy(&self, legacy: &std::path::Path) -> usize {
+        let Ok(entries) = fs::read_dir(legacy) else {
+            return 0;
+        };
+        let mut imported = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let (Some(name), Some("json")) =
+                (path.file_name(), path.extension().and_then(|e| e.to_str()))
+            else {
+                continue;
+            };
+            let target = self.base_dir.join(name);
+            if target.exists() {
+                continue;
+            }
+            let valid = fs::read_to_string(&path)
+                .ok()
+                .and_then(|c| serde_json::from_str::<TaskCheckpoint>(&c).ok());
+            if let Some(cp) = valid
+                && self.save(&cp).is_ok()
+            {
+                imported += 1;
+            }
+        }
+        if imported > 0 {
+            info!(
+                "Imported {imported} Forge checkpoints from {} into {}",
+                legacy.display(),
+                self.base_dir.display()
+            );
+        }
+        imported
     }
 
     fn checkpoint_path(&self, job_id: &str) -> PathBuf {
@@ -308,6 +350,30 @@ mod tests {
         }
         let total: usize = cp.activity.iter().map(|e| e.body.len()).sum();
         assert!(total <= MAX_ACTIVITY_TOTAL_CHARS, "{total}");
+    }
+
+    #[test]
+    fn legacy_checkpoints_are_imported_once_without_overwriting() {
+        let root = std::env::temp_dir().join(format!("forge_cp_import_{}", Uuid::new_v4()));
+        let legacy = TaskCheckpointStore::new(root.join("legacy"));
+        let current = TaskCheckpointStore::new(root.join("current"));
+        let mut a = checkpoint();
+        a.job_id = "job-a".into();
+        legacy.save(&a).unwrap();
+        let mut b = checkpoint();
+        b.job_id = "job-b".into();
+        b.iteration = 1;
+        legacy.save(&b).unwrap();
+        b.iteration = 7;
+        current.save(&b).unwrap();
+        fs::write(root.join("legacy/broken.json"), "{").unwrap();
+
+        assert_eq!(current.import_legacy(&root.join("legacy")), 1);
+        assert!(current.load("job-a").unwrap().is_some());
+        assert_eq!(current.load("job-b").unwrap().unwrap().iteration, 7);
+        assert_eq!(current.import_legacy(&root.join("legacy")), 0);
+        assert!(legacy.load("job-a").unwrap().is_some());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

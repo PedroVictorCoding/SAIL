@@ -8,11 +8,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+use sail_continuity::{Continuity, EffectGate, TaskState};
 use sail_forge::admission::IssueCandidate;
 use sail_forge::contracts::{ForgeJobReport, ReviewPolicyConfig, ReviewVerdict};
 use sail_forge::github::{DraftPr, GithubClient, OpenPullRequest};
 use sail_forge::nightly::{ForgeNightlyRunner, JobExecutor, NightlyConfig, NightlyState};
-use sail_forge::orchestrator::{ForgeOrchestrator, OrchestratorConfig};
+use sail_forge::orchestrator::{EFFECT_PUBLISH, ForgeOrchestrator, OrchestratorConfig};
 use sail_forge::persistence::TaskCheckpointStore;
 use sail_forge::reviewer::{ReviewBroker, ReviewError};
 use sail_forge::self_review::{ReviewPacket, ReviewProvider};
@@ -159,39 +160,55 @@ impl JobExecutor for ScriptedExecutor {
 
 struct Harness {
     root: PathBuf,
+    repo: PathBuf,
     origin: PathBuf,
     orchestrator: Arc<ForgeOrchestrator>,
     config: NightlyConfig,
+}
+
+/// A daemon boot: a fresh orchestrator over the harness's durable files.
+fn boot(root: &Path, repo: &Path) -> Arc<ForgeOrchestrator> {
+    let mut config = OrchestratorConfig::default();
+    config.workspace_root = repo.to_path_buf();
+    let broker = Arc::new(
+        ReviewBroker::new(ReviewPolicyConfig::default())
+            .with_mock_mode(true)
+            .with_ledger_path(root.join("ledger.json")),
+    );
+    Arc::new(
+        ForgeOrchestrator::new(
+            config,
+            Arc::new(TaskCheckpointStore::new(root.join("checkpoints"))),
+            broker,
+            Arc::new(SandboxPolicy::new()),
+        )
+        .with_self_reviewer(Arc::new(PassingReviewer))
+        .with_continuity(Arc::new(
+            Continuity::open(root.join("continuity.db")).unwrap(),
+        )),
+    )
 }
 
 impl Harness {
     fn new(name: &str) -> Self {
         let root = std::env::temp_dir().join(format!("forge_nightly_{name}_{}", Uuid::new_v4()));
         let (repo, origin) = setup_repo_with_origin(&root);
-        let mut config = OrchestratorConfig::default();
-        config.workspace_root = repo;
-        let broker = Arc::new(
-            ReviewBroker::new(ReviewPolicyConfig::default())
-                .with_mock_mode(true)
-                .with_ledger_path(root.join("ledger.json")),
-        );
-        let orchestrator = Arc::new(
-            ForgeOrchestrator::new(
-                config,
-                Arc::new(TaskCheckpointStore::new(root.join("checkpoints"))),
-                broker,
-                Arc::new(SandboxPolicy::new()),
-            )
-            .with_self_reviewer(Arc::new(PassingReviewer)),
-        );
+        let orchestrator = boot(&root, &repo);
         let mut nightly = NightlyConfig::default();
         nightly.state_dir = root.join("state");
         Self {
             root,
+            repo,
             origin,
             orchestrator,
             config: nightly,
         }
+    }
+
+    /// Simulate a daemon restart: new boot, recovery as the Forge subsystem runs it.
+    fn restart(&mut self) {
+        self.orchestrator = boot(&self.root, &self.repo);
+        self.orchestrator.recover_from_checkpoints().unwrap();
     }
 
     fn runner(
@@ -457,4 +474,110 @@ async fn publish_refuses_existing_remote_branch() {
     assert_eq!(digest.entries[0].outcome, "publish_failed");
     assert!(digest.entries[0].detail.contains("already exists"));
     assert!(gh.created.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn publish_interrupted_by_a_crash_is_never_repeated_blindly() {
+    let mut h = Harness::new("crash_publish");
+    let gh = Arc::new(FakeGithub {
+        issues: vec![issue(6, &["forge-ready"])],
+        ..Default::default()
+    });
+    let exec = ScriptedExecutor::new(vec![GOOD_PATCH]);
+
+    // A verified job held back by the PR cap.
+    let mut capped = h.config.clone();
+    capped.max_prs_per_day = 0;
+    let digest = h
+        .runner(gh.clone(), exec.clone(), capped)
+        .run_once(false, false)
+        .await;
+    assert_eq!(digest.entries[0].outcome, "ready");
+    let job_id = NightlyState::load(&h.config.state_dir).issues[&6]
+        .last_job_id
+        .clone()
+        .unwrap();
+    assert_eq!(
+        h.orchestrator.continuity().get(&job_id).unwrap().state,
+        TaskState::Succeeded
+    );
+
+    // The next publish attempt journals its intent, then the daemon dies before the
+    // receipt: whether the push and PR happened is unknown.
+    assert_eq!(
+        h.orchestrator
+            .continuity()
+            .begin_effect(&job_id, EFFECT_PUBLISH, "push and open draft PR")
+            .unwrap(),
+        EffectGate::Proceed
+    );
+    h.restart();
+
+    let task = h.orchestrator.continuity().get(&job_id).unwrap();
+    assert_eq!(task.state, TaskState::NeedsIntervention);
+    let digest = h
+        .runner(gh.clone(), exec.clone(), h.config.clone())
+        .run_once(false, false)
+        .await;
+    assert_eq!(digest.entries[0].outcome, "needs_intervention");
+    assert!(
+        gh.created.lock().unwrap().is_empty(),
+        "must not open a PR blindly"
+    );
+    assert!(!remote_has_branch(&h.origin, "agent/forge-issue-6"));
+    assert_eq!(exec.calls.load(Ordering::SeqCst), 1, "must not solve again");
+
+    // Later passes keep the issue parked and say why.
+    let digest = h
+        .runner(gh.clone(), exec.clone(), h.config.clone())
+        .run_once(false, false)
+        .await;
+    assert!(digest.entries.is_empty());
+    let (_, why) = digest.rejected.iter().find(|(n, _)| *n == 6).unwrap();
+    assert!(why[0].contains("needs intervention"), "{why:?}");
+    assert_eq!(exec.calls.load(Ordering::SeqCst), 1);
+    assert!(gh.created.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn publish_receipt_survives_a_crash_before_the_runner_saves_state() {
+    let h = Harness::new("receipt");
+    let gh = Arc::new(FakeGithub {
+        issues: vec![issue(7, &["forge-ready"])],
+        ..Default::default()
+    });
+    let exec = ScriptedExecutor::new(vec![GOOD_PATCH]);
+    let mut capped = h.config.clone();
+    capped.max_prs_per_day = 0;
+    h.runner(gh.clone(), exec.clone(), capped)
+        .run_once(false, false)
+        .await;
+    let job_id = NightlyState::load(&h.config.state_dir).issues[&7]
+        .last_job_id
+        .clone()
+        .unwrap();
+    // The PR was opened and journaled, but the runner died before saving its own state.
+    let continuity = h.orchestrator.continuity();
+    continuity
+        .begin_effect(&job_id, EFFECT_PUBLISH, "push and open draft PR")
+        .unwrap();
+    continuity
+        .commit_effect(&job_id, EFFECT_PUBLISH, "https://example.test/pull/41")
+        .unwrap();
+
+    let digest = h
+        .runner(gh.clone(), exec.clone(), h.config.clone())
+        .run_once(false, false)
+        .await;
+    assert_eq!(digest.entries[0].outcome, "published");
+    assert_eq!(digest.entries[0].detail, "https://example.test/pull/41");
+    assert!(
+        gh.created.lock().unwrap().is_empty(),
+        "receipt reused, no second PR"
+    );
+    let state = NightlyState::load(&h.config.state_dir);
+    assert_eq!(
+        state.issues[&7].pr_url.as_deref(),
+        Some("https://example.test/pull/41")
+    );
 }

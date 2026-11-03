@@ -13,7 +13,7 @@ Status: design and implementation reference. These docs describe intended behavi
 | Systems & Security | [GUARDIAN](SAIL_GUARDIAN.md) · [BRIDGE](SAIL_BRIDGE.md) · [SENTINEL](SAIL_SENTINEL.md) |
 | Infrastructure & Compute | [MESH](SAIL_MESH.md) |
 | Health & Physiology | [HEALTH](SAIL_HEALTH.md) |
-| Shared foundation | [CORE](SAIL_CORE.md) |
+| Shared foundation | [CORE](SAIL_CORE.md) ([continuity](SAIL_CONTINUITY.md)) |
 | Cross-cutting experience | [STUDIO](SAIL_STUDIO.md) · [CAMPUS LEARNING](SAIL_CAMPUS_LEARNING.md) · [FORGE / CRAFT ANYTHING](SAIL_FORGE_CRAFT_ANYTHING.md) |
 
 ## Design rules

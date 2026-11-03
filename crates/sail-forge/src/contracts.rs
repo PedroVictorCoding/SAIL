@@ -164,6 +164,19 @@ impl ForgeActivityEntry {
     }
 }
 
+/// Continuity's view of a Forge job: whether it is queued, running, interrupted by a
+/// restart, waiting for the user, or finished, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinuityView {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub attempt: u32,
+    /// True when the job cannot continue without the user.
+    #[serde(default)]
+    pub needs_attention: bool,
+}
+
 /// Real-time status of a Forge issue job (`forge:issue_status`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueStatusResponse {
@@ -195,6 +208,9 @@ pub struct IssueStatusResponse {
     pub live_output: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_action: Option<String>,
+    /// Continuity's durable task state, when the job is tracked there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuity: Option<ContinuityView>,
 }
 
 /// Request to pause an active task (`forge:issue_pause`).

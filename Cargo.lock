@@ -2186,6 +2186,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "165ca6e57b20e1351573e3729b958bc62f0e48025386970b6e4d29e7a7e71f3f"
 dependencies = [
  "bitflags 2.13.2",
+ "chrono",
  "fallible-iterator",
  "fallible-streaming-iterator",
  "hashlink",
@@ -2369,6 +2370,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-continuity"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "sail-core"
 version = "0.1.0"
 dependencies = [
@@ -2379,6 +2393,7 @@ dependencies = [
  "sail-bridge",
  "sail-canvas",
  "sail-common",
+ "sail-continuity",
  "sail-dialogue",
  "sail-discovery",
  "sail-flow",
@@ -2471,6 +2486,7 @@ dependencies = [
  "reqwest",
  "ring",
  "sail-common",
+ "sail-continuity",
  "sail-guardian",
  "sail-protocol",
  "serde",
