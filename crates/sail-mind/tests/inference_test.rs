@@ -747,6 +747,7 @@ impl sail_common::resources::HostProbe for AdmissionProbe {
             swap_used_bytes: 0,
             swap_total_bytes: 0,
             logical_cpus: 12,
+            memory_pressure_avg10: None,
         })
     }
 }
