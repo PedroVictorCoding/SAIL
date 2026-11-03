@@ -119,3 +119,64 @@ fn cpu_and_vulkan_launch_profiles_are_explicit_and_bounded() {
         .is_err()
     );
 }
+
+#[test]
+fn moe_experts_can_stay_in_system_ram_while_attention_runs_on_the_gpu() {
+    use sail_mind::config::CpuMoe;
+    let all = LocalModelConfig {
+        compute: ComputeBackend::Hybrid,
+        device: "Vulkan0".into(),
+        gpu_layers: 99,
+        cpu_moe: CpuMoe::All,
+        ..Default::default()
+    }
+    .launch_args(1)
+    .unwrap();
+    assert!(all.windows(2).any(|p| p == ["--gpu-layers", "99"]));
+    assert!(all.iter().any(|a| a == "--cpu-moe"));
+    assert!(!all.iter().any(|a| a == "--n-cpu-moe"));
+
+    let some = LocalModelConfig {
+        compute: ComputeBackend::Vulkan,
+        device: "Vulkan0".into(),
+        gpu_layers: 99,
+        cpu_moe: CpuMoe::Layers(30),
+        ..Default::default()
+    }
+    .launch_args(1)
+    .unwrap();
+    assert!(some.windows(2).any(|p| p == ["--n-cpu-moe", "30"]));
+
+    // Default: no expert flags at all, so dense models and existing setups are unchanged.
+    let plain = LocalModelConfig {
+        compute: ComputeBackend::Vulkan,
+        device: "Vulkan0".into(),
+        gpu_layers: 8,
+        ..Default::default()
+    }
+    .launch_args(1)
+    .unwrap();
+    assert!(!plain.iter().any(|a| a.contains("cpu-moe")));
+
+    // Expert placement only means something when offloading.
+    assert!(
+        LocalModelConfig {
+            cpu_moe: CpuMoe::All,
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
+}
+
+#[test]
+fn cpu_moe_setting_parses_strictly() {
+    use sail_mind::config::CpuMoe;
+    assert_eq!(CpuMoe::parse("all").unwrap(), CpuMoe::All);
+    assert_eq!(CpuMoe::parse(" OFF ").unwrap(), CpuMoe::Off);
+    assert_eq!(CpuMoe::parse("0").unwrap(), CpuMoe::Off);
+    assert_eq!(CpuMoe::parse("24").unwrap(), CpuMoe::Layers(24));
+    for bad in ["-1", "999", "many", "1.5"] {
+        assert!(CpuMoe::parse(bad).is_err(), "{bad}");
+    }
+}

@@ -1,6 +1,58 @@
 use sail_protocol::*;
 use std::{net::IpAddr, path::PathBuf, time::Duration};
 
+/// Where a mixture-of-experts model's expert weights live when offloading to the GPU.
+///
+/// For MoE models such as Qwen3-Coder-30B-A3B or Qwen3.6-35B-A3B, most of the weights are
+/// experts and only a few run per token. Keeping all experts in system RAM and putting
+/// every layer's attention and KV cache on the GPU (`--gpu-layers 99 --cpu-moe`) uses a
+/// small GPU far better than moving the first N whole layers. `Layers(n)` keeps the experts
+/// of `n` layers on the CPU (`--n-cpu-moe n`) and the rest on the GPU, for cards with spare
+/// VRAM. Measure with `scripts/mind-gpu-setup.sh` before enabling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CpuMoe {
+    /// Normal layer offload (dense models, or CPU-only).
+    #[default]
+    Off,
+    /// Every layer's experts in system RAM (`--cpu-moe`).
+    All,
+    /// Experts of this many layers in system RAM (`--n-cpu-moe N`).
+    Layers(u32),
+}
+
+impl CpuMoe {
+    /// Parse `SAIL_CPU_MOE`: `off`/`0`, `all`, or a layer count (1-256).
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "off" | "0" | "false" | "none" => Ok(CpuMoe::Off),
+            "all" | "on" | "true" => Ok(CpuMoe::All),
+            n => match n.parse::<u32>() {
+                Ok(n) if (1..=256).contains(&n) => Ok(CpuMoe::Layers(n)),
+                _ => Err(InferenceError::new(
+                    ErrorCode::InvalidConfiguration,
+                    "SAIL_CPU_MOE must be off, all, or a layer count from 1 to 256",
+                )),
+            },
+        }
+    }
+
+    /// The setting from `SAIL_CPU_MOE`, `Off` when unset.
+    pub fn from_env() -> Result<Self> {
+        match std::env::var("SAIL_CPU_MOE") {
+            Ok(v) => Self::parse(&v),
+            Err(_) => Ok(CpuMoe::Off),
+        }
+    }
+
+    fn args(self) -> Vec<String> {
+        match self {
+            CpuMoe::Off => vec![],
+            CpuMoe::All => vec!["--cpu-moe".into()],
+            CpuMoe::Layers(n) => vec!["--n-cpu-moe".into(), n.to_string()],
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LocalModelConfig {
     pub name: String,
@@ -13,6 +65,8 @@ pub struct LocalModelConfig {
     pub compute: ComputeBackend,
     pub device: String,
     pub gpu_layers: u32,
+    /// MoE expert placement for Vulkan/Hybrid; see [`CpuMoe`].
+    pub cpu_moe: CpuMoe,
     pub threads: usize,
     pub threads_batch: Option<usize>,
     pub context_tokens: usize,
@@ -88,6 +142,7 @@ impl Default for LocalModelConfig {
             compute: ComputeBackend::Cpu,
             device: "Vulkan0".into(),
             gpu_layers: 8,
+            cpu_moe: CpuMoe::Off,
             threads: cpus.min(5),
             threads_batch: None,
             context_tokens: std::env::var("SAIL_CONTEXT_TOKENS")
@@ -152,6 +207,7 @@ impl LocalModelConfig {
                 InferenceError::new(ErrorCode::InvalidConfiguration, "Invalid SAIL_GPU_LAYERS")
             })?;
         }
+        config.cpu_moe = CpuMoe::from_env()?;
         if let Ok(v) = std::env::var("SAIL_VULKAN_DEVICE") {
             config.device = v;
         }
@@ -232,6 +288,12 @@ impl LocalModelConfig {
                 "Vulkan and Hybrid require a named Vulkan device and nonzero bounded GPU layers",
             ));
         }
+        if self.compute == ComputeBackend::Cpu && self.cpu_moe != CpuMoe::Off {
+            return Err(InferenceError::new(
+                ErrorCode::InvalidConfiguration,
+                "SAIL_CPU_MOE places MoE experts while offloading to the GPU; it needs SAIL_MODEL_BACKEND=vulkan or hybrid",
+            ));
+        }
         if self.managed
             && (url.scheme() != "http"
                 || !matches!(url.host_str(), Some("127.0.0.1" | "localhost")))
@@ -263,6 +325,8 @@ impl LocalModelConfig {
             compute: profile.backend,
             device: profile.device.clone(),
             gpu_layers: profile.gpu_layers,
+            // Profiles do not carry expert placement yet; the operator's setting applies.
+            cpu_moe: CpuMoe::from_env().unwrap_or_default(),
             threads: profile.threads,
             threads_batch: Some(profile.threads_batch),
             context_tokens: profile.context_tokens,
@@ -330,12 +394,15 @@ impl LocalModelConfig {
                 "--gpu-layers".into(),
                 "0".into(),
             ]),
-            ComputeBackend::Vulkan | ComputeBackend::Hybrid => args.extend([
-                "--device".into(),
-                self.device.clone(),
-                "--gpu-layers".into(),
-                self.gpu_layers.to_string(),
-            ]),
+            ComputeBackend::Vulkan | ComputeBackend::Hybrid => {
+                args.extend([
+                    "--device".into(),
+                    self.device.clone(),
+                    "--gpu-layers".into(),
+                    self.gpu_layers.to_string(),
+                ]);
+                args.extend(self.cpu_moe.args());
+            }
         }
         if let Some(projector) = &self.projector
             && projector.is_file()
