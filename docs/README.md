@@ -15,6 +15,7 @@ Status: design and implementation reference. These docs describe intended behavi
 | Health & Physiology | [HEALTH](SAIL_HEALTH.md) |
 | Shared foundation | [CORE](SAIL_CORE.md) ([continuity](SAIL_CONTINUITY.md)) |
 | Cross-cutting experience | [STUDIO](SAIL_STUDIO.md) · [CAMPUS LEARNING](SAIL_CAMPUS_LEARNING.md) · [FORGE / CRAFT ANYTHING](SAIL_FORGE_CRAFT_ANYTHING.md) |
+| Cross-cutting capabilities | [EXTERNAL MODELS, GATEWAY, SKILLS & SCHEDULING](SAIL_EXTERNAL_MODELS_GATEWAY_SKILLS.md) |
 
 ## Design rules
 - Specs are per-capability **ownership and acceptance contracts**, not permission to add navigation tabs, new processes or microservices.
