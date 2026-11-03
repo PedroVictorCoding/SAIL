@@ -1368,7 +1368,9 @@ impl ForgeOrchestrator {
             let logs_dir = self.config.workspace_root.join("logs").join(job_id);
             let _ = fs::create_dir_all(&logs_dir);
             let log_path = logs_dir.join("cargo_test.log");
+            let test_started = std::time::Instant::now();
             let test_res = worktree.run_command("cargo", &["test"], 180);
+            let test_duration_ms = test_started.elapsed().as_millis() as u64;
             let mut test_recs = Vec::new();
             let (passed, test_msg) = match test_res {
                 Ok(out) => {
@@ -1383,7 +1385,7 @@ impl ForgeOrchestrator {
                         } else {
                             format!("failed ({})", out.status)
                         },
-                        duration_ms: 100,
+                        duration_ms: test_duration_ms,
                         log_ref: format!("logs/{}/cargo_test.log", job_id),
                         exit_code: out.status,
                         stdout_log_path: Some(log_path.clone()),

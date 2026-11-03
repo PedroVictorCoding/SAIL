@@ -12,7 +12,9 @@ use sail_continuity::{Continuity, EffectGate, TaskState};
 use sail_forge::admission::IssueCandidate;
 use sail_forge::contracts::{ForgeJobReport, ReviewPolicyConfig, ReviewVerdict};
 use sail_forge::github::{DraftPr, GithubClient, OpenPullRequest};
-use sail_forge::nightly::{ForgeNightlyRunner, JobExecutor, NightlyConfig, NightlyState};
+use sail_forge::nightly::{
+    ForgeNightlyRunner, IssueRecord, JobExecutor, NightlyConfig, NightlyState,
+};
 use sail_forge::orchestrator::{EFFECT_PUBLISH, ForgeOrchestrator, OrchestratorConfig};
 use sail_forge::persistence::TaskCheckpointStore;
 use sail_forge::reviewer::{ReviewBroker, ReviewError};
@@ -390,6 +392,105 @@ async fn dry_run_selects_without_executing_or_writing() {
 }
 
 struct RejectingReviewer;
+
+/// Inject a transport outage; retire the synthetic queued task so recovery can select
+/// it again. This fixture does not claim to execute inference or generate a patch.
+struct TransportFailureExecutor {
+    reason: &'static str,
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl JobExecutor for TransportFailureExecutor {
+    async fn execute(
+        &self,
+        orchestrator: &ForgeOrchestrator,
+        job_id: &str,
+    ) -> Result<ForgeJobReport, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        orchestrator
+            .cancel_job(job_id, "test transport outage")
+            .unwrap();
+        Err(self.reason.into())
+    }
+}
+
+#[tokio::test]
+async fn model_outages_preserve_attempt_budget_and_persist_the_actual_reason() {
+    for reason in [
+        "Model request to http://model.test/completions timed out (deadline 600s). Server busy.",
+        "Cannot connect to model endpoint http://model.test/completions: connection refused",
+        "Solver failed to produce a valid diff: Model transport failure at http://model.test/completions: connection reset",
+    ] {
+        let mut h = Harness::new("transport_failure");
+        let gh = Arc::new(FakeGithub {
+            issues: vec![issue(186, &["forge-ready"]), issue(187, &["forge-ready"])],
+            ..Default::default()
+        });
+        let mut state = NightlyState::default();
+        state.issues.insert(
+            186,
+            IssueRecord {
+                attempts: 1,
+                last_outcome: "failed".into(),
+                last_reason: Some("previous patch failure".into()),
+                ..Default::default()
+            },
+        );
+        state.save(&h.config.state_dir).unwrap();
+        let exec = Arc::new(TransportFailureExecutor {
+            reason,
+            calls: AtomicUsize::new(0),
+        });
+        for run in 1..=2 {
+            let digest =
+                ForgeNightlyRunner::new(h.orchestrator.clone(), gh.clone(), h.config.clone())
+                    .with_executor(exec.clone())
+                    .run_once(false, false)
+                    .await;
+            assert!(
+                digest
+                    .halted
+                    .as_deref()
+                    .unwrap()
+                    .contains("infrastructure failure")
+            );
+            assert_eq!(
+                exec.calls.load(Ordering::SeqCst),
+                run,
+                "No immediate retries or later issues"
+            );
+            let state = NightlyState::load(&h.config.state_dir);
+            let record = &state.issues[&186];
+            assert_eq!(
+                record.attempts, 1,
+                "Preserve earlier patch attempt, refund only outage"
+            );
+            assert_eq!(record.last_outcome, "aborted");
+            assert_eq!(record.last_reason.as_deref(), Some(reason));
+            assert!(
+                !state.issues.contains_key(&187),
+                "Halt before the next issue"
+            );
+            assert_eq!(digest.entries.len(), 1);
+            assert_eq!(digest.entries[0].outcome, "aborted");
+            assert_eq!(digest.entries[0].detail, reason);
+            let saved_digest = fs::read_to_string(
+                h.config
+                    .state_dir
+                    .join("digests")
+                    .join(format!("{}.md", digest.date)),
+            )
+            .unwrap();
+            assert!(saved_digest.contains(reason));
+            assert!(
+                gh.created.lock().unwrap().is_empty(),
+                "Never publish an outage"
+            );
+            h.restart();
+        }
+    }
+}
 
 #[async_trait]
 impl ReviewProvider for RejectingReviewer {
