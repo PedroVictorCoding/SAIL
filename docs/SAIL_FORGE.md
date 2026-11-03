@@ -189,12 +189,18 @@ logs the persistence failure. Existing ledger JSON remains compatible;
 `persist_ledger`/`persist_ledger_sync` now return I/O errors to their trusted
 callers. These snapshot APIs are administrative operations, not review dispatch.
 
+**Issue identity.** The slot belongs to the canonical `owner/repo#N`, lowercased. Slugs, `https://github.com/…`, `github.com/….git`, `git@github.com:…` and a trailing `/` all map to the same key. So do leading zeros in the issue number. An identity without a positive numeric issue number, or with unexpected characters, is refused (`invalid_issue_identity`) and gets no slot. Ledgers written by older versions are re-keyed on load. If any spelling of an issue was attempted or reviewed, the issue stays consumed.
+
+**Pre-flight, before the slot is reserved.** The Codex binary must exist, and `codex login status` must report a ChatGPT sign-in. API-key sign-in (`codex_api_key_auth_refused`), not logged in, or an unrecognized status all stop here without starting a review, so the slot stays unused for a later attempt. A missing binary no longer consumes the slot.
+
+**Verdict.** The output must contain exactly one `VERDICT: APPROVED|CHANGES_REQUESTED` line and one `REQUIREMENTS_COVERED: YES|NO` line, each starting a line. `CONFIDENCE` is optional and stays 0.0 when absent. Anything else (no verdict, two verdicts, an unknown value) is recorded as an inconclusive, failed review. The slot is still consumed, because Codex ran.
+
 Use one stable absolute ledger path on a local filesystem supporting `flock`,
 atomic rename and `fsync`, in a trusted service-owned directory. Do not remove the
 ledger/sidecar or run older daemons concurrently: older versions do not honor the
-lock protocol. Back up both accounting state and configuration. This change does
-not complete #96's remaining canonical repository identity, CLI authentication,
-read-only review isolation, capacity detection or verdict-validation requirements.
+lock protocol. Back up both accounting state and configuration. Still open in #96: read-only review isolation (running `codex review` from a
+read-only copy of the proposed patch), subscription-capacity detection
+(`waiting_for_subscription_capacity`) and the review pane's `0/1` display.
 No UI additions are required; denied reviews use the existing review result pane.
 
 ### Local model request deadline
