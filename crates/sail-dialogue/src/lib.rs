@@ -14,6 +14,7 @@ pub mod turn_coordinator;
 pub mod vad;
 mod visual_capture;
 pub mod vlm;
+pub mod web_assets;
 
 use async_trait::async_trait;
 use std::net::SocketAddr;

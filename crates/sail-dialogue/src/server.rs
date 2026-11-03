@@ -85,6 +85,10 @@ pub async fn run_dialogue_server_with_services(
     let app = Router::new()
         .nest_service("/api/guardian", approval_routes)
         .nest_service("/api/memory", memory_routes)
+        .nest_service(
+            "/voice-assets",
+            crate::web_assets::router(crate::web_assets::assets_dir()),
+        )
         .route(
             "/",
             get(|| async { Html(include_str!("../web/index.html")) }),
@@ -180,6 +184,24 @@ pub async fn run_dialogue_server_with_services(
             }),
         )
         .route(
+            "/client-speech.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/client-speech.js"),
+                )
+            }),
+        )
+        .route(
+            "/client-speech-worker.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/client-speech-worker.js"),
+                )
+            }),
+        )
+        .route(
             "/capture.js",
             get(|| async {
                 (
@@ -205,7 +227,8 @@ pub async fn run_dialogue_server_with_services(
             services,
             arena,
             inference,
-        }));
+        }))
+        .layer(axum::middleware::map_response(cross_origin_isolation));
     match (
         std::env::var("SAIL_TLS_CERT"),
         std::env::var("SAIL_TLS_KEY"),
@@ -354,6 +377,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     let mut pending = Vec::<i16>::new();
     let mut speech_frames = 0usize;
     let mut capture_priority = None;
+    let mut client_speech = ClientSpeech::default();
     let mut capture_learning_epoch = None;
     let mut previous_learning_epoch = None;
     let hello = json!({"type":"session","session_id":session,"sample_rate":16000,"frame_samples":512,"learning":false,"control":pipe.control_state()});
@@ -580,7 +604,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                         info!(turn_id=current,samples=audio.len(),audio_ms=audio.len()/16,"Speech boundary finalized; scheduling STT and assistant turn");
                                         partial.take();turn.take();pipe.advance_turn();
                                         emit(&tx,current,json!({"type":"turn_committed","cause":"silence","audio_ms":audio.len()/16})).await;
-                                        turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone()));capture_priority.take();
+                                        turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone(),client_speech.output()));capture_priority.take();
                                     }
                                 },
                                 Err(error)=>{capture_priority.take();error!(%error,"PCM/VAD processing failed");pending.clear();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":error.to_string()})).await;break;}
@@ -614,14 +638,46 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 if let Some(language)=language{pipe.tts.set_voice(voice,language);}else{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Unsupported voice"})).await;}
                             },
                             "end_turn"=>{
-                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone()));capture_priority.take();}
+                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone(),client_speech.output()));capture_priority.take();}
+                            },
+                            "client_speech"=>{
+                                // What the browser verified it can run. Unreported parts stay on
+                                // the host workers; turning STT off discards any client capture.
+                                client_speech=ClientSpeech{stt:value["stt"].as_bool()==Some(true),tts:value["tts"].as_bool()==Some(true)};
+                                if !client_speech.stt{capture_priority.take();}
+                                info!(stt=client_speech.stt,tts=client_speech.tts,engine=%value["engine"],"Client speech capabilities");
+                                emit_session(&tx,json!({"type":"client_speech","stt":client_speech.stt,"tts":client_speech.tts})).await;
+                            },
+                            "speech_start"=>{
+                                // Browser VAD heard speech: the same priority and barge-in as the
+                                // host VAD's speech onset.
+                                if !client_speech.stt||pipe.control_state().is_muted{continue;}
+                                capture_learning_epoch=state.arena.learning_epoch(&session);
+                                capture_priority=Some(sail_common::resources::global().voice_turn());
+                                info!("Client speech onset; cancelling previous response for barge-in");
+                                turn.take();partial.take();epoch.fetch_add(1,Ordering::SeqCst);
+                                emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"interruption","state":"listening"})).await;
+                            },
+                            "speech_cancel"=>{capture_priority.take();},
+                            "voice_text"=>{
+                                let text=value["text"].as_str().unwrap_or_default().trim();
+                                if !client_speech.stt||pipe.control_state().is_muted||text.is_empty()||text.len()>16000{capture_priority.take();continue;}
+                                // Learn only under the consent that was in force when capture
+                                // began; a change during capture means no learning for the turn.
+                                let consent=capture_learning_epoch.take().filter(|e|Some(*e)==state.arena.learning_epoch(&session));
+                                partial.take();turn.take();pipe.advance_turn();
+                                let current=epoch.load(Ordering::SeqCst);
+                                emit(&tx,current,json!({"type":"transcript","channel":"voice:stt","text":text,"is_final":true,"source":"client"})).await;
+                                emit(&tx,current,json!({"type":"turn_committed","cause":"client","chars":text.chars().count()})).await;
+                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(text.into(),None,consent),epoch.clone(),client_speech.output()));
+                                capture_priority.take();
                             },
                             "text"=>{
                                 let prompt=value["text"].as_str().unwrap_or_default();
                                 if prompt.trim().is_empty()||prompt.len()>16000{continue;}
                                 let vision=match parse_vision(&value["vision"]) {Ok(v)=>v,Err(e)=>{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":e.to_string()})).await;continue;}};
                                 capture_priority.take();turn.take();partial.take();pipe.reset_capture();pipe.advance_turn();pending.clear();let current=epoch.fetch_add(1,Ordering::SeqCst)+1;
-                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision,state.arena.learning_epoch(&session)),epoch.clone()));
+                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision,state.arena.learning_epoch(&session)),epoch.clone(),client_speech.output()));
                             },
                             "kernel_tool"=>{
                                 let name=value["tool"].as_str().unwrap_or_default();
@@ -924,6 +980,50 @@ enum TurnInput {
     Audio(Vec<i16>, Option<u64>),
     Text(String, Option<VisionFrameInput>, Option<u64>),
 }
+
+/// Where the reply is turned into speech. `Client`: the browser runs Kokoro and the
+/// server sends `speech_text` fragments in order instead of synthesizing audio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpeechOutput {
+    Host,
+    Client,
+}
+
+/// What this connection's browser runs itself, as it reported with `client_speech`.
+/// Anything it does not report stays on the host workers.
+#[derive(Clone, Copy, Debug, Default)]
+struct ClientSpeech {
+    /// Browser VAD and Whisper: it sends `speech_start` and `voice_text`, not PCM.
+    stt: bool,
+    /// Browser Kokoro: the server sends `speech_text` instead of audio.
+    tts: bool,
+}
+impl ClientSpeech {
+    fn output(self) -> SpeechOutput {
+        if self.tts {
+            SpeechOutput::Client
+        } else {
+            SpeechOutput::Host
+        }
+    }
+}
+/// Cross-origin isolation, so on-device speech can use WebAssembly threads
+/// (SharedArrayBuffer). Every resource the page loads is same-origin.
+async fn cross_origin_isolation(
+    mut response: axum::response::Response,
+) -> axum::response::Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        "cross-origin-opener-policy",
+        axum::http::HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        "cross-origin-embedder-policy",
+        axum::http::HeaderValue::from_static("require-corp"),
+    );
+    response
+}
+
 #[allow(clippy::too_many_arguments)]
 fn start_turn(
     state: Arc<ServerState>,
@@ -935,6 +1035,7 @@ fn start_turn(
     vlm: Arc<VoiceVlm>,
     input: TurnInput,
     epoch: Arc<AtomicU64>,
+    speech_output: SpeechOutput,
 ) -> AbortTask {
     let voice_priority = sail_common::resources::global().voice_turn();
     let span = tracing::info_span!("voice_turn",session_id=%session,turn_id=current);
@@ -952,6 +1053,7 @@ fn start_turn(
                 vlm,
                 input,
                 epoch,
+                speech_output,
             )
             .await
             {
@@ -979,6 +1081,7 @@ async fn run_turn(
     vlm: Arc<VoiceVlm>,
     input: TurnInput,
     epoch: Arc<AtomicU64>,
+    speech_output: SpeechOutput,
 ) -> Result<()> {
     let start = Instant::now();
     // Held across STT, inference, tool calls and TTS; abort/drop releases priority.
@@ -1108,6 +1211,13 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         let mut fragments=0usize;
         while let Some(text) = speech_rx.recv().await {
             fragments+=1;
+            if speech_output==SpeechOutput::Client {
+                // The browser synthesizes and plays fragments in arrival order; it keeps
+                // the same punctuation-aware pause the host adds between phrases.
+                debug!(fragment=fragments,text_chars=text.chars().count(),"Sending response fragment for client speech");
+                emit(&tx_speech,current,json!({"type":"speech_text","channel":"voice:tts","text":text,"pause_ms":pause_after_ms(&text),"fragment":fragments,"state":"speaking","turn_id":current})).await;
+                continue;
+            }
             info!(fragment=fragments,text_chars=text.chars().count(),"Synthesizing response fragment");
             match tts.synthesize_pcm(&text).await {
                 Ok((mut pcm, rate)) => {
