@@ -1,0 +1,17 @@
+# AppArmor profile for SAIL's pinned Chromium (Bridge browser worker).
+#
+# Ubuntu 23.10+ restricts unprivileged user namespaces, which Chromium's own sandbox
+# needs. This profile grants `userns` to the one pinned binary only; it does not turn
+# the host-wide restriction off and does not confine Chromium further.
+#
+# Installed by scripts/install-chromium-apparmor.sh, which replaces @CHROMIUM@ with the
+# real path of $SAIL_CHROMIUM.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile sail-chromium @CHROMIUM@ flags=(unconfined) {
+  userns,
+
+  include if exists <local/sail-chromium>
+}
