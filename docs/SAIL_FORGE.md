@@ -88,6 +88,25 @@ If a gate or the self-review rejects the patch, the reason is appended to the is
 - The self-review uses the same local model as the solver.
 - A job interrupted by a daemon restart is resumed by checkpoint recovery, but it is only published if it completes during a later nightly run.
 
+### Failure memory (#121)
+
+Every finished job appends one record to `$SAIL_FORGE_STATE_DIR/failure_memory.jsonl` (`crates/sail-forge/src/failure_memory.rs`). A record holds:
+- the canonical issue, base commit, job, model and files changed;
+- the outcome: verified, or the first failing stage (compile, tests, gate, mutation, review, no patch);
+- normalized signatures (`rustc:E0308`, `test:<name>`, `gate:new_unwrap`, `mutation:missed`, `review:rejected`);
+- one short failure line.
+
+It holds no source code, issue text or model transcript. Cancelled jobs and infrastructure failures (model down, timeouts) are not recorded.
+
+Before the solver starts, it gets a `## Forge failure memory` section, at most 1500 characters:
+- earlier failed attempts on the same issue;
+- signatures that recur (2 or more attempts) in the issue's `## Target files`;
+- verified fixes that changed those files.
+
+The section goes to the model only; it is not saved into the issue body. Records that are invalidated are never shown.
+
+Manage records with `cargo run -p sail-forge --bin sail_forge_memory -- list [--issue owner/repo#N] | export | invalidate <id|issue> <reason> | delete <id|issue>`. Use `invalidate` when a "verified" fix was later reverted. Deleting records never touches Git. Set `SAIL_FORGE_FAILURE_MEMORY=0` to turn it off in the daemon and the nightly runner.
+
 ### Solver: edits, context and measurement
 
 **Edits.** The solver prefers Aider-style SEARCH/REPLACE blocks (`crates/sail-forge/src/edit.rs`): a path line, then `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE`.

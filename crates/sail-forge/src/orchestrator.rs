@@ -90,6 +90,8 @@ pub struct ForgeOrchestrator {
     checkpoint_store: Arc<TaskCheckpointStore>,
     review_broker: Arc<ReviewBroker>,
     self_reviewer: Option<Arc<dyn ReviewProvider>>,
+    /// Record of past attempts (#121); `None` keeps Forge stateless across jobs.
+    failure_memory: Option<Arc<crate::failure_memory::FailureMemory>>,
     sandbox_policy: Arc<SandboxPolicy>,
     active_jobs: Arc<Mutex<HashMap<String, ActiveJob>>>,
     concurrency_semaphore: Arc<Semaphore>,
@@ -131,6 +133,7 @@ impl ForgeOrchestrator {
             checkpoint_store,
             review_broker,
             self_reviewer: None,
+            failure_memory: None,
             sandbox_policy,
             active_jobs: Arc::new(Mutex::new(HashMap::new())),
             concurrency_semaphore: Arc::new(Semaphore::new(max_jobs)),
@@ -145,6 +148,65 @@ impl ForgeOrchestrator {
 
     /// Use a durable Continuity store (production). Without it, task records last only for
     /// this process.
+    /// Record every finished job and show the solver relevant past attempts.
+    pub fn with_failure_memory(
+        mut self,
+        memory: Arc<crate::failure_memory::FailureMemory>,
+    ) -> Self {
+        self.failure_memory = Some(memory);
+        self
+    }
+
+    /// Append the job's outcome to the failure memory. Cancelled jobs and infrastructure
+    /// failures (model down, timeouts) teach nothing about the code and are not recorded.
+    fn record_attempt(&self, job_id: &str, result: &Result<ForgeJobReport, String>) {
+        use crate::failure_memory::{self as fm, AttemptOutcome, AttemptRecord, FailureClass};
+        let Some(memory) = &self.failure_memory else {
+            return;
+        };
+        let Some(cp) = self
+            .active_jobs
+            .lock()
+            .unwrap()
+            .get(job_id)
+            .map(|j| j.checkpoint.clone())
+        else {
+            return;
+        };
+        let (outcome, signatures, summary) = match result {
+            Ok(_) => (AttemptOutcome::Verified, vec![], None),
+            Err(e) => {
+                let text = format!("{e}\n{}", cp.failure_reason.clone().unwrap_or_default());
+                let class = fm::classify(cp.verification_status.as_deref(), &text);
+                if class == FailureClass::Infrastructure {
+                    return;
+                }
+                (
+                    AttemptOutcome::Failed { class },
+                    fm::signatures(Some(class), &text),
+                    fm::summary_line(&text),
+                )
+            }
+        };
+        let record = AttemptRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            recorded_at: chrono::Utc::now(),
+            issue: fm::issue_key(&format!("{}#{}", cp.repo, cp.issue_number)),
+            base_commit: cp.base_commit.clone(),
+            job_id: job_id.to_string(),
+            model: cp.model_endpoint.clone(),
+            outcome,
+            signatures,
+            summary,
+            files: cp.modified_files.clone().unwrap_or_default(),
+            turns: cp.activity.last().map(|a| a.turn).unwrap_or(0),
+            invalidated: None,
+        };
+        if let Err(error) = memory.append(&record) {
+            warn!(%job_id, %error, "Could not record the attempt in failure memory");
+        }
+    }
+
     pub fn with_continuity(mut self, continuity: Arc<Continuity>) -> Self {
         self.continuity = continuity;
         self
@@ -1153,6 +1215,16 @@ impl ForgeOrchestrator {
             .run_job_lifecycle_inner(job_id, &workspace_id, patch_to_apply)
             .await;
 
+        let was_cancelled = self
+            .active_jobs
+            .lock()
+            .unwrap()
+            .get(job_id)
+            .is_some_and(|j| j.cancelled.load(Ordering::SeqCst));
+        if !was_cancelled {
+            self.record_attempt(job_id, &result);
+        }
+
         self.leases.lock().unwrap().remove(job_id);
         let cancelled = {
             let jobs = self.active_jobs.lock().unwrap();
@@ -1460,6 +1532,19 @@ impl ForgeOrchestrator {
                         },
                     ));
                 }
+            };
+
+            // Past attempts relevant to this issue, for the model only (not stored in the
+            // checkpoint, so it never accumulates across retries).
+            let body = match &self.failure_memory {
+                Some(memory) => {
+                    let targets = crate::admission::parse_target_files(&body);
+                    match memory.brief(&format!("{repo}#{issue_number}"), &targets) {
+                        Some(brief) => format!("{body}\n\n{brief}"),
+                        None => body,
+                    }
+                }
+                None => body,
             };
 
             controller
