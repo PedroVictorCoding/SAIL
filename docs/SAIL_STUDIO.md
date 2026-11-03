@@ -39,7 +39,23 @@ Desired capabilities and rollout order:
 1. **Documents / word processing**: initial editor and full vertical slice (WordCraft *if verified suitable*).
 2. **Spreadsheets and presentations**: chart/formula/range/slide operations (GridCraft / DeckCraft if suitable).
 3. **PDF, raster and vector graphics**: reading, annotation, object/layer edits where supported.
-4. **Audio, video, CAD and other creative apps**: later, after per-editor architecture/feasibility assessments.
+4. **Audio, video, CAD and other creative apps**: Studio Audio workbench and Music Strategist (§3.1).
+
+### 3.1 Studio Audio — Music Making Strategist & Production Workbench
+
+Studio Audio provides iterative music production analysis and co-producer strategic feedback grounded in empirical audio measurements rather than LLM guesswork (vision §0.2 #2).
+
+- **Storage & Layout:** Song projects reside under `/srv/sail-data/studio/projects/<song_id>/` (vision decision 10), tracking `project.json` manifests, export revisions (`revisions/v1_rough.wav`, `revisions/v2_master.wav`), and reference tracks (`references/target_track.wav`).
+- **Tool Contract (`studio:audio_analyze`):**
+  - Read-only Bridge tool (`ResourceClass: cpu`, low risk) parsing RIFF/WAVE PCM audio natively without requiring external heavy runtimes.
+  - Generates an objective `AudioReceipt`: duration, sample rate, bit depth, channels, Integrated LUFS (ITU-R BS.1770), True Peak approximation, Loudness Range (LRA), RMS, 6-band frequency energy (sub-bass, bass, low-mids, midrange, high-mids, brilliance), arrangement section segmentation, and tempo/BPM estimation.
+  - Digital clipping detection flags inter-sample ceiling violations (> 0.0 dBTP).
+- **Music Strategist Review:**
+  - Evaluates track against streaming standards (e.g. -14.0 LUFS) or genre targets (e.g. EDM -8.0 LUFS, Hip-Hop -9.0 LUFS).
+  - Inspects arrangement tension: flags low dynamic lift between verses and drops/choruses (< 2.0 dB).
+  - Tonal balance findings: highlights sub-bass mud, 300-400 Hz boxiness, or recessed air bands.
+  - Strategic recommendations: prioritizes 3 concrete, actionable mixing/mastering steps with specific decibel and frequency values.
+- **Canvas Visual Receipt:** Produces Mermaid `xychart-beta` section energy charts embedded in Studio cards for visual arrangement inspection.
 
 For every candidate, maintain a compatibility record: source URL, pinned version/commit, license (and redistribution terms), browser build status, supported import/export formats, command API maturity, autosave behavior, platform requirements, performance, and accessibility. **No editor is considered integrated merely because its webpage loads in an iframe.**
 
@@ -150,7 +166,7 @@ Spreadsheet and presentation adapters, entire Craft suite, joint coauthoring acr
 - **S2:** spreadsheets, range/formula/chart operations and native save/import/export.
 - **S3:** presentation editor, template/slide manipulation, speaker notes.
 - **S4:** cross-artifact operations with transactional previews: data → chart → document → slides.
-- **S5:** verified image/PDF/design adapters, additional media editors, Skillsmith workflows, offline Android performance optimization.
+- **S5:** Studio Audio & Music Strategist (native WAV empirical analysis, section dynamics, and Canvas timeline charts); verified image/PDF/design adapters, additional media editors, Skillsmith workflows, offline Android performance optimization.
 
 Each editor requires separate compatibility evidence, functionality matrix, version-pinned build, permission tests and honest import/export fidelity testing.
 
