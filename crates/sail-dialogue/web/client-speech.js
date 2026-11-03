@@ -12,12 +12,13 @@ const SailClientSpeech = (() => {
   const WARM_UP = 'Hello, I am ready to help you today.';
 
   class EngineWorker {
-    constructor(role) {
+    constructor(role, onProgress = () => {}) {
       this.worker = new Worker(`/client-speech-worker.js?role=${role}`, { type: 'module' });
       this.nextId = 1; this.pending = new Map();
       this.ready = new Promise((resolve, reject) => {
         this.worker.onmessage = ({ data }) => {
           if (data.ready) { resolve(); return; }
+          if (data.progress) { onProgress(data.progress); return; }
           const call = this.pending.get(data.id); if (!call) return;
           this.pending.delete(data.id);
           if (data.ok) call.resolve(data.result); else call.reject(new Error(data.error));
@@ -89,6 +90,8 @@ const SailClientSpeech = (() => {
   const engine = {
     status: 'off', detail: 'Speech runs on the SAIL host.', device: null, voices: [],
     stt: false, tts: false, measured: null, settled: false,
+    // Loading bar: phase 'downloading' (bytes known so far) or 'measuring'; null when idle.
+    loading: null,
     vadWorker: null, speechWorker: null, detector: new TurnDetector(),
   };
 
@@ -97,7 +100,7 @@ const SailClientSpeech = (() => {
 
   function stop(detail = 'Speech runs on the SAIL host.') {
     engine.vadWorker?.terminate(); engine.speechWorker?.terminate();
-    Object.assign(engine, { status: 'off', detail, device: null, voices: [], stt: false, tts: false, measured: null, vadWorker: null, speechWorker: null, settled: true });
+    Object.assign(engine, { status: 'off', detail, device: null, voices: [], stt: false, tts: false, measured: null, vadWorker: null, speechWorker: null, settled: true, loading: null });
     engine.detector.reset();
   }
 
@@ -112,10 +115,33 @@ const SailClientSpeech = (() => {
     try {
       const manifest = await fetch('/voice-assets/manifest.json', { cache: 'no-cache' });
       if (!manifest.ok) { stop('On-device speech is not installed on the SAIL host; the host handles speech.'); onStatus(engine); return engine; }
+      const files = new Map(), expected = new Map();
+      engine.loading = { phase: 'downloading', device: null, loaded: 0, total: 0 };
       Object.assign(engine, { status: 'loading', settled: false, detail: 'Loading speech models on this device…' }); onStatus(engine);
-      engine.vadWorker = new EngineWorker('vad'); engine.speechWorker = new EngineWorker('speech');
+      let lastReport = 0;
+      const onProgress = progress => {
+        if (progress.device) engine.loading.device = progress.device;
+        if (progress.expected) expected.set(progress.role, progress.expected);
+        if (progress.file) {
+          // Keep a finished file's bytes even if its 'done' report has no size.
+          const previous = files.get(progress.file);
+          files.set(progress.file, progress.done && !progress.total && previous ? { ...previous, loaded: previous.total, done: true } : progress);
+        }
+        let loaded = 0;
+        for (const file of files.values()) loaded += file.loaded;
+        // Measure only against the whole download, once both workers have declared it;
+        // until then (or with an older manifest without sizes) the bar is indeterminate,
+        // so it never runs backwards.
+        const total = expected.size === 2 ? [...expected.values()].reduce((a, b) => a + b, 0) : 0;
+        Object.assign(engine.loading, { loaded, total });
+        const now = performance.now();
+        if (now - lastReport > 100 || progress.done || progress.device) { lastReport = now; onStatus(engine); }
+      };
+      engine.vadWorker = new EngineWorker('vad', onProgress); engine.speechWorker = new EngineWorker('speech', onProgress);
       const [, speech] = await Promise.all([engine.vadWorker.call('load'), engine.speechWorker.call('load')]);
+      engine.loading = { phase: 'measuring', device: speech.device, loaded: 0, total: 0 }; onStatus(engine);
       const measured = await benchmark();
+      engine.loading = null;
       const limit = maxRealTimeFactor();
       const stt = measured.sttRtf <= limit, tts = measured.ttsRtf <= limit;
       const where = speech.device === 'webgpu' ? 'WebGPU' : 'CPU, WebAssembly';

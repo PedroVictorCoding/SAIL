@@ -32,13 +32,49 @@ async function webgpuAvailable() {
   try { return Boolean(await navigator.gpu?.requestAdapter()); } catch { return false; }
 }
 
+// Download progress for the page's loading bar: bytes per file as transformers.js reports
+// them (it reports cached files too, read from the browser cache).
+// A finished file reports its full size from the manifest ('done' events carry no bytes).
+let manifestSizes = {};
+function reportProgress(info) {
+  if (info.status !== 'progress' && info.status !== 'done') return;
+  const file = `${info.name}/${info.file}`;
+  if (info.status === 'done') {
+    const bytes = manifestSizes[`hf/${file}`] ?? 0;
+    self.postMessage({ progress: { role: ROLE, file, loaded: bytes, total: bytes, done: true } });
+  } else {
+    self.postMessage({ progress: { role: ROLE, file, loaded: info.loaded ?? 0, total: info.total ?? 0, done: false } });
+  }
+}
+
 let vad = null, vadState = null, vadContext = null;
 let asr = null, tts = null, device = 'wasm';
 
+// Exactly the files each load below fetches (keep in step with its dtype choices), so the
+// page's loading bar can measure against the whole download from the start.
+const WHISPER = 'hf/onnx-community/whisper-base/', KOKORO = 'hf/onnx-community/Kokoro-82M-v1.0-ONNX/';
+function filesFor(role, gpu) {
+  if (role === 'vad') return ['hf/onnx-community/silero-vad/onnx/model.onnx'];
+  return [
+    ...['config.json', 'generation_config.json', 'preprocessor_config.json', 'tokenizer.json', 'tokenizer_config.json'].map(f => WHISPER + f),
+    ...(gpu ? ['onnx/encoder_model.onnx', 'onnx/decoder_model_merged_q4.onnx'] : ['onnx/encoder_model_quantized.onnx', 'onnx/decoder_model_merged_quantized.onnx']).map(f => WHISPER + f),
+    ...['config.json', 'tokenizer.json', 'tokenizer_config.json', gpu ? 'onnx/model.onnx' : 'onnx/model_quantized.onnx'].map(f => KOKORO + f),
+  ];
+}
+async function reportExpected(gpu) {
+  try {
+    const manifest = await (await realFetch(`${ASSETS}manifest.json`, { cache: 'no-cache' })).json();
+    manifestSizes = Object.fromEntries(Object.entries(manifest.files).map(([f, v]) => [f, v.bytes]));
+    const sizes = filesFor(ROLE, gpu).map(f => manifest.files[f]?.bytes);
+    if (sizes.every(Number.isFinite)) self.postMessage({ progress: { role: ROLE, expected: sizes.reduce((a, b) => a + b, 0) } });
+  } catch { /* older manifest without sizes: the bar uses the sizes it has seen */ }
+}
+
 async function loadVad() {
+  await reportExpected(false);
   // Silero v5 at 16 kHz: 512-sample frames with 64 samples of context, as the host runs it.
   const model = await AutoModel.from_pretrained('onnx-community/silero-vad', {
-    config: { model_type: 'custom' }, dtype: 'fp32', device: 'wasm',
+    config: { model_type: 'custom' }, dtype: 'fp32', device: 'wasm', progress_callback: reportProgress,
   });
   vad = model; resetVad();
   return { device: 'wasm' };
@@ -62,14 +98,16 @@ async function vadFrame(samples) {
 
 async function loadSpeech() {
   device = (await webgpuAvailable()) ? 'webgpu' : 'wasm';
+  self.postMessage({ progress: { role: ROLE, device } });
   const gpu = device === 'webgpu';
+  await reportExpected(gpu);
   asr = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
-    device,
+    device, progress_callback: reportProgress,
     dtype: gpu ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : { encoder_model: 'q8', decoder_model_merged: 'q8' },
   });
   const { KokoroTTS, env: kokoroEnv } = await import(`${ASSETS}lib/kokoro.web.js`);
   kokoroEnv.wasmPaths = `${ASSETS}lib/`;
-  tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', { device, dtype: gpu ? 'fp32' : 'q8' });
+  tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', { device, dtype: gpu ? 'fp32' : 'q8', progress_callback: reportProgress });
   return { device, voices: Object.keys(tts.voices) };
 }
 

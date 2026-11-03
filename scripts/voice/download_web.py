@@ -113,7 +113,8 @@ def main() -> int:
     # manifest exists, so a partial download is never offered to clients.
     manifest = {
         'version': 1,
-        'files': {rel: {'source': url, 'sha256': sha} for rel, url, sha in FILES},
+        # Sizes let the browser show real loading progress against the full download.
+        'files': {rel: {'source': url, 'sha256': sha, 'bytes': (root / rel).stat().st_size} for rel, url, sha in FILES},
         'models': {'stt': WHISPER[0], 'tts': KOKORO[0], 'vad': SILERO[0]},
     }
     tmp = root / 'manifest.json.download'
