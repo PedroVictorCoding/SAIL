@@ -253,11 +253,14 @@ fn is_infrastructure_failure(reason: &str) -> bool {
         || reason.contains("inference server")
         || reason.contains("Concurrency semaphore")
         || reason.contains("Failed to create isolated worktree")
+        || (reason.contains("Model request to ") && reason.contains(" timed out"))
+        || reason.contains("Cannot connect to model endpoint")
+        || reason.contains("Model transport failure at")
 }
 
 fn feedback_body(issue: &IssueCandidate, record: &IssueRecord) -> String {
     match (&record.last_reason, record.attempts) {
-        (Some(reason), n) if n > 0 => format!(
+        (Some(reason), n) if n > 0 && record.last_outcome != "aborted" => format!(
             "{}\n\n## Previous attempt feedback\nA previous attempt was rejected: {reason}\nFix the cause; do not repeat the same change.\n",
             issue.body
         ),
@@ -572,9 +575,16 @@ impl ForgeNightlyRunner {
                     Err(reason) if is_infrastructure_failure(&reason) => {
                         record.attempts -= 1;
                         record.last_outcome = "aborted".into();
+                        record.last_reason = Some(reason.clone());
                         state.issues.insert(issue.number, record);
                         let _ = state.save(&self.config.state_dir);
                         warn!("Forge nightly halted: {}", reason);
+                        digest.entries.push(DigestEntry {
+                            issue: issue.number,
+                            title: issue.title.clone(),
+                            outcome: "aborted".into(),
+                            detail: reason.clone(),
+                        });
                         digest.halted = Some(format!("infrastructure failure: {reason}"));
                         break 'issues;
                     }
@@ -685,6 +695,9 @@ mod tests {
         assert!(body.starts_with(&issue.body));
         assert!(body.contains("## Previous attempt feedback"));
         assert!(body.contains("new_unwrap"));
+        record.last_outcome = "aborted".into();
+        record.last_reason = Some("Cannot connect to model endpoint http://model.test".into());
+        assert_eq!(feedback_body(&issue, &record), issue.body);
     }
 
     #[test]
@@ -698,5 +711,24 @@ mod tests {
         assert!(!is_infrastructure_failure(
             "Pre-review gates failed: [new_unwrap] src/lib.rs"
         ));
+        for reason in [
+            "Model request to http://127.0.0.1:8081/v1/chat/completions timed out (deadline 600s). The server may be busy or generating slowly; configure SAIL_FORGE_MODEL_TIMEOUT_SECS for this host.",
+            "Cannot connect to model endpoint http://localhost:9090/v1/chat/completions: connection refused",
+            "Model transport failure at http://model.test/completions: connection reset",
+        ] {
+            assert!(is_infrastructure_failure(reason), "{reason}");
+            let wrapped = format!("Solver failed to produce a valid diff: {reason}");
+            assert!(is_infrastructure_failure(&wrapped), "{wrapped}");
+        }
+        for reason in [
+            "Pre-review gates failed: [protected_path] src/config.rs",
+            "Tests failed: cargo test timed out",
+            "Tests failed: assertion failed in model_transport_failure",
+            "Self-review rejected: missing requirements",
+            "External review rejected: model request parser is broken",
+            "Model request to http://model.test returned an invalid patch",
+        ] {
+            assert!(!is_infrastructure_failure(reason), "{reason}");
+        }
     }
 }

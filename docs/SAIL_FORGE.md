@@ -83,6 +83,20 @@ If a gate or the self-review rejects the patch, the reason is appended to the is
 - Retry an exhausted issue: delete its entry from `nightly_state.json`.
 - Labels Forge expects to exist on GitHub: `forge-ready`, `forge-generated`, and optionally `blocked`, `needs-decision`, `needs-decomposition`, `forge-failed`.
 
+### Test evidence and model outages
+
+Pinned-patch jobs record the measured wall time of the sandboxed `cargo test` command
+in the existing test receipt, checkpoint and final report; this includes command
+startup and compilation, not just the test bodies. A passing review is not a substitute
+for the command's actual exit status.
+
+Model request timeouts, connection failures and transport failures halt the nightly
+run as infrastructure outages. The runner restores that attempt's budget, persists
+the actual reason as `aborted`, and includes it in the morning digest. It does not
+retry immediately, publish a PR, or feed the outage back as a rejected code change.
+Existing patch/test/gate/review failures still consume issue attempts. This retains
+the existing once-per-night scheduling policy; it does not add automatic outage recovery.
+
 **Known limits:**
 - Gate heuristics work on the diff text.
 - The self-review uses the same local model as the solver.

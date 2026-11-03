@@ -45,6 +45,72 @@ fn setup_test_git_repo(path: &Path) {
 }
 
 #[tokio::test]
+async fn pinned_patch_records_real_cargo_test_duration() {
+    let temp_dir = std::env::temp_dir().join(format!("test_orch_duration_{}", Uuid::new_v4()));
+    setup_test_git_repo(&temp_dir);
+    fs::write(
+        temp_dir.join("src/lib.rs"),
+        "pub fn compute() -> i32 { 42 }\n#[test]\nfn test_compute() { std::thread::sleep(std::time::Duration::from_millis(300)); assert_eq!(compute(), 42); }\n",
+    )
+    .unwrap();
+    for args in [
+        vec!["add", "src/lib.rs"],
+        vec!["commit", "-m", "slow test fixture"],
+    ] {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&temp_dir)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    let checkpoint_store = Arc::new(TaskCheckpointStore::new(temp_dir.join("checkpoints")));
+    let review_broker = Arc::new(
+        ReviewBroker::new(ReviewPolicyConfig::default())
+            .with_mock_mode(true)
+            .with_ledger_path(temp_dir.join("review_ledger.json")),
+    );
+    let config = OrchestratorConfig {
+        workspace_root: temp_dir.clone(),
+        ..Default::default()
+    };
+    let orchestrator = ForgeOrchestrator::new(
+        config,
+        checkpoint_store.clone(),
+        review_broker,
+        Arc::new(SandboxPolicy::new()),
+    );
+    let job_id = orchestrator
+        .enqueue_issue(IssueEnqueueRequest {
+            repo: "PedroVictorCoding/SAIL".into(),
+            issue_number: 185,
+            ..Default::default()
+        })
+        .unwrap();
+    let patch = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,4 @@\n pub fn compute() -> i32 { 42 }\n+pub fn double() -> i32 { compute() * 2 }\n #[test]\n fn test_compute() { std::thread::sleep(std::time::Duration::from_millis(300)); assert_eq!(compute(), 42); }\n";
+    let report = orchestrator
+        .run_job_lifecycle(&job_id, Some(patch))
+        .await
+        .unwrap();
+    assert_eq!(report.status, ForgeTaskState::Completed);
+    let test = &report.tests[0];
+    assert_eq!(test.command, "cargo test");
+    assert_eq!(test.exit_code, 0);
+    assert!(
+        test.duration_ms >= 300,
+        "Actual sleeping test duration: {test:?}"
+    );
+    let checkpoint = checkpoint_store.load(&job_id).unwrap().unwrap();
+    assert_eq!(checkpoint.test_history[0].duration_ms, test.duration_ms);
+    assert_eq!(
+        checkpoint.final_report.unwrap().tests[0].duration_ms,
+        test.duration_ms
+    );
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[tokio::test]
 async fn test_full_autonomous_issue_resolution_lifecycle() {
     let temp_dir = std::env::temp_dir().join(format!("test_orch_lifecycle_{}", Uuid::new_v4()));
     setup_test_git_repo(&temp_dir);
