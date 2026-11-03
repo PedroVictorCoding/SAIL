@@ -141,3 +141,55 @@ fn finds_definitions_and_references_and_flags_edited_files() {
 
     let _ = fs::remove_dir_all(&repo);
 }
+
+#[test]
+fn index_of_an_unmodified_commit_is_reused_by_the_next_job() {
+    if !rust_analyzer_works() {
+        return;
+    }
+    let repo = demo_repo();
+    let cache = std::env::temp_dir().join(format!("forge_symbol_cache_{}", Uuid::new_v4()));
+    let new_wt = || {
+        let job = format!("symcache-{}", Uuid::new_v4().simple());
+        IsolatedWorktree::create(&job, &repo, "HEAD", Arc::new(SandboxPolicy::new())).unwrap()
+    };
+
+    let first = new_wt();
+    let built = sail_forge::symbol_index::cached_or_build(&first, 600, &cache).unwrap();
+    let cached_file = cache.join(format!("{}.scip", first.base_commit));
+    assert!(
+        cached_file.is_file(),
+        "index of the base commit was not cached"
+    );
+
+    // A second job on the same commit reads the cache: no rust-analyzer run, so no index
+    // file appears in its worktree.
+    let second = new_wt();
+    let reused = sail_forge::symbol_index::cached_or_build(&second, 600, &cache).unwrap();
+    assert!(
+        !second
+            .root_dir
+            .join(sail_forge::symbol_index::INDEX_REL_PATH)
+            .exists()
+    );
+    assert_eq!(reused.len(), built.len());
+    assert!(!reused.find("area", 1).is_empty());
+
+    // An index built after edits is not cached under the base commit.
+    let _ = fs::remove_file(&cached_file);
+    let third = new_wt();
+    third
+        .write_file(
+            Path::new("src/lib.rs"),
+            "pub mod shapes;\npub fn edited() {}\n",
+        )
+        .unwrap();
+    sail_forge::symbol_index::cached_or_build(&third, 600, &cache).unwrap();
+    assert!(
+        !cached_file.exists(),
+        "an edited tree must not be cached as the base commit"
+    );
+
+    let _ = fs::remove_dir_all(&cache);
+    let _ = fs::remove_dir_all(&repo);
+}

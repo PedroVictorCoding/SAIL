@@ -409,13 +409,82 @@ pub fn index_for(worktree: &IsolatedWorktree, timeout_secs: u64) -> CachedIndex 
     {
         return cached.clone();
     }
-    let built = build(worktree, timeout_secs).map(Arc::new);
+    let built = cached_or_build(worktree, timeout_secs, &cache_dir()).map(Arc::new);
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if cache.len() >= CACHE_SLOTS {
         drop(cache.remove(0));
     }
     cache.push((root, built.clone()));
     built
+}
+
+/// Where indexes of unmodified base commits are kept between jobs:
+/// `SAIL_FORGE_SYMBOL_INDEX_CACHE`, else `symbol-index/` in Forge's state directory
+/// (`/srv/sail-data/forge/symbol-index` with the SAIL data root).
+pub fn cache_dir() -> PathBuf {
+    std::env::var_os("SAIL_FORGE_SYMBOL_INDEX_CACHE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::nightly::default_state_dir().join("symbol-index"))
+}
+
+/// Indexes kept in the cache; older ones are removed.
+pub const CACHE_KEEP: usize = 20;
+
+fn is_full_sha(s: &str) -> bool {
+    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Use the cached index of the worktree's base commit, or build one. An index is cached
+/// only when it was built from the unmodified base commit, keyed by that commit's SHA (set
+/// by Forge from the trusted source repository, not read from the sandbox-writable `.git`).
+/// A cached index used after edits treats every changed file as stale.
+pub fn cached_or_build(
+    worktree: &IsolatedWorktree,
+    timeout_secs: u64,
+    cache: &Path,
+) -> Result<SymbolIndex, String> {
+    let key = is_full_sha(&worktree.base_commit).then(|| worktree.base_commit.to_ascii_lowercase());
+    if let Some(key) = &key {
+        let path = cache.join(format!("{key}.scip"));
+        if let Ok(bytes) = std::fs::read(&path) {
+            match SymbolIndex::from_scip_bytes(&bytes) {
+                Ok(index) => return Ok(index),
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "discarding unreadable cached symbol index");
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+    let index = build(worktree, timeout_secs)?;
+    if let Some(key) = key.filter(|_| index.indexed_diff.trim().is_empty()) {
+        if let Err(e) = store_in_cache(cache, &key, &worktree.root_dir.join(INDEX_REL_PATH)) {
+            tracing::warn!(error = %e, "could not cache the symbol index");
+        }
+    }
+    Ok(index)
+}
+
+fn store_in_cache(cache: &Path, key: &str, built: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o770)
+        .create(cache)?;
+    let tmp = cache.join(format!(".{key}.{}.tmp", std::process::id()));
+    std::fs::copy(built, &tmp)?;
+    std::fs::rename(&tmp, cache.join(format!("{key}.scip")))?;
+    // Keep the newest CACHE_KEEP indexes.
+    let mut entries: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(cache)?
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "scip"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    entries.sort_by_key(|e| std::cmp::Reverse(e.0));
+    for (_, old) in entries.into_iter().skip(CACHE_KEEP) {
+        let _ = std::fs::remove_file(old);
+    }
+    Ok(())
 }
 
 /// Run `rust-analyzer scip` in the sandbox and parse the result.

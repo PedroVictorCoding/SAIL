@@ -106,6 +106,7 @@ If a gate or the self-review rejects the patch, the reason is appended to the is
 **Symbol tools (#119).** `code:find_symbol {"name": ...}` returns definitions: signature, `file:line`, reference count and the first doc line. `code:find_references {"name": ...}` lists every use of the best match, grouped by file, with test files marked. Both read a SCIP index that `rust-analyzer scip` builds inside the job's sandbox on the first `code:*` call (`crates/sail-forge/src/symbol_index.rs`).
 - Measured on this container (4 cores): about 112 s to index the SAIL workspace, then about 40 ms per query.
 - The index is not rebuilt after edits. Results in files changed since indexing say so, so the model re-reads them.
+- An index built from the unmodified base commit is cached as `<sha>.scip` in `$SAIL_FORGE_SYMBOL_INDEX_CACHE`, default `symbol-index/` in Forge's state directory (`/srv/sail-data/forge/symbol-index` with the SAIL data root). The next job on that commit skips the build. The newest 20 indexes are kept. The SHA comes from Forge's trusted clone step, never from the sandbox-writable `.git`. An index built after edits is not cached.
 - Without rust-analyzer (`rustup component add rust-analyzer`), the tools answer "symbol index unavailable" and point to `repo:search`.
 - `SAIL_FORGE_SYMBOL_INDEX_TIMEOUT_SECS`: default 600. The history budget is 36k chars, sized for the 16k-token llama-server context.
 
