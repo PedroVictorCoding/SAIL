@@ -186,7 +186,7 @@ impl TerminalSession {
         ))
     }
 
-    fn spawn_piped(
+    pub fn spawn_piped(
         shell: &str,
         cwd: &std::path::Path,
         cwd_str: &str,

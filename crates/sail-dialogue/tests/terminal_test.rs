@@ -15,7 +15,7 @@ async fn test_terminal_session_lifecycle() {
     session.resize(100, 30);
 
     session
-        .write(b"echo SAIL_TERMINAL_ONLINE\n")
+        .write(b"stty size; echo SAIL_TERMINAL_ONLINE\n")
         .await
         .expect("Failed to write to terminal");
 
@@ -24,7 +24,7 @@ async fn test_terminal_session_lifecycle() {
         while let Some(bytes) = output_rx.recv().await {
             let chunk = String::from_utf8_lossy(&bytes);
             accumulated.push_str(&chunk);
-            if accumulated.contains("SAIL_TERMINAL_ONLINE") {
+            if accumulated.contains("30 100") && accumulated.contains("SAIL_TERMINAL_ONLINE") {
                 return true;
             }
         }
@@ -34,11 +34,67 @@ async fn test_terminal_session_lifecycle() {
 
     assert!(
         read_result.unwrap_or(false),
-        "Expected output containing SAIL_TERMINAL_ONLINE, got: {}",
+        "Expected output containing '30 100' and 'SAIL_TERMINAL_ONLINE', got: {}",
         accumulated
     );
 
     session.kill();
+    let dead = timeout(Duration::from_secs(2), async {
+        while session.is_alive() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(
+        dead.is_ok(),
+        "Expected session to no longer be alive after kill"
+    );
+    assert!(!session.is_alive());
+}
+
+#[tokio::test]
+async fn test_terminal_spawn_piped() {
+    let cwd = std::env::current_dir().unwrap();
+    let cwd_str = cwd.to_string_lossy().to_string();
+    let (session, mut output_rx) = TerminalSession::spawn_piped("/bin/sh", &cwd, &cwd_str)
+        .expect("Failed to spawn piped terminal");
+    assert!(session.is_alive());
+
+    session
+        .write(b"echo PIPED_OUT; echo PIPED_ERR >&2\n")
+        .await
+        .expect("Failed to write to piped terminal");
+
+    let mut accumulated = String::new();
+    let read_result = timeout(Duration::from_secs(5), async {
+        while let Some(bytes) = output_rx.recv().await {
+            accumulated.push_str(&String::from_utf8_lossy(&bytes));
+            if accumulated.contains("PIPED_OUT") && accumulated.contains("PIPED_ERR") {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+
+    assert!(
+        read_result.unwrap_or(false),
+        "Expected PIPED_OUT and PIPED_ERR in piped output, got: {}",
+        accumulated
+    );
+
+    session.kill();
+    let dead = timeout(Duration::from_secs(2), async {
+        while session.is_alive() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(
+        dead.is_ok(),
+        "Expected piped session to no longer be alive after kill"
+    );
+    assert!(!session.is_alive());
 }
 
 async fn test_ws_terminal(_headers: HeaderMap, ws: WebSocketUpgrade) -> impl IntoResponse {
@@ -172,7 +228,51 @@ async fn test_terminal_websocket_integration() {
         "Expected reconnected handshake after restart"
     );
 
-    // Clean up
-    let _ = ws_stream.close(None).await;
+    // 6. Test Message::Binary input
+    ws_stream
+        .send(Message::Binary(b"echo BINARY_WS_OK\n".to_vec()))
+        .await
+        .expect("Failed to send binary input");
+
+    let mut bin_accumulated = String::new();
+    let bin_verified = timeout(Duration::from_secs(5), async {
+        while let Some(Ok(msg)) = ws_stream.next().await {
+            if let Ok(text) = msg.to_text()
+                && let Ok(TerminalServerMessage::Output { data }) =
+                    serde_json::from_str::<TerminalServerMessage>(text)
+            {
+                bin_accumulated.push_str(&data);
+                if bin_accumulated.contains("BINARY_WS_OK") {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+    .await;
+
+    assert!(
+        bin_verified.unwrap_or(false),
+        "Expected output containing BINARY_WS_OK, got: {}",
+        bin_accumulated
+    );
+
+    // 7. Test Message::Close frame
+    ws_stream
+        .send(Message::Close(None))
+        .await
+        .expect("Failed to send close frame");
+
+    let closed = timeout(Duration::from_secs(5), async {
+        while let Some(msg) = ws_stream.next().await {
+            if msg.is_err() || matches!(msg.ok(), Some(Message::Close(_))) {
+                return true;
+            }
+        }
+        true
+    })
+    .await;
+    assert!(closed.unwrap_or(false), "Expected socket to close");
+
     server_task.abort();
 }

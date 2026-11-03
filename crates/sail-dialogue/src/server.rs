@@ -2313,4 +2313,86 @@ mod tests {
         assert!(tok.len() >= 32);
         assert!(authority.unwrap().authenticates(&tok));
     }
+
+    #[tokio::test]
+    async fn ws_terminal_handler_origin_validation() {
+        let app = Router::new().route("/ws/terminal", get(ws_terminal_handler));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = reqwest::Client::new();
+        let host_str = addr.to_string();
+        let ftp_origin = format!("ftp://{addr}");
+        let valid_origin = format!("http://{addr}");
+
+        // 1. Disallowed scheme (ftp)
+        let res = client
+            .get(format!("http://{addr}/ws/terminal"))
+            .header("origin", &ftp_origin)
+            .header("host", &host_str)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 2. Mismatched origin host
+        let res = client
+            .get(format!("http://{addr}/ws/terminal"))
+            .header("origin", "http://evil.com")
+            .header("host", &host_str)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 3. Matching origin and host upgrades successfully
+        let res = client
+            .get(format!("http://{addr}/ws/terminal"))
+            .header("origin", &valid_origin)
+            .header("host", &host_str)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::SWITCHING_PROTOCOLS);
+    }
+
+    #[tokio::test]
+    async fn run_dialogue_server_fails_on_privileged_port() {
+        let bus = EventBus::new();
+        let scheduler = std::sync::Arc::new(sail_common::resources::ResourceScheduler::new(
+            std::sync::Arc::new(FixedHost),
+            sail_common::resources::AdmissionPolicy::default(),
+        ));
+        let service = sail_mind::GemmaRunner::with_scheduler(
+            sail_mind::GemmaConfig {
+                server_url: "http://127.0.0.1:9/v1/chat/completions".to_string(),
+                model_path: std::path::PathBuf::from("/nonexistent/test-model.gguf"),
+                ..Default::default()
+            },
+            scheduler,
+        )
+        .service()
+        .expect("test model service");
+        let services = VoiceModelServices::new().with_inference(service);
+        let arena = Arc::new(sail_arena::ArenaSubsystem::new());
+        let res =
+            run_dialogue_server_with_services("127.0.0.1:1".parse().unwrap(), bus, services, arena)
+                .await;
+        assert!(res.is_err(), "Expected bind error on privileged port 1");
+    }
 }
