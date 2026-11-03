@@ -8,7 +8,6 @@ publish.workspace = true
 
 [dependencies]
 sail-common.workspace = true
-ring.workspace = true
 chrono.workspace = true
 tokio.workspace = true
 async-trait.workspace = true

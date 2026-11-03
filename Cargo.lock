@@ -2457,7 +2457,6 @@ dependencies = [
  "futures-util",
  "image",
  "reqwest",
- "ring",
  "rustfft",
  "rustls",
  "sail-agents",

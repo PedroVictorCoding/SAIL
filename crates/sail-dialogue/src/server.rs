@@ -41,7 +41,10 @@ use tokio::{
 };
 use tracing::{Instrument, debug, error, info, trace, warn};
 
+type SessionLiveContext = Arc<std::sync::Mutex<crate::live_context::LiveContext>>;
+
 pub struct ServerState {
+    live_context_authority: Option<sail_guardian::authority::ApprovalAuthority>,
     bus: EventBus,
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
@@ -71,16 +74,14 @@ pub async fn run_dialogue_server_with_services(
     };
     let services = services.with_inference(inference.clone());
     let (owner_authority, active_token) = resolve_or_generate_owner_token();
+    let live_context_authority = active_token
+        .as_deref()
+        .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok());
     let memory_routes = crate::memory_http::router_with_arena(
         arena.clone(),
         active_token
             .as_deref()
             .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok()),
-    );
-    let speaker_routes = crate::speakers::router(
-        arena.store().clone(),
-        services.clone(),
-        active_token.as_deref(),
     );
     let approval_routes = crate::approval_http::router_with_token(
         owner_authority,
@@ -90,7 +91,6 @@ pub async fn run_dialogue_server_with_services(
     let app = Router::new()
         .nest_service("/api/guardian", approval_routes)
         .nest_service("/api/memory", memory_routes)
-        .nest_service("/api/speakers", speaker_routes)
         .route(
             "/",
             get(|| async { Html(include_str!("../web/index.html")) }),
@@ -101,15 +101,6 @@ pub async fn run_dialogue_server_with_services(
                 (
                     [("content-type", "text/javascript")],
                     include_str!("../web/card-modal.js"),
-                )
-            }),
-        )
-        .route(
-            "/speakers.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/speakers.js"),
                 )
             }),
         )
@@ -216,6 +207,7 @@ pub async fn run_dialogue_server_with_services(
         .route("/api/mind/status", get(mind_status))
         .route("/ws/voice", get(ws_handler))
         .with_state(Arc::new(ServerState {
+            live_context_authority,
             bus,
             services,
             arena,
@@ -354,6 +346,9 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
         "Voice client connected; creating isolated session"
     );
     state.arena.begin_voice_session(&session);
+    let live_context = Arc::new(std::sync::Mutex::new(
+        crate::live_context::LiveContext::default(),
+    ));
     let mut pipe = RealtimeVoicePipeline::with_services(state.services.clone(), session.clone());
     let warm_tts = pipe.tts.clone();
     let _warmup=AbortTask(tokio::spawn(async move {
@@ -365,6 +360,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     let (tx, mut rx) = mpsc::channel::<Outbound>(128);
     let mut turn: Option<AbortTask> = None;
     let mut partial: Option<AbortTask> = None;
+    let mut observation: Option<AbortTask> = None;
     let mut client_tools = ClientTools::default();
     let mut pending = Vec::<i16>::new();
     let mut speech_frames = 0usize;
@@ -549,6 +545,10 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                     Message::Binary(bytes)=>{
                         if bytes.len()>8192 || bytes.len()%2!=0 {emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"PCM packets must be even-sized, at most 8192 bytes"})).await;continue;}
                         if pipe.control_state().is_muted{continue;}
+                        // Keep background speech from interrupting an explicit typed answer.
+                        // Pausing during that answer also avoids capturing synthesized speech.
+                        if live_context.lock().expect("live context lock").enabled()
+                            && turn.as_ref().is_some_and(|t| !t.0.is_finished()) { continue; }
                         let frame_learning_epoch = state.arena.learning_epoch(&session);
                         if frame_learning_epoch != previous_learning_epoch {
                             // Discard buffered audio (including VAD pre-roll) across consent
@@ -568,7 +568,9 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                         capture_learning_epoch = frame_learning_epoch;
                                         capture_priority = Some(sail_common::resources::global().voice_turn());
                                         info!(confidence=vad.confidence,inference_us=vad.inference_us,"Speech onset detected; cancelling previous response for barge-in");
-                                        turn.take();partial.take();epoch.fetch_add(1,Ordering::SeqCst);speech_frames=0;
+                                        if live_context.lock().expect("live context lock").enabled() { observation.take(); }
+                                        else { turn.take();epoch.fetch_add(1,Ordering::SeqCst); }
+                                        partial.take();speech_frames=0;
                                         emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"interruption","state":"listening"})).await;
                                     }
                                     let current=epoch.load(Ordering::SeqCst);
@@ -595,7 +597,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                         info!(turn_id=current,samples=audio.len(),audio_ms=audio.len()/16,"Speech boundary finalized; scheduling STT and assistant turn");
                                         partial.take();turn.take();pipe.advance_turn();
                                         emit(&tx,current,json!({"type":"turn_committed","cause":"silence","audio_ms":audio.len()/16})).await;
-                                        turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone()));capture_priority.take();
+                                        let task=start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone(),live_context.clone());if live_context.lock().expect("live context lock").enabled(){observation=Some(task);}else{turn=Some(task);}capture_priority.take();
                                     }
                                 },
                                 Err(error)=>{capture_priority.take();error!(%error,"PCM/VAD processing failed");pending.clear();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":error.to_string()})).await;break;}
@@ -607,14 +609,26 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                         let action=value["action"].as_str().unwrap_or_default();
                         debug!(action,epoch=epoch.load(Ordering::SeqCst),"Received voice client command");
                         match action {
+                            "set_live_context"=>{
+                                let enabled = value["enabled"].as_bool();
+                                let authorized = state.live_context_authority.as_ref().is_some_and(|a| a.authenticates(value["owner_token"].as_str().unwrap_or_default()));
+                                if enabled.is_none() || (enabled == Some(true) && !authorized) {
+                                    emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Enabling live context requires owner authentication and explicit consent"})).await;
+                                    continue;
+                                }
+                                capture_priority.take();observation.take();turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.reset_capture();
+                                live_context.lock().expect("live context lock").set_enabled(enabled.unwrap());
+                                state.services.reset_vad(&session).await;
+                                emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"live_context_state","enabled":enabled,"segments":0})).await;
+                            },
                             "interrupt"|"reset"=>{
                                 client_tools.0.abort_all();
-                                capture_priority.take();turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.interrupt();
-                                if action=="reset"{state.arena.clear_voice_session(&session);state.arena.begin_voice_session(&session);pipe.reset();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"learning_state","enabled":false})).await;}
+                                capture_priority.take();observation.take();turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.interrupt();
+                                if action=="reset"{live_context.lock().expect("live context lock").set_enabled(false);emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"live_context_state","enabled":false,"segments":0})).await;state.arena.clear_voice_session(&session);state.arena.begin_voice_session(&session);pipe.reset();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"learning_state","enabled":false})).await;}
                                 state.services.reset_vad(&session).await;
                                 emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"interruption","state":"interrupted"})).await;
                             },
-                            "toggle_mute"=>{capture_priority.take();partial.take();pending.clear();pipe.toggle_mute();state.services.reset_vad(&session).await;},
+                            "toggle_mute"=>{live_context.lock().expect("live context lock").clear();observation.take();capture_priority.take();partial.take();pending.clear();pipe.toggle_mute();state.services.reset_vad(&session).await;},
                             "set_tier"=>{
                                 let profile=match value["profile"].as_str(){Some("LowPower")=>HardwareTierProfile::LowPower,Some("HighPerformance")=>HardwareTierProfile::HighPerformance,_=>HardwareTierProfile::Balanced};pipe.set_hardware_profile(profile);
                             },
@@ -629,14 +643,14 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 if let Some(language)=language{pipe.tts.set_voice(voice,language);}else{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Unsupported voice"})).await;}
                             },
                             "end_turn"=>{
-                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone()));capture_priority.take();}
+                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;let task=start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone(),live_context.clone());if live_context.lock().expect("live context lock").enabled(){observation=Some(task);}else{turn=Some(task);}capture_priority.take();}
                             },
                             "text"=>{
                                 let prompt=value["text"].as_str().unwrap_or_default();
                                 if prompt.trim().is_empty()||prompt.len()>16000{continue;}
                                 let vision=match parse_vision(&value["vision"]) {Ok(v)=>v,Err(e)=>{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":e.to_string()})).await;continue;}};
-                                capture_priority.take();turn.take();partial.take();pipe.reset_capture();pipe.advance_turn();pending.clear();let current=epoch.fetch_add(1,Ordering::SeqCst)+1;
-                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision,state.arena.learning_epoch(&session)),epoch.clone()));
+                                capture_priority.take();observation.take();turn.take();partial.take();pipe.reset_capture();pipe.advance_turn();pending.clear();let current=epoch.fetch_add(1,Ordering::SeqCst)+1;
+                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision,state.arena.learning_epoch(&session)),epoch.clone(),live_context.clone()));
                             },
                             "kernel_tool"=>{
                                 let name=value["tool"].as_str().unwrap_or_default();
@@ -750,6 +764,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     }
     info!("Voice client disconnected; cancelling tasks and clearing session context");
     drop(turn);
+    drop(observation);
     drop(partial);
     drop(client_tools);
     state.services.reset_vad(&session).await;
@@ -950,7 +965,9 @@ fn start_turn(
     vlm: Arc<VoiceVlm>,
     input: TurnInput,
     epoch: Arc<AtomicU64>,
+    live_context: SessionLiveContext,
 ) -> AbortTask {
+    let capture_generation = live_context.lock().expect("live context lock").generation();
     let voice_priority = sail_common::resources::global().voice_turn();
     let span = tracing::info_span!("voice_turn",session_id=%session,turn_id=current);
     AbortTask(tokio::spawn(
@@ -967,6 +984,8 @@ fn start_turn(
                 vlm,
                 input,
                 epoch,
+                live_context,
+                capture_generation,
             )
             .await
             {
@@ -994,10 +1013,14 @@ async fn run_turn(
     vlm: Arc<VoiceVlm>,
     input: TurnInput,
     epoch: Arc<AtomicU64>,
+    live_context: SessionLiveContext,
+    capture_generation: u64,
 ) -> Result<()> {
     let start = Instant::now();
     // Held across STT, inference, tool calls and TTS; abort/drop releases priority.
     let _voice_priority = sail_common::resources::global().voice_turn();
+    let observe_only = matches!(&input, TurnInput::Audio(..))
+        && live_context.lock().expect("live context lock").enabled();
     let learning_epoch = match &input {
         TurnInput::Audio(_, consent) => *consent,
         TurnInput::Text(_, _, consent) => *consent,
@@ -1016,6 +1039,23 @@ async fn run_turn(
         TurnInput::Text(text, vision, _) => (text, vision),
     };
     if prompt.trim().is_empty() {
+        emit(&tx, current, json!({"type":"turn_finished","state":"idle"})).await;
+        return Ok(());
+    }
+    if observe_only {
+        let accepted = live_context.lock().expect("live context lock").observe(
+            capture_generation,
+            &prompt,
+            Instant::now(),
+        );
+        if accepted {
+            emit(
+                &tx,
+                current,
+                json!({"type":"live_context_observed","text":prompt,"speaker":"unknown"}),
+            )
+            .await;
+        }
         emit(&tx, current, json!({"type":"turn_finished","state":"idle"})).await;
         return Ok(());
     }
@@ -1081,6 +1121,15 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         && let Some(Value::String(system)) = messages[0].get_mut("content")
     {
         system.push_str(&knowledge);
+    }
+    let observed_context = live_context
+        .lock()
+        .expect("live context lock")
+        .prompt_context(Instant::now());
+    if let Some(observed) = observed_context
+        && let Some(Value::String(system)) = messages[0].get_mut("content")
+    {
+        system.push_str(&observed);
     }
     for turn in &conversation.hot {
         messages.push(json!({"role":"user","content":turn.user}));
@@ -2150,5 +2199,232 @@ mod tests {
         let tok = token.unwrap();
         assert!(tok.len() >= 32);
         assert!(authority.unwrap().authenticates(&tok));
+    }
+}
+
+#[cfg(test)]
+mod live_conversation_tests {
+    use super::*;
+    struct FixtureHost;
+    impl sail_common::resources::HostProbe for FixtureHost {
+        fn sample(&self) -> std::io::Result<sail_protocol::resources::HostSample> {
+            use sail_common::resources::GIB;
+            Ok(sail_protocol::resources::HostSample {
+                available_ram_bytes: 24 * GIB,
+                total_ram_bytes: 32 * GIB,
+                swap_used_bytes: 0,
+                swap_total_bytes: 8 * GIB,
+                logical_cpus: 12,
+            })
+        }
+    }
+    #[tokio::test]
+    async fn live_audio_builds_context_without_inference_tools_tts_or_archive() {
+        // Explicit fixture STT, through the real supervised worker and run_turn path.
+        // Run this filtered test alone: worker configuration is process environment.
+        let path =
+            std::env::temp_dir().join(format!("sail-live-fixture-{}.py", uuid::Uuid::new_v4()));
+        std::fs::write(&path, r#"import sys,json
+for line in sys.stdin:
+    request=json.loads(line)
+    assert sys.argv[1] == 'stt', 'listen-only must not run other models'
+    if len(request['pcm']) < 8:
+        print(json.dumps({'ok':False,'error':'fixture STT unavailable'}),flush=True)
+        continue
+    print(json.dumps({'ok':True,'result':{'text':'The launch is on Tuesday.','tokens':[]}}),flush=True)
+"#).unwrap();
+        let old_python = std::env::var_os("SAIL_VOICE_PYTHON");
+        let old_worker = std::env::var_os("SAIL_VOICE_WORKER");
+        unsafe {
+            std::env::set_var("SAIL_VOICE_PYTHON", "/usr/bin/python3");
+            std::env::set_var("SAIL_VOICE_WORKER", &path);
+        }
+        let services = VoiceModelServices::with_scheduler(Arc::new(
+            sail_common::resources::ResourceScheduler::new(
+                Arc::new(FixtureHost),
+                Default::default(),
+            ),
+        ));
+        let arena = Arc::new(sail_arena::ArenaSubsystem::new());
+        arena.begin_voice_session("fixture");
+        arena.set_session_learning("fixture", true).unwrap();
+        let state = Arc::new(ServerState {
+            bus: EventBus::new(),
+            services: services.clone(),
+            arena: arena.clone(),
+            inference: sail_mind::MindService::from_env().unwrap(),
+            live_context_authority: None,
+        });
+        let context = Arc::new(std::sync::Mutex::new(
+            crate::live_context::LiveContext::default(),
+        ));
+        context.lock().unwrap().set_enabled(true);
+        let generation = context.lock().unwrap().generation();
+        let (tx, mut rx) = mpsc::channel(16);
+        let result = run_turn(
+            state.clone(),
+            "fixture".into(),
+            1,
+            tx,
+            LocalStreamingStt::with_services(services.clone()),
+            LocalNeuralTts::with_services(Default::default(), services.clone()),
+            Arc::new(VoiceVlm::new("fixture-unused")),
+            TurnInput::Audio(vec![1; 16000], arena.learning_epoch("fixture")),
+            Arc::new(AtomicU64::new(1)),
+            context.clone(),
+            generation,
+        )
+        .await;
+        result.unwrap();
+        // A decoder failure must neither fabricate an observation nor clear prior context.
+        let (failure_tx, mut failure_rx) = mpsc::channel(16);
+        let failure = run_turn(
+            state.clone(),
+            "fixture".into(),
+            2,
+            failure_tx,
+            LocalStreamingStt::with_services(services.clone()),
+            LocalNeuralTts::with_services(Default::default(), services.clone()),
+            Arc::new(VoiceVlm::new("fixture-unused")),
+            TurnInput::Audio(vec![1], None),
+            Arc::new(AtomicU64::new(2)),
+            context.clone(),
+            generation,
+        )
+        .await;
+        assert!(failure.is_err());
+        assert!(failure_rx.try_recv().is_err());
+
+        // Exercise real WebSocket consent/authentication/reset handling, with fixture workers.
+        use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+        async fn receive_type<S>(
+            socket: &mut tokio_tungstenite::WebSocketStream<S>,
+            wanted: &str,
+        ) -> Value
+        where
+            S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+        {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let message = socket.next().await.unwrap().unwrap();
+                    if let WsMessage::Text(text) = message {
+                        let value: Value = serde_json::from_str(&text).unwrap();
+                        if value["type"] == wanted {
+                            return value;
+                        }
+                    }
+                }
+            })
+            .await
+            .unwrap()
+        }
+        let token = "fixture-live-context-owner-token-32-bytes";
+        let socket_state = Arc::new(ServerState {
+            bus: EventBus::new(),
+            services: services.clone(),
+            arena: arena.clone(),
+            inference: state.inference.clone(),
+            live_context_authority: Some(
+                sail_guardian::authority::ApprovalAuthority::new(token).unwrap(),
+            ),
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = Router::new()
+            .route("/ws/voice", get(ws_handler))
+            .with_state(socket_state);
+        let server = AbortTask(tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        }));
+        let (mut socket, _) = connect_async(format!("ws://{addr}/ws/voice"))
+            .await
+            .unwrap();
+        receive_type(&mut socket, "session").await;
+        socket
+            .send(WsMessage::Text(
+                json!({"action":"set_live_context","enabled":true}).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            receive_type(&mut socket, "error").await["message"]
+                .as_str()
+                .unwrap()
+                .contains("owner authentication")
+        );
+        socket
+            .send(WsMessage::Text(
+                json!({"action":"set_live_context","enabled":true,"owner_token":token}).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            receive_type(&mut socket, "live_context_state").await["enabled"],
+            true
+        );
+        socket
+            .send(WsMessage::Text(json!({"action":"reset"}).to_string()))
+            .await
+            .unwrap();
+        assert_eq!(
+            receive_type(&mut socket, "live_context_state").await["enabled"],
+            false
+        );
+        // Stopping does not require an available owner token.
+        socket
+            .send(WsMessage::Text(
+                json!({"action":"set_live_context","enabled":false}).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            receive_type(&mut socket, "live_context_state").await["enabled"],
+            false
+        );
+        socket.close(None).await.unwrap();
+        drop(server);
+        unsafe {
+            match old_python {
+                Some(v) => std::env::set_var("SAIL_VOICE_PYTHON", v),
+                None => std::env::remove_var("SAIL_VOICE_PYTHON"),
+            };
+            match old_worker {
+                Some(v) => std::env::set_var("SAIL_VOICE_WORKER", v),
+                None => std::env::remove_var("SAIL_VOICE_WORKER"),
+            };
+        }
+        std::fs::remove_file(path).unwrap();
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event.value);
+        }
+        assert!(events.iter().any(|e| e["type"] == "live_context_observed"));
+        assert!(!events.iter().any(|e| matches!(
+            e["type"].as_str(),
+            Some("turn_started" | "tool_started" | "audio")
+        )));
+        assert!(
+            arena
+                .conversation_context("fixture", "launch")
+                .hot
+                .is_empty(),
+            "ambient speech must not enter normal learning/archive"
+        );
+        assert!(
+            context
+                .lock()
+                .unwrap()
+                .prompt_context(Instant::now())
+                .unwrap()
+                .contains("Tuesday")
+        );
+        context.lock().unwrap().set_enabled(false);
+        assert!(
+            context
+                .lock()
+                .unwrap()
+                .prompt_context(Instant::now())
+                .is_none()
+        );
     }
 }

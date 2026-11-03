@@ -16,7 +16,6 @@ use sail_common::{
 
 pub mod compaction;
 pub mod knowledge;
-pub mod speakers;
 pub mod store;
 
 pub use compaction::{Breadcrumb, ContextBudget, Recall, WorkingContext};

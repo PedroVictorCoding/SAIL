@@ -682,3 +682,78 @@ async fn publish_receipt_survives_a_crash_before_the_runner_saves_state() {
         Some("https://example.test/pull/41")
     );
 }
+
+/// The first attempt is preempted by live voice, as the solver reports it; later attempts
+/// apply a passing patch.
+struct VoiceThenPatchExecutor {
+    calls: AtomicUsize,
+    bodies: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl JobExecutor for VoiceThenPatchExecutor {
+    async fn execute(
+        &self,
+        orchestrator: &ForgeOrchestrator,
+        job_id: &str,
+    ) -> Result<ForgeJobReport, String> {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        let cp = orchestrator
+            .checkpoint_store()
+            .load(job_id)
+            .unwrap()
+            .unwrap();
+        self.bodies
+            .lock()
+            .unwrap()
+            .push(cp.issue_body.unwrap_or_default());
+        if n == 0 {
+            orchestrator
+                .cancel_job(job_id, "test voice preemption")
+                .unwrap();
+            return Err("Background inference preempted for live voice".into());
+        }
+        orchestrator
+            .run_job_lifecycle(job_id, Some(GOOD_PATCH))
+            .await
+    }
+}
+
+#[tokio::test]
+async fn voice_preemption_spends_no_attempt_and_the_issue_is_retried() {
+    let h = Harness::new("voice");
+    let gh = Arc::new(FakeGithub {
+        issues: vec![issue(1, &["forge-ready"])],
+        ..Default::default()
+    });
+    let exec = Arc::new(VoiceThenPatchExecutor {
+        calls: AtomicUsize::new(0),
+        bodies: Mutex::new(Vec::new()),
+    });
+    let mut config = h.config.clone();
+    config.voice_quiet = std::time::Duration::from_millis(10);
+    let digest = ForgeNightlyRunner::new(h.orchestrator.clone(), gh.clone(), config)
+        .with_executor(exec.clone())
+        .run_once(false, false)
+        .await;
+
+    assert!(digest.halted.is_none(), "{:?}", digest.halted);
+    assert_eq!(
+        exec.calls.load(Ordering::SeqCst),
+        2,
+        "retried after the pause"
+    );
+    let bodies = exec.bodies.lock().unwrap().clone();
+    assert!(
+        !bodies[1].contains("live voice") && !bodies[1].contains("Previous attempt feedback"),
+        "voice preemption became model feedback:\n{}",
+        bodies[1]
+    );
+    assert_eq!(digest.entries.len(), 1);
+    assert_eq!(digest.entries[0].outcome, "published");
+    let state = NightlyState::load(&h.config.state_dir);
+    assert_eq!(
+        state.issues[&1].attempts, 1,
+        "the preempted attempt was counted"
+    );
+}

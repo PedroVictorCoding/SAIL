@@ -61,7 +61,7 @@ flowchart TB
 - **SAIL Flow**: Workflow orchestration, triggers, automation nodes, condition evaluation, and execution scheduling.
 - **SAIL Discovery**: Autonomous curiosity engine, learning resources, knowledge-gap identification, and proactive interest exploration.
 - **SAIL Agents**: Goal decomposition, specialized worker delegation, tool proposal & authorization, step verification, and task coordination.
-- **SAIL Mind**: Local Gemma 4 (`models/gemma4-v2-Q4_K_M.gguf` via `llama-server`), native SSM/MoE models, inference adapters, context window allocation, and compute routing.
+- **SAIL Mind**: One resident local model, Qwen3.6-35B-A3B (`models/Qwen3.6-35B-A3B-Q4_K_M.gguf` via `llama-server`), shared by voice, agents and Forge, inference adapters, context window allocation, and compute routing.
 - **SAIL Guardian**: Access control, capability grants (`devices`, `files`, `system`, `tools`), sandbox policy, interactive user approvals, and tamper-evident SHA-256 audit receipts.
 - **SAIL Bridge**: Host OS integration, sandboxed command execution, browser/application connectors, and peripheral communication.
 

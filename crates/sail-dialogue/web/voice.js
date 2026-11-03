@@ -1,4 +1,5 @@
 'use strict';
+let liveContextEnabled = false;
 let learningSession = null, learningEnabled = false, learningBusy = false;
 let ws, audioCtx, micStream, processor, micSource;
 let workletLoaded=false;
@@ -89,12 +90,13 @@ function connectWs() {
   ws = new WebSocket(`${proto}//${location.host}/ws/voice`);
   ws.onopen = () => {
     setConnection('Connected · local session', true);
-    micBtn.disabled = false;
+    micBtn.disabled = false; document.getElementById('liveContextBtn').disabled = false;
     if (orbState === 'disconnected') updateState('idle');
     sendAction('forge:list');
   };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
+    liveContextEnabled = false; renderLiveContext(); document.getElementById('liveContextBtn').disabled = true;
     learningSession = null; learningEnabled = false; renderLearning();
     pendingApprovalActions.clear(); lastToolCalls.clear();
     cancelVisualCapture(); captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
@@ -111,6 +113,10 @@ function connectWs() {
         cancelVisualCapture();
         document.getElementById('conversation').replaceChildren(); responseNode = null;
         applyControl(data.control); break;
+      case 'live_context_state':
+        liveContextEnabled = data.enabled === true; renderLiveContext(); break;
+      case 'live_context_observed':
+        transcriptBox.textContent = `Context · ${data.text}`; break;
       case 'learning_state':
         learningEnabled = data.enabled === true; renderLearning(); break;
       case 'telemetry':
@@ -812,6 +818,28 @@ window.addEventListener('sail:orb-telemetry', event => {
 window.sailUi = Object.freeze({
   setOrbTelemetry: data => window.dispatchEvent(new CustomEvent('sail:orb-telemetry', { detail:data })),
   resumeOrbAnimation: () => { orbFrozen = false; },
+});
+
+
+function renderLiveContext() {
+  const button = document.getElementById('liveContextBtn');
+  button.setAttribute('aria-pressed', String(liveContextEnabled));
+  button.textContent = liveContextEnabled ? 'Disable and clear context' : 'Enable listening context';
+  document.getElementById('liveContextStatus').textContent = liveContextEnabled
+    ? 'Listening context enabled · start microphone to capture; type to ask'
+    : 'Listening context off';
+}
+document.getElementById('liveContextBtn').addEventListener('click', async () => {
+  const button = document.getElementById('liveContextBtn');
+  button.disabled = true;
+  const connection = ws;
+  try {
+    const owner_token = liveContextEnabled ? undefined : await getOrFetchOwnerToken();
+    if (ws !== connection || ws.readyState !== WebSocket.OPEN) return;
+    stopPlayback();
+    sendAction('set_live_context', {enabled: !liveContextEnabled, owner_token});
+  } catch (error) { showError(error.message); }
+  finally { button.disabled = !ws || ws.readyState !== WebSocket.OPEN; }
 });
 
 function renderLearning() {

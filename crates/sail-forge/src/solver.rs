@@ -1182,6 +1182,18 @@ pub struct LocalSolverController {
     /// Explicit endpoints instead of `candidate_endpoints()` (environment-based).
     pub endpoint_override: Option<Vec<String>>,
     resource_scheduler: std::sync::Arc<sail_common::resources::ResourceScheduler>,
+    voice_quiet: Duration,
+}
+
+/// `SAIL_FORGE_VOICE_QUIET_SECS` (default 5, 0–300): quiet time after a voice turn before
+/// preempted Forge work resumes.
+pub(crate) fn voice_quiet_from_env() -> Duration {
+    let secs = std::env::var("SAIL_FORGE_VOICE_QUIET_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v <= 300)
+        .unwrap_or(5);
+    Duration::from_secs(secs)
 }
 
 impl LocalSolverController {
@@ -1199,6 +1211,7 @@ impl LocalSolverController {
             model_timeouts: ModelTimeouts::default(),
             endpoint_override: None,
             resource_scheduler: sail_common::resources::global(),
+            voice_quiet: voice_quiet_from_env(),
         }
     }
 
@@ -1208,6 +1221,46 @@ impl LocalSolverController {
     ) -> Self {
         self.resource_scheduler = scheduler;
         self
+    }
+
+    /// How long voice must stay quiet before preempted work resumes.
+    pub fn with_voice_quiet(mut self, quiet: Duration) -> Self {
+        self.voice_quiet = quiet;
+        self
+    }
+
+    /// Wait until live voice is quiet. `None` if the job was cancelled meanwhile.
+    async fn wait_for_voice_idle(&self, is_cancelled: &mut impl FnMut() -> bool) -> Option<()> {
+        wait_for_model(
+            self.resource_scheduler.voice_idle(self.voice_quiet),
+            is_cancelled,
+        )
+        .await
+    }
+
+    /// Run a repository tool. When live voice preempts its build or refuses it admission,
+    /// wait for voice to be quiet and run it again: talking to SAIL pauses Forge, it does
+    /// not fail the job. Other resource refusals are returned as they are. `None` if the
+    /// job was cancelled while waiting.
+    async fn run_tool_yielding_to_voice(
+        &self,
+        worktree: &IsolatedWorktree,
+        call: &RepoToolCall,
+        log_dir: &Path,
+        step_idx: u32,
+        is_cancelled: &mut impl FnMut() -> bool,
+    ) -> Option<RepoToolResult> {
+        loop {
+            let epoch = self.resource_scheduler.voice_epoch();
+            let res =
+                execute_repo_tool(worktree, call, log_dir, self.command_timeout_secs, step_idx);
+            let voice_ran = self.resource_scheduler.voice_active()
+                || self.resource_scheduler.voice_epoch() != epoch;
+            if !(res.resource_blocked && voice_ran) {
+                return Some(res);
+            }
+            self.wait_for_voice_idle(is_cancelled).await?;
+        }
     }
 
     pub fn with_model_timeouts(mut self, timeouts: ModelTimeouts) -> Self {
@@ -1443,8 +1496,34 @@ Rules:
         let mut parse_failures = 0u32;
 
         let mut resource_blocked = false;
+        // Live voice preempted this turn: wait until it is quiet, then run the turn again.
+        let mut voice_paused = false;
         let mut cancelled_during_request = false;
         'solver: loop {
+            if std::mem::take(&mut voice_paused) && !cancelled_during_request {
+                // The preempted turn's partial reply was discarded and never entered the
+                // conversation; re-running it does not spend a turn.
+                turns = turns.saturating_sub(1);
+                on_progress(SolverProgress {
+                    turn: turns,
+                    max_turns: self.max_turns,
+                    iteration: iterations,
+                    stage: "paused".into(),
+                    message:
+                        "Paused: live voice has priority. Resuming when the conversation is quiet."
+                            .into(),
+                    live_output: None,
+                    model_action: Some("Model inference paused for live voice".into()),
+                    diff: None,
+                    target_file: None,
+                    activity: None,
+                    logs: Some(vec!["Paused for live voice".into()]),
+                });
+                if self.wait_for_voice_idle(&mut is_cancelled).await.is_none() {
+                    cancelled_during_request = true;
+                }
+                continue 'solver;
+            }
             if cancelled_during_request || is_cancelled() {
                 let final_diff = worktree.get_diff().unwrap_or_default();
                 let modified_files = extract_modified_files_from_diff(&final_diff);
@@ -1524,6 +1603,10 @@ Rules:
                 model_cancel.clone(),
             ) {
                 Ok(lease) => lease,
+                Err(error) if error.is_voice_priority() => {
+                    voice_paused = true;
+                    continue 'solver;
+                }
                 Err(error) => {
                     resource_blocked = true;
                     last_error = Some(error.to_string());
@@ -1552,9 +1635,8 @@ Rules:
                         Some(response) => response,
                         None => {
                             if model_cancel.is_cancelled() {
-                                resource_blocked = true;
-                                last_error = Some("Background inference preempted for live voice; retry when idle".into());
-                                break 'solver;
+                                voice_paused = true;
+                                continue 'solver;
                             }
                             cancelled_during_request = true;
                             continue 'solver;
@@ -1595,9 +1677,8 @@ Rules:
                                         Some(None) => break,
                                         None => {
                                             if model_cancel.is_cancelled() {
-                                                resource_blocked = true;
-                                                last_error = Some("Background inference preempted for live voice; retry when idle".into());
-                                                break 'solver;
+                                                voice_paused = true;
+                                                continue 'solver;
                                             }
                                             cancelled_during_request = true;
                                             continue 'solver;
@@ -1659,9 +1740,8 @@ Rules:
                                 Some(result) => result,
                                 None => {
                                     if model_cancel.is_cancelled() {
-                                        resource_blocked = true;
-                                        last_error = Some("Background inference preempted for live voice; retry when idle".into());
-                                        break 'solver;
+                                        voice_paused = true;
+                                        continue 'solver;
                                     }
                                     cancelled_during_request = true;
                                     continue 'solver;
@@ -1718,20 +1798,18 @@ Rules:
                         }
                         Ok(resp) => {
                             let status = resp.status();
-                            let body = match wait_for_model(resp.text(), &mut inference_cancelled)
-                                .await
-                            {
-                                Some(result) => result.unwrap_or_default(),
-                                None => {
-                                    if model_cancel.is_cancelled() {
-                                        resource_blocked = true;
-                                        last_error = Some("Background inference preempted for live voice; retry when idle".into());
-                                        break 'solver;
+                            let body =
+                                match wait_for_model(resp.text(), &mut inference_cancelled).await {
+                                    Some(result) => result.unwrap_or_default(),
+                                    None => {
+                                        if model_cancel.is_cancelled() {
+                                            voice_paused = true;
+                                            continue 'solver;
+                                        }
+                                        cancelled_during_request = true;
+                                        continue 'solver;
                                     }
-                                    cancelled_during_request = true;
-                                    continue 'solver;
-                                }
-                            };
+                                };
                             endpoint_failures.push(EndpointFailure::http(ep, status, &body));
                         }
                         Err(e) => {
@@ -1803,12 +1881,8 @@ Rules:
             }
 
             if model_cancel.is_cancelled() {
-                resource_blocked = true;
-                last_error = Some(
-                    "Background inference preempted for live voice; partial output discarded"
-                        .into(),
-                );
-                break 'solver;
+                voice_paused = true;
+                continue 'solver;
             }
             drop(model_lease);
 
@@ -1920,13 +1994,19 @@ Rules:
                     }
                     if !tests_verified {
                         iterations += 1;
-                        let test_res = execute_repo_tool(
-                            worktree,
-                            &RepoToolCall::Test { filter: None },
-                            log_dir,
-                            self.command_timeout_secs,
-                            iterations,
-                        );
+                        let Some(test_res) = self
+                            .run_tool_yielding_to_voice(
+                                worktree,
+                                &RepoToolCall::Test { filter: None },
+                                log_dir,
+                                iterations,
+                                &mut is_cancelled,
+                            )
+                            .await
+                        else {
+                            cancelled_during_request = true;
+                            continue 'solver;
+                        };
                         if test_res.resource_blocked {
                             resource_blocked = true;
                             last_error = Some(test_res.output.clone());
@@ -2059,13 +2139,19 @@ Rules:
                             logs: Some(vec!["Executing cargo test in sandbox worktree...".into()]),
                         });
 
-                        let test_res = execute_repo_tool(
-                            worktree,
-                            &RepoToolCall::Test { filter: None },
-                            log_dir,
-                            self.command_timeout_secs,
-                            iterations,
-                        );
+                        let Some(test_res) = self
+                            .run_tool_yielding_to_voice(
+                                worktree,
+                                &RepoToolCall::Test { filter: None },
+                                log_dir,
+                                iterations,
+                                &mut is_cancelled,
+                            )
+                            .await
+                        else {
+                            cancelled_during_request = true;
+                            continue 'solver;
+                        };
                         if test_res.resource_blocked {
                             resource_blocked = true;
                             last_error = Some(test_res.output.clone());
@@ -2183,13 +2269,19 @@ Rules:
                         logs: Some(vec!["Executing cargo test in sandbox...".into()]),
                     });
 
-                    let test_res = execute_repo_tool(
-                        worktree,
-                        &action,
-                        log_dir,
-                        self.command_timeout_secs,
-                        iterations,
-                    );
+                    let Some(test_res) = self
+                        .run_tool_yielding_to_voice(
+                            worktree,
+                            &action,
+                            log_dir,
+                            iterations,
+                            &mut is_cancelled,
+                        )
+                        .await
+                    else {
+                        cancelled_during_request = true;
+                        continue 'solver;
+                    };
                     if test_res.resource_blocked {
                         resource_blocked = true;
                         last_error = Some(test_res.output.clone());
@@ -2299,13 +2391,19 @@ Rules:
                         logs: Some(vec![format!("Executed {}", tool_desc)]),
                     });
 
-                    let res = execute_repo_tool(
-                        worktree,
-                        other_tool,
-                        log_dir,
-                        self.command_timeout_secs,
-                        iterations,
-                    );
+                    let Some(res) = self
+                        .run_tool_yielding_to_voice(
+                            worktree,
+                            other_tool,
+                            log_dir,
+                            iterations,
+                            &mut is_cancelled,
+                        )
+                        .await
+                    else {
+                        cancelled_during_request = true;
+                        continue 'solver;
+                    };
                     push_message!(serde_json::json!({
                         "role": "user",
                         "content": format!("Tool `{}` result:\n{}", res.tool, res.output)

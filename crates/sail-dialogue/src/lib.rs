@@ -1,11 +1,11 @@
 pub mod approval_http;
 pub mod control;
 mod execution;
+pub mod live_context;
 pub mod memory_http;
 pub mod orb;
 pub mod pipeline;
 pub mod server;
-pub mod speakers;
 mod speech;
 pub mod staged_ack;
 pub mod stt;

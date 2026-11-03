@@ -6,7 +6,9 @@ use std::{
     collections::HashMap,
     io,
     sync::{Arc, Mutex, OnceLock},
+    time::Duration,
 };
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -121,6 +123,16 @@ impl ResourceClaim {
 #[derive(Debug, thiserror::Error)]
 #[error("resource admission denied: {0}")]
 pub struct AdmissionError(pub String);
+/// Why background work is refused or cancelled while a voice turn runs.
+const VOICE_PRIORITY: &str = "live voice has priority";
+const VOICE_PREEMPTED: &str = "Background inference preempted for live voice";
+impl AdmissionError {
+    /// Refused or preempted only because live voice has priority: the work can resume
+    /// once voice is idle ([`ResourceScheduler::voice_idle`]).
+    pub fn is_voice_priority(&self) -> bool {
+        self.0 == VOICE_PRIORITY || self.0 == VOICE_PREEMPTED
+    }
+}
 struct Entry {
     claim: ResourceClaim,
     cancel: CancellationToken,
@@ -129,6 +141,8 @@ struct Entry {
 struct State {
     entries: HashMap<Uuid, Entry>,
     voice_turns: usize,
+    /// Voice turns started since boot; tells a caller whether voice ran during its work.
+    voice_epoch: u64,
     rejected: u64,
     preemptions: u64,
 }
@@ -136,6 +150,8 @@ pub struct ResourceScheduler {
     probe: Arc<dyn HostProbe>,
     policy: AdmissionPolicy,
     state: Mutex<State>,
+    /// Active voice turn count, published for `voice_idle` waiters.
+    voice: watch::Sender<usize>,
 }
 pub fn global() -> Arc<ResourceScheduler> {
     static SCHEDULER: OnceLock<Arc<ResourceScheduler>> = OnceLock::new();
@@ -154,19 +170,20 @@ impl ResourceScheduler {
             probe,
             policy,
             state: Mutex::new(State::default()),
+            voice: watch::Sender::new(0),
         }
     }
-    /// Cancels background inference/builds/speech; never kills an external model.
+    /// Cancels background inference/builds; never kills an external model.
     /// New background work stays blocked for the entire turn, including tool/TTS gaps.
     pub fn voice_turn(self: &Arc<Self>) -> VoiceTurn {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         state.voice_turns += 1;
+        state.voice_epoch += 1;
+        self.voice.send_replace(state.voice_turns);
         let mut preemptions = 0;
         for entry in state.entries.values() {
-            if matches!(
-                entry.claim.kind,
-                WorkKind::Inference | WorkKind::Build | WorkKind::Speech
-            ) && entry.claim.priority == WorkPriority::Background
+            if matches!(entry.claim.kind, WorkKind::Inference | WorkKind::Build)
+                && entry.claim.priority == WorkPriority::Background
                 && !entry.cancel.is_cancelled()
             {
                 entry.cancel.cancel();
@@ -176,6 +193,41 @@ impl ResourceScheduler {
         state.preemptions += preemptions;
         VoiceTurn(self.clone())
     }
+    /// Whether a voice turn is in progress.
+    pub fn voice_active(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .voice_turns
+            > 0
+    }
+
+    /// Counter of voice turns started. Compare a value taken before some background work
+    /// with one taken after it to learn whether voice preempted that work.
+    pub fn voice_epoch(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .voice_epoch
+    }
+
+    /// Resolves once no voice turn has started or been active for `quiet`. Background work
+    /// that voice preempted waits here and then resumes, so a conversation pauses it
+    /// rather than failing it. The quiet period keeps a follow-up question from being
+    /// cut off by work restarting between turns.
+    pub async fn voice_idle(&self, quiet: Duration) {
+        let mut active = self.voice.subscribe();
+        loop {
+            // The sender lives as long as `self`, so this only waits for the count.
+            let _ = active.wait_for(|turns| *turns == 0).await;
+            let epoch = self.voice_epoch();
+            tokio::time::sleep(quiet).await;
+            if !self.voice_active() && self.voice_epoch() == epoch {
+                return;
+            }
+        }
+    }
+
     pub fn try_admit(
         self: &Arc<Self>,
         claim: ResourceClaim,
@@ -191,7 +243,7 @@ impl ResourceScheduler {
                 .sample()
                 .map_err(|e| format!("host sample unavailable: {e}"))?;
             if claim.priority == WorkPriority::Background && state.voice_turns > 0 {
-                return Err("live voice has priority".into());
+                return Err(VOICE_PRIORITY.into());
             }
             let pending = state
                 .entries
@@ -271,7 +323,7 @@ impl ResourceScheduler {
         )?;
         tokio::select! {
             biased;
-            _ = cancel.cancelled() => Err(AdmissionError("Background inference preempted for live voice".into())),
+            _ = cancel.cancelled() => Err(AdmissionError(VOICE_PREEMPTED.into())),
             value = operation => Ok(value),
         }
     }
@@ -344,11 +396,9 @@ impl Drop for ResourceLease {
 pub struct VoiceTurn(Arc<ResourceScheduler>);
 impl Drop for VoiceTurn {
     fn drop(&mut self) {
-        self.0
-            .state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .voice_turns -= 1;
+        let mut state = self.0.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.voice_turns -= 1;
+        self.0.voice.send_replace(state.voice_turns);
     }
 }
 

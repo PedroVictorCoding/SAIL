@@ -35,6 +35,9 @@ pub struct NightlyConfig {
     pub admission: AdmissionPolicy,
     pub pr_labels: Vec<String>,
     pub base_branch: String,
+    /// Quiet time after live voice before a preempted issue is retried
+    /// (`SAIL_FORGE_VOICE_QUIET_SECS`).
+    pub voice_quiet: std::time::Duration,
 }
 
 /// `SAIL_FORGE_STATE_DIR`, else `forge/` under the SAIL data root.
@@ -90,6 +93,7 @@ impl Default for NightlyConfig {
             admission: AdmissionPolicy::default(),
             pr_labels: vec!["forge-generated".into()],
             base_branch: "main".into(),
+            voice_quiet: crate::solver::voice_quiet_from_env(),
         }
     }
 }
@@ -279,6 +283,16 @@ fn is_infrastructure_failure(reason: &str) -> bool {
         || reason.contains("Cannot connect to model endpoint")
         || reason.contains("Model transport failure at")
 }
+
+/// Live voice preempted or refused the work. That is not a property of the patch or of the
+/// host: the attempt is not counted, and the issue is retried once voice is quiet.
+fn is_voice_preemption(reason: &str) -> bool {
+    reason.contains("live voice")
+}
+
+/// Bound on voice pauses for one issue in one run, should a voice-preemption reason ever
+/// recur while no voice turn is active.
+const MAX_VOICE_PAUSES_PER_ISSUE: u32 = 20;
 
 fn feedback_body(issue: &IssueCandidate, record: &IssueRecord) -> String {
     match (&record.last_reason, record.attempts) {
@@ -544,6 +558,7 @@ impl ForgeNightlyRunner {
         let _ = state.save(&self.config.state_dir);
 
         'issues: for issue in work {
+            let mut voice_pauses = 0u32;
             loop {
                 if let Some(stop) = self.should_stop(respect_window) {
                     digest.halted = Some(stop);
@@ -562,6 +577,7 @@ impl ForgeNightlyRunner {
                     issue_body: Some(feedback_body(&issue, &record)),
                     ..Default::default()
                 };
+                let before_attempt = record.clone();
                 let job_id = match self.orchestrator.enqueue_managed_issue(req) {
                     Ok(id) => id,
                     Err(e) => {
@@ -593,6 +609,24 @@ impl ForgeNightlyRunner {
                             .filter(|s| !s.is_empty())
                             .unwrap_or_else(|| "completed without a passing review".into());
                         ("rejected".into(), reason, true)
+                    }
+                    Err(reason)
+                        if is_voice_preemption(&reason)
+                            && voice_pauses < MAX_VOICE_PAUSES_PER_ISSUE =>
+                    {
+                        // Restore the record: no attempt spent, and no voice text becomes
+                        // feedback for the model.
+                        voice_pauses += 1;
+                        state.issues.insert(issue.number, before_attempt);
+                        let _ = state.save(&self.config.state_dir);
+                        info!(
+                            "Forge nightly: issue #{} paused for live voice; retrying when quiet",
+                            issue.number
+                        );
+                        sail_common::resources::global()
+                            .voice_idle(self.config.voice_quiet)
+                            .await;
+                        continue;
                     }
                     Err(reason) if is_infrastructure_failure(&reason) => {
                         record.attempts -= 1;

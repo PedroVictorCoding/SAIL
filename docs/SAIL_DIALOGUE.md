@@ -60,10 +60,10 @@ One complete local voice turn with measured STT/first-audio latency, barge-in, n
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
 
-## Optional local speaker analysis
+## Live conversation context
 
-Settings → Voice & Audio includes an owner-authenticated clip workflow for anonymous
-speaker timelines, explicit voice enrollment, identification and claimed-speaker
-verification. It does not alter the live microphone path or grant permissions from
-a voice match. Setup, encrypted-profile lifecycle, model licensing and the pending
-real-acoustic validation gate are documented in [Local speaker intelligence](SPEAKER_INTELLIGENCE.md).
+Voice settings provide opt-in, owner-authenticated listening without replies using
+the existing local VAD/STT. A bounded session-only buffer supplies anonymous speech
+as untrusted background to explicit typed questions. No pyannote or voiceprints are
+required. See [live conversation context](LIVE_CONVERSATION_CONTEXT.md) for consent,
+clearing/expiry, usage, verification and limitations.
