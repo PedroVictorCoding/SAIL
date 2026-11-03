@@ -573,10 +573,17 @@ impl ArenaSubsystem {
 
     /// Forget a conversation completely: in-RAM context, archived records and index entries.
     pub fn clear_voice_session(&self, session: &str) {
-        if let Err(error) = self.set_session_learning(session, false) {
+        // Also works for archived sessions no longer present in the live ledger.
+        // Hold the session lock across cleanup so an in-flight turn cannot reinsert text.
+        let Ok(mut sessions) = self.sessions.write() else {
+            return;
+        };
+        sessions.remove(session);
+        if let Err(error) = self.store.knowledge().write(knowledge::Actor::User, |tx| {
+            tx.discard_session_sources(VOICE_SCOPE, session)
+        }) {
             warn!(%error, session, "SAIL Arena could not discard pending session sources");
         }
-        self.release_session(session);
     }
 
     /// Drop a disconnected session's in-RAM context; its archive stays on disk.

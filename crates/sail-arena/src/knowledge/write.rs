@@ -66,6 +66,17 @@ impl<'t> KnowledgeTx<'t> {
             return Err(invalid("owner action required"));
         }
         self.bump_generation()?;
+        // A generation change obsoletes shared-scope jobs too. Re-admit their surviving
+        // sources, otherwise their processed markers would silently strand other sessions.
+        self.conn.execute(
+            "DELETE FROM kn_source_progress WHERE extractor_version=1 AND record_id IN (
+                SELECT r.id FROM kn_jobs j, json_each(j.sources) s JOIN records r
+                  ON r.id=json_extract(s.value,'$.id')
+                 AND hex(r.hash)=json_extract(s.value,'$.hash')
+                 AND r.created_at=json_extract(s.value,'$.created_at')
+                WHERE j.state IN ('pending','running'))",
+            [],
+        )?;
         self.conn.execute("DELETE FROM records_fts WHERE rowid IN (SELECT id FROM records WHERE scope=?1 AND session=?2)", params![scope, session])?;
         self.conn.execute(
             "DELETE FROM records WHERE scope=?1 AND session=?2",
