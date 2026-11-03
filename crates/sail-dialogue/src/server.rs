@@ -1880,6 +1880,42 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use tokio::sync::Mutex;
+
+    struct FixedHost;
+    impl sail_common::resources::HostProbe for FixedHost {
+        fn sample(&self) -> std::io::Result<sail_protocol::resources::HostSample> {
+            Ok(sail_protocol::resources::HostSample {
+                total_ram_bytes: 32 * sail_common::resources::GIB,
+                available_ram_bytes: 24 * sail_common::resources::GIB,
+                swap_used_bytes: 0,
+                swap_total_bytes: 0,
+                logical_cpus: 12,
+                memory_pressure_avg10: None,
+            })
+        }
+    }
+
+    /// A model service whose admission uses host measurements the test controls. The real broker
+    /// reads `/proc`, so on a small or busy machine it can refuse work for reasons unrelated to
+    /// the protocol being tested.
+    fn test_vlm(addr: std::net::SocketAddr) -> VoiceVlm {
+        let scheduler = std::sync::Arc::new(sail_common::resources::ResourceScheduler::new(
+            std::sync::Arc::new(FixedHost),
+            sail_common::resources::AdmissionPolicy::default(),
+        ));
+        let service = sail_mind::GemmaRunner::with_scheduler(
+            sail_mind::GemmaConfig {
+                server_url: format!("http://{addr}/v1/chat/completions"),
+                // Not a real file, so the service never tries to spawn a model process.
+                model_path: std::path::PathBuf::from("/nonexistent/test-model.gguf"),
+                ..Default::default()
+            },
+            scheduler,
+        )
+        .service()
+        .expect("test model service");
+        VoiceVlm::with_service(service)
+    }
     #[tokio::test]
     async fn client_tool_completes_while_voice_turn_is_active() {
         let turn = AbortTask(tokio::spawn(std::future::pending()));
@@ -2010,10 +2046,7 @@ mod tests {
         let server = AbortTask(tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         }));
-        let vlm = VoiceVlm::with_config(sail_mind::GemmaConfig {
-            server_url: format!("http://{addr}/v1/chat/completions"),
-            ..Default::default()
-        });
+        let vlm = test_vlm(addr);
         let (tx, mut rx) = mpsc::channel(128);
         let (speech_tx, mut speech_rx) = mpsc::channel(16);
         let mut messages = vec![
@@ -2084,10 +2117,7 @@ mod tests {
             let server = AbortTask(tokio::spawn(async move {
                 axum::serve(listener, app).await.unwrap();
             }));
-            let vlm = VoiceVlm::with_config(sail_mind::GemmaConfig {
-                server_url: format!("http://{addr}/v1/chat/completions"),
-                ..Default::default()
-            });
+            let vlm = test_vlm(addr);
             let (speech_tx, mut speech_rx) = mpsc::channel::<String>(16);
             let (tx, _rx) = mpsc::channel(128);
             let expected_first = first_sentence.to_string();

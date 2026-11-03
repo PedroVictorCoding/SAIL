@@ -224,6 +224,39 @@ fn concurrent_launchers_cannot_both_take_the_browser_slot() {
     );
 }
 #[test]
+fn one_inference_is_admissible_when_its_threads_exceed_headroom_capacity() {
+    // A small host: 4 logical CPUs, so the admission capacity is 4 - cpu_headroom(2) = 2.
+    // llama-server still asks for one thread per CPU, which previously denied every inference
+    // outright: nothing could ever run on a modest machine (or a 4-vCPU CI runner).
+    let probe = Arc::new(Probe(Mutex::new(Some(HostSample {
+        logical_cpus: 4,
+        ..host()
+    }))));
+    let scheduler = Arc::new(ResourceScheduler::new(probe, AdmissionPolicy::default()));
+    let mut claim = ResourceClaim::inference(WorkPriority::Voice);
+    claim.cpu_slots = 4;
+    let first = scheduler.try_admit(claim, Default::default()).unwrap();
+    // Concurrency is still limited: a second CPU-heavy consumer is refused.
+    assert!(
+        scheduler
+            .try_admit(
+                ResourceClaim::inference(WorkPriority::Interactive),
+                Default::default()
+            )
+            .is_err()
+    );
+    drop(first);
+    assert!(
+        scheduler
+            .try_admit(
+                ResourceClaim::inference(WorkPriority::Interactive),
+                Default::default()
+            )
+            .is_ok()
+    );
+}
+
+#[test]
 fn real_linux_probe_reports_observations_without_allocating_workloads() {
     let observed = ProcHostProbe.sample().unwrap();
     assert!(observed.total_ram_bytes > 0);

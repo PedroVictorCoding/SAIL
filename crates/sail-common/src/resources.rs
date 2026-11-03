@@ -290,16 +290,21 @@ impl ResourceScheduler {
                 }
                 None => {}
             }
-            let cpu = state
-                .entries
-                .values()
-                .map(|e| e.claim.cpu_slots)
-                .sum::<usize>();
             let capacity = sample
                 .logical_cpus
                 .saturating_sub(self.policy.cpu_headroom)
                 .max(1);
-            if cpu.saturating_add(claim.cpu_slots) > capacity {
+            // A claim's slots say how many threads the admitted process will use, not how many
+            // exclusive lanes it owns; the OS schedules those threads. Cap the reservation at the
+            // admission capacity so one process that wants the whole machine is still admissible
+            // on a modest host (its thread count can exceed `logical_cpus - headroom`), while a
+            // second CPU-heavy consumer is still refused.
+            let reserved: usize = state
+                .entries
+                .values()
+                .map(|e| e.claim.cpu_slots.min(capacity))
+                .sum();
+            if reserved.saturating_add(claim.cpu_slots.min(capacity)) > capacity {
                 return Err("CPU admission slots occupied".into());
             }
             let count = |kind| {

@@ -112,13 +112,18 @@ async fn generate(
         )))
         .unwrap()
 }
-fn service(server: &TestServer, limits: ResourceLimits) -> MindService {
-    let scheduler = Arc::new(sail_common::resources::ResourceScheduler::new(
+/// Host measurements a test controls. Admission must never depend on the runner's live load, or
+/// a busy CI machine turns a scheduling test red for reasons unrelated to the code under test.
+fn fixture_scheduler() -> Arc<sail_common::resources::ResourceScheduler> {
+    Arc::new(sail_common::resources::ResourceScheduler::new(
         Arc::new(AdmissionProbe(std::sync::Mutex::new(
             24 * sail_common::resources::GIB,
         ))),
         Default::default(),
-    ));
+    ))
+}
+fn service(server: &TestServer, limits: ResourceLimits) -> MindService {
+    let scheduler = fixture_scheduler();
     let backend = sail_mind::local::LocalGemmaBackend::with_scheduler(
         LocalModelConfig {
             endpoint: server.url.clone(),
@@ -470,7 +475,7 @@ async fn queue_bound_queue_deadline_and_shutdown_cancel_all_requests() {
         entered: Notify::new(),
         release: Notify::new(),
     });
-    let mind = MindService::with_backends(
+    let mind = MindService::with_scheduler(
         vec![backend.clone()],
         ResourceLimits {
             max_parallel: 1,
@@ -478,6 +483,7 @@ async fn queue_bound_queue_deadline_and_shutdown_cancel_all_requests() {
             queue_timeout_ms: 200,
             ..Default::default()
         },
+        fixture_scheduler(),
     )
     .unwrap();
     let first = tokio::spawn({
@@ -545,12 +551,13 @@ async fn inference_deadline_and_disconnected_consumers_are_bounded() {
         entered: Notify::new(),
         release: Notify::new(),
     });
-    let mind = MindService::with_backends(
+    let mind = MindService::with_scheduler(
         vec![backend],
         ResourceLimits {
             inference_timeout_ms: 30,
             ..Default::default()
         },
+        fixture_scheduler(),
     )
     .unwrap();
     assert_eq!(
@@ -871,10 +878,7 @@ async fn voice_preempts_a_real_background_http_stream_and_completes_its_own_requ
 async fn voice_can_enter_a_full_background_queue_and_drop_releases_priority() {
     use sail_common::resources::*;
     use sail_protocol::resources::WorkPriority;
-    let scheduler = Arc::new(ResourceScheduler::new(
-        Arc::new(AdmissionProbe(std::sync::Mutex::new(24 * GIB))),
-        Default::default(),
-    ));
+    let scheduler = fixture_scheduler();
     let backend = Arc::new(BlockingBackend {
         entered: Notify::new(),
         release: Notify::new(),
