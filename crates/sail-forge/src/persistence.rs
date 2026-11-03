@@ -182,6 +182,7 @@ impl TaskCheckpointStore {
         let dir = sail_continuity::state_dir().join("forge-checkpoints");
         let store = Self::new(dir);
         store.import_legacy(&std::env::temp_dir().join("sail_forge_checkpoints"));
+        store.import_legacy(&sail_continuity::legacy_state_dir().join("forge-checkpoints"));
         store
     }
 

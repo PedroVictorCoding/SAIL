@@ -61,7 +61,25 @@ pub struct GuardianSubsystem {
 
 impl GuardianSubsystem {
     pub fn new() -> Self {
-        let policy = Arc::new(PolicyEngine::new());
+        Self::build(None)
+    }
+
+    /// Like [`Self::new`], but keep learned rules and safety findings in `dir` (the daemon
+    /// passes `<SAIL data root>/guardian`). `SAIL_LEARNED_RULES_PATH` and
+    /// `SAIL_SAFETY_REVIEW_PATH` still override each file.
+    pub fn with_data_dir(dir: &std::path::Path) -> Self {
+        Self::build(Some(dir))
+    }
+
+    fn build(data_dir: Option<&std::path::Path>) -> Self {
+        let env_path = |key: &str| std::env::var_os(key).map(std::path::PathBuf::from);
+        let policy = Arc::new(match data_dir {
+            Some(dir) => PolicyEngine::with_persistence(
+                env_path("SAIL_LEARNED_RULES_PATH")
+                    .unwrap_or_else(|| dir.join("learned_rules.json")),
+            ),
+            None => PolicyEngine::new(),
+        });
         let audit = Arc::new(AuditLedger::new());
         let approval = Arc::new(ApprovalBroker::new());
         let credentials = Arc::new(match std::env::var_os("SAIL_VAULT_DIR") {
@@ -76,12 +94,19 @@ impl GuardianSubsystem {
         let sandbox = Arc::new(SandboxPolicy::new());
         // Device consent is established explicitly by a trusted session, never at boot.
 
-        let broker = Arc::new(GuardianExecutionBroker::new(
+        let mut broker = GuardianExecutionBroker::new(
             policy.clone(),
             audit.clone(),
             approval.clone(),
             sandbox.clone(),
-        ));
+        );
+        if let Some(dir) = data_dir {
+            broker = broker.with_safety_review_path(
+                env_path("SAIL_SAFETY_REVIEW_PATH")
+                    .unwrap_or_else(|| dir.join("safety_findings.json")),
+            );
+        }
+        let broker = Arc::new(broker);
 
         register_global_broker(broker.clone());
 

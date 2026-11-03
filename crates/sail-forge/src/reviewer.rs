@@ -207,12 +207,11 @@ impl ReviewBroker {
     }
 
     pub fn new(config: ReviewPolicyConfig) -> Self {
+        // `SAIL_DATA_DIR` is the older, Forge-only override; the default is `forge/` under
+        // the SAIL data root.
         let data_dir = std::env::var("SAIL_DATA_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-                PathBuf::from(home).join(".sail").join("forge")
-            });
+            .unwrap_or_else(|_| sail_common::storage::data_path("forge"));
 
         let ledger_path = data_dir.join("review_ledger.json");
         let initial_ledger = Self::load_ledger_from_disk(&ledger_path).unwrap_or_default();

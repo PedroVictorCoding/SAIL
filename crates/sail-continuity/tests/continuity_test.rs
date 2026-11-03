@@ -338,3 +338,25 @@ fn unclaimed_task_can_be_failed_by_its_owner() {
     assert_eq!(task.state, TaskState::Failed);
     assert!(c.fail_unclaimed("t", "again").is_err());
 }
+
+#[test]
+fn legacy_store_migrates_with_its_wal_and_keeps_a_backup() {
+    let (old, old_dir) = db();
+    let new = old_dir.join("data/state/continuity.db");
+    {
+        // Leave committed rows in the WAL (no checkpoint) to prove VACUUM INTO picks them up.
+        let store = Continuity::open(&old).unwrap();
+        store
+            .submit(spec("migrated-task", ResumePolicy::Manual))
+            .unwrap();
+        std::mem::forget(store);
+    }
+    assert!(sail_continuity::migrate_legacy_store(&old, &new).unwrap());
+    let reopened = Continuity::open(&new).unwrap();
+    assert!(reopened.get("migrated-task").is_ok());
+    assert!(!old.exists());
+    assert!(old_dir.join("continuity.db.migrated-to-sail-data").exists());
+    // Already migrated: nothing happens, and an existing store is never replaced.
+    assert!(!sail_continuity::migrate_legacy_store(&old, &new).unwrap());
+    let _ = std::fs::remove_dir_all(&old_dir);
+}
