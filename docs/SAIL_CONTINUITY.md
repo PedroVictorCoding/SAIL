@@ -45,7 +45,7 @@ Continuity is a library (`crates/sail-continuity`), not a new process, tab or se
 
 **Persistence and recovery.** SQLite in WAL mode with `synchronous=FULL`. Each daemon start opens a new *boot*. `recover()` classifies every task left `running` by an older boot. Leases carry `(attempt, boot)`; a write from a stale lease is rejected, so a leftover worker cannot overwrite a newer attempt.
 
-Default location, first match wins: `SAIL_CONTINUITY_DB`; `/srv/sail/state/continuity.db` when the runtime SSD is writable; `$XDG_DATA_HOME/sail/continuity.db` (or `~/.local/share/...`). Forge checkpoints moved from the system temp directory, which may be tmpfs, to a `forge-checkpoints` directory beside it; existing checkpoints are copied over once. If the store cannot be opened, SAIL runs with an in-memory store and logs an error; it does not pretend to be durable.
+Default location, first match wins: `SAIL_CONTINUITY_DB`; `$SAIL_STATE_DIR/continuity.db`; `state/continuity.db` under the SAIL data root (`/srv/sail-data/state/continuity.db` when the data disk is mounted; see [Deployment](../Docs/DEPLOYMENT_UBUNTU.md#6-persistent-data-srvsail-data)). A store left at the old default, `/srv/sail/state/continuity.db`, is copied once with `VACUUM INTO` (WAL included) and the old files are renamed `*.migrated-to-sail-data`. Forge checkpoints live in `forge-checkpoints` beside it; checkpoints in the old location are imported.
 
 **Cancellation.** `request_cancel` cancels a queued, interrupted or `needs_intervention` task immediately. For a running task it sets a durable flag and signals the worker; if the daemon dies first, recovery finishes the task as `cancelled` rather than resuming it.
 

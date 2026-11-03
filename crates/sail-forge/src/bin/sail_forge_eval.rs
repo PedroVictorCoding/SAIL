@@ -41,15 +41,7 @@ async fn main() {
         .map(|v| v.split(',').filter_map(|s| s.trim().parse().ok()).collect());
     let out_dir = arg_value(&args, "--out")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var("SAIL_FORGE_STATE_DIR")
-                .map(PathBuf::from)
-                .or_else(|_| {
-                    std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/state/sail/forge"))
-                })
-                .unwrap_or_else(|_| std::env::temp_dir().join("sail_forge_state"))
-                .join("eval")
-        });
+        .unwrap_or_else(|| sail_forge::nightly::default_state_dir().join("eval"));
 
     let endpoint = LocalSolverController::candidate_endpoints()
         .into_iter()

@@ -26,6 +26,26 @@ use sail_mind::MindSubsystem;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     logging::init()?;
+    // Persistent data lives under one root (`/srv/sail-data` when mounted). Move data left at
+    // older defaults before any store opens.
+    let data_root = sail_common::storage::log_data_root();
+    sail_forge::nightly::migrate_legacy_forge_data();
+    let guardian_dir = sail_common::storage::data_dir("guardian");
+    for (old, name) in [
+        (".local/guardian_learned_rules.json", "learned_rules.json"),
+        (
+            ".local/guardian_safety_findings.json",
+            "safety_findings.json",
+        ),
+    ] {
+        if let Err(error) = sail_common::storage::migrate_legacy(
+            std::path::Path::new(old),
+            &guardian_dir.join(name),
+        ) {
+            tracing::error!(%old, %error, "Guardian data migration failed; the old file is untouched");
+        }
+    }
+    tracing::debug!(root = %data_root.path.display(), "data migration checked");
 
     if std::env::args().nth(1).as_deref() == Some("mind-status") {
         let status = status::read().await?;
@@ -73,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut discovery = DiscoverySubsystem::new();
     let mut flow = FlowSubsystem::new();
     let mut agents = AgentsSubsystem::new();
-    let mut guardian = GuardianSubsystem::new();
+    let mut guardian = GuardianSubsystem::with_data_dir(&guardian_dir);
 
     let review_broker = Arc::new(
         ReviewBroker::new(ReviewPolicyConfig::default()).with_credentials(guardian.credentials()),
