@@ -43,6 +43,21 @@ fn legacy(error: sail_protocol::InferenceError) -> SailError {
 }
 impl GemmaRunner {
     pub fn new(config: GemmaConfig) -> Self {
+        Self::with_optional_scheduler(config, None)
+    }
+    /// Same as [`GemmaRunner::new`], but admission is decided by `scheduler` instead of the
+    /// process-global broker. Tests and embedders need host measurements they control; the
+    /// daemon keeps using [`sail_common::resources::global`].
+    pub fn with_scheduler(
+        config: GemmaConfig,
+        scheduler: std::sync::Arc<sail_common::resources::ResourceScheduler>,
+    ) -> Self {
+        Self::with_optional_scheduler(config, Some(scheduler))
+    }
+    fn with_optional_scheduler(
+        config: GemmaConfig,
+        scheduler: Option<std::sync::Arc<sail_common::resources::ResourceScheduler>>,
+    ) -> Self {
         let service = LocalModelConfig::from_env().and_then(|mut local| {
             local.endpoint = config.server_url;
             local.model_path = config.model_path;
@@ -51,7 +66,22 @@ impl GemmaRunner {
             local.threads = config.threads;
             local.context_tokens = config.ctx_size;
             local.managed = local.managed && local.model_path.is_file();
-            MindService::new(local, Default::default())
+            match scheduler {
+                Some(scheduler) => {
+                    let limits = sail_protocol::ResourceLimits::default();
+                    let backend = crate::local::LocalGemmaBackend::with_scheduler(
+                        local,
+                        limits.max_parallel,
+                        scheduler.clone(),
+                    )?;
+                    MindService::with_scheduler(
+                        vec![std::sync::Arc::new(backend)],
+                        limits,
+                        scheduler,
+                    )
+                }
+                None => MindService::new(local, sail_protocol::ResourceLimits::default()),
+            }
         });
         Self { service }
     }

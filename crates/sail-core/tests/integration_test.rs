@@ -15,6 +15,35 @@ use sail_discovery::DiscoverySubsystem;
 use sail_flow::FlowSubsystem;
 use sail_mind::MindSubsystem;
 
+/// These waits verify that the event bus wires each subsystem to the next one; they are not
+/// latency budgets. A cold first launch (large debug binary, first model probe, cold SQLite)
+/// on a busy or small machine can take longer than a second, so allow real headroom instead of
+/// turning an unrelated scheduling delay into a failing subsystem contract.
+const EVENT_WAIT: Duration = Duration::from_secs(15);
+
+/// Fixed host measurements: the ecosystem test checks event wiring, so it must not be denied
+/// work by whatever load the machine running it happens to be under.
+struct FixedHost;
+impl sail_common::resources::HostProbe for FixedHost {
+    fn sample(&self) -> std::io::Result<sail_protocol::resources::HostSample> {
+        Ok(sail_protocol::resources::HostSample {
+            total_ram_bytes: 32 * sail_common::resources::GIB,
+            available_ram_bytes: 24 * sail_common::resources::GIB,
+            swap_used_bytes: 0,
+            swap_total_bytes: 0,
+            logical_cpus: 12,
+            memory_pressure_avg10: None,
+        })
+    }
+}
+
+fn fixed_scheduler() -> Arc<sail_common::resources::ResourceScheduler> {
+    Arc::new(sail_common::resources::ResourceScheduler::new(
+        Arc::new(FixedHost),
+        sail_common::resources::AdmissionPolicy::default(),
+    ))
+}
+
 fn spawn_subsystem_worker(
     subsystem_id: SubsystemId,
     subsystem: Arc<dyn Subsystem>,
@@ -62,12 +91,14 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
     });
     let bus = EventBus::new();
 
-    let mut mind =
-        MindSubsystem::new("missing-test-model.gguf").with_gemma_config(sail_mind::GemmaConfig {
+    let mut mind = MindSubsystem::new("missing-test-model.gguf").with_gemma_config_and_scheduler(
+        sail_mind::GemmaConfig {
             model_path: "missing-test-model.gguf".into(),
             server_url: format!("http://{addr}/v1/chat/completions"),
             ..Default::default()
-        });
+        },
+        fixed_scheduler(),
+    );
     let mut arena = ArenaSubsystem::new();
     let mut bridge = BridgeSubsystem::new();
     let mut canvas = CanvasSubsystem::new();
@@ -148,13 +179,10 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
     bus.publish(user_utterance).unwrap();
 
     // Verify Dialogue receives the response delta from Agents
-    let response_delta = tokio::time::timeout(
-        Duration::from_secs(2),
-        next_business_event(&mut rx_dialogue),
-    )
-    .await
-    .expect("Timed out waiting for Dialogue response delta")
-    .expect("Failed to receive event");
+    let response_delta = tokio::time::timeout(EVENT_WAIT, next_business_event(&mut rx_dialogue))
+        .await
+        .expect("Timed out waiting for Dialogue response delta")
+        .expect("Failed to receive event");
 
     match response_delta.payload {
         EventPayload::DialogueResponseDelta {
@@ -163,18 +191,20 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
             is_finished,
         } => {
             assert_eq!(session_id, "req-test-turn-1");
-            assert!(delta.contains("Explain the architecture"));
+            assert!(
+                delta.contains("Explain the architecture"),
+                "response delta did not carry the model reply: {delta:?}"
+            );
             assert!(is_finished);
         }
         other => panic!("Unexpected event received by Dialogue: {other:?}"),
     }
 
     // Verify Canvas received the visual render artifact from Agents
-    let canvas_render =
-        tokio::time::timeout(Duration::from_secs(2), next_business_event(&mut rx_canvas))
-            .await
-            .expect("Timed out waiting for Canvas render")
-            .expect("Failed to receive event");
+    let canvas_render = tokio::time::timeout(EVENT_WAIT, next_business_event(&mut rx_canvas))
+        .await
+        .expect("Timed out waiting for Canvas render")
+        .expect("Failed to receive event");
 
     match canvas_render.payload {
         EventPayload::CanvasRender {
@@ -205,11 +235,10 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
     bus.publish(gap).unwrap();
 
     // Flow should receive ResearchTriggerDispatched, then task execution occurs
-    let flow_event =
-        tokio::time::timeout(Duration::from_secs(2), next_business_event(&mut rx_flow))
-            .await
-            .expect("Timed out waiting for Flow trigger")
-            .expect("Failed to receive event");
+    let flow_event = tokio::time::timeout(EVENT_WAIT, next_business_event(&mut rx_flow))
+        .await
+        .expect("Timed out waiting for Flow trigger")
+        .expect("Failed to receive event");
 
     match flow_event.payload {
         EventPayload::ResearchTriggerDispatched { workflow_id, query } => {
@@ -221,7 +250,7 @@ async fn test_full_sail_subsystem_ecosystem_loop() {
 
     // Agents reports the turn as a `MemoryRecordStored` bus event; Arena archives it in its
     // durable store (not the in-RAM voice session ledger that `len()`/`is_empty()` count).
-    let stored = tokio::time::timeout(Duration::from_secs(2), async {
+    let stored = tokio::time::timeout(EVENT_WAIT, async {
         loop {
             let records = arena_arc.store().stats().map(|s| s.records).unwrap_or(0);
             if records > 0 {

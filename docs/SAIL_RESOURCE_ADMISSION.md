@@ -45,6 +45,15 @@ permit one owned heavy model, one browser claim and one Forge build. The policy 
 typed constructor argument, allowing deterministic deployment composition and tests;
 this initial slice does not expose policy editing in the frontend.
 
+**CPU slots are demand, not exclusive lanes.** A claim states how many threads the admitted
+process will use; the OS schedules those threads. Each reservation is capped at the
+admission capacity (`logical CPUs - 2`, at least 1), so a model server that asks for one
+thread per CPU is still admissible on a modest 4-core host, while a second CPU-heavy
+consumer is still refused. Without that cap, any host with six or fewer logical CPUs denied
+every inference outright. Tests must not depend on the runner's live CPU, RAM or PSI: they
+inject a `ResourceScheduler` over a fixed `HostProbe` (see `sail-mind/tests/inference_test.rs`
+and the dialogue protocol tests) instead of the process-global broker.
+
 **Swap in use is not pressure.** Linux keeps idle pages in swap long after memory is free
 again; on the target host 2–3 GB stayed swapped out with 20 GB of RAM available, zero
 memory pressure and no swap traffic, and an earlier rule (refuse above 1 GiB of swap
