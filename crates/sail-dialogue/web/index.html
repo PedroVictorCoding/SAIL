@@ -494,6 +494,20 @@
           </div>
         </div>
 
+        <div class="vscode-setting-item" data-search-terms="speech device browser webgpu host whisper kokoro silero offload">
+          <div class="vscode-setting-info">
+            <label for="speechPlacementSelect" class="vscode-setting-name">Where Speech Runs</label>
+            <p class="vscode-setting-desc">Listening, transcription and the spoken voice can run on this device, leaving the SAIL host free for the language model. Same models as the host; nothing is downloaded from the internet.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <select id="speechPlacementSelect" aria-label="Where speech runs" aria-describedby="speechPlacementStatus">
+              <option value="device">This device when available</option>
+              <option value="host">SAIL host</option>
+            </select>
+            <span id="speechPlacementStatus" role="status" aria-live="polite">Checking this device…</span>
+          </div>
+        </div>
+
         <div class="vscode-setting-item" data-search-terms="turn taking mode automatic manual silence speech send">
           <div class="vscode-setting-info">
             <label for="turnModeSelect" class="vscode-setting-name">Turn Taking Mode</label>
@@ -779,6 +793,7 @@
 </dialog>
 <script src="/mermaid.js" defer></script>
 <script src="/card-modal.js" defer></script>
+<script src="/client-speech.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/forge.js" defer></script>
 <script src="/approvals.js" defer></script>

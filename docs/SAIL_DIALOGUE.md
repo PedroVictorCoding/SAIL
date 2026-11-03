@@ -38,6 +38,51 @@ Use the existing SAIL design: compact dark UI, contextual cards, ambient Orb, pr
 - Target the primary host (i5-10400, 32 GB RAM, RX 5500) with measured CPU/RAM/VRAM/disk budgets; protect real-time voice responsiveness and bound expensive work.
 - Support explicit cancellation, resource exhaustion errors, versioned schema evolution, event provenance and least-privilege access. Do not hardcode secrets or bypass approval on retry.
 
+## 6a. On-device speech (decided 2026-11-03)
+
+The speech chain (Silero VAD, Whisper base, Kokoro) can run in the user's browser, so the
+host's CPU stays with the one resident language model ([Mind](SAIL_MIND.md#one-resident-model)).
+It is the **same models** as the host workers, not a separate on-device assistant: the
+conversation still goes to the host model. The host workers remain the fallback.
+
+**Install.** `python3 scripts/voice/download_web.py` puts transformers.js 3.5.1 (bundles
+ONNX Runtime Web), kokoro-js 1.2.1 and the ONNX models in `$SAIL_RUNTIME/models/voice/web`
+(about 0.7 GB, every file pinned by revision and SHA-256). The server serves only the files
+listed in its `manifest.json`, under `/voice-assets/`, refusing symlinks
+(`crates/sail-dialogue/src/web_assets.rs`). The browser never contacts the internet: the
+libraries' Hugging Face and CDN URLs are mapped to these files, and other requests to
+those hosts are refused. Pages are cross-origin isolated so WebAssembly can use threads.
+
+**Measured, per device.** On load the browser (`web/client-speech.js`, models in Web
+Workers) speaks a short phrase with Kokoro and transcribes it back with Whisper. Each side
+moves to the device only if it ran at most 0.5× real time there; otherwise it stays on
+the host, and Settings → Voice & Audio → *Where Speech Runs* says which and why, with the
+measured numbers. The user can choose *SAIL host* to keep everything on the host.
+Uses WebGPU when the browser offers it, else WebAssembly.
+
+**Protocol** (`/ws/voice`, all additive):
+
+| Client → server | Meaning |
+| --- | --- |
+| `client_speech {stt, tts, engine}` | What this browser runs. Unreported parts stay on the host. |
+| `speech_start` | Browser VAD heard speech: voice priority (preempts background work) and barge-in, as the host VAD's onset. |
+| `voice_text {text}` | The transcribed turn. Learns only under the consent in force when capture began. |
+| `speech_cancel` | VAD misfire or discarded capture: releases voice priority. |
+
+With client TTS the server sends `speech_text {text, pause_ms, fragment}` in order instead
+of `audio_chunk`; the browser synthesizes and plays it through the same playback queue, so
+interruption and the Orb behave the same. With client STT no PCM leaves the device.
+
+**Limits.** kokoro-js 1.2.1 speaks English only: with the Portuguese or Spanish voices,
+speech output stays on the host. transformers.js Whisper does not identify the language by
+itself, so the browser runs Whisper's language identification first, as faster-whisper
+does on the host. Echo during playback is handled by the browser's echo cancellation, as
+with host capture.
+
+**Licenses.** transformers.js and kokoro-js: Apache-2.0. ONNX Runtime Web: MIT. Whisper
+base (OpenAI weights, onnx-community export): Apache-2.0 card / MIT upstream. Kokoro-82M:
+Apache-2.0. Silero VAD: MIT. Downloaded at setup, not vendored in the repository.
+
 ## 7. MVP vertical slice
 One complete local voice turn with measured STT/first-audio latency, barge-in, no mic access when disabled and PT-PT/English text playback.
 
