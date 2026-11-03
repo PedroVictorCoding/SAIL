@@ -37,6 +37,16 @@ function formatDiffHighlight(diffText) {
   }).join('\n');
 }
 
+// Durable task states that say more than the Forge stage: work waiting, resuming after a
+// restart, or stopped until the user decides. Running and succeeded jobs keep the stage label.
+const FORGE_TASK_LABELS = {
+  queued: 'queued',
+  interrupted: 'resuming after restart',
+  needs_intervention: 'needs your attention',
+  failed: 'failed',
+  cancelled: 'cancelled',
+};
+
 function handleForgeEvent(data) {
   const jobContainer = document.getElementById('forgeActiveJob');
   if (!jobContainer) return;
@@ -56,17 +66,22 @@ function handleForgeEvent(data) {
     jobContainer.prepend(jobCard);
   }
 
-  const badgeClass = state === 'completed' ? 'result-success' : state === 'blocked' ? 'result-failure' : 'forge-state-active';
+  const task = data.continuity;
+  const taskLabel = task && FORGE_TASK_LABELS[task.state];
+  const stopped = task && (task.needs_attention || task.state === 'failed' || task.state === 'cancelled');
+  const badgeClass = stopped ? 'result-failure' : state === 'completed' ? 'result-success' : state === 'blocked' ? 'result-failure' : 'forge-state-active';
 
   jobCard.replaceChildren();
   const heading=document.createElement('div');heading.className='forge-job-heading';
   const label=document.createElement('span');label.textContent=`${jobId}${data.issue_number ? ` · Issue #${data.issue_number}` : ''}`;
-  const badge=document.createElement('span');badge.className=badgeClass;badge.textContent=`● ${state}`;heading.append(label,badge);jobCard.append(heading);
+  const badge=document.createElement('span');badge.className=badgeClass;badge.textContent=`● ${taskLabel || state}`;heading.append(label,badge);jobCard.append(heading);
   const metadata=(label,value)=>{const line=document.createElement('div');line.className='forge-meta-line';const key=document.createElement('span');key.textContent=label;const text=document.createElement('strong');text.textContent=String(value);line.append(key,text);jobCard.append(line);};
   if(data.repo)metadata('Repo:',data.repo);
   if(data.model_id||data.model)metadata('Model:',data.model_id||data.model);
   if(data.iterations)metadata('Iterations:',data.iterations);
-  if(data.failure_reason)metadata('Reason:',data.failure_reason);
+  if(task?.needs_attention&&task.reason)metadata('Needs you:',task.reason);
+  else if(taskLabel&&task.reason&&task.reason!==data.failure_reason)metadata('Status:',task.reason);
+  if(data.failure_reason&&!(task?.needs_attention&&task.reason===data.failure_reason))metadata('Reason:',data.failure_reason);
   if(data.task||data.summary||data.message){const text=document.createElement('div');text.className='forge-task-desc';text.textContent=String(data.task||data.summary||data.message);jobCard.append(text);}
   if(data.branch)metadata('Branch:',data.branch);
   if(data.passed!==undefined)metadata('Review verdict:',`${data.passed ? '✓ Passed' : 'Failed'} (${data.finding_count||0} findings)`);
@@ -350,6 +365,8 @@ function renderForgeJobList(jobs) {
       issue_number: job.issue_number,
       state: typeof job.state === 'string' ? job.state : JSON.stringify(job.state),
       branch: job.branch,
+      failure_reason: job.failure_reason,
+      continuity: job.continuity,
       summary: job.diff_stat ? `${job.diff_stat.files_changed} files changed, +${job.diff_stat.insertions}/-${job.diff_stat.deletions}` : null,
     });
   }

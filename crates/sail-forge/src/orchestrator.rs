@@ -7,17 +7,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::Semaphore;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use sail_common::bus::EventBus;
 use sail_common::types::{EventPayload, SailEvent, SubsystemId};
+use sail_continuity::{
+    CancelOutcome, Continuity, ContinuityError, Lease, Outcome, ResumePolicy, Task, TaskSpec,
+    TaskState,
+};
 use sail_guardian::sandbox::SandboxPolicy;
 
 use crate::contracts::{
-    ForgeActivityEntry, ForgeBudgetConfig, ForgeJobReport, ForgeTaskState, IssueEnqueueRequest,
-    IssueStatusResponse, PrDraftRequest, PrDraftResult, ReviewPolicyConfig, ReviewRequest,
-    ReviewResult, ReviewVerdict, TestExecutionRecord,
+    ContinuityView, ForgeActivityEntry, ForgeBudgetConfig, ForgeJobReport, ForgeTaskState,
+    IssueEnqueueRequest, IssueStatusResponse, PrDraftRequest, PrDraftResult, ReviewPolicyConfig,
+    ReviewRequest, ReviewResult, ReviewVerdict, TestExecutionRecord,
 };
 use crate::gates::DiffGatePolicy;
 use crate::persistence::{TaskCheckpoint, TaskCheckpointStore};
@@ -92,6 +96,26 @@ pub struct ForgeOrchestrator {
     event_bus: Arc<Mutex<Option<EventBus>>>,
     /// Jobs driven by a caller (e.g. the nightly runner) rather than the enqueue event handler.
     managed_jobs: Arc<Mutex<HashSet<String>>>,
+    /// Durable task records shared with Core (see `docs/SAIL_CONTINUITY.md`).
+    continuity: Arc<Continuity>,
+    /// Continuity leases of running jobs. Locked on its own (never while waiting on
+    /// `active_jobs`), so status events can record progress while `active_jobs` is held.
+    leases: Arc<Mutex<HashMap<String, Lease>>>,
+}
+
+/// Continuity task kind of a Forge job the subsystem runs (and re-runs after a restart).
+pub const TASK_KIND_ISSUE: &str = "forge.issue_solve";
+/// Continuity task kind of a job the nightly runner drives; it retries on its own.
+pub const TASK_KIND_NIGHTLY: &str = "forge.nightly_issue_solve";
+/// Effect-journal key for publishing a job as a draft PR.
+pub const EFFECT_PUBLISH: &str = "publish:draft_pr";
+
+fn forge_owner() -> String {
+    SubsystemId::Forge.to_string()
+}
+
+fn issue_dedupe_key(repo: &str, issue_number: u64) -> String {
+    format!("{repo}#{issue_number}")
 }
 
 impl ForgeOrchestrator {
@@ -112,7 +136,35 @@ impl ForgeOrchestrator {
             concurrency_semaphore: Arc::new(Semaphore::new(max_jobs)),
             event_bus: Arc::new(Mutex::new(None)),
             managed_jobs: Arc::new(Mutex::new(HashSet::new())),
+            continuity: Arc::new(
+                Continuity::open_in_memory().expect("in-memory continuity store opens"),
+            ),
+            leases: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Use a durable Continuity store (production). Without it, task records last only for
+    /// this process.
+    pub fn with_continuity(mut self, continuity: Arc<Continuity>) -> Self {
+        self.continuity = continuity;
+        self
+    }
+
+    pub fn continuity(&self) -> Arc<Continuity> {
+        self.continuity.clone()
+    }
+
+    /// The active (non-terminal) Continuity task for an issue, if any.
+    pub fn active_task_for_issue(&self, repo: &str, issue_number: u64) -> Option<Task> {
+        let key = issue_dedupe_key(repo, issue_number);
+        self.continuity
+            .list(&sail_continuity::TaskFilter {
+                owner: Some(forge_owner()),
+                ..Default::default()
+            })
+            .ok()?
+            .into_iter()
+            .find(|t| t.dedupe_key.as_deref() == Some(key.as_str()))
     }
 
     /// Run a tier-0 reviewer (normally the local model) on every gated patch.
@@ -135,6 +187,20 @@ impl ForgeOrchestrator {
     }
 
     fn emit_event(&self, payload: EventPayload) {
+        if let EventPayload::ForgeIssueStatusUpdated {
+            job_id,
+            stage,
+            message,
+            ..
+        } = &payload
+        {
+            let lease = self.leases.lock().unwrap().get(job_id).cloned();
+            if let Some(lease) = lease
+                && let Err(error) = self.continuity.progress(&lease, stage, message)
+            {
+                warn!(%job_id, %error, "Could not record Forge progress in Continuity");
+            }
+        }
         let lock = self.event_bus.lock().unwrap();
         if let Some(bus) = &*lock {
             let event = SailEvent::new(SubsystemId::Forge, payload);
@@ -200,6 +266,44 @@ impl ForgeOrchestrator {
         let branch = format!("agent/forge-issue-{}", req.issue_number);
         let base_commit = "main".to_string();
 
+        // Durable task record first: a duplicate request for an issue that already has an
+        // active job returns that job instead of starting a second worker on its branch.
+        let title = match &req.issue_title {
+            Some(t) => format!("Issue #{}: {t}", req.issue_number),
+            None => format!("Issue #{}", req.issue_number),
+        };
+        let spec = TaskSpec::new(
+            forge_owner(),
+            if managed {
+                TASK_KIND_NIGHTLY
+            } else {
+                TASK_KIND_ISSUE
+            },
+            title,
+        )
+        .with_id(job_id.clone())
+        .with_dedupe_key(issue_dedupe_key(&req.repo, req.issue_number))
+        .with_resume(if managed {
+            ResumePolicy::Abandon
+        } else {
+            ResumePolicy::Restart
+        })
+        .with_checkpoint(serde_json::json!({ "forge_checkpoint": job_id }));
+        let submitted = self.continuity.submit(spec).map_err(|e| e.to_string())?;
+        if !submitted.created {
+            if managed {
+                return Err(format!(
+                    "issue #{} already has an active Forge job ({})",
+                    req.issue_number, submitted.task.id
+                ));
+            }
+            info!(
+                "Issue #{} already has active Forge job {}; not starting another",
+                req.issue_number, submitted.task.id
+            );
+            return Ok(submitted.task.id);
+        }
+
         let budget = req
             .budget
             .unwrap_or_else(|| self.config.default_budget.clone());
@@ -225,9 +329,12 @@ impl ForgeOrchestrator {
             &format!("enqueue:{}", job_id),
         );
 
-        self.checkpoint_store
-            .save(&checkpoint)
-            .map_err(|e| format!("Failed to save checkpoint: {}", e))?;
+        if let Err(e) = self.checkpoint_store.save(&checkpoint) {
+            let _ = self
+                .continuity
+                .fail_unclaimed(&job_id, "Forge checkpoint could not be saved");
+            return Err(format!("Failed to save checkpoint: {}", e));
+        }
 
         let active_job = ActiveJob {
             checkpoint,
@@ -314,6 +421,7 @@ impl ForgeOrchestrator {
             modified_files: cp.modified_files.clone(),
             live_output: cp.live_output.clone(),
             model_action: cp.model_action.clone(),
+            continuity: None,
         }
     }
 
@@ -343,8 +451,14 @@ impl ForgeOrchestrator {
             .map(|cp| cp.activity)
     }
 
-    /// Retrieve the status of an active or stored job.
+    /// Status of an active or stored job, including Continuity's authoritative task state.
     pub fn get_status(&self, query: &str) -> Option<IssueStatusResponse> {
+        let mut status = self.lookup_status(query)?;
+        status.continuity = self.continuity_view(&status.job_id);
+        Some(status)
+    }
+
+    fn lookup_status(&self, query: &str) -> Option<IssueStatusResponse> {
         let q = query.trim();
         {
             let jobs = self.active_jobs.lock().unwrap();
@@ -401,6 +515,9 @@ impl ForgeOrchestrator {
             }
         }
 
+        for status in &mut results {
+            status.continuity = self.continuity_view(&status.job_id);
+        }
         results
     }
 
@@ -480,7 +597,8 @@ impl ForgeOrchestrator {
         Ok(())
     }
 
-    /// Cancel an active job.
+    /// Cancel a job. The request is durable: if the daemon stops before the worker notices,
+    /// recovery finishes the job as cancelled instead of resuming it.
     pub fn cancel_job(&self, job_id: &str, reason: &str) -> Result<(), String> {
         let mut jobs = self.active_jobs.lock().unwrap();
         let resolved_id = if jobs.contains_key(job_id) {
@@ -490,10 +608,16 @@ impl ForgeOrchestrator {
         }) {
             id.clone()
         } else {
-            return Err(format!("Job {} not found", job_id));
+            drop(jobs);
+            return self.cancel_stored_job(job_id, reason);
         };
         let job = jobs.get_mut(&resolved_id).unwrap();
         job.cancelled.store(true, Ordering::SeqCst);
+        if let Err(error) = self.continuity.request_cancel(&resolved_id, reason)
+            && !matches!(error, ContinuityError::NotFound(_))
+        {
+            warn!(job_id = %resolved_id, %error, "Could not record cancellation in Continuity");
+        }
         job.checkpoint.transition(ForgeTaskState::Blocked, reason);
         let _ = self.checkpoint_store.save(&job.checkpoint);
 
@@ -511,6 +635,42 @@ impl ForgeOrchestrator {
         });
 
         info!("Cancelled job {} ({})", resolved_id, reason);
+        Ok(())
+    }
+
+    /// Cancel a job that is not loaded in memory, e.g. one waiting for intervention after a
+    /// restart.
+    fn cancel_stored_job(&self, job_id: &str, reason: &str) -> Result<(), String> {
+        let resolved = match self.checkpoint_store.load(job_id) {
+            Ok(Some(cp)) => Some(cp.job_id),
+            _ => self.checkpoint_store.list_all().ok().and_then(|all| {
+                all.into_iter()
+                    .find(|cp| Self::matches_job_identifier(job_id, &cp.job_id, cp.issue_number))
+                    .map(|cp| cp.job_id)
+            }),
+        }
+        .ok_or_else(|| format!("Job {} not found", job_id))?;
+        match self.continuity.request_cancel(&resolved, reason) {
+            Ok(CancelOutcome::AlreadyFinished(state)) => {
+                return Err(format!("Job {resolved} already finished ({state})"));
+            }
+            Ok(_) | Err(ContinuityError::NotFound(_)) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        self.mark_blocked(&resolved, &format!("Cancelled: {reason}"));
+        self.emit_event(EventPayload::ForgeIssueStatusUpdated {
+            job_id: resolved.clone(),
+            state: "blocked".into(),
+            stage: "cancelled".into(),
+            message: reason.to_string(),
+            diff: None,
+            target_file: None,
+            logs: Some(vec![format!("Job cancelled: {reason}")]),
+            live_output: None,
+            model_action: None,
+            turn: None,
+        });
+        info!("Cancelled stored job {} ({})", resolved, reason);
         Ok(())
     }
 
@@ -587,6 +747,11 @@ impl ForgeOrchestrator {
             cleared.push(id);
         }
 
+        for id in &cleared {
+            if let Err(error) = self.continuity.remove(id) {
+                warn!(job_id = %id, %error, "Continuity kept the task record of a cleared job");
+            }
+        }
         info!("Cleared {} Forge jobs: {:?}", cleared.len(), cleared);
         Ok(cleared)
     }
@@ -943,6 +1108,9 @@ impl ForgeOrchestrator {
 
     /// Execute the full autonomous resolution lifecycle with real sandbox test execution,
     /// iterative repair, and strict verification. Never falsifies test results or completions.
+    ///
+    /// Waits for the heavy-job slot (the task stays `queued` meanwhile), takes the job's
+    /// Continuity lease, and records the outcome there when the lifecycle ends.
     pub async fn run_job_lifecycle(
         &self,
         job_id: &str,
@@ -955,6 +1123,84 @@ impl ForgeOrchestrator {
             .await
             .map_err(|e| format!("Concurrency semaphore error: {}", e))?;
 
+        let lease = match self.continuity.claim(job_id) {
+            Ok(lease) => lease,
+            Err(
+                ContinuityError::Cancelled(_)
+                | ContinuityError::InvalidState {
+                    state: TaskState::Cancelled,
+                    ..
+                },
+            ) => {
+                self.mark_blocked(job_id, "Cancelled before it started");
+                return Err("Job was cancelled before it started".into());
+            }
+            Err(e) => return Err(format!("Job {job_id} cannot start: {e}")),
+        };
+        self.leases
+            .lock()
+            .unwrap()
+            .insert(job_id.to_string(), lease.clone());
+        // A re-run after a restart gets a fresh workspace; the interrupted attempt's
+        // directory is left for inspection rather than reused or deleted.
+        let workspace_id = if lease.attempt() > 1 {
+            format!("{job_id}-a{}", lease.attempt())
+        } else {
+            job_id.to_string()
+        };
+
+        let result = self
+            .run_job_lifecycle_inner(job_id, &workspace_id, patch_to_apply)
+            .await;
+
+        self.leases.lock().unwrap().remove(job_id);
+        let cancelled = {
+            let jobs = self.active_jobs.lock().unwrap();
+            jobs.get(job_id)
+                .is_some_and(|j| j.cancelled.load(Ordering::SeqCst))
+        } || self.continuity.is_cancel_requested(job_id).unwrap_or(false);
+        let outcome = match &result {
+            Ok(_) => Outcome::Succeeded,
+            Err(e) if cancelled => Outcome::Cancelled(e.clone()),
+            Err(e) => Outcome::Failed(e.clone()),
+        };
+        if let Err(error) = self.continuity.finish(&lease, outcome) {
+            warn!(%job_id, %error, "Could not record Forge job outcome in Continuity");
+        }
+        result
+    }
+
+    /// Set a job's Forge state to blocked with a reason, in memory and on disk.
+    fn mark_blocked(&self, job_id: &str, reason: &str) {
+        let mut jobs = self.active_jobs.lock().unwrap();
+        let checkpoint = match jobs.get_mut(job_id) {
+            Some(job) => Some(&mut job.checkpoint),
+            None => None,
+        };
+        let mut stored;
+        let checkpoint = match checkpoint {
+            Some(cp) => cp,
+            None => match self.checkpoint_store.load(job_id) {
+                Ok(Some(cp)) => {
+                    stored = cp;
+                    &mut stored
+                }
+                _ => return,
+            },
+        };
+        if checkpoint.state != ForgeTaskState::Blocked {
+            checkpoint.transition(ForgeTaskState::Blocked, reason);
+        }
+        checkpoint.failure_reason = Some(reason.to_string());
+        let _ = self.checkpoint_store.save(checkpoint);
+    }
+
+    async fn run_job_lifecycle_inner(
+        &self,
+        job_id: &str,
+        workspace_id: &str,
+        patch_to_apply: Option<&str>,
+    ) -> Result<ForgeJobReport, String> {
         let start_time = Instant::now();
         self.check_interruption(job_id).await?;
 
@@ -995,7 +1241,7 @@ impl ForgeOrchestrator {
 
         // 2. Setup isolated worktree
         let worktree = IsolatedWorktree::create(
-            job_id,
+            workspace_id,
             &self.config.workspace_root,
             &base_commit,
             self.sandbox_policy.clone(),
@@ -1652,36 +1898,115 @@ impl ForgeOrchestrator {
         })
     }
 
-    /// Recover unfinished tasks across daemon restarts and reload checkpoints.
+    /// Recover after a daemon restart. Continuity decides what each interrupted job may do
+    /// (see `docs/SAIL_CONTINUITY.md`); this returns the ids the subsystem should run again.
+    ///
+    /// Call once, at startup, before any job is enqueued.
     pub fn recover_from_checkpoints(&self) -> Result<Vec<String>, String> {
+        let owner = forge_owner();
         let saved = self
             .checkpoint_store
             .list_all()
             .map_err(|e| format!("Failed to list checkpoints: {}", e))?;
 
-        let mut recovered_ids = Vec::new();
-        let mut jobs = self.active_jobs.lock().unwrap();
-
-        for cp in saved {
-            if cp.state != ForgeTaskState::Completed && cp.state != ForgeTaskState::Blocked {
-                info!(
-                    "Recovered in-flight Forge task {} from state {:?}",
-                    cp.job_id, cp.state
-                );
-                let id = cp.job_id.clone();
-                jobs.insert(
-                    id.clone(),
-                    ActiveJob {
-                        checkpoint: cp,
-                        paused: Arc::new(AtomicBool::new(false)),
-                        cancelled: Arc::new(AtomicBool::new(false)),
-                    },
-                );
-                recovered_ids.push(id);
+        // Jobs from before Continuity existed: adopt unfinished ones with the old behavior
+        // (run again) so an upgrade does not strand them.
+        for cp in &saved {
+            if matches!(
+                cp.state,
+                ForgeTaskState::Completed | ForgeTaskState::Blocked
+            ) || !matches!(
+                self.continuity.get(&cp.job_id),
+                Err(ContinuityError::NotFound(_))
+            ) {
+                continue;
+            }
+            let spec = TaskSpec::new(
+                owner.clone(),
+                TASK_KIND_ISSUE,
+                format!("Issue #{}", cp.issue_number),
+            )
+            .with_id(cp.job_id.clone())
+            .with_dedupe_key(issue_dedupe_key(&cp.repo, cp.issue_number))
+            .with_resume(ResumePolicy::Restart);
+            match self.continuity.submit(spec) {
+                Ok(s) if s.created => info!("Adopted pre-Continuity Forge job {}", cp.job_id),
+                Ok(s) => self.mark_blocked(
+                    &cp.job_id,
+                    &format!("Superseded by job {} for the same issue", s.task.id),
+                ),
+                Err(e) => warn!(job_id = %cp.job_id, error = %e, "Could not adopt Forge job"),
             }
         }
 
-        Ok(recovered_ids)
+        let report = self.continuity.recover().map_err(|e| e.to_string())?;
+        let ours = |t: &&Task| t.owner == owner;
+
+        for task in report
+            .abandoned
+            .iter()
+            .chain(&report.cancelled)
+            .filter(ours)
+        {
+            let reason = task
+                .reason
+                .clone()
+                .unwrap_or_else(|| task.state.to_string());
+            self.mark_blocked(&task.id, &reason);
+        }
+        for task in report.needs_intervention.iter().filter(ours) {
+            warn!(job_id = %task.id, reason = ?task.reason, "Forge job needs intervention");
+        }
+
+        let mut resume = Vec::new();
+        let mut jobs = self.active_jobs.lock().unwrap();
+        for task in report.resumable.iter().filter(ours) {
+            if task.kind == TASK_KIND_NIGHTLY {
+                // The nightly runner retries on its own pass; never run its job unattended
+                // here, where its publish step would be skipped.
+                let reason = "interrupted before it ran; the nightly runner retries it";
+                let _ = self.continuity.fail_unclaimed(&task.id, reason);
+                drop(jobs);
+                self.mark_blocked(&task.id, reason);
+                jobs = self.active_jobs.lock().unwrap();
+                continue;
+            }
+            match self.checkpoint_store.load(&task.id) {
+                Ok(Some(cp)) => {
+                    info!(
+                        "Resuming Forge task {} (was {:?}, Continuity {})",
+                        cp.job_id, cp.state, task.state
+                    );
+                    jobs.insert(
+                        task.id.clone(),
+                        ActiveJob {
+                            checkpoint: cp,
+                            paused: Arc::new(AtomicBool::new(false)),
+                            cancelled: Arc::new(AtomicBool::new(false)),
+                        },
+                    );
+                    resume.push(task.id.clone());
+                }
+                _ => {
+                    warn!(job_id = %task.id, "Forge checkpoint missing; cannot resume");
+                    let _ = self
+                        .continuity
+                        .fail_unclaimed(&task.id, "Forge checkpoint missing; cannot resume");
+                }
+            }
+        }
+        Ok(resume)
+    }
+
+    /// Continuity's view of a job, for status projections.
+    fn continuity_view(&self, job_id: &str) -> Option<ContinuityView> {
+        let task = self.continuity.get(job_id).ok()?;
+        Some(ContinuityView {
+            state: task.state.as_str().to_string(),
+            reason: task.reason,
+            attempt: task.attempt,
+            needs_attention: task.state == TaskState::NeedsIntervention,
+        })
     }
 }
 

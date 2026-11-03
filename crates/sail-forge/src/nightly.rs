@@ -15,8 +15,9 @@ use tracing::{info, warn};
 use crate::admission::{AdmissionPolicy, IssueCandidate};
 use crate::contracts::{ForgeJobReport, IssueEnqueueRequest};
 use crate::github::{GithubClient, mark_open_prs};
-use crate::orchestrator::ForgeOrchestrator;
+use crate::orchestrator::{EFFECT_PUBLISH, ForgeOrchestrator};
 use crate::publish::{PublishConfig, publish_draft_pr};
+use sail_continuity::{ContinuityError, EffectGate};
 
 /// Runner limits and schedule.
 #[derive(Debug, Clone)]
@@ -330,6 +331,24 @@ impl ForgeNightlyRunner {
             if record.pr_url.is_some() || record.last_outcome == "ready" {
                 continue;
             }
+            // Never start a second job for an issue whose job is still active or whose
+            // outcome needs the user (e.g. a publish interrupted by a crash).
+            if let Some(task) = self
+                .orchestrator
+                .active_task_for_issue(&self.config.repo_slug, issue.number)
+            {
+                let why = if task.state == sail_continuity::TaskState::NeedsIntervention {
+                    format!(
+                        "job {} needs intervention: {}",
+                        task.id,
+                        task.reason.unwrap_or_default()
+                    )
+                } else {
+                    format!("job {} is already {}", task.id, task.state)
+                };
+                digest.rejected.push((issue.number, vec![why]));
+                continue;
+            }
             if record.attempts >= self.config.max_attempts_per_issue {
                 digest.rejected.push((
                     issue.number,
@@ -370,7 +389,41 @@ impl ForgeNightlyRunner {
             Ok(Some(cp)) => cp,
             _ => return ("publish_failed".into(), "checkpoint missing".into()),
         };
-        match publish_draft_pr(publish, &cp, self.github.as_ref()) {
+
+        // Journal the push + PR so a crash cannot make it happen twice or be forgotten.
+        let continuity = self.orchestrator.continuity();
+        let description = format!(
+            "push branch agent/forge-issue-{} and open a draft PR",
+            cp.issue_number
+        );
+        let journaled = match continuity.begin_effect(job_id, EFFECT_PUBLISH, &description) {
+            Ok(EffectGate::Proceed) => true,
+            Ok(EffectGate::AlreadyDone { receipt }) => {
+                info!("Forge nightly: job {job_id} was already published ({receipt})");
+                return ("published".into(), receipt);
+            }
+            Err(ContinuityError::NotFound(_)) => {
+                warn!(
+                    "Forge nightly: job {job_id} has no Continuity record; publishing unjournaled"
+                );
+                false
+            }
+            Err(e @ ContinuityError::EffectInDoubt { .. }) => {
+                return ("needs_intervention".into(), e.to_string());
+            }
+            Err(e) => return ("publish_failed".into(), e.to_string()),
+        };
+        let result = publish_draft_pr(publish, &cp, self.github.as_ref());
+        if journaled {
+            let recorded = match &result {
+                Ok(url) => continuity.commit_effect(job_id, EFFECT_PUBLISH, url),
+                Err(e) => continuity.fail_effect(job_id, EFFECT_PUBLISH, e),
+            };
+            if let Err(e) = recorded {
+                warn!("Forge nightly: could not journal publish of {job_id}: {e}");
+            }
+        }
+        match result {
             Ok(url) => {
                 *state.prs_opened.entry(today).or_insert(0) += 1;
                 ("published".into(), url)

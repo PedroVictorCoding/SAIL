@@ -78,6 +78,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let review_broker = Arc::new(
         ReviewBroker::new(ReviewPolicyConfig::default()).with_credentials(guardian.credentials()),
     );
+    // Durable record of accepted background work; recovered when Forge starts.
+    let continuity = Arc::new(sail_continuity::Continuity::open_default());
     let checkpoint_store = Arc::new(TaskCheckpointStore::default_store());
     let orchestrator = Arc::new(
         ForgeOrchestrator::new(
@@ -86,7 +88,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             review_broker,
             guardian.sandbox(),
         )
-        .with_self_reviewer(Arc::new(LocalModelReviewer::new())),
+        .with_self_reviewer(Arc::new(LocalModelReviewer::new()))
+        .with_continuity(continuity),
     );
     if !std::env::var("SAIL_MEMORY_BACKGROUND").is_ok_and(|v| v == "0" || v == "false") {
         let admission_mind = model_service.clone();
