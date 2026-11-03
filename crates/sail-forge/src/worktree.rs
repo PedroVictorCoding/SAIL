@@ -46,6 +46,10 @@ pub enum WorktreeError {
     PatchError(String),
     #[error("Bubblewrap sandbox unavailable: {0}")]
     BwrapUnavailable(String),
+    #[error("Path {0:?} is inside the worktree's Git metadata, which Forge never edits")]
+    GitMetadataPath(PathBuf),
+    #[error("The worktree's Git configuration changed after setup; refusing to run Git on it")]
+    GitConfigTampered,
 }
 
 /// Owns only a freshly allocated directory; cleanup never trusts public path fields.
@@ -233,6 +237,8 @@ pub struct IsolatedWorktree {
     pub sandbox_policy: Arc<SandboxPolicy>,
     keep_on_drop: bool,
     allocation: WorkspaceAllocation,
+    /// `.git/config` as Forge wrote it during setup; host Git refuses to run if it changes.
+    trusted_git_config: Vec<u8>,
 }
 
 impl IsolatedWorktree {
@@ -285,10 +291,12 @@ impl IsolatedWorktree {
             sandbox_policy: scoped_policy,
             keep_on_drop: false,
             allocation,
+            trusted_git_config: Vec::new(),
         };
 
         let pinned_sha = worktree.init_git_workspace(&canonical_repo, base_commit)?;
         worktree.base_commit = pinned_sha;
+        worktree.trusted_git_config = fs::read(worktree.root_dir.join(".git/config"))?;
         Ok(worktree)
     }
 
@@ -334,6 +342,14 @@ impl IsolatedWorktree {
                 root: self.root_dir.clone(),
             });
         }
+        // Host Git runs commands named in `.git` (hooks, fsmonitor, diff drivers), so edits
+        // there would execute outside the sandbox. Any case: Git matches `.GIT` too.
+        if rel_path
+            .components()
+            .any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))
+        {
+            return Err(WorktreeError::GitMetadataPath(rel_path.to_path_buf()));
+        }
 
         // Check for symlink escapes in all path components from root_dir down to target
         let mut curr = self.root_dir.clone();
@@ -352,6 +368,16 @@ impl IsolatedWorktree {
                     }
                 }
             }
+        }
+
+        // A symlink inside the worktree (for example `alias -> .git`, planted by a sandboxed
+        // build) passes the checks above; reject what the path really resolves to.
+        match resolve_existing_prefix(&normalized) {
+            Ok(real) if real.starts_with(self.root_dir.join(".git")) => {
+                return Err(WorktreeError::GitMetadataPath(rel_path.to_path_buf()));
+            }
+            Ok(_) => {}
+            Err((path, target)) => return Err(WorktreeError::SymlinkEscape { path, target }),
         }
 
         // Validate against Guardian policy
@@ -377,6 +403,58 @@ impl IsolatedWorktree {
         let target = self.resolve_safe_path(rel_path, false)?;
         let content = fs::read_to_string(target)?;
         Ok(content)
+    }
+
+    /// Read a file a sandboxed command produced (a test report, an index). Same checks as
+    /// [`Self::read_file`]: a symlink the sandbox left pointing outside the worktree is
+    /// refused rather than followed to a host file.
+    pub fn read_output(&self, rel_path: &Path) -> Result<Vec<u8>, WorktreeError> {
+        Ok(fs::read(self.resolve_safe_path(rel_path, false)?)?)
+    }
+
+    /// Remove a file or directory a sandboxed command left behind, without following a
+    /// symlinked parent out of the worktree. A missing path is not an error.
+    pub fn remove_output(&self, rel_path: &Path) -> Result<(), WorktreeError> {
+        let path = self.resolve_safe_path(rel_path, true)?;
+        let res = match fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_dir() => fs::remove_dir_all(&path),
+            Ok(_) => fs::remove_file(&path),
+            Err(e) => Err(e),
+        };
+        match res {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
+    }
+
+    /// Host `git` for this worktree. Sandboxed commands write the working tree and must not
+    /// get Git to run anything: `.git` is read-only inside the sandbox, the configuration
+    /// must still be the one written at setup, and hooks, fsmonitor, pagers and submodule
+    /// recursion (a nested repository the sandbox could create) are switched off.
+    fn host_git(&self) -> Result<Command, WorktreeError> {
+        let current = fs::read(self.root_dir.join(".git/config"))?;
+        if current != self.trusted_git_config {
+            return Err(WorktreeError::GitConfigTampered);
+        }
+        let mut cmd = Command::new("git");
+        cmd.args([
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.pager=cat",
+            "-c",
+            "diff.ignoreSubmodules=all",
+            "-c",
+            "submodule.recurse=false",
+        ])
+        .env("GIT_PAGER", "cat")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .current_dir(&self.root_dir);
+        Ok(cmd)
     }
 
     /// Apply unified diff patch strictly inside the worktree.
@@ -406,12 +484,12 @@ impl IsolatedWorktree {
             ));
         }
 
-        let output = Command::new("git")
+        let output = self
+            .host_git()?
             .arg("apply")
             .arg("--verbose")
             .arg("--recount")
             .arg("-")
-            .current_dir(&self.root_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -574,19 +652,22 @@ impl IsolatedWorktree {
 
     /// Generate unified diff against base commit in the isolated worktree.
     pub fn get_diff(&self) -> Result<String, WorktreeError> {
-        let output = Command::new("git")
+        const SAFE_DIFF: [&str; 3] = ["--no-ext-diff", "--no-textconv", "--ignore-submodules=all"];
+        let output = self
+            .host_git()?
             .arg("diff")
+            .args(SAFE_DIFF)
             .arg(&self.base_commit)
-            .current_dir(&self.root_dir)
             .output()?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
-            let head_output = Command::new("git")
+            let head_output = self
+                .host_git()?
                 .arg("diff")
+                .args(SAFE_DIFF)
                 .arg("HEAD")
-                .current_dir(&self.root_dir)
                 .output()?;
             Ok(String::from_utf8_lossy(&head_output.stdout).to_string())
         }
@@ -700,6 +781,12 @@ impl IsolatedWorktree {
 
         // Isolated worktree: root_dir is strictly the only directory writable outside tmpfs
         cmd.arg("--bind").arg(&self.root_dir).arg(&self.root_dir);
+        // Host Git later runs in this directory and obeys `.git` (hooks, fsmonitor, diff
+        // drivers): keep it read-only so a build script cannot plant commands there. As a
+        // mount point it also cannot be renamed or replaced.
+        cmd.arg("--ro-bind")
+            .arg(self.root_dir.join(".git"))
+            .arg(self.root_dir.join(".git"));
         cmd.arg("--chdir").arg(&self.root_dir);
 
         // Security isolation flags (defense-in-depth namespace containment)
@@ -950,6 +1037,29 @@ impl IsolatedWorktree {
             "Target repository {:?} does not contain a valid .git directory",
             repo_root
         )))
+    }
+}
+
+/// `path` with symlinks resolved as far as it exists; the missing tail is appended unchanged.
+/// A dangling symlink is an error `(link, target)`: writing through it would create its
+/// target, wherever that is.
+fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, (PathBuf, PathBuf)> {
+    let mut existing = path;
+    let mut tail = Vec::new();
+    loop {
+        if let Ok(real) = fs::canonicalize(existing) {
+            return Ok(tail.iter().rev().fold(real, |acc, part| acc.join(part)));
+        }
+        if let Ok(target) = fs::read_link(existing) {
+            return Err((existing.to_path_buf(), target));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return Ok(path.to_path_buf()),
+        }
     }
 }
 

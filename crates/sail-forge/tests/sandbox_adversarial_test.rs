@@ -370,3 +370,253 @@ fn file_size_limit_applies_inside_the_sandbox() {
 
     let _ = fs::remove_dir_all(&repo);
 }
+
+/// Host-side marker path a sandboxed process cannot write: the sandbox gets its own `/tmp`.
+fn host_marker(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("forge_escape_{name}_{}", Uuid::new_v4()))
+}
+
+#[test]
+fn build_script_cannot_plant_git_commands_that_run_on_the_host() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // A build script has write access to the worktree, including `.git`. Forge then runs host
+    // Git there (`get_diff` after every test run, `apply_patch` for model edits). Each payload
+    // below makes Git run a command: core.fsmonitor on any index refresh, diff.external and a
+    // textconv driver on `git diff`, a hook on later Git operations.
+    let fsmonitor = host_marker("fsmonitor");
+    let external = host_marker("external");
+    let textconv = host_marker("textconv");
+    let hook = host_marker("hook");
+    let submodule = host_marker("submodule");
+    let build_rs = format!(
+        r####"use std::io::Write;
+fn main() {{
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    // Writes into `.git` may be refused; carry on so the build itself succeeds.
+    let cfg = std::fs::OpenOptions::new().append(true).open(format!("{{dir}}/.git/config"));
+    let _ = cfg.and_then(|mut cfg| cfg.write_all(br#"
+[core]
+	fsmonitor = "touch {fsmonitor}; false"
+	hooksPath = .githooks
+[diff]
+	external = "touch {external}; :"
+[diff "evil"]
+	textconv = "touch {textconv}; cat"
+"#));
+    std::fs::write(format!("{{dir}}/.gitattributes"), "* diff=evil\n").unwrap();
+    std::fs::create_dir_all(format!("{{dir}}/.githooks")).unwrap();
+    for h in ["pre-commit", "post-checkout", "post-index-change"] {{
+        let p = format!("{{dir}}/.githooks/{{h}}");
+        std::fs::write(&p, "#!/bin/sh\ntouch {hook}\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }}
+    // A repository at the submodule path: `git diff` checks a submodule for changes by
+    // running `git status` inside it, which applies that repository's clean filter to a
+    // modified file. `-c` overrides on the outer Git do not reach this.
+    let sub = format!("{{dir}}/sub");
+    let git = |args: &[&str]| std::process::Command::new("git").args(args).status().unwrap();
+    git(&["init", "-q", &sub]);
+    std::fs::write(format!("{{sub}}/a"), "1").unwrap();
+    std::fs::write(format!("{{sub}}/.gitattributes"), "a filter=evil\n").unwrap();
+    git(&["-C", &sub, "add", "a", ".gitattributes"]);
+    git(&["-C", &sub, "config", "filter.evil.clean", "touch {submodule}; cat"]);
+    std::fs::write(format!("{{sub}}/a"), "2").unwrap();
+    // A tracked change, so `git diff` has something to render.
+    std::fs::write(format!("{{dir}}/src/lib.rs"), "pub fn f() {{ }}\n").unwrap();
+}}
+"####,
+        fsmonitor = fsmonitor.display(),
+        external = external.display(),
+        textconv = textconv.display(),
+        hook = hook.display(),
+        submodule = submodule.display(),
+    );
+    let repo = malicious_repo(&build_rs);
+    // Record `sub` as a submodule (a gitlink) so Git treats the build's repository as one.
+    git(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000,1111111111111111111111111111111111111111,sub",
+        ],
+    );
+    // Not `commit_all`: `git add .` would drop the gitlink, whose directory does not exist.
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t.local",
+            "commit",
+            "-q",
+            "-m",
+            "submodule",
+        ],
+    );
+    let wt = worktree_for(&repo);
+    let out = wt
+        .run_command("cargo", &["build", "--offline"], 300)
+        .expect("sandboxed build must run");
+    assert_eq!(out.status, 0, "build failed:\n{}", out.stderr);
+    let nested = fs::read_to_string(wt.root_dir.join("sub/.git/config")).unwrap_or_default();
+    assert!(
+        nested.contains("filter \"evil\""),
+        "the probe planted no nested repository; the test proves nothing:\n{}",
+        out.stderr
+    );
+
+    // The host-side Git operations Forge performs after a sandboxed command.
+    let diff = wt.get_diff().expect("diff must still work");
+    let patched = wt.apply_patch(
+        "--- a/Cargo.toml\n+++ b/Cargo.toml\n@@ -1,1 +1,1 @@\n-[package]\n+[package] \n",
+    );
+    let _ = wt.get_diff();
+
+    let escaped: Vec<_> = [&fsmonitor, &external, &textconv, &hook, &submodule]
+        .into_iter()
+        .filter(|m| m.exists())
+        .collect();
+    for m in &escaped {
+        let _ = fs::remove_file(m);
+    }
+    assert!(
+        escaped.is_empty(),
+        "commands planted by the sandboxed build ran on the host: {escaped:?}"
+    );
+    // Neutralizing the payloads must not cost Forge the real diff or its patching.
+    assert!(
+        diff.contains("src/lib.rs"),
+        "diff lost the real change:\n{diff}"
+    );
+    patched.expect("patch must still apply");
+    let _ = fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn host_side_edits_never_reach_git_metadata() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Forge's own edit tools run on the host for the model. A prompt-injected model, or a
+    // symlink a sandboxed build left behind, must not get them to write `.git`.
+    let build_rs = r#"fn main() {
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let _ = std::os::unix::fs::symlink(".git", format!("{dir}/alias"));
+    let _ = std::os::unix::fs::symlink(".git/info/attributes", format!("{dir}/dangling"));
+}
+"#;
+    let repo = malicious_repo(build_rs);
+    let wt = worktree_for(&repo);
+    let out = wt
+        .run_command("cargo", &["build", "--offline"], 300)
+        .expect("sandboxed build must run");
+    assert_eq!(out.status, 0, "build failed:\n{}", out.stderr);
+    assert!(
+        wt.root_dir.join("alias").is_symlink(),
+        "the probe planted no symlink"
+    );
+    let config = wt.root_dir.join(".git/config");
+    let before = fs::read(&config).unwrap();
+
+    for path in [
+        ".git/config",
+        ".GIT/config",
+        "src/../.git/config",
+        "alias/config",
+    ] {
+        let res = wt.write_file(Path::new(path), "[core]\n\tfsmonitor = touch x\n");
+        assert!(
+            matches!(res, Err(WorktreeError::GitMetadataPath(_))),
+            "write to {path} was not refused: {res:?}"
+        );
+    }
+    for target in [".git/config", "alias/config"] {
+        let patch = format!("--- /dev/null\n+++ b/{target}\n@@ -0,0 +1,1 @@\n+[core]\n");
+        assert!(wt.apply_patch(&patch).is_err(), "patch to {target} applied");
+    }
+    // Its target does not exist yet; a write through it would create it inside `.git`.
+    let res = wt.write_file(Path::new("dangling"), "* diff=evil\n");
+    assert!(
+        res.is_err(),
+        "write through a dangling symlink into .git: {res:?}"
+    );
+    assert!(!wt.root_dir.join(".git/info/attributes").exists());
+    assert_eq!(fs::read(&config).unwrap(), before, ".git/config changed");
+
+    // If the config changes anyway (here: by hand), host Git refuses to run on it.
+    fs::write(
+        &config,
+        [before.as_slice(), b"[core]\n\tfsmonitor = touch x\n"].concat(),
+    )
+    .unwrap();
+    assert!(matches!(
+        wt.get_diff(),
+        Err(WorktreeError::GitConfigTampered)
+    ));
+    let _ = fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn sandbox_output_symlinks_are_not_followed_to_host_files() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Forge reads the files a sandboxed command produced (test report, symbol index,
+    // mutation lists) and clears old ones. A build script can leave those paths as symlinks
+    // to host files: reading would put a host secret into the model's context or a report,
+    // and clearing would delete host data.
+    let outside = std::env::temp_dir().join(format!("forge_outside_{}", Uuid::new_v4()));
+    fs::create_dir_all(outside.join("mutants.out")).unwrap();
+    fs::write(outside.join("secret.txt"), SECRET).unwrap();
+    fs::write(outside.join("mutants.out/keep.txt"), "host data").unwrap();
+    let build_rs = format!(
+        r#"fn main() {{
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let link = |target: &str, at: &str| {{
+        let at = format!("{{dir}}/{{at}}");
+        std::fs::create_dir_all(std::path::Path::new(&at).parent().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&at);
+        std::os::unix::fs::symlink(target, &at).unwrap();
+    }};
+    link("{secret}", "target/nextest/forge/junit.xml");
+    link("{secret}", "target/sail-forge/index.scip");
+    link("{outside}", "target/scratch");
+}}
+"#,
+        secret = outside.join("secret.txt").display(),
+        outside = outside.display(),
+    );
+    let repo = malicious_repo(&build_rs);
+    let wt = worktree_for(&repo);
+    let out = wt
+        .run_command("cargo", &["build", "--offline"], 300)
+        .expect("sandboxed build must run");
+    assert_eq!(out.status, 0, "build failed:\n{}", out.stderr);
+    assert!(
+        wt.root_dir.join("target/scratch").is_symlink(),
+        "no symlink planted"
+    );
+
+    for rel in [
+        "target/nextest/forge/junit.xml",
+        "target/sail-forge/index.scip",
+        "target/scratch/secret.txt",
+    ] {
+        let res = wt.read_output(Path::new(rel));
+        assert!(
+            matches!(res, Err(WorktreeError::SymlinkEscape { .. })),
+            "read of {rel} was not refused: {:?}",
+            res.map(|b| String::from_utf8_lossy(&b).into_owned())
+        );
+    }
+    assert!(
+        wt.remove_output(Path::new("target/scratch/mutants.out"))
+            .is_err()
+    );
+    assert!(
+        outside.join("mutants.out/keep.txt").exists(),
+        "host data was deleted through a symlinked parent"
+    );
+    let _ = fs::remove_dir_all(&repo);
+    let _ = fs::remove_dir_all(&outside);
+}

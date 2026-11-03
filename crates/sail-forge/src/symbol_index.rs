@@ -456,23 +456,23 @@ pub fn cached_or_build(
             }
         }
     }
-    let index = build(worktree, timeout_secs)?;
+    let (index, bytes) = build_with_bytes(worktree, timeout_secs)?;
     if let Some(key) = key.filter(|_| index.indexed_diff.trim().is_empty()) {
-        if let Err(e) = store_in_cache(cache, &key, &worktree.root_dir.join(INDEX_REL_PATH)) {
+        if let Err(e) = store_in_cache(cache, &key, &bytes) {
             tracing::warn!(error = %e, "could not cache the symbol index");
         }
     }
     Ok(index)
 }
 
-fn store_in_cache(cache: &Path, key: &str, built: &Path) -> std::io::Result<()> {
+fn store_in_cache(cache: &Path, key: &str, built: &[u8]) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o770)
         .create(cache)?;
     let tmp = cache.join(format!(".{key}.{}.tmp", std::process::id()));
-    std::fs::copy(built, &tmp)?;
+    std::fs::write(&tmp, built)?;
     std::fs::rename(&tmp, cache.join(format!("{key}.scip")))?;
     // Keep the newest CACHE_KEEP indexes.
     let mut entries: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(cache)?
@@ -489,14 +489,27 @@ fn store_in_cache(cache: &Path, key: &str, built: &Path) -> std::io::Result<()> 
 
 /// Run `rust-analyzer scip` in the sandbox and parse the result.
 pub fn build(worktree: &IsolatedWorktree, timeout_secs: u64) -> Result<SymbolIndex, String> {
+    build_with_bytes(worktree, timeout_secs).map(|(index, _)| index)
+}
+
+/// [`build`], also returning the raw index for the cache.
+fn build_with_bytes(
+    worktree: &IsolatedWorktree,
+    timeout_secs: u64,
+) -> Result<(SymbolIndex, Vec<u8>), String> {
     if !crate_binary_available("rust-analyzer") {
         return Err("rust-analyzer is not installed".into());
     }
-    let out_path = worktree.root_dir.join(INDEX_REL_PATH);
-    if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    // Checked paths: a symlinked parent left by an earlier sandboxed command must not
+    // redirect these host-side writes out of the worktree.
+    let out_rel = Path::new(INDEX_REL_PATH);
+    if let Some(parent) = out_rel.parent() {
+        let dir = worktree
+            .resolve_safe_path(parent, true)
+            .map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let _ = std::fs::remove_file(&out_path);
+    worktree.remove_output(out_rel).map_err(|e| e.to_string())?;
     let diff_at_build = worktree.get_diff().unwrap_or_default();
     let start = Instant::now();
     let out = worktree
@@ -514,11 +527,14 @@ pub fn build(worktree: &IsolatedWorktree, timeout_secs: u64) -> Result<SymbolInd
             tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
         ));
     }
-    let bytes = std::fs::read(&out_path).map_err(|e| format!("no index written: {e}"))?;
+    // Written by the sandbox: refuse a symlink to a host file instead of reading it.
+    let bytes = worktree
+        .read_output(Path::new(INDEX_REL_PATH))
+        .map_err(|e| format!("no index written: {e}"))?;
     let mut index = SymbolIndex::from_scip_bytes(&bytes)?;
     index.indexed_diff = diff_at_build;
     index.build_secs = start.elapsed().as_secs_f64();
-    Ok(index)
+    Ok((index, bytes))
 }
 
 fn crate_binary_available(name: &str) -> bool {

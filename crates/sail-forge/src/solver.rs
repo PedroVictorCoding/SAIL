@@ -614,7 +614,7 @@ pub fn run_staged_test_command(
                 test_report::FORGE_NEXTEST_CONFIG,
             )?;
             // A stale report from an earlier step must never be read as this run's result.
-            let _ = fs::remove_file(worktree.root_dir.join(test_report::junit_report_rel()));
+            worktree.remove_output(&test_report::junit_report_rel())?;
             test_report::nextest_args(filter)
         }
         TestTool::CargoTest => {
@@ -630,10 +630,10 @@ pub fn run_staged_test_command(
 
     let mut junit_summary = None;
     if tool == TestTool::Nextest {
-        let report = worktree.root_dir.join(test_report::junit_report_rel());
-        junit_summary = fs::read_to_string(&report)
+        junit_summary = worktree
+            .read_output(&test_report::junit_report_rel())
             .ok()
-            .and_then(|xml| test_report::parse_junit(&xml).ok());
+            .and_then(|xml| test_report::parse_junit(&String::from_utf8_lossy(&xml)).ok());
 
         if output.status == 0 && filter.is_none() {
             let remaining = timeout_secs
