@@ -555,7 +555,27 @@ function announceClientSpeech() {
   const engine = SailClientSpeech.engine;
   sendAction('client_speech', { stt:SailClientSpeech.sttOnDevice(), tts:SailClientSpeech.ttsOnDevice(selectedVoice()), engine:{ device:engine.device, measured:engine.measured } });
 }
+// Loading bar beside "Mic on": real download progress, then an indeterminate bar while
+// the device times itself; hidden once speech has settled on the device or the host.
+function renderSpeechLoad() {
+  const indicator = document.getElementById('speechLoadIndicator'); if (!indicator) return;
+  const loading = SailClientSpeech.engine.loading;
+  indicator.hidden = !loading; if (!loading) return;
+  const bar = document.getElementById('speechLoadBar'), value = document.getElementById('speechLoadValue');
+  const where = loading.device === 'webgpu' ? ' · WebGPU' : loading.device === 'wasm' ? ' · CPU' : '';
+  if (loading.phase === 'measuring') {
+    document.getElementById('speechLoadLabel').textContent = `Checking speed${where}`;
+    bar.removeAttribute('value'); value.textContent = '';
+    return;
+  }
+  document.getElementById('speechLoadLabel').textContent = `Loading voice models${where}`;
+  if (loading.total > 0) {
+    const percent = Math.min(100, Math.floor(loading.loaded * 100 / loading.total));
+    bar.value = percent; value.textContent = `${percent}%`;
+  } else { bar.removeAttribute('value'); value.textContent = ''; }
+}
 function renderSpeechPlacement() {
+  renderSpeechLoad();
   const status = document.getElementById('speechPlacementStatus'); if (!status) return;
   const engine = SailClientSpeech.engine;
   const parts = [engine.detail];
