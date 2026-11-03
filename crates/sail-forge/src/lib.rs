@@ -19,6 +19,7 @@ pub mod reviewer;
 pub mod self_review;
 pub mod solver;
 pub mod subsystem;
+pub mod symbol_index;
 pub mod test_report;
 pub mod worktree;
 

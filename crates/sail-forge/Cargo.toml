@@ -25,3 +25,5 @@ futures-util.workspace = true
 libc = "0.2"
 roxmltree = "0.20"
 tracing-subscriber = "0.3"
+scip = "0.10.0"
+protobuf = "3.7"
