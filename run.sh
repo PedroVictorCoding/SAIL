@@ -219,7 +219,10 @@ if command -v fuser >/dev/null 2>&1; then
   fi
 fi
 
-# 5. Guard CARGO_TARGET_DIR against invalid or unwritable target directories
+# 5. Guard CARGO_TARGET_DIR against invalid or unwritable target directories, and keep
+#    build artifacts on the runtime SSD by default. A 54 GB debug `target/` under the
+#    repository once filled the 116 GB root filesystem (vision §13.1); `/srv/sail` exists
+#    for exactly this. An explicit CARGO_TARGET_DIR always wins.
 if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
   if ! mkdir -p "$CARGO_TARGET_DIR" 2>/dev/null || [[ ! -w "$CARGO_TARGET_DIR" ]]; then
     echo "Notice: Configured CARGO_TARGET_DIR ($CARGO_TARGET_DIR) is not writable."
@@ -227,8 +230,14 @@ if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
     export CARGO_TARGET_DIR="$REPO_ROOT/target"
   fi
 else
-  export CARGO_TARGET_DIR="$REPO_ROOT/target"
+  RUNTIME_TARGET="${SAIL_RUNTIME:-/srv/sail}/cargo-target"
+  if mkdir -p "$RUNTIME_TARGET" 2>/dev/null && [[ -w "$RUNTIME_TARGET" ]]; then
+    export CARGO_TARGET_DIR="$RUNTIME_TARGET"
+  else
+    export CARGO_TARGET_DIR="$REPO_ROOT/target"
+  fi
 fi
+echo "Using CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
 
 # 6. Configure TLS and certificates
 if [[ "$ENABLE_TLS" == "true" ]]; then
