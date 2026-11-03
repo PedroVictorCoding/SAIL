@@ -43,15 +43,17 @@ async fn main() {
     if let Some(root) = repo_root {
         config.workspace_root = root;
     }
-    let orchestrator = Arc::new(
-        ForgeOrchestrator::new(
-            config,
-            Arc::new(TaskCheckpointStore::default_store()),
-            Arc::new(ReviewBroker::new(ReviewPolicyConfig::default())),
-            Arc::new(SandboxPolicy::new()),
-        )
-        .with_self_reviewer(Arc::new(LocalModelReviewer::new())),
-    );
+    let mut forge = ForgeOrchestrator::new(
+        config,
+        Arc::new(TaskCheckpointStore::default_store()),
+        Arc::new(ReviewBroker::new(ReviewPolicyConfig::default())),
+        Arc::new(SandboxPolicy::new()),
+    )
+    .with_self_reviewer(Arc::new(LocalModelReviewer::new()));
+    if let Some(memory) = sail_forge::failure_memory::FailureMemory::from_env() {
+        forge = forge.with_failure_memory(Arc::new(memory));
+    }
+    let orchestrator = Arc::new(forge);
     let runner = ForgeNightlyRunner::new(
         orchestrator,
         Arc::new(GhCliClient::new()),

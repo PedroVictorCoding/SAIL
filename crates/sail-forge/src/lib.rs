@@ -5,6 +5,7 @@ pub mod contracts;
 pub mod edit;
 pub mod eval;
 pub mod eval_cases;
+pub mod failure_memory;
 pub mod fixtures;
 pub mod gates;
 pub mod github;
