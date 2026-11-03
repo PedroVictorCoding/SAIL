@@ -37,6 +37,9 @@ rustfft = "6.4"
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 chrono.workspace = true
 tower = { version = "0.5", features = ["util"] }

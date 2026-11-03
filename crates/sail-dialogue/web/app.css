@@ -1554,3 +1554,156 @@ a.nav-item { text-decoration:none; color:var(--muted) }
 .memory-graph line { stroke:var(--muted); stroke-width:1 }
 .memory-graph text { fill:var(--text); font-size:12px }
 @media(max-width:1180px) { .memory-layout { grid-template-columns:minmax(0,1fr) } }
+
+/* -------------------------------------------------------------------------- */
+/* In-Browser Interactive Terminal                                            */
+/* -------------------------------------------------------------------------- */
+
+.terminal-card {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  min-height: 420px;
+  background: var(--surface);
+  border: var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s ease;
+}
+
+.terminal-quick-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0 10px;
+  scrollbar-width: none;
+}
+.terminal-quick-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.quick-cmd-btn {
+  background: var(--recessed);
+  border: var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  padding: 4px 10px;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.15s ease;
+}
+.quick-cmd-btn:hover {
+  color: var(--text);
+  background: var(--surface);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.quick-cmd-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.terminal-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 280px;
+  max-height: 480px;
+  background: #080a0f;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Monaco, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #e2e8f0;
+  cursor: text;
+}
+.terminal-container:focus-within {
+  border-color: rgba(234, 88, 12, 0.4);
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(234, 88, 12, 0.25);
+}
+
+.terminal-output {
+  flex: 1;
+  padding: 12px 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  word-break: break-all;
+  white-space: pre-wrap;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+.terminal-output::-webkit-scrollbar {
+  width: 6px;
+}
+.terminal-output::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.terminal-line {
+  margin: 0;
+  padding: 1px 0;
+  min-height: 18px;
+}
+
+.terminal-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #0d1017;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.terminal-prompt-symbol {
+  color: #ea580c;
+  font-weight: 700;
+  font-size: 12.5px;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.terminal-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #f8fafc;
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 0;
+  caret-color: #ea580c;
+}
+.terminal-input::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+/* Fullscreen / Maximized Overlay */
+.terminal-card.terminal-fullscreen {
+  position: fixed;
+  inset: 16px;
+  z-index: 10000;
+  max-width: none;
+  width: calc(100vw - 32px);
+  height: calc(100vh - 32px);
+  border-radius: 16px;
+  background: #0f131a;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+.terminal-card.terminal-fullscreen #terminalPanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: calc(100% - 60px);
+}
+.terminal-card.terminal-fullscreen .terminal-container {
+  flex: 1;
+  max-height: none;
+}
+

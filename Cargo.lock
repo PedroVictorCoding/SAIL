@@ -2456,6 +2456,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "image",
+ "libc",
  "reqwest",
  "rustfft",
  "rustls",

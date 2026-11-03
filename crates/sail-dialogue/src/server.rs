@@ -197,9 +197,19 @@ pub async fn run_dialogue_server_with_services(
                 )
             }),
         )
+        .route(
+            "/terminal.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/terminal.js"),
+                )
+            }),
+        )
         .route("/api/health", get(health))
         .route("/api/mind/status", get(mind_status))
         .route("/ws/voice", get(ws_handler))
+        .route("/ws/terminal", get(ws_terminal_handler))
         .with_state(Arc::new(ServerState {
             bus,
             services,
@@ -272,6 +282,33 @@ async fn ws_handler(
     ws.max_message_size(6_000_000)
         .max_frame_size(6_000_000)
         .on_upgrade(move |socket| handle_voice_socket(socket, state))
+        .into_response()
+}
+
+async fn ws_terminal_handler(headers: HeaderMap, ws: WebSocketUpgrade) -> axum::response::Response {
+    if let Some(origin) = headers.get("origin") {
+        let origin = origin
+            .to_str()
+            .ok()
+            .and_then(|v| reqwest::Url::parse(v).ok());
+        let host = headers.get("host").and_then(|v| v.to_str().ok());
+        if !origin.as_ref().is_some_and(|o| {
+            matches!(o.scheme(), "http" | "https")
+                && Some(
+                    format!(
+                        "{}{}",
+                        o.host_str().unwrap_or_default(),
+                        o.port().map(|p| format!(":{p}")).unwrap_or_default()
+                    )
+                    .as_str(),
+                ) == host
+        }) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+    ws.max_message_size(1_048_576)
+        .max_frame_size(1_048_576)
+        .on_upgrade(|socket| crate::terminal::handle_terminal_socket(socket, None))
         .into_response()
 }
 struct Outbound {
