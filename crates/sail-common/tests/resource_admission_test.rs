@@ -265,3 +265,51 @@ async fn raw_inference_wrapper_is_not_polled_when_denied_and_drops_on_voice_pree
     );
     assert_eq!(scheduler.status().admitted_inference, 0);
 }
+
+#[test]
+fn background_speaker_worker_is_preempted_but_live_speech_is_preserved() {
+    let (_, scheduler) = setup();
+    let background = CancellationToken::new();
+    let live = CancellationToken::new();
+    let _analysis = scheduler
+        .try_admit(
+            ResourceClaim {
+                kind: WorkKind::Speech,
+                priority: WorkPriority::Background,
+                ram_bytes: 128 * MIB,
+                cpu_slots: 1,
+                heavy_model: false,
+            },
+            background.clone(),
+        )
+        .unwrap();
+    let _speech = scheduler
+        .try_admit(
+            ResourceClaim {
+                kind: WorkKind::Speech,
+                priority: WorkPriority::Voice,
+                ram_bytes: 128 * MIB,
+                cpu_slots: 0,
+                heavy_model: false,
+            },
+            live.clone(),
+        )
+        .unwrap();
+    let _voice = scheduler.voice_turn();
+    assert!(background.is_cancelled());
+    assert!(!live.is_cancelled());
+    assert!(
+        scheduler
+            .try_admit(
+                ResourceClaim {
+                    kind: WorkKind::Speech,
+                    priority: WorkPriority::Background,
+                    ram_bytes: 128 * MIB,
+                    cpu_slots: 1,
+                    heavy_model: false
+                },
+                Default::default()
+            )
+            .is_err()
+    );
+}

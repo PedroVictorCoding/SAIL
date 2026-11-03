@@ -36,3 +36,5 @@ rustc-ice-*.txt
 models/voice/
 .local/
 __pycache__/
+
+.venv-speaker/

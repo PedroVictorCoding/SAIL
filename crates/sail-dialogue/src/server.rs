@@ -77,6 +77,11 @@ pub async fn run_dialogue_server_with_services(
             .as_deref()
             .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok()),
     );
+    let speaker_routes = crate::speakers::router(
+        arena.store().clone(),
+        services.clone(),
+        active_token.as_deref(),
+    );
     let approval_routes = crate::approval_http::router_with_token(
         owner_authority,
         sail_guardian::global_broker().ok(),
@@ -85,6 +90,7 @@ pub async fn run_dialogue_server_with_services(
     let app = Router::new()
         .nest_service("/api/guardian", approval_routes)
         .nest_service("/api/memory", memory_routes)
+        .nest_service("/api/speakers", speaker_routes)
         .route(
             "/",
             get(|| async { Html(include_str!("../web/index.html")) }),
@@ -95,6 +101,15 @@ pub async fn run_dialogue_server_with_services(
                 (
                     [("content-type", "text/javascript")],
                     include_str!("../web/card-modal.js"),
+                )
+            }),
+        )
+        .route(
+            "/speakers.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/speakers.js"),
                 )
             }),
         )

@@ -539,6 +539,17 @@
             <button class="quiet-button" id="muteBtn" aria-pressed="false">Mute</button>
           </div>
         </div>
+        <details id="speakerControls" class="speaker-controls">
+          <summary>Speaker timelines and enrolled voices</summary>
+          <p class="sheet-note">Analyze a local WAV clip (16 kHz mono PCM16, 1–60 seconds). Unknown voices stay anonymous. Enrollment needs consent and at least 3 seconds of one person speaking without overlap. Only encrypted voiceprints are saved, not audio. Matches never authorize actions.</p>
+          <label for="speakerAudio">Audio clip</label><input id="speakerAudio" type="file" accept="audio/wav,.wav">
+          <div class="speaker-actions"><button class="quiet-button" id="speakerAnalyze" data-speaker-run type="button">Analyze speakers</button><button class="quiet-button" id="speakerCancel" type="button" hidden>Cancel request</button></div>
+          <label for="speakerName">Enrollment name</label><input id="speakerName" type="text" maxlength="80" autocomplete="off">
+          <label class="speaker-consent"><input id="speakerConsent" type="checkbox"> I have this speaker’s consent to save their voiceprint locally.</label>
+          <div class="speaker-actions"><button class="quiet-button" id="speakerEnroll" data-speaker-run type="button">Enroll selected clip</button><button class="quiet-button" id="speakerRefresh" type="button">Refresh enrolled voices</button></div>
+          <p id="speakerStatus" role="status" aria-live="polite">Optional local model required. Choose a clip to begin.</p>
+          <ol id="speakerResults" aria-label="Speaker timeline"></ol><div id="speakerProfiles" aria-label="Enrolled voices"></div>
+        </details>
       </section>
 
       <!-- 3. Guardian Security Category -->
@@ -784,6 +795,7 @@
 <script src="/approvals.js" defer></script>
 <script src="/subsystem-pages.js" defer></script>
 <script src="/memory.js" defer></script>
+<script src="/speakers.js" defer></script>
 <script src="/ui.js" defer></script>
 </body>
 </html>

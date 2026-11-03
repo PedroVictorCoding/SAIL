@@ -5,6 +5,7 @@ pub mod memory_http;
 pub mod orb;
 pub mod pipeline;
 pub mod server;
+pub mod speakers;
 mod speech;
 pub mod staged_ack;
 pub mod stt;

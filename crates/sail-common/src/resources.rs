@@ -156,15 +156,17 @@ impl ResourceScheduler {
             state: Mutex::new(State::default()),
         }
     }
-    /// Cancels background inference/builds; never kills an external model.
+    /// Cancels background inference/builds/speech; never kills an external model.
     /// New background work stays blocked for the entire turn, including tool/TTS gaps.
     pub fn voice_turn(self: &Arc<Self>) -> VoiceTurn {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         state.voice_turns += 1;
         let mut preemptions = 0;
         for entry in state.entries.values() {
-            if matches!(entry.claim.kind, WorkKind::Inference | WorkKind::Build)
-                && entry.claim.priority == WorkPriority::Background
+            if matches!(
+                entry.claim.kind,
+                WorkKind::Inference | WorkKind::Build | WorkKind::Speech
+            ) && entry.claim.priority == WorkPriority::Background
                 && !entry.cancel.is_cancelled()
             {
                 entry.cancel.cancel();

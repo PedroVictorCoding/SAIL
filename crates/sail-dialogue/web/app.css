@@ -1554,3 +1554,18 @@ a.nav-item { text-decoration:none; color:var(--muted) }
 .memory-graph line { stroke:var(--muted); stroke-width:1 }
 .memory-graph text { fill:var(--text); font-size:12px }
 @media(max-width:1180px) { .memory-layout { grid-template-columns:minmax(0,1fr) } }
+
+.speaker-controls { margin-top:var(--space-6); padding:var(--space-4) 0; border-top:var(--border) }
+.speaker-controls summary { min-height:44px; cursor:pointer; color:var(--text) }
+.speaker-controls label { display:block; margin:var(--space-3) 0; font-size:13px; color:var(--muted) }
+.speaker-controls input[type=text] { max-width:100%; min-height:40px; padding:8px 12px; background:var(--recessed); color:var(--text); border:var(--border); border-radius:var(--radius-control); box-shadow:var(--depth-inset) }
+.speaker-controls input[type=file] { max-width:100%; font-size:13px }
+.speaker-actions,.speaker-profile { display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2); margin:var(--space-3) 0 }
+.speaker-controls .quiet-button { min-height:44px }
+.speaker-controls li,.speaker-controls [role=status] { color:var(--muted); font-size:13px; line-height:1.6; overflow-wrap:anywhere }
+@media(max-width:820px) {
+  #settingsPanel-voice .vscode-setting-item { flex-direction:column; align-items:stretch }
+  #settingsPanel-voice .vscode-setting-info { min-width:0; width:auto }
+  #settingsPanel-voice .vscode-setting-control { min-width:0; width:100%; align-items:flex-start }
+  .speaker-controls { min-width:0; width:100% }
+}

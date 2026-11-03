@@ -59,3 +59,11 @@ One complete local voice turn with measured STT/first-audio latency, barge-in, n
 - [Roadmap and subsystem taxonomy](https://github.com/PedroVictorCoding/SAIL/issues/15)
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
+
+## Optional local speaker analysis
+
+Settings → Voice & Audio includes an owner-authenticated clip workflow for anonymous
+speaker timelines, explicit voice enrollment, identification and claimed-speaker
+verification. It does not alter the live microphone path or grant permissions from
+a voice match. Setup, encrypted-profile lifecycle, model licensing and the pending
+real-acoustic validation gate are documented in [Local speaker intelligence](SPEAKER_INTELLIGENCE.md).

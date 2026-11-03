@@ -1,0 +1,3 @@
+# Optional, separate from the existing voice worker environment.
+# pyannote.audio: MIT; Community-1 model: CC-BY-4.0, gated access terms.
+pyannote.audio==4.0.7
