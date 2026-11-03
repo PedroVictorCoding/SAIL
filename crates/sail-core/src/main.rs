@@ -101,16 +101,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Durable record of accepted background work; recovered when Forge starts.
     let continuity = Arc::new(sail_continuity::Continuity::open_default());
     let checkpoint_store = Arc::new(TaskCheckpointStore::default_store());
-    let orchestrator = Arc::new(
-        ForgeOrchestrator::new(
-            OrchestratorConfig::default(),
-            checkpoint_store,
-            review_broker,
-            guardian.sandbox(),
-        )
-        .with_self_reviewer(Arc::new(LocalModelReviewer::new()))
-        .with_continuity(continuity),
-    );
+    let mut forge = ForgeOrchestrator::new(
+        OrchestratorConfig::default(),
+        checkpoint_store,
+        review_broker,
+        guardian.sandbox(),
+    )
+    .with_self_reviewer(Arc::new(LocalModelReviewer::new()))
+    .with_continuity(continuity);
+    if let Some(memory) = sail_forge::failure_memory::FailureMemory::from_env() {
+        forge = forge.with_failure_memory(Arc::new(memory));
+    }
+    let orchestrator = Arc::new(forge);
     if !std::env::var("SAIL_MEMORY_BACKGROUND").is_ok_and(|v| v == "0" || v == "false") {
         let admission_mind = model_service.clone();
         let admission_forge = orchestrator.clone();

@@ -92,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       export SAIL_MODEL_BACKEND="hybrid"
       shift
       ;;
+    --cpu-moe)
+      export SAIL_CPU_MOE="$2"
+      shift 2
+      ;;
     --gpu-layers|-ngl)
       export SAIL_GPU_LAYERS="$2"
       shift 2
@@ -141,6 +145,7 @@ Options:
   --vulkan             Shorthand for --backend vulkan
   --hybrid             Shorthand for --backend hybrid (GPU + CPU hybrid offloading)
   --gpu-layers, -ngl N Number of layers to offload to GPU in vulkan/hybrid mode
+  --cpu-moe <all|N|off> Keep MoE expert weights of all/N layers in RAM (use with -ngl 99)
   --threads, -t N      Number of CPU generation/batch threads (default: min(cores, 6))
   --device <dev>       Compute device identifier (e.g. Vulkan0)
   --cache-type-k, -ctk KV cache K quant type (q4_0, q8_0, f16; default: q4_0)
@@ -271,6 +276,20 @@ if [[ -z "${SAIL_MODEL_PATH:-}" ]]; then
   done
 fi
 
+# 8b. Measured GPU offload. scripts/mind-gpu-setup.sh writes this file only when GPU
+# offload beat CPU-only on this host. An explicit --cpu/--vulkan/--hybrid/--backend (or a
+# SAIL_MODEL_BACKEND already in the environment) wins; delete the file to go back to CPU.
+GPU_ENV="${SAIL_DATA:-/srv/sail-data}/mind/gpu.env"
+if [[ -z "${SAIL_MODEL_BACKEND:-}" && -f "$GPU_ENV" ]]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      SAIL_MODEL_BACKEND|SAIL_VULKAN_DEVICE|SAIL_GPU_LAYERS|SAIL_CPU_MOE|SAIL_LLAMA_SERVER)
+        [[ -z "${!key:-}" ]] && export "$key=$value" ;;
+    esac
+  done < <(grep -E '^[A-Z_]+=' "$GPU_ENV")
+  GPU_ENV_LOADED=1
+fi
+
 # Set default context tokens (16k for Qwen 3.6 on 32GB systems)
 export SAIL_CONTEXT_TOKENS="${SAIL_CONTEXT_TOKENS:-16384}"
 
@@ -289,7 +308,7 @@ fi
 if [[ -n "${SAIL_MODEL_PATH:-}" ]]; then
   echo " LLM Model:    $SAIL_MODEL_PATH"
 fi
-echo " Backend:      ${SAIL_MODEL_BACKEND:-cpu}$([ "${SAIL_MODEL_BACKEND:-cpu}" = "hybrid" ] && echo " (GPU+CPU layers: ${SAIL_GPU_LAYERS:-8})" || true)"
+echo " Backend:      ${SAIL_MODEL_BACKEND:-cpu}$([ "${SAIL_MODEL_BACKEND:-cpu}" != "cpu" ] && echo " (${SAIL_VULKAN_DEVICE:-Vulkan0}, GPU layers: ${SAIL_GPU_LAYERS:-8}, MoE experts on CPU: ${SAIL_CPU_MOE:-off})" || true)$([ "${GPU_ENV_LOADED:-0}" = 1 ] && echo " [from $GPU_ENV]" || true)"
 echo " Acceleration: FlashAttention=$([ "${SAIL_FLASH_ATTN:-1}" != "0" ] && echo "on" || echo "off"), KV-Cache=${SAIL_CACHE_TYPE_K:-q4_0}/${SAIL_CACHE_TYPE_V:-q4_0}, CacheReuse=${SAIL_CACHE_REUSE:-256}"
 if [[ -f "$REPO_ROOT/.local/sail_owner_token" ]]; then
   echo " Owner token:  Configured (.local/sail_owner_token)"
