@@ -9,7 +9,7 @@ pub mod profile;
 pub mod service;
 mod validation;
 pub use bench::{BenchmarkRunner, BenchmarkScenario};
-pub use config::LocalModelConfig;
+pub use config::{CpuMoe, LocalModelConfig};
 pub use hardware::HardwareProbe;
 pub use profile::InferenceProfileManager;
 pub use sail_protocol as protocol;

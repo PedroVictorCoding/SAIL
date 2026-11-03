@@ -48,6 +48,30 @@ Route one text request to a local model, stream tokens, cancel it, report actual
 - [ ] Show user-visible success/error through the mapped existing UI and preserve user control.
 - [ ] Submit focused tests and a reviewable PR without automatic merge.
 
+## 7a. GPU offload for MoE models (#34)
+
+The host has an AMD RX 5500 with little VRAM. Both local models are mixture-of-experts with about 3B parameters active per token (Qwen3-Coder-30B-A3B, Qwen3.6-35B-A3B). Most of their weights are experts, and only a few run for each token. The useful split is therefore **every layer's attention and KV cache on the GPU, expert weights in system RAM**, not "the first N whole layers on the GPU". The latter fills VRAM with rarely used experts.
+
+| Setting | Meaning |
+|---|---|
+| `SAIL_MODEL_BACKEND=hybrid` (or `vulkan`) | Offload through llama.cpp's Vulkan backend |
+| `SAIL_VULKAN_DEVICE=Vulkan0` | The device llama-server lists for the AMD GPU |
+| `SAIL_GPU_LAYERS=99` | All layers on the GPU |
+| `SAIL_CPU_MOE=all` | Keep every layer's experts in RAM (`--cpu-moe`) |
+| `SAIL_CPU_MOE=N` | Keep the experts of N layers in RAM (`--n-cpu-moe N`); smaller N puts more on the GPU |
+
+`SAIL_CPU_MOE` is rejected on the CPU backend. Unset or `off` means no expert flags, so dense models and existing setups are unchanged. `run.sh --cpu-moe <all|N|off>` sets it too.
+
+**Enable it only after measuring (vision §5).** Run `scripts/mind-gpu-setup.sh` on the host with SAIL stopped. It:
+1. checks the GPU, render-node access and the Vulkan driver, and refuses a software device;
+2. builds llama.cpp `b11600` with Vulkan into `/srv/sail/llama.cpp-vulkan`;
+3. benchmarks each model with `llama-bench`: CPU-only, then `-ngl 99` with a sweep of `--n-cpu-moe` (99, 40, 36, 32, 28, 24);
+4. stores the raw JSON in `/srv/sail-data/mind/bench/`.
+
+Only when the best GPU setting beats CPU-only by at least 5% on both prompt processing and generation does it write `/srv/sail-data/mind/gpu.env`. `run.sh` loads that file unless a backend is given explicitly. Otherwise SAIL stays on CPU. Delete the file to go back to CPU. Re-run the script after driver, llama.cpp or model changes.
+
+Not done yet: per-model profiles in the router (`InferenceProfile` has no expert-placement field, so `SAIL_CPU_MOE` applies to every managed model), and VRAM headroom checks while ASR/TTS run.
+
 ## 8. Next steps
 1. Audit the relevant implementation and the linked roadmap issue; update this spec with confirmed module/file paths and contracts.
 2. Build the MVP vertical slice with real tool/model/provider integrations.
