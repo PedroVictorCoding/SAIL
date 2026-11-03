@@ -48,6 +48,14 @@ Route one text request to a local model, stream tokens, cancel it, report actual
 - [ ] Show user-visible success/error through the mapped existing UI and preserve user control.
 - [ ] Submit focused tests and a reviewable PR without automatic merge.
 
+## Host admission and voice priority
+
+Mind shares Core's process-wide resource broker with Forge and speech workers. Owned
+model startup and inference require fresh RAM/swap/CPU admission; trusted Dialogue
+calls select voice priority and preempt background inference. See
+[Host resource admission](SAIL_RESOURCE_ADMISSION.md) for estimates, lease lifetimes,
+status fields, verification and remaining browser/VRAM/eviction limitations.
+
 ## 7a. GPU offload for MoE models (#34)
 
 The host has an AMD RX 5500 with little VRAM. Both local models are mixture-of-experts with about 3B parameters active per token (Qwen3-Coder-30B-A3B, Qwen3.6-35B-A3B). Most of their weights are experts, and only a few run for each token. The useful split is therefore **every layer's attention and KV cache on the GPU, expert weights in system RAM**, not "the first N whole layers on the GPU". The latter fills VRAM with rarely used experts.

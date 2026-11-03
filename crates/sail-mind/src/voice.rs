@@ -13,6 +13,7 @@ use tracing::{Instrument, debug, error, info, trace, warn};
 
 struct Worker {
     child: Child,
+    lease: sail_common::resources::ResourceLease,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
 }
@@ -46,6 +47,9 @@ impl WorkerClient {
         // The task drains the response even when its caller is cancelled, preserving framing.
         tokio::spawn(async move {
             let _permit = permit;
+            // Draining an accepted speech request retains voice priority even if its
+            // original turn is aborted; the worker still consumes compute.
+            let _voice = (this.mode != "vad").then(|| sail_common::resources::global().voice_turn());
             let mut slot = this.worker.lock().await;
             let started=Instant::now();
             if this.mode!="vad"{debug!(engine=this.mode,queue_wait_ms=queued.elapsed().as_millis(),"Acquired speech worker; sending request");}
@@ -55,6 +59,15 @@ impl WorkerClient {
                 let script =
                     std::env::var("SAIL_VOICE_WORKER").unwrap_or("scripts/voice/worker.py".into());
                 info!(engine=this.mode,%python,%script,"Starting persistent offline speech worker");
+                let lease = sail_common::resources::global().try_admit(
+                    sail_common::resources::ResourceClaim {
+                        kind: sail_protocol::resources::WorkKind::Speech,
+                        priority: sail_protocol::resources::WorkPriority::Voice,
+                        ram_bytes: match this.mode { "stt" => 1024, "tts" => 512, _ => 128 } * sail_common::resources::MIB,
+                        cpu_slots: 0,
+                        heavy_model: false,
+                    }, Default::default(),
+                ).map_err(|e| SailError::Inference(e.to_string()))?;
                 let mut child = Command::new(python)
                     .arg(script)
                     .arg(this.mode)
@@ -85,6 +98,7 @@ impl WorkerClient {
                     }.instrument(tracing::info_span!(parent:None,"speech_worker",engine=mode,?pid)));
                 }
                 *slot = Some(Worker {
+                    lease,
                     input: child.stdin.take().unwrap(),
                     output: BufReader::new(child.stdout.take().unwrap()),
                     child,
@@ -114,6 +128,7 @@ impl WorkerClient {
             let result = tokio::time::timeout(Duration::from_secs(120), operation).await;
             match result {
                 Ok(Ok(value)) => {
+                    worker.lease.settled();
                     if this.mode=="vad"{trace!(engine=this.mode,elapsed_us=started.elapsed().as_micros(),"VAD worker response received");}
                     else{debug!(engine=this.mode,elapsed_ms=started.elapsed().as_millis(),"Speech worker response received");}
                     Ok(value)

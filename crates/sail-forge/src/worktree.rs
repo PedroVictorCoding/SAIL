@@ -14,6 +14,8 @@ use sail_guardian::sandbox::{CommandOutput, SandboxPolicy, SandboxViolation};
 /// Errors encountered during worktree lifecycle or sandbox operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WorktreeError {
+    #[error("{0}")]
+    ResourceAdmission(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Invalid job ID: expected 1–128 ASCII letters, digits, underscores or hyphens")]
@@ -233,6 +235,7 @@ pub struct IsolatedWorktree {
     pub sandbox_policy: Arc<SandboxPolicy>,
     keep_on_drop: bool,
     allocation: WorkspaceAllocation,
+    resource_scheduler: Arc<sail_common::resources::ResourceScheduler>,
 }
 
 impl IsolatedWorktree {
@@ -285,11 +288,20 @@ impl IsolatedWorktree {
             sandbox_policy: scoped_policy,
             keep_on_drop: false,
             allocation,
+            resource_scheduler: sail_common::resources::global(),
         };
 
         let pinned_sha = worktree.init_git_workspace(&canonical_repo, base_commit)?;
         worktree.base_commit = pinned_sha;
         Ok(worktree)
+    }
+
+    pub fn with_resource_scheduler(
+        mut self,
+        scheduler: Arc<sail_common::resources::ResourceScheduler>,
+    ) -> Self {
+        self.resource_scheduler = scheduler;
+        self
     }
 
     /// Mark this worktree to be preserved on drop for manual user inspection of failures.
@@ -755,6 +767,16 @@ impl IsolatedWorktree {
             }
         }
 
+        // Admission precedes the real process boundary; existing sandbox limits remain.
+        let resource_cancel = tokio_util::sync::CancellationToken::new();
+        let _resource_lease = self
+            .resource_scheduler
+            .try_admit(
+                sail_common::resources::ResourceClaim::build(),
+                resource_cancel.clone(),
+            )
+            .map_err(|e| WorktreeError::ResourceAdmission(e.to_string()))?;
+        cmd.env("CARGO_BUILD_JOBS", "1");
         let mut child = cmd.spawn()?;
 
         let max_output_bytes = 512 * 1024; // 512KB output cap
@@ -824,10 +846,16 @@ impl IsolatedWorktree {
                     });
                 }
                 None => {
-                    if start.elapsed() >= timeout {
+                    if resource_cancel.is_cancelled() || start.elapsed() >= timeout {
                         warn!(
-                            "Command {} timed out after {}s; killing process group",
-                            binary, timeout_secs
+                            binary,
+                            timeout_secs,
+                            reason = if resource_cancel.is_cancelled() {
+                                "voice_priority"
+                            } else {
+                                "deadline"
+                            },
+                            "Stopping sandbox command process group"
                         );
                         #[cfg(unix)]
                         {
@@ -840,6 +868,11 @@ impl IsolatedWorktree {
                         let _ = child.wait();
                         let _ = stdout_handle.join();
                         let _ = stderr_handle.join();
+                        if resource_cancel.is_cancelled() {
+                            return Err(WorktreeError::ResourceAdmission(
+                                "Build preempted for live voice; retry when idle".into(),
+                            ));
+                        }
                         return Err(WorktreeError::CommandTimeout {
                             binary: binary.to_string(),
                             timeout_secs,

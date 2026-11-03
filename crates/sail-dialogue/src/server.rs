@@ -353,6 +353,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     let mut client_tools = ClientTools::default();
     let mut pending = Vec::<i16>::new();
     let mut speech_frames = 0usize;
+    let mut capture_priority = None;
     let mut capture_learning_epoch = None;
     let mut previous_learning_epoch = None;
     let hello = json!({"type":"session","session_id":session,"sample_rate":16000,"frame_samples":512,"learning":false,"control":pipe.control_state()});
@@ -537,7 +538,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                         if frame_learning_epoch != previous_learning_epoch {
                             // Discard buffered audio (including VAD pre-roll) across consent
                             // boundaries. Never relabel earlier capture with a later grant.
-                            partial.take(); pending.clear(); pipe.reset_capture();
+                            capture_priority.take(); partial.take(); pending.clear(); pipe.reset_capture();
                             state.services.reset_vad(&session).await;
                             capture_learning_epoch = None;
                             previous_learning_epoch = frame_learning_epoch;
@@ -550,6 +551,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 Ok((audio,vad,orb))=>{
                                     if vad.event==VadEvent::SpeechStart {
                                         capture_learning_epoch = frame_learning_epoch;
+                                        capture_priority = Some(sail_common::resources::global().voice_turn());
                                         info!(confidence=vad.confidence,inference_us=vad.inference_us,"Speech onset detected; cancelling previous response for barge-in");
                                         turn.take();partial.take();epoch.fetch_add(1,Ordering::SeqCst);speech_frames=0;
                                         emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"interruption","state":"listening"})).await;
@@ -559,6 +561,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                     if speech_frames.is_multiple_of(32){debug!(turn_id=current,state=?orb.state,confidence=vad.confidence,rms=vad.rms_power,"Microphone/VAD heartbeat");}
                                     emit(&tx,current,json!({"type":"telemetry","channel":"voice:orb","state":orb.state,"rms":orb.rms_level,"phase":orb.wave_phase,"spectrum":[orb.spectrum.sub_bass,orb.spectrum.bass,orb.spectrum.low_mid,orb.spectrum.mid,orb.spectrum.high_mid,orb.spectrum.presence,orb.spectrum.brilliance,orb.spectrum.air],"confidence":vad.confidence,"vad_us":vad.inference_us,"vad_roundtrip_us":vad.process_duration_us,"vad_event":vad.event,"captured_ms":vad.captured_ms,"speaker":orb.turn_speaker,"turn_id":current})).await;
                                     if vad.event==VadEvent::CaptureLimitReached {
+                                        capture_priority.take();
                                         partial.take();
                                         emit(&tx,current,json!({"type":"capture_limit","max_recording_ms":pipe.control_state().max_recording_ms,"message":"Recording limit reached. Your audio is held; send the turn or start a new conversation to discard it."})).await;
                                     }
@@ -577,10 +580,10 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                         info!(turn_id=current,samples=audio.len(),audio_ms=audio.len()/16,"Speech boundary finalized; scheduling STT and assistant turn");
                                         partial.take();turn.take();pipe.advance_turn();
                                         emit(&tx,current,json!({"type":"turn_committed","cause":"silence","audio_ms":audio.len()/16})).await;
-                                        turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone()));
+                                        turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone()));capture_priority.take();
                                     }
                                 },
-                                Err(error)=>{error!(%error,"PCM/VAD processing failed");pending.clear();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":error.to_string()})).await;break;}
+                                Err(error)=>{capture_priority.take();error!(%error,"PCM/VAD processing failed");pending.clear();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":error.to_string()})).await;break;}
                             }
                         }
                     },
@@ -591,12 +594,12 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                         match action {
                             "interrupt"|"reset"=>{
                                 client_tools.0.abort_all();
-                                turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.interrupt();
+                                capture_priority.take();turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.interrupt();
                                 if action=="reset"{state.arena.clear_voice_session(&session);state.arena.begin_voice_session(&session);pipe.reset();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"learning_state","enabled":false})).await;}
                                 state.services.reset_vad(&session).await;
                                 emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"interruption","state":"interrupted"})).await;
                             },
-                            "toggle_mute"=>{partial.take();pending.clear();pipe.toggle_mute();state.services.reset_vad(&session).await;},
+                            "toggle_mute"=>{capture_priority.take();partial.take();pending.clear();pipe.toggle_mute();state.services.reset_vad(&session).await;},
                             "set_tier"=>{
                                 let profile=match value["profile"].as_str(){Some("LowPower")=>HardwareTierProfile::LowPower,Some("HighPerformance")=>HardwareTierProfile::HighPerformance,_=>HardwareTierProfile::Balanced};pipe.set_hardware_profile(profile);
                             },
@@ -611,13 +614,13 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 if let Some(language)=language{pipe.tts.set_voice(voice,language);}else{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Unsupported voice"})).await;}
                             },
                             "end_turn"=>{
-                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone()));}
+                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone()));capture_priority.take();}
                             },
                             "text"=>{
                                 let prompt=value["text"].as_str().unwrap_or_default();
                                 if prompt.trim().is_empty()||prompt.len()>16000{continue;}
                                 let vision=match parse_vision(&value["vision"]) {Ok(v)=>v,Err(e)=>{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":e.to_string()})).await;continue;}};
-                                turn.take();partial.take();pipe.reset_capture();pipe.advance_turn();pending.clear();let current=epoch.fetch_add(1,Ordering::SeqCst)+1;
+                                capture_priority.take();turn.take();partial.take();pipe.reset_capture();pipe.advance_turn();pending.clear();let current=epoch.fetch_add(1,Ordering::SeqCst)+1;
                                 turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision,state.arena.learning_epoch(&session)),epoch.clone()));
                             },
                             "kernel_tool"=>{
@@ -933,9 +936,11 @@ fn start_turn(
     input: TurnInput,
     epoch: Arc<AtomicU64>,
 ) -> AbortTask {
+    let voice_priority = sail_common::resources::global().voice_turn();
     let span = tracing::info_span!("voice_turn",session_id=%session,turn_id=current);
     AbortTask(tokio::spawn(
         async move {
+            let _voice_priority = voice_priority;
             info!("Starting voice turn");
             if let Err(e) = run_turn(
                 state,
@@ -976,6 +981,8 @@ async fn run_turn(
     epoch: Arc<AtomicU64>,
 ) -> Result<()> {
     let start = Instant::now();
+    // Held across STT, inference, tool calls and TTS; abort/drop releases priority.
+    let _voice_priority = sail_common::resources::global().voice_turn();
     let learning_epoch = match &input {
         TurnInput::Audio(_, consent) => *consent,
         TurnInput::Text(_, _, consent) => *consent,

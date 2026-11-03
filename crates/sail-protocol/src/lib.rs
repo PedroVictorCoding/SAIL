@@ -275,6 +275,8 @@ pub struct InferenceMetrics {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MindStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<resources::ResourceStatus>,
     pub version: u16,
     pub accepting_requests: bool,
     pub models: Vec<ModelStatus>,
@@ -392,3 +394,5 @@ impl Default for ResourceLimits {
 pub mod execution;
 
 pub mod memory;
+
+pub mod resources;

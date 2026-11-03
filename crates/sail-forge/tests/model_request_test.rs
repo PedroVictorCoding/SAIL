@@ -353,3 +353,203 @@ fn summary_without_failures_is_explicit() {
         "Local model unavailable after 2 attempt(s): e: d"
     );
 }
+
+struct ResourceProbe(u64);
+impl sail_common::resources::HostProbe for ResourceProbe {
+    fn sample(&self) -> std::io::Result<sail_protocol::resources::HostSample> {
+        Ok(sail_protocol::resources::HostSample {
+            available_ram_bytes: self.0,
+            total_ram_bytes: 32 * sail_common::resources::GIB,
+            swap_used_bytes: 0,
+            swap_total_bytes: 0,
+            logical_cpus: 12,
+        })
+    }
+}
+fn resource_scheduler(available: u64) -> Arc<sail_common::resources::ResourceScheduler> {
+    Arc::new(sail_common::resources::ResourceScheduler::new(
+        Arc::new(ResourceProbe(available)),
+        Default::default(),
+    ))
+}
+#[tokio::test]
+async fn resource_denial_is_blocked_before_forge_contacts_the_model() {
+    let (ep, chats) = fake_model(vec![Behavior::Fix]).await;
+    let (wt, repo) = repo_worktree();
+    let scheduler = resource_scheduler(sail_common::resources::GIB);
+    let controller = LocalSolverController::new(2, 120, None)
+        .with_endpoints(vec![ep])
+        .with_resource_scheduler(scheduler.clone());
+    let logs = repo.join("logs");
+    let outcome = controller
+        .solve_issue(
+            &wt,
+            "f must return 2",
+            "src/lib.rs",
+            &logs,
+            || false,
+            |_| {},
+        )
+        .await;
+    assert!(!outcome.success);
+    assert_eq!(outcome.verification_status, "resource_blocked");
+    assert!(outcome.failure_reason.unwrap().contains("RAM"));
+    assert_eq!(chats.load(Ordering::SeqCst), 0);
+    assert!(outcome.final_diff.is_empty());
+    assert_eq!(scheduler.status().admitted_inference, 0);
+    let _ = fs::remove_dir_all(repo);
+}
+#[tokio::test]
+async fn live_voice_stops_forges_direct_http_request_and_keeps_the_workspace_unchanged() {
+    let (ep, chats) = fake_model(vec![Behavior::Hang]).await;
+    let (wt, repo) = repo_worktree();
+    let scheduler = resource_scheduler(24 * sail_common::resources::GIB);
+    let controller = LocalSolverController::new(2, 120, None)
+        .with_endpoints(vec![ep])
+        .with_resource_scheduler(scheduler.clone());
+    let logs = repo.join("logs");
+    let task = controller.solve_issue(
+        &wt,
+        "f must return 2",
+        "src/lib.rs",
+        &logs,
+        || false,
+        |_| {},
+    );
+    let interrupt = async {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while chats.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        scheduler.voice_turn()
+    };
+    let (outcome, voice) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(task, interrupt)
+    })
+    .await
+    .unwrap();
+    assert!(!outcome.success);
+    assert_eq!(outcome.verification_status, "resource_blocked");
+    assert!(outcome.failure_reason.unwrap().contains("preempted"));
+    assert!(outcome.final_diff.is_empty());
+    assert_eq!(chats.load(Ordering::SeqCst), 1);
+    assert_eq!(scheduler.status().preemptions, 1);
+    assert_eq!(scheduler.status().admitted_inference, 0);
+    drop(voice);
+    assert_eq!(scheduler.status().voice_turns, 0);
+    let _ = fs::remove_dir_all(repo);
+}
+#[test]
+fn resource_denial_prevents_a_real_forge_build_launch() {
+    let (wt, repo) = repo_worktree();
+    let scheduler = resource_scheduler(sail_common::resources::GIB);
+    let wt = wt.with_resource_scheduler(scheduler.clone());
+    let error = wt
+        .run_command("cargo", &["test", "--offline"], 5)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            sail_forge::worktree::WorktreeError::ResourceAdmission(_)
+        ),
+        "{error}"
+    );
+    assert!(!wt.root_dir.join("target").exists());
+    assert_eq!(scheduler.status().active_builds, 0);
+    let _ = fs::remove_dir_all(repo);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_voice_terminates_a_running_sandbox_build_before_releasing_its_slot() {
+    let (wt, repo) = repo_worktree();
+    let scheduler = resource_scheduler(24 * sail_common::resources::GIB);
+    let wt = wt.with_resource_scheduler(scheduler.clone());
+    fs::write(
+        wt.root_dir.join("build.rs"),
+        r#"fn main() {
+        std::fs::write("build-running", "running").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        std::fs::write("build-completed", "done").unwrap();
+    }"#,
+    )
+    .unwrap();
+    let root = wt.root_dir.clone();
+    let task = tokio::task::spawn_blocking(move || {
+        let result = wt.run_command("cargo", &["test", "--offline"], 15);
+        (wt, result)
+    });
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while !root.join("build-running").exists() {
+            assert!(
+                !task.is_finished(),
+                "sandbox build ended before its fixture started"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(scheduler.status().active_builds, 1);
+    let voice = scheduler.voice_turn();
+    let (_wt, result) = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    let error = result.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            sail_forge::worktree::WorktreeError::ResourceAdmission(_)
+        ),
+        "{error}"
+    );
+    assert!(!root.join("build-completed").exists());
+    assert_eq!(scheduler.status().active_builds, 0);
+    drop(voice);
+    assert!(
+        scheduler
+            .try_admit(
+                sail_common::resources::ResourceClaim::build(),
+                Default::default()
+            )
+            .is_ok()
+    );
+    let _ = fs::remove_dir_all(repo);
+}
+
+#[tokio::test]
+async fn denied_build_is_resource_blocked_without_fabricated_test_results_or_repair() {
+    let (ep, chats) = fake_model(vec![Behavior::Fix]).await;
+    let (wt, repo) = repo_worktree();
+    let wt = wt.with_resource_scheduler(resource_scheduler(sail_common::resources::GIB));
+    let controller = LocalSolverController::new(2, 120, None)
+        .with_endpoints(vec![ep])
+        .with_resource_scheduler(resource_scheduler(24 * sail_common::resources::GIB));
+    let outcome = controller
+        .solve_issue(
+            &wt,
+            "f must return 2",
+            "src/lib.rs",
+            &repo.join("logs"),
+            || false,
+            |_| {},
+        )
+        .await;
+    assert!(!outcome.success);
+    assert_eq!(outcome.verification_status, "resource_blocked");
+    assert!(outcome.failure_reason.unwrap().contains("RAM"));
+    assert!(
+        !outcome.final_diff.is_empty(),
+        "retain the actual patch for inspection"
+    );
+    assert!(outcome.test_records.is_empty(), "no test process ran");
+    assert_eq!(
+        chats.load(Ordering::SeqCst),
+        1,
+        "do not ask the model to repair infrastructure denial"
+    );
+    let _ = fs::remove_dir_all(repo);
+}
