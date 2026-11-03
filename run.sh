@@ -261,14 +261,12 @@ fi
 # 7. Bind address
 export SAIL_VOICE_BIND="${HOST}:${PORT}"
 
-# 8. Model auto-discovery if not explicitly set
+# 8. The one resident model (see sail_common::models). No fallback to another model:
+# SAIL keeps a single large model that voice, agents and Forge share.
 if [[ -z "${SAIL_MODEL_PATH:-}" ]]; then
   for cand in \
     "$REPO_ROOT/models/Qwen3.6-35B-A3B-Q4_K_M.gguf" \
-    "/srv/sail/models/Qwen3.6-35B-A3B-Q4_K_M.gguf" \
-    "$REPO_ROOT/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf" \
-    "/srv/sail/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf" \
-    "$REPO_ROOT/models/gemma4-v2-Q4_K_M.gguf"; do
+    "${SAIL_RUNTIME:-/srv/sail}/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"; do
     if [[ -f "$cand" ]]; then
       export SAIL_MODEL_PATH="$cand"
       break

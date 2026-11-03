@@ -399,47 +399,151 @@ async fn resource_denial_is_blocked_before_forge_contacts_the_model() {
     assert_eq!(scheduler.status().admitted_inference, 0);
     let _ = fs::remove_dir_all(repo);
 }
-#[tokio::test]
-async fn live_voice_stops_forges_direct_http_request_and_keeps_the_workspace_unchanged() {
-    let (ep, chats) = fake_model(vec![Behavior::Hang]).await;
+/// Solve with an explicit scheduler and a short voice quiet period.
+async fn solve_with(
+    endpoints: Vec<String>,
+    wt: &IsolatedWorktree,
+    scheduler: Arc<sail_common::resources::ResourceScheduler>,
+) -> (sail_forge::solver::SolverOutcome, Vec<String>) {
+    let controller = LocalSolverController::new(2, 120, None)
+        .with_model_timeouts(fast_timeouts())
+        .with_endpoints(endpoints)
+        .with_resource_scheduler(scheduler)
+        .with_voice_quiet(Duration::from_millis(100));
+    let logs = std::env::temp_dir().join(format!("model_req_logs_{}", Uuid::new_v4()));
+    let mut stages = Vec::new();
+    let outcome = controller
+        .solve_issue(
+            wt,
+            "f must return 2",
+            "## Target files\n- `src/lib.rs`\n",
+            &logs,
+            || false,
+            |p| stages.push(p.stage.clone()),
+        )
+        .await;
+    (outcome, stages)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_voice_pauses_forge_and_the_same_turn_resumes_when_quiet() {
+    // Baseline: the same job with no voice.
+    let (ep, _) = fake_model(vec![Behavior::Fix]).await;
+    let (wt, repo) = repo_worktree();
+    let (baseline, _) = solve_with(
+        vec![ep],
+        &wt,
+        resource_scheduler(24 * sail_common::resources::GIB),
+    )
+    .await;
+    assert!(baseline.success, "{:?}", baseline.failure_reason);
+    let _ = fs::remove_dir_all(repo);
+
+    // The first request hangs; voice starts while Forge waits for it.
+    let (ep, chats) = fake_model(vec![Behavior::Hang, Behavior::Fix]).await;
     let (wt, repo) = repo_worktree();
     let scheduler = resource_scheduler(24 * sail_common::resources::GIB);
-    let controller = LocalSolverController::new(2, 120, None)
-        .with_endpoints(vec![ep])
-        .with_resource_scheduler(scheduler.clone());
-    let logs = repo.join("logs");
-    let task = controller.solve_issue(
-        &wt,
-        "f must return 2",
-        "src/lib.rs",
-        &logs,
-        || false,
-        |_| {},
-    );
-    let interrupt = async {
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while chats.load(Ordering::SeqCst) == 0 {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
+    let voice = {
+        let (scheduler, chats) = (scheduler.clone(), chats.clone());
+        tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while chats.load(Ordering::SeqCst) == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let turn = scheduler.voice_turn();
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            // Nothing new reaches the model while voice holds priority.
+            let during_voice = chats.load(Ordering::SeqCst);
+            drop(turn);
+            during_voice
         })
-        .await
-        .unwrap();
-        scheduler.voice_turn()
     };
-    let (outcome, voice) = tokio::time::timeout(Duration::from_secs(3), async {
-        tokio::join!(task, interrupt)
-    })
+    let (outcome, stages) = tokio::time::timeout(
+        Duration::from_secs(120),
+        solve_with(vec![ep], &wt, scheduler.clone()),
+    )
     .await
     .unwrap();
-    assert!(!outcome.success);
-    assert_eq!(outcome.verification_status, "resource_blocked");
-    assert!(outcome.failure_reason.unwrap().contains("preempted"));
-    assert!(outcome.final_diff.is_empty());
-    assert_eq!(chats.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        voice.await.unwrap(),
+        1,
+        "Forge asked the model during voice"
+    );
+
+    assert!(
+        outcome.success,
+        "a voice pause must not fail the job: {:?} {:?}",
+        outcome.verification_status, outcome.failure_reason
+    );
+    assert_eq!(
+        chats.load(Ordering::SeqCst),
+        2,
+        "the preempted turn ran once more"
+    );
+    assert_eq!(outcome.turns, baseline.turns, "the paused turn was spent");
+    assert!(stages.iter().any(|s| s == "paused"), "{stages:?}");
     assert_eq!(scheduler.status().preemptions, 1);
     assert_eq!(scheduler.status().admitted_inference, 0);
-    drop(voice);
-    assert_eq!(scheduler.status().voice_turns, 0);
+    let _ = fs::remove_dir_all(repo);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_preempted_by_voice_is_run_again_when_quiet() {
+    let (ep, _) = fake_model(vec![Behavior::Fix]).await;
+    let (wt, repo) = repo_worktree();
+    let scheduler = resource_scheduler(24 * sail_common::resources::GIB);
+    let wt = wt.with_resource_scheduler(scheduler.clone());
+    // The first build announces itself and stalls; voice preempts it there.
+    fs::write(
+        wt.root_dir.join("build.rs"),
+        r#"fn main() {
+        let first = !std::path::Path::new("build-started").exists();
+        std::fs::write("build-started", "1").unwrap();
+        if first {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
+    }"#,
+    )
+    .unwrap();
+    let root = wt.root_dir.clone();
+    let voice = {
+        let scheduler = scheduler.clone();
+        tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(60), async {
+                while !root.join("build-started").exists() {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let turn = scheduler.voice_turn();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            drop(turn);
+        })
+    };
+    let (outcome, stages) = tokio::time::timeout(
+        Duration::from_secs(180),
+        solve_with(vec![ep], &wt, scheduler.clone()),
+    )
+    .await
+    .unwrap();
+    voice.await.unwrap();
+    assert!(
+        outcome.success,
+        "a voice pause must not fail the job: {:?} {:?} {stages:?}",
+        outcome.verification_status, outcome.failure_reason
+    );
+    assert!(
+        scheduler.status().preemptions >= 1,
+        "voice never preempted the build"
+    );
+    assert!(
+        !outcome.test_records.is_empty() && outcome.test_records.iter().all(|r| r.exit_code == 0),
+        "a preempted run must not be recorded as a test result"
+    );
     let _ = fs::remove_dir_all(repo);
 }
 #[test]

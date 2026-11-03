@@ -47,23 +47,8 @@ impl Default for OrchestratorConfig {
         allowed_repos.insert("PedroVictorCoding/SAIL".into());
         allowed_repos.insert("local/test-repo".into());
 
-        let model_path = std::env::var("SAIL_MODEL_PATH")
-            .ok()
-            .map(PathBuf::from)
-            .or_else(|| {
-                let candidates = [
-                    PathBuf::from("/home/main/SAIL/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
-                    PathBuf::from("models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
-                    PathBuf::from("/srv/sail/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"),
-                    PathBuf::from(
-                        "/home/main/SAIL/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
-                    ),
-                    PathBuf::from("models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
-                    PathBuf::from("/srv/sail/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
-                    PathBuf::from("models/gemma4-v2-Q4_K_M.gguf"),
-                ];
-                candidates.into_iter().find(|p| p.exists())
-            });
+        // The shared resident model; Forge never selects a model of its own.
+        let model_path = Some(sail_common::models::primary_model_path());
 
         Self {
             allowed_repos,
