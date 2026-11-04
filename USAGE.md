@@ -180,6 +180,10 @@ Choose **Watchlists** to set your places, routes, tickers, news topics and feeds
 
 All sources are free and need no account or key. SAIL fetches them only while a board is open, and keeps the history it uses for baselines in its local data directory. Road times are free-flow estimates; live road delays would need a traffic provider key, which the Tracker does not use yet. Quotes and other figures are unofficial and may be delayed.
 
+## Switch to the Tools Map interface
+
+In **Settings → General → Interface style**, choose **Tools Map** to replace the card dashboard with a live map of SAIL's subsystems. Each station shows whether it is active; select one to see host metrics, its connections, tasks, recent events and configuration, or choose **Open in Workspace** to jump to its classic page. The top bar shows CPU, GPU, RAM and the fullest disk, and **Live Activity** lists Guardian decisions, plan changes and model events as they happen. Type in **Ask SAIL** (or press `Ctrl K`) to send a message, or type a station name such as `Guardian` to select it. Choose **Classic view** in the sidebar, or switch back in Settings, to return. The choice is remembered by this browser.
+
 ## Hear the reply before all the text is finished
 
 SAIL starts synthesizing the first complete sentence while Gemma generates the rest. Longer sentences can be committed at a natural clause boundary. Punctuation, questions, quoted endings, common abbreviations and decimal numbers are kept together so speech is not cut at arbitrary model-token boundaries. Kokoro keeps the selected voice and speed, and short pauses preserve the cadence between sentences and clauses.
