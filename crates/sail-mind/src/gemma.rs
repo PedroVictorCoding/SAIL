@@ -134,6 +134,9 @@ impl GemmaRunner {
         tx: tokio::sync::mpsc::Sender<String>,
     ) -> Result<Value> {
         let service = self.service().map_err(legacy)?;
+        // Replies from this method carry `finish_reason` (see below) and callers append
+        // them to the history verbatim. It is response metadata, not part of a message,
+        // and the protocol rejects unknown message fields, so drop it here.
         let messages = messages
             .into_iter()
             .map(|mut m| {
