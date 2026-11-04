@@ -16,6 +16,8 @@ pub use profile::InferenceProfileManager;
 pub use sail_protocol as protocol;
 pub use service::MindService;
 pub use tokio_util::sync::CancellationToken;
+/// Mind's request checks, exported so callers can test that their requests are admissible.
+pub use validation::validate_request;
 pub mod voice;
 pub use voice::VoiceModelServices;
 

@@ -364,7 +364,53 @@
 
     <div id="memoryParking" hidden>
       <article class="workspace-card memory-card" id="memoryCard">
-        <div class="card-tab-panel active" id="memoryPanelMain">
+        <header class="card-heading learn-card-tabs">
+          <div class="card-title"><h2 class="sr-only">Arena</h2></div>
+          <div class="card-heading-actions">
+            <div class="card-tabs" role="tablist" aria-label="Arena tabs">
+              <button type="button" class="card-tab active" role="tab" aria-selected="true" data-tab-card="memoryCard" data-tab-panel="learnPanelMain" id="learnTab"><span>Learn</span></button>
+              <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelMain" id="memoryTab"><span>Memory</span></button>
+            </div>
+          </div>
+        </header>
+        <div class="card-tab-panel active" id="learnPanelMain" role="tabpanel" aria-labelledby="learnTab">
+          <header class="card-heading"><div class="card-title"><h2>Learn</h2></div><div class="card-heading-actions"><button class="quiet-button" id="learnNew" type="button" hidden>New goal</button></div></header>
+          <section id="learnStart" aria-label="Start learning">
+            <form id="learnStartForm" class="learn-start">
+              <label for="learnGoal">What do you want to understand?</label>
+              <input id="learnGoal" maxlength="300" required placeholder="For example: how TCP congestion control works">
+              <button class="quiet-button learn-primary" type="submit">Start learning</button>
+            </form>
+            <p class="learn-hint">SAIL first asks a few questions to find your starting point, then teaches one small step at a time. Everything runs on this host.</p>
+            <div id="learnSessions" class="learn-sessions"></div>
+          </section>
+          <section id="learnSession" class="learn-session" aria-labelledby="learnGoalTitle" hidden>
+            <div class="learn-goal-line">
+              <div><h3 id="learnGoalTitle"></h3><span id="learnMode" class="learn-mode"></span></div>
+              <div class="learn-controls"><button class="quiet-button" id="learnStop" type="button" hidden>Stop</button><button class="quiet-button" id="learnPause" type="button" aria-pressed="false">Pause</button></div>
+            </div>
+            <div class="learn-status-line"><p id="learnStatus" role="status" aria-live="polite"></p><button class="quiet-button" id="learnRetry" type="button" hidden>Try again</button></div>
+            <div class="learn-layout">
+              <nav class="learn-map" aria-label="Learning map">
+                <h4>Learning map</h4>
+                <p id="learnMapEmpty" class="learn-hint">The map appears once your starting point is clear.</p>
+                <ol id="learnSteps"></ol>
+                <p class="learn-hint">Covered means explained, not mastered.</p>
+                <details id="learnMapDetails" hidden><summary>Show as diagram</summary><div id="learnDiagram" class="learn-diagram"></div></details>
+              </nav>
+              <div class="learn-main">
+                <ol id="learnTranscript" class="learn-transcript" aria-label="Lesson so far"></ol>
+                <form id="learnDock" class="learn-dock" aria-label="Current question" hidden></form>
+                <form id="learnMessageForm" class="learn-message">
+                  <label for="learnMessageInput" class="sr-only">Message the tutor</label>
+                  <input id="learnMessageInput" maxlength="2000" placeholder="Ask, or say “explain differently”, “too easy”…">
+                  <button class="quiet-button" id="learnMessageSend" type="submit">Send</button>
+                </form>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="card-tab-panel" id="memoryPanelMain" role="tabpanel" aria-labelledby="memoryTab" hidden>
           <header class="card-heading"><div class="card-title"><h2>Remembered knowledge</h2></div><div class="card-heading-actions"><button class="quiet-button" id="memoryRefresh" type="button">Refresh</button><button class="quiet-button" id="memoryExport" type="button">Export</button></div></header>
           <form id="memorySearch" class="memory-search"><label for="memoryQuery">Search memory</label><input id="memoryQuery" maxlength="1000" placeholder="Names, preferences, facts…"><button class="quiet-button" type="submit">Search</button></form>
           <p id="memoryStatus" role="status">Open Arena to load memory.</p>
@@ -827,6 +873,7 @@
 <script src="/plans.js" defer></script>
 <script src="/subsystem-pages.js" defer></script>
 <script src="/memory.js" defer></script>
+<script src="/learn.js" defer></script>
 <script src="/ui.js" defer></script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js" defer></script>
