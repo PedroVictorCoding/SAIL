@@ -66,3 +66,4 @@ sail-guardian = { path = "crates/sail-guardian" }
 sail-continuity = { path = "crates/sail-continuity" }
 sail-pulse = { path = "crates/sail-pulse" }
 sail-forge = { path = "crates/sail-forge" }
+sail-ui = { path = "crates/sail-ui" }

@@ -30,6 +30,7 @@ sail-protocol.workspace = true
 sail-forge.workspace = true
 sail-continuity.workspace = true
 sail-pulse.workspace = true
+sail-ui.workspace = true
 
 tokio.workspace = true
 tokio-util.workspace = true

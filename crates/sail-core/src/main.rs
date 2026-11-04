@@ -22,6 +22,7 @@ use sail_forge::{
 };
 use sail_guardian::GuardianSubsystem;
 use sail_mind::MindSubsystem;
+use sail_ui::UiSubsystem;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -82,6 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut flow = FlowSubsystem::new();
     let mut agents = AgentsSubsystem::new();
     let mut guardian = GuardianSubsystem::with_data_dir(&guardian_dir);
+    let mut ui = UiSubsystem::new();
 
     let review_broker = Arc::new(
         ReviewBroker::new(ReviewPolicyConfig::default()).with_credentials(guardian.credentials()),
@@ -179,6 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     agents.init(&bus).await?;
     guardian.init(&bus).await?;
     forge.init(&bus).await?;
+    ui.init(&bus).await?;
 
     arena.start().await?;
     let arena = Arc::new(arena);
@@ -195,6 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     agents.start().await?;
     guardian.start().await?;
     forge.start().await?;
+    ui.start().await?;
     // After Forge's start, whose recovery pass marks the previous boot's tasks interrupted.
     if let Some(plans) = &plans {
         match plans.resume() {
@@ -215,6 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agents_arc = Arc::new(agents);
     let guardian_arc = Arc::new(guardian);
     let forge_arc = Arc::new(forge);
+    let ui_arc = Arc::new(ui);
 
     // Spawn event dispatcher loops for each subsystem
     spawn_subsystem_worker(SubsystemId::Mind, mind_arc, &bus);
@@ -227,6 +232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spawn_subsystem_worker(SubsystemId::Agents, agents_arc, &bus);
     spawn_subsystem_worker(SubsystemId::Guardian, guardian_arc, &bus);
     spawn_subsystem_worker(SubsystemId::Forge, forge_arc, &bus);
+    spawn_subsystem_worker(SubsystemId::Ui, ui_arc, &bus);
 
     info!(
         "All 10 SAIL subsystems (including SAIL Guardian & SAIL Forge) bootstrapped and listening on the event bus"
