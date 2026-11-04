@@ -1,4 +1,5 @@
 pub mod approval_http;
+pub mod conversation_controller;
 pub mod control;
 mod execution;
 pub mod learn_http;
