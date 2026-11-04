@@ -122,7 +122,7 @@ impl Tool for Canvas {
 /// Dialogue's tools as the model sees them, in the order the voice tool list offers them
 /// (ties in tool selection keep this order). `vision_frame` and `memory_recall` are not
 /// here: they act on the current turn's image and archive, not through the scheduler.
-pub(crate) const MODEL_TOOL_ORDER: [&str; 15] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 16] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -133,6 +133,7 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 15] = [
     "fs:write",
     "github:issues",
     "web:read",
+    "studio:audio_analyze",
     "forge:enqueue",
     "forge:status",
     "forge:list",
@@ -171,7 +172,7 @@ pub fn registry() -> Arc<ToolRegistry> {
             "The job id or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)",
         )
     };
-    let kernel: [KernelTool; 13] = [
+    let kernel: [KernelTool; 14] = [
         (
             "os:status",
             "Read local OS memory, uptime and load",
@@ -230,6 +231,18 @@ pub fn registry() -> Arc<ToolRegistry> {
             "Fetch and read the text contents of any public web page, URL, documentation, or online issue without write permissions",
             json!({"url":string(2048, "The HTTP or HTTPS URL to fetch and read")}),
             &["url"],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "studio:audio_analyze",
+            "Measure a local audio file for Studio: integrated loudness (LUFS, ITU-R BS.1770-4 gated), true-peak estimate, loudness range, frequency balance, arrangement energy and tempo, with concrete mixing recommendations and a chart ready to display.",
+            json!({
+                "file_path":string(1024, "Path to the audio file inside the authorized workspace"),
+                "genre_hint":string(64, "Optional genre such as electronic, hip-hop, pop or rock"),
+                "target_lufs":{"type":"number","minimum":-30,"maximum":-3,"description":"Optional loudness target; defaults to the genre or -14 LUFS"}
+            }),
+            &["file_path"],
             ToolEffect::ReadOnly,
             2,
         ),

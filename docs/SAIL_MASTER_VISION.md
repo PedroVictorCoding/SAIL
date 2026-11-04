@@ -470,6 +470,7 @@ A first-time user launches SAIL on Web/Android, grants only narrow permissions, 
 | Coding | Actual functional diff + issue-specific passing tests + PR or reviewed artifact; original source safe |
 | Browser | Navigated real allowed page; returned observation screenshot/structured state; closed isolated session; policy enforced |
 | Studio | Native document changed, saved, reloaded, and undo verified |
+| Studio Audio | Validated audio file → objective AudioReceipt (LUFS, True Peak, BPM, EQ) → grounded strategist review + Canvas visual receipt |
 | Campus | Probe answer persisted, relevant plan graph projected, lesson check resolved, independent practice scored |
 | Discovery | Sourced useful suggestion delivered once, snooze retained, no quiet-hours notification |
 | Flow | Authorized DAG nodes execute with receipts; restart resumes without replaying committed side effects |

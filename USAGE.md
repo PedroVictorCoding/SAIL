@@ -57,6 +57,23 @@ The old automatic 30-second split is removed. A turn can now hold up to **3 minu
 
 Settings apply to the current connection and keep already captured audio. A service can set defaults with `SAIL_VOICE_TURN_MODE=manual` (or `automatic`) and `SAIL_VOICE_PAUSE_MS=3000`. Restart the service and refresh the page after updating.
 
+### Analyze an audio track (Studio Audio)
+
+Ask in the conversation, for example: "Analyze `mixdown.wav` for streaming and tell me what to
+fix." SAIL calls the local measurement tool and answers from the receipt, not from guesswork:
+
+| Measurement | Meaning |
+|---|---|
+| **Integrated LUFS** | ITU-R BS.1770-4 gated loudness; a -23 dBFS 1 kHz test tone reads -23.0 |
+| **Loudness range (LU)** | EBU Tech 3342 short-term range; `0` means the clip is too short to measure |
+| **True peak (dBTP)** | 4x inter-sample estimate; at or above 0 dBTP is flagged as clipping |
+| **Bands and sections** | Six-band balance and per-section energy, charted in Canvas |
+
+The file must be a RIFF/WAVE file inside the tool workspace (`SAIL_TOOL_ROOT`, or the SAIL
+working directory when it is unset). The reply includes the chart, so it also appears in Canvas;
+nothing is uploaded and no cloud service is involved.
+
+
 ### Choose a hardware tier
 
 | Tier | Recommended use | STT/TTS CPU threads | Partial transcript cadence |

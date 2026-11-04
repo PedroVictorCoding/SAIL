@@ -255,6 +255,7 @@ impl LocalKernelToolBroker {
             "forge:clear" => Self::tool_forge_clear(&call.params),
             "github:issues" => Self::tool_github_issues(&call.params),
             "web:read" => Self::tool_web_read(&call.params),
+            "studio:audio_analyze" => Self::tool_studio_audio_analyze(&call.params),
             unknown => KernelToolResult {
                 tool: unknown.to_string(),
                 success: false,
@@ -268,6 +269,53 @@ impl LocalKernelToolBroker {
             tool: tool.into(),
             success: false,
             output: serde_json::json!({"error":message}),
+        }
+    }
+
+    /// studio:audio_analyze — objective loudness/peak/spectral/arrangement receipt for a local
+    /// audio file, plus the measurement-grounded strategist review and a Canvas chart.
+    fn tool_studio_audio_analyze(params: &serde_json::Value) -> KernelToolResult {
+        const TOOL: &str = "studio:audio_analyze";
+        let Some(file_path) = params.get("file_path").and_then(|value| value.as_str()) else {
+            return Self::error(TOOL, "file_path is required");
+        };
+        let path = match sail_bridge::studio_audio::confine_to_workspace(file_path) {
+            Ok(path) => path,
+            Err(error) => return Self::error(TOOL, &error),
+        };
+        let target_lufs = params.get("target_lufs").and_then(|value| value.as_f64());
+        let receipt = match sail_bridge::studio_audio::analyze_audio_file(&path, target_lufs) {
+            Ok(receipt) => receipt,
+            Err(error) => return Self::error(TOOL, &error),
+        };
+        let genre = params.get("genre_hint").and_then(|value| value.as_str());
+        let review =
+            sail_bridge::studio_audio::generate_strategist_review(&receipt, genre, target_lufs);
+        KernelToolResult {
+            tool: TOOL.into(),
+            success: true,
+            output: serde_json::json!({
+                "file_name": receipt.file_name,
+                "duration_seconds": receipt.duration_seconds,
+                "sample_rate": receipt.sample_rate,
+                "channels": receipt.channels,
+                "integrated_lufs": receipt.integrated_lufs,
+                "loudness_range_lu": receipt.loudness_range_lra,
+                "true_peak_dbtp": receipt.true_peak_db,
+                "rms_db": receipt.rms_db,
+                "clipping_detected": receipt.clipping_detected,
+                "estimated_bpm": receipt.estimated_bpm,
+                "frequency_bands": receipt.frequency_bands,
+                "sections": receipt.sections,
+                "review": {
+                    "loudness": review.loudness_verdict,
+                    "headroom": review.headroom_verdict,
+                    "dynamics": review.dynamic_contrast_verdict,
+                    "tonal_balance": review.tonal_balance_findings,
+                    "recommendations": review.strategic_recommendations,
+                },
+                "mermaid": review.canvas_card_mermaid,
+            }),
         }
     }
     /// os:status — Query OS kernel status, load averages, memory info directly from /proc
@@ -1231,7 +1279,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 18);
 
         let names: Vec<_> = tools
             .iter()
@@ -1249,6 +1297,7 @@ mod schema_selection_tests {
         assert!(names.contains(&"vision_frame"));
         assert!(names.contains(&"github_issues"));
         assert!(names.contains(&"web_read"));
+        assert!(names.contains(&"studio_audio_analyze"));
         assert!(names.contains(&"forge_enqueue"));
         assert!(names.contains(&"forge_status"));
         assert!(names.contains(&"forge_list"));

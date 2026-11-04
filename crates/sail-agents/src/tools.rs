@@ -235,6 +235,14 @@ fn schema_supported(schema: &Value, depth: usize) -> Result<(), String> {
                 }
             }
         }
+        Some("number") => {
+            // Both bounds, so a model cannot pass huge or non-finite values.
+            for key in ["minimum", "maximum"] {
+                if schema[key].as_f64().is_none_or(|n| !n.is_finite()) {
+                    return Err("number bounds required".into());
+                }
+            }
+        }
         Some("boolean" | "null") => {}
         _ => return Err("unsupported schema type".into()),
     }
@@ -287,6 +295,14 @@ fn validate(schema: &Value, value: &Value) -> Result<(), String> {
             }
             for value in items {
                 validate(&schema["items"], value)?;
+            }
+        }
+        "number" => {
+            let number = value.as_f64().ok_or("number expected")?;
+            if schema["minimum"].as_f64().is_some_and(|min| number < min)
+                || schema["maximum"].as_f64().is_some_and(|max| number > max)
+            {
+                return Err("number range".into());
             }
         }
         "boolean" => {

@@ -250,6 +250,33 @@ pub async fn run_dialogue_server_with_plans(
                 )
             }),
         )
+        .route(
+            "/vendor/xterm.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/vendor/xterm/xterm.js"),
+                )
+            }),
+        )
+        .route(
+            "/vendor/addon-fit.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/vendor/xterm/addon-fit.js"),
+                )
+            }),
+        )
+        .route(
+            "/vendor/xterm.css",
+            get(|| async {
+                (
+                    [("content-type", "text/css; charset=utf-8")],
+                    include_str!("../web/vendor/xterm/xterm.css"),
+                )
+            }),
+        )
         .route("/api/health", get(health))
         .route("/api/mind/status", get(mind_status))
         .route("/ws/voice", get(ws_handler))
@@ -1220,6 +1247,8 @@ async fn run_turn(
 - vision_frame: measure luminance and edge density of attached image
 - github_issues: list recent open GitHub issues or fetch full details of a specific issue by number or URL (e.g. issue_number: 125, or url: \"https://github.com/owner/repo/issues/125\")
 - web_read: read-only public web page and documentation fetcher from the internet without write permissions (e.g. url: \"https://...\")
+- studio_audio_analyze: measure a local audio file (integrated LUFS, true-peak estimate, loudness range, frequency balance, arrangement energy, tempo) and return grounded mixing recommendations plus a chart to display
+
 - forge_enqueue: enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting
 - forge_status: check the status, review verdict and diff of a Forge coding job (accepts job_id or issue number, e.g. \"5\" or \"job-5\")
 - forge_list: list active and recent Forge autonomous coding tasks
@@ -2015,6 +2044,78 @@ mod tests {
         .expect("test model service");
         VoiceVlm::with_service(service)
     }
+
+    /// A stereo 1 kHz tone at `dbfs`, written as a 16-bit RIFF/WAVE file.
+    fn write_tone_wav(path: &std::path::Path, sample_rate: u32, seconds: f64, dbfs: f64) {
+        use std::io::Write;
+        let channels = 2u16;
+        let frames = (sample_rate as f64 * seconds) as usize;
+        let data_len = (frames * channels as usize * 2) as u32;
+        let mut file = std::fs::File::create(path).expect("create tone");
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36 + data_len).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&16u32.to_le_bytes()).unwrap();
+        file.write_all(&1u16.to_le_bytes()).unwrap();
+        file.write_all(&channels.to_le_bytes()).unwrap();
+        file.write_all(&sample_rate.to_le_bytes()).unwrap();
+        file.write_all(&(sample_rate * channels as u32 * 2).to_le_bytes())
+            .unwrap();
+        file.write_all(&(channels * 2).to_le_bytes()).unwrap();
+        file.write_all(&16u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_len.to_le_bytes()).unwrap();
+        let amplitude = 10f64.powf(dbfs / 20.0);
+        for frame in 0..frames {
+            let t = frame as f64 / sample_rate as f64;
+            let sample =
+                (amplitude * (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 32767.0) as i16;
+            for _ in 0..channels {
+                file.write_all(&sample.to_le_bytes()).unwrap();
+            }
+        }
+    }
+
+    // The conversational route must reach the measurement tool through Guardian, return the
+    // receipt and hand the model a chart it can show. A tool that only exists in a unit test
+    // is not a delivered capability.
+    #[tokio::test]
+    async fn studio_audio_tool_returns_a_measured_receipt_through_the_guarded_route() {
+        let _guardian = sail_guardian::GuardianSubsystem::new();
+        let dir = std::env::temp_dir().join(format!("sail-studio-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("tone.wav");
+        write_tone_wav(&wav, 48_000, 10.0, -23.0);
+
+        let result = execute_tool_for(
+            "studio_audio_analyze",
+            json!({"file_path": wav.to_string_lossy(), "target_lufs": -23.0}),
+            None,
+            None,
+        );
+        assert!(result.success, "tool failed: {}", result.output);
+        let lufs = result.output["integrated_lufs"]
+            .as_f64()
+            .expect("measured loudness");
+        assert!(
+            (lufs + 23.0).abs() <= 0.3,
+            "-23 dBFS stereo tone must measure about -23 LUFS, got {lufs}"
+        );
+        assert!(
+            result.output["mermaid"]
+                .as_str()
+                .is_some_and(|chart| chart.starts_with("xychart-beta")),
+            "the tool must hand back a Canvas chart"
+        );
+        assert!(
+            result.output["review"]["recommendations"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty()),
+            "the review must be grounded in the receipt"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn client_tool_completes_while_voice_turn_is_active() {
         let turn = AbortTask(tokio::spawn(std::future::pending()));

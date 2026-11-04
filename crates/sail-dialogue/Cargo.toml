@@ -30,6 +30,7 @@ sail-canvas.workspace = true
 sail-guardian.workspace = true
 sail-protocol.workspace = true
 sail-runner = { path = "../sail-runner" }
+sail-bridge.workspace = true
 tokio-util = { version = "0.7", features = ["rt", "io"] }
 sail-forge.workspace = true
 axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }

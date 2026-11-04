@@ -132,7 +132,7 @@ async fn test_terminal_websocket_integration() {
     assert!(js_res.status().is_success());
     let js_body = js_res.text().await.unwrap();
     assert!(js_body.contains("TerminalApp"));
-    assert!(js_body.contains("AnsiParser"));
+    assert!(js_body.contains("new Terminal("));
 
     // 2. Connect to WebSocket /ws/terminal
     let ws_url = format!("ws://{addr}/ws/terminal");
@@ -183,10 +183,7 @@ async fn test_terminal_websocket_integration() {
     let mut accumulated = String::new();
     let verified = timeout(Duration::from_secs(5), async {
         while let Some(Ok(msg)) = ws_stream.next().await {
-            if let Ok(text) = msg.to_text()
-                && let Ok(TerminalServerMessage::Output { data }) =
-                    serde_json::from_str::<TerminalServerMessage>(text)
-            {
+            if let Some(data) = terminal_output(msg) {
                 accumulated.push_str(&data);
                 if accumulated.contains("PTY_WS_VERIFIED") {
                     return true;
@@ -237,10 +234,7 @@ async fn test_terminal_websocket_integration() {
     let mut bin_accumulated = String::new();
     let bin_verified = timeout(Duration::from_secs(5), async {
         while let Some(Ok(msg)) = ws_stream.next().await {
-            if let Ok(text) = msg.to_text()
-                && let Ok(TerminalServerMessage::Output { data }) =
-                    serde_json::from_str::<TerminalServerMessage>(text)
-            {
+            if let Some(data) = terminal_output(msg) {
                 bin_accumulated.push_str(&data);
                 if bin_accumulated.contains("BINARY_WS_OK") {
                     return true;
@@ -256,6 +250,31 @@ async fn test_terminal_websocket_integration() {
         "Expected output containing BINARY_WS_OK, got: {}",
         bin_accumulated
     );
+
+    // Exit must be reported without a further client keystroke, after final bytes.
+    ws_stream.send(Message::Text(serde_json::to_string(&TerminalClientMessage::Input {
+        data: "printf '\\303'; sleep 0.05; printf '\\251'; printf 'FINAL_%s' RECEIPT; exit 7\n".into(),
+    }).unwrap())).await.unwrap();
+    let (bytes, code) = timeout(Duration::from_secs(5), async {
+        let mut bytes = Vec::new();
+        while let Some(Ok(message)) = ws_stream.next().await {
+            match message {
+                Message::Binary(chunk) => bytes.extend(chunk),
+                Message::Text(text) => {
+                    if let Ok(TerminalServerMessage::Exit { code }) = serde_json::from_str(&text) {
+                        return (bytes, code);
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("socket closed without an exit receipt");
+    })
+    .await
+    .expect("shell exit must be reported promptly");
+    let text = String::from_utf8(bytes).expect("PTY output must preserve split UTF-8 bytes");
+    assert!(text.contains("éFINAL_RECEIPT"), "{text}");
+    assert_eq!(code, Some(7));
 
     // 7. Test Message::Close frame
     ws_stream
@@ -275,4 +294,37 @@ async fn test_terminal_websocket_integration() {
     assert!(closed.unwrap_or(false), "Expected socket to close");
 
     server_task.abort();
+}
+
+fn terminal_output(msg: Message) -> Option<String> {
+    match msg {
+        Message::Binary(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+        Message::Text(text) => match serde_json::from_str(&text).ok()? {
+            TerminalServerMessage::Output { data } => Some(data),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn piped_exit_drains_both_streams() {
+    let cwd = std::env::current_dir().unwrap();
+    let (session, mut output) = TerminalSession::spawn_piped("/bin/sh", &cwd, ".").unwrap();
+    session
+        .write(b"printf 'final stdout'; printf 'final stderr' >&2; exit 7\n")
+        .await
+        .unwrap();
+    let bytes = timeout(Duration::from_secs(5), async {
+        let mut bytes = Vec::new();
+        while let Some(chunk) = output.recv().await {
+            bytes.extend(chunk);
+        }
+        bytes
+    })
+    .await
+    .expect("output must close without additional input");
+    let text = String::from_utf8(bytes).unwrap();
+    assert!(text.contains("final stdout"), "{text}");
+    assert!(text.contains("final stderr"), "{text}");
 }

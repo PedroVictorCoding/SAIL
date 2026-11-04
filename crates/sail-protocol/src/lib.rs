@@ -396,3 +396,5 @@ pub mod execution;
 pub mod memory;
 
 pub mod resources;
+
+pub mod studio;

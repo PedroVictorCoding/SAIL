@@ -542,3 +542,33 @@ async fn queued_operation_does_not_consume_its_token_before_dispatch() {
     assert!(!second.await.unwrap().success);
     assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
 }
+#[test]
+fn number_inputs_must_be_bounded_and_in_range() {
+    let registry = ToolRegistry::default();
+    let mut unbounded = descriptor("level:unbounded", ToolEffect::ReadOnly, 1000);
+    unbounded.input_schema = json!({"type":"object","properties":{"lufs":{"type":"number"}},"additionalProperties":false});
+    assert!(registry.register(unbounded, fake(None, false, 0)).is_err());
+    let mut bounded = descriptor("level:target", ToolEffect::ReadOnly, 1000);
+    bounded.input_schema = json!({"type":"object","properties":{"lufs":{"type":"number","minimum":-30,"maximum":-3}},"additionalProperties":false});
+    registry.register(bounded, fake(None, false, 0)).unwrap();
+    assert!(
+        registry
+            .validate_input("level:target", &json!({"lufs":-14.5}))
+            .is_ok()
+    );
+    assert!(
+        registry
+            .validate_input("level:target", &json!({"lufs":-14}))
+            .is_ok()
+    );
+    assert!(
+        registry
+            .validate_input("level:target", &json!({"lufs":-40.0}))
+            .is_err()
+    );
+    assert!(
+        registry
+            .validate_input("level:target", &json!({"lufs":"loud"}))
+            .is_err()
+    );
+}
