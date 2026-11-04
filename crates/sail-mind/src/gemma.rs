@@ -139,11 +139,11 @@ impl GemmaRunner {
         // and the protocol rejects unknown message fields, so drop it here.
         let messages = messages
             .into_iter()
-            .map(|mut message| {
-                if let Some(fields) = message.as_object_mut() {
-                    fields.remove("finish_reason");
+            .map(|mut m| {
+                if let Some(obj) = m.as_object_mut() {
+                    obj.remove("finish_reason");
                 }
-                serde_json::from_value(message)
+                serde_json::from_value(m)
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let tools = serde_json::from_value(tools)?;

@@ -997,13 +997,26 @@ impl LocalKernelToolBroker {
         match output {
             Ok(out) if out.status.success() => {
                 let raw_content = String::from_utf8_lossy(&out.stdout);
-                let clean = Self::extract_text_from_html(&raw_content);
+                let title = Self::extract_html_title(&raw_content).unwrap_or_else(|| {
+                    url.split('/')
+                        .next_back()
+                        .unwrap_or("the webpage")
+                        .replace('-', " ")
+                });
+                let paragraphs = Self::extract_paragraphs_from_html(&raw_content, 12);
+                let clean = if !paragraphs.is_empty() {
+                    format!("{title}\n\n{}", paragraphs.join("\n\n"))
+                } else {
+                    Self::extract_text_from_html(&raw_content)
+                };
                 let capped: String = clean.chars().take(24000).collect();
                 KernelToolResult {
                     tool: "web:read".into(),
                     success: true,
                     output: serde_json::json!({
                         "url": url,
+                        "title": title,
+                        "paragraphs": paragraphs,
                         "bytes": raw_content.len(),
                         "content": capped,
                     }),
@@ -1073,7 +1086,7 @@ impl LocalKernelToolBroker {
                 let raw_content = String::from_utf8_lossy(&out.stdout);
                 let title = Self::extract_html_title(&raw_content).unwrap_or_else(|| {
                     url.split('/')
-                        .last()
+                        .next_back()
                         .unwrap_or("the webpage")
                         .replace('-', " ")
                 });
@@ -1104,20 +1117,110 @@ impl LocalKernelToolBroker {
         }
     }
 
+    fn decode_html_entities(text: &str) -> String {
+        text.replace("&#x27;", "'")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'")
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&mdash;", "—")
+            .replace("&ndash;", "–")
+            .replace("&nbsp;", " ")
+    }
+
+    fn strip_tag_blocks(html: &str, tag: &str) -> String {
+        let open_pat = format!("<{tag}");
+        let close_pat = format!("</{tag}>");
+        let lower = html.to_ascii_lowercase();
+        let mut out = String::with_capacity(html.len());
+        let mut pos = 0;
+        while let Some(rel_start) = lower[pos..].find(&open_pat) {
+            let start = pos + rel_start;
+            let after_open = start + open_pat.len();
+            let valid_tag = lower[after_open..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_ascii_whitespace() || c == '>' || c == '/');
+            if !valid_tag {
+                out.push_str(&html[pos..after_open]);
+                pos = after_open;
+                continue;
+            }
+            out.push_str(&html[pos..start]);
+            if let Some(rel_end) = lower[after_open..].find(&close_pat) {
+                pos = after_open + rel_end + close_pat.len();
+            } else {
+                pos = html.len();
+                break;
+            }
+        }
+        out.push_str(&html[pos..]);
+        out
+    }
+
     fn extract_html_title(html: &str) -> Option<String> {
         let lower = html.to_ascii_lowercase();
-        let start = lower.find("<title>")?;
-        let end = lower[start..].find("</title>")?;
-        let title_raw = &html[start + 7..start + end];
-        let title = title_raw.trim().replace('\n', " ");
+        let start_tag = lower.find("<title")?;
+        let open_end = lower[start_tag..].find('>')?;
+        let content_start = start_tag + open_end + 1;
+        let end = lower[content_start..].find("</title>")?;
+        let title_raw = &html[content_start..content_start + end];
+        let title = Self::decode_html_entities(title_raw)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         if title.is_empty() { None } else { Some(title) }
     }
 
     fn extract_paragraphs_from_html(html: &str, max_paragraphs: usize) -> Vec<String> {
-        let text = Self::extract_text_from_html(html);
+        let mut cleaned = html.to_string();
+        for tag in [
+            "script", "style", "svg", "noscript", "nav", "header", "footer",
+        ] {
+            cleaned = Self::strip_tag_blocks(&cleaned, tag);
+        }
+        let lower = cleaned.to_ascii_lowercase();
         let mut paragraphs = Vec::new();
-        let mut current = String::new();
+        let mut pos = 0;
+        while let Some(rel_p) = lower[pos..].find("<p") {
+            let p_start = pos + rel_p;
+            let after_p = p_start + 2;
+            let is_p_tag = lower[after_p..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_whitespace() || c == '>');
+            if !is_p_tag {
+                pos = after_p;
+                continue;
+            }
+            let Some(rel_gt) = lower[after_p..].find('>') else {
+                break;
+            };
+            let content_start = after_p + rel_gt + 1;
+            let Some(rel_end) = lower[content_start..].find("</p>") else {
+                break;
+            };
+            let inner = &cleaned[content_start..content_start + rel_end];
+            let p_text = Self::extract_text_from_html(inner)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if p_text.chars().count() >= 45 && !paragraphs.contains(&p_text) {
+                paragraphs.push(p_text);
+                if paragraphs.len() >= max_paragraphs {
+                    return paragraphs;
+                }
+            }
+            pos = content_start + rel_end + 4;
+        }
+        if !paragraphs.is_empty() {
+            return paragraphs;
+        }
 
+        let text = Self::extract_text_from_html(&cleaned);
+        let mut current = String::new();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() {
@@ -1149,33 +1252,32 @@ impl LocalKernelToolBroker {
     }
 
     fn extract_text_from_html(html: &str) -> String {
+        let mut cleaned = html.to_string();
+        for tag in ["script", "style", "svg", "noscript"] {
+            cleaned = Self::strip_tag_blocks(&cleaned, tag);
+        }
         let mut in_tag = false;
-        let mut in_script = false;
-        let mut in_style = false;
-        let mut result = String::with_capacity(html.len());
+        let mut result = String::with_capacity(cleaned.len());
         let mut tag_name = String::new();
 
-        for ch in html.chars() {
+        for ch in cleaned.chars() {
             if ch == '<' {
                 in_tag = true;
                 tag_name.clear();
             } else if ch == '>' {
                 in_tag = false;
-                let lower = tag_name.to_ascii_lowercase();
-                if lower.starts_with("script") {
-                    in_script = true;
-                } else if lower.starts_with("/script") {
-                    in_script = false;
-                } else if lower.starts_with("style") {
-                    in_style = true;
-                } else if lower.starts_with("/style") {
-                    in_style = false;
-                } else if matches!(
+                let lower = tag_name
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if matches!(
                     lower.as_str(),
                     "p" | "/p"
                         | "div"
                         | "/div"
                         | "br"
+                        | "br/"
                         | "h1"
                         | "/h1"
                         | "h2"
@@ -1189,12 +1291,13 @@ impl LocalKernelToolBroker {
                 }
             } else if in_tag {
                 tag_name.push(ch);
-            } else if !in_script && !in_style {
+            } else {
                 result.push(ch);
             }
         }
 
-        result
+        let decoded = Self::decode_html_entities(&result);
+        decoded
             .lines()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty())

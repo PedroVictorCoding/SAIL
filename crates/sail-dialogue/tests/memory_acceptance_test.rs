@@ -228,6 +228,77 @@ fn retrieval_is_relevant_compact_and_bounded() {
     assert!(ctx.contains("200 euros"), "{ctx}");
 }
 
+#[test]
+fn website_conversation_adds_learned_knowledge_once_and_reuses_when_context_wills() {
+    let dir = TempDb(std::env::temp_dir().join(format!("sail-mem-web-{}", uuid::Uuid::new_v4())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let (store, arena) = open(&dir.0.join("arena.db"));
+
+    let user_prompt = "Read me this website: https://www.lesswrong.com/w/rokos-basilisk";
+    let assistant_reply = "Here is the content of the page:\n\n---\n\n## Rokos Basilisk\n\n**Rokos Basilisk** is a thought experiment proposed in 2010 by the user Roko on the LessWrong community blog about a future superintelligent AI.";
+
+    assert!(!arena.has_learned_knowledge(
+        "voice",
+        "Roko's Basilisk",
+        Some("https://www.lesswrong.com/w/rokos-basilisk")
+    ));
+
+    // 1. First conversation turn learns the concept and adds it to memory once.
+    let (claim_id, added) = arena
+        .learn_from_conversation_turn("voice", user_prompt, assistant_reply)
+        .expect("learned knowledge should be extracted");
+    assert!(added, "first occurrence should be newly added to memory");
+    assert!(arena.has_learned_knowledge(
+        "voice",
+        "Roko's Basilisk",
+        Some("https://www.lesswrong.com/w/rokos-basilisk")
+    ));
+    assert!(arena.has_learned_knowledge("voice", "Rokos Basilisk", None));
+
+    // 2. Repeating the conversation or web tool check sees it is already in memory and does not duplicate it.
+    let (second_id, second_added) = arena
+        .learn_from_conversation_turn(
+            "voice",
+            "Read this page for me: https://www.lesswrong.com/w/rokos-basilisk",
+            "The page at https://www.lesswrong.com/w/rokos-basilisk is titled **\"Roko's Basilisk\"** and is a wiki entry on LessWrong. It explains the thought experiment originally posted on LessWrong by a user named \"Roko\" in 2010.",
+        )
+        .expect("existing claim should be found");
+    assert_eq!(second_id, claim_id);
+    assert!(
+        !second_added,
+        "already-learned concept must not be added twice"
+    );
+
+    let entities = store.knowledge().entities(&Access::owner(), 50).unwrap();
+    assert_eq!(
+        entities.len(),
+        1,
+        "only one entity should exist: {entities:?}"
+    );
+    let claims = store
+        .knowledge()
+        .claims_about(entities[0].0.id, &Access::owner(), false)
+        .unwrap();
+    assert_eq!(
+        claims.len(),
+        1,
+        "only one active claim should exist: {claims:?}"
+    );
+
+    // 3. Reused later when context wills it (both with and without apostrophe, or by URL).
+    let ctx_apostrophe = owner_knowledge_context(&arena, "What do you know about Roko's Basilisk?")
+        .expect("relevant memory context should be supplied for Roko's Basilisk");
+    assert!(ctx_apostrophe.contains("Basilisk"), "{ctx_apostrophe}");
+    assert!(ctx_apostrophe.contains("LessWrong"), "{ctx_apostrophe}");
+
+    let ctx_plain = owner_knowledge_context(&arena, "Explain Rokos Basilisk to me")
+        .expect("relevant memory context should be supplied for Rokos Basilisk");
+    assert!(ctx_plain.contains("Basilisk"), "{ctx_plain}");
+
+    // 4. Not included when context is unrelated.
+    assert!(owner_knowledge_context(&arena, "What is the weather forecast tomorrow?").is_none());
+}
+
 trait TestLearning {
     fn ensure_test_learning(&self, session: &str);
 }

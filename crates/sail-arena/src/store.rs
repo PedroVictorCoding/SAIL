@@ -530,8 +530,8 @@ const STOPWORDS: &[&str] = &[
 /// words, because entity names such as "Go", "AI" or "λ" are often that short.
 const SHORT_STOPWORDS: &[&str] = &[
     "a", "an", "i", "is", "am", "my", "me", "to", "of", "in", "on", "at", "do", "be", "it", "or",
-    "as", "so", "we", "us", "if", "no", "by", "up", "de", "da", "e", "o", "os", "em", "eu", "se",
-    "na", "ao", "é", "um",
+    "as", "so", "we", "us", "if", "no", "by", "up", "s", "t", "de", "da", "e", "o", "os", "em",
+    "eu", "se", "na", "ao", "é", "um",
 ];
 
 /// Words that make a whole message an acknowledgement rather than a request.
