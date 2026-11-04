@@ -3,6 +3,21 @@
 // Matches sail_common::SubsystemId; Agents and Forge are separate workspaces.
 const subsystemPages = [
   {
+    "id": "factory",
+    "name": "Factory",
+    "icon": "spaces",
+    "subtitle": "The room as the index",
+    "description": "One isometric room holding every station. Nothing hidden, nothing floating.",
+    "card": null,
+    "panel": null,
+    "settings": null,
+    "details": [
+      "Every subsystem is a fixed station on one floor",
+      "Hover to peek, click for the station inspector",
+      "Drag to pan, scroll to zoom, \\ for the room directory"
+    ]
+  },
+  {
     "id": "core",
     "name": "Core",
     "icon": "home",
