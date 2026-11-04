@@ -166,6 +166,14 @@ Kokoro is pre-warmed when the browser connects. A short, single-sentence answer 
 
 The runner logs the first audio's readiness time as `first_audio_ms`, separately from model completion and total turn time. Use those measurements to distinguish model thinking/prefill time from speech synthesis delay.
 
+## See the model loading
+
+SAIL starts its language model (Qwen) on the first request after a restart. While it loads,
+a bar beside the connection status shows how much of the model is in memory, then
+**Starting Qwen…** while it initializes; it disappears when the model is ready. A cold
+load takes about a minute on this host, a few seconds when the model is still cached.
+On a phone the bar is labelled **Model**; the on-device voice bar is labelled **Voice**.
+
 ## Understand the Orb and session
 
 The Orb indicates **idle**, **listening**, **thinking**, **speaking** or **interrupted**. The meters show audio level, speech confidence and measured VAD timing. VAD inference time and worker round-trip time are separate measurements; neither is the total time needed to produce a reply.

@@ -18,6 +18,8 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 // The residency lease lives exactly as long as the owned child handle.
+/// How often load progress is measured while the model starts.
+const LOAD_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 struct OwnedModel {
     child: Child,
     lease: ResourceLease,
@@ -89,6 +91,7 @@ impl LocalGemmaBackend {
             last_error: None,
             active_profile,
             hardware: None,
+            load: None,
         };
         Ok(Self {
             config,
@@ -346,9 +349,27 @@ impl LocalGemmaBackend {
                 *process = Some(OwnedModel { child, lease });
             }
         }
+        let owned = process.is_some();
         drop(process);
+        // Only a model this runtime started reports progress; an external service's load
+        // is not ours to measure.
+        let mut progress = owned.then(|| {
+            crate::residency::LoadProgress::new(
+                std::iter::once(self.config.model_path.clone())
+                    .chain(self.config.projector.clone().filter(|p| p.is_file()))
+                    .collect(),
+            )
+        });
+        let mut sampled = Instant::now() - LOAD_SAMPLE_INTERVAL;
         let deadline = Instant::now() + self.config.startup_timeout;
         loop {
+            if let Some(progress) = progress.as_mut()
+                && sampled.elapsed() >= LOAD_SAMPLE_INTERVAL
+            {
+                sampled = Instant::now();
+                let load = progress.sample();
+                self.update(|s| s.load = Some(load));
+            }
             match self.probe().await {
                 Ok(status) => {
                     if let Some(owned) = self.process.lock().await.as_ref() {
@@ -718,6 +739,7 @@ impl InferenceBackend for LocalGemmaBackend {
     }
     async fn start(&self) -> Result<ModelStatus> {
         let result = self.start_inner().await;
+        self.update(|s| s.load = None);
         if let Err(error) = &result {
             self.update(|s| {
                 s.state = ModelState::Unavailable;
