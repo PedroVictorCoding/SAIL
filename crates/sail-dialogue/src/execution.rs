@@ -139,7 +139,7 @@ impl Tool for Canvas {
 /// Dialogue's tools as the model sees them, in the order the voice tool list offers them
 /// (ties in tool selection keep this order). `vision_frame` and `memory_recall` are not
 /// here: they act on the current turn's image and archive, not through the scheduler.
-pub(crate) const MODEL_TOOL_ORDER: [&str; 20] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 21] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -150,6 +150,7 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 20] = [
     "fs:write",
     "github:issues",
     "web:read",
+    "web:speak",
     "studio:audio_analyze",
     "pulse:create",
     "pulse:list",
@@ -193,7 +194,7 @@ pub fn registry() -> Arc<ToolRegistry> {
             "The job id or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)",
         )
     };
-    let kernel: [KernelTool; 14] = [
+    let kernel: [KernelTool; 15] = [
         (
             "os:status",
             "Read local OS memory, uptime and load",
@@ -251,6 +252,18 @@ pub fn registry() -> Arc<ToolRegistry> {
             "web:read",
             "Fetch and read the text contents of any public web page, URL, documentation, or online issue without write permissions",
             json!({"url":string(2048, "The HTTP or HTTPS URL to fetch and read")}),
+            &["url"],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "web:speak",
+            "Fetch a web page, extract its important readable content, and stream it directly to voice synthesis so the user hears it immediately without waiting for model token generation. Pass a short context_phrase (e.g. 'Reading the article from LessWrong:') to announce the page before speech begins.",
+            json!({
+                "url":string(2048, "The HTTP or HTTPS URL of the page to read aloud"),
+                "context_phrase":string(256, "A short introductory phrase to speak before reading the content, e.g. 'Reading Roko's Basilisk from LessWrong:'"),
+                "max_paragraphs":{"type":"integer","minimum":1,"maximum":20,"description":"Maximum number of paragraphs to read aloud (defaults to 6)"}
+            }),
             &["url"],
             ToolEffect::ReadOnly,
             2,
@@ -349,7 +362,14 @@ pub fn registry() -> Arc<ToolRegistry> {
             )
             .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
     }
-    let pulse_tools: [(&'static str, &'static str, Value, &'static [&'static str], ToolEffect, usize); 4] = [
+    let pulse_tools: [(
+        &'static str,
+        &'static str,
+        Value,
+        &'static [&'static str],
+        ToolEffect,
+        usize,
+    ); 4] = [
         (
             "pulse:create",
             "Create a local one-time reminder. Convert the requested time to a concrete RFC 3339 due_at. If the time is ambiguous, call with preview=true first and show the interpreted local time before saving.",
@@ -454,7 +474,11 @@ pub fn shared() -> Result<Arc<ToolScheduler>, sail_guardian::ExecutionDenied> {
 }
 
 /// Execute one Pulse tool against the process-wide store and return a JSON observation.
-fn execute_pulse_tool(pulse: &sail_pulse::Pulse, tool: &str, input: Value) -> Result<Value, String> {
+fn execute_pulse_tool(
+    pulse: &sail_pulse::Pulse,
+    tool: &str,
+    input: Value,
+) -> Result<Value, String> {
     let settings = pulse.settings().map_err(|error| error.to_string())?;
     match tool {
         "pulse:create" => {
@@ -472,13 +496,8 @@ fn execute_pulse_tool(pulse: &sail_pulse::Pulse, tool: &str, input: Value) -> Re
                 .as_i64()
                 .map(|value| value as i32)
                 .unwrap_or(settings.utc_offset_minutes);
-            let new = sail_pulse::NewReminder::new(
-                text,
-                due_at,
-                timezone,
-                utc_offset_minutes,
-            )
-            .map_err(|error| error.to_string())?;
+            let new = sail_pulse::NewReminder::new(text, due_at, timezone, utc_offset_minutes)
+                .map_err(|error| error.to_string())?;
             let local = due_at.with_timezone(
                 &chrono::FixedOffset::east_opt(utc_offset_minutes * 60)
                     .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).expect("UTC offset")),
@@ -523,7 +542,9 @@ fn execute_pulse_tool(pulse: &sail_pulse::Pulse, tool: &str, input: Value) -> Re
                 .as_str()
                 .ok_or_else(|| "id is required".to_string())?;
             let reminder = pulse.cancel(id).map_err(|error| error.to_string())?;
-            Ok(json!({"reminder": reminder, "message": format!("Reminder {} cancelled.", reminder.id)}))
+            Ok(
+                json!({"reminder": reminder, "message": format!("Reminder {} cancelled.", reminder.id)}),
+            )
         }
         "pulse:snooze" => {
             let id = input["id"]
@@ -531,7 +552,9 @@ fn execute_pulse_tool(pulse: &sail_pulse::Pulse, tool: &str, input: Value) -> Re
                 .ok_or_else(|| "id is required".to_string())?;
             let until = match (
                 input["minutes"].as_u64(),
-                input["until"].as_str().filter(|value| !value.trim().is_empty()),
+                input["until"]
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty()),
             ) {
                 (Some(minutes), None) if (1..=10_080).contains(&minutes) => {
                     chrono::Utc::now() + chrono::Duration::minutes(minutes as i64)
@@ -543,12 +566,13 @@ fn execute_pulse_tool(pulse: &sail_pulse::Pulse, tool: &str, input: Value) -> Re
                 _ => return Err("provide either minutes or until, not both".into()),
             };
             let reminder = pulse.snooze(id, until).map_err(|error| error.to_string())?;
-            Ok(json!({"reminder": reminder, "message": format!("Reminder snoozed until {}.", reminder.due_at)}))
+            Ok(
+                json!({"reminder": reminder, "message": format!("Reminder snoozed until {}.", reminder.due_at)}),
+            )
         }
         other => Err(format!("Unknown Pulse tool: {other}")),
     }
 }
-
 
 #[cfg(test)]
 mod tests {

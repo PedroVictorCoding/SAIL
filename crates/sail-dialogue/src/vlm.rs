@@ -45,7 +45,7 @@ impl LocalKernelToolBroker {
                 sail_guardian::Capability::System(sail_guardian::SystemCapability::OsTelemetry)
             }
             "proc:list" | "forge:enqueue" | "forge:cancel" | "forge:clear" | "github:issues"
-            | "web:read" => {
+            | "web:read" | "web:speak" | "web_speak" => {
                 sail_guardian::capability::bound_tool_invocation(&call.tool, &call.params)
             }
             "fs:query" | "fs:read" => {
@@ -255,6 +255,7 @@ impl LocalKernelToolBroker {
             "forge:clear" => Self::tool_forge_clear(&call.params),
             "github:issues" => Self::tool_github_issues(&call.params),
             "web:read" => Self::tool_web_read(&call.params),
+            "web:speak" | "web_speak" => Self::tool_web_speak(&call.params),
             "studio:audio_analyze" => Self::tool_studio_audio_analyze(&call.params),
             unknown => KernelToolResult {
                 tool: unknown.to_string(),
@@ -1016,6 +1017,137 @@ impl LocalKernelToolBroker {
         }
     }
 
+    /// web:speak — Read-only HTTP/HTTPS web fetcher that extracts readable article paragraphs
+    /// and formats them for direct-to-voice streaming.
+    fn tool_web_speak(params: &serde_json::Value) -> KernelToolResult {
+        let url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim();
+
+        if url.is_empty() {
+            return Self::error(
+                "web:speak",
+                "Parameter 'url' is required (e.g. https://...)",
+            );
+        }
+
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Self::error("web:speak", "URL must start with http:// or https://");
+        }
+
+        // Restrict loopback and private address probing
+        if url.contains("://127.")
+            || url.contains("://localhost")
+            || url.contains("://0.0.0.0")
+            || url.contains("://[::1]")
+        {
+            return Self::error(
+                "web:speak",
+                "Loopback and local addresses are restricted for web reading.",
+            );
+        }
+
+        let max_paragraphs = params
+            .get("max_paragraphs")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(6)
+            .clamp(1, 20) as usize;
+
+        let output = std::process::Command::new("curl")
+            .args([
+                "-sL",
+                "--max-time",
+                "10",
+                "--max-filesize",
+                "5000000",
+                "-H",
+                "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+                url,
+            ])
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let raw_content = String::from_utf8_lossy(&out.stdout);
+                let title = Self::extract_html_title(&raw_content).unwrap_or_else(|| {
+                    url.split('/')
+                        .last()
+                        .unwrap_or("the webpage")
+                        .replace('-', " ")
+                });
+                let paragraphs = Self::extract_paragraphs_from_html(&raw_content, max_paragraphs);
+                let context_phrase = params
+                    .get("context_phrase")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("Reading {title}:"));
+
+                KernelToolResult {
+                    tool: "web:speak".into(),
+                    success: true,
+                    output: serde_json::json!({
+                        "url": url,
+                        "title": title,
+                        "context_phrase": context_phrase,
+                        "paragraphs": paragraphs,
+                        "bytes": raw_content.len(),
+                    }),
+                }
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                Self::error("web:speak", &format!("HTTP request failed: {stderr}"))
+            }
+            Err(e) => Self::error("web:speak", &format!("Failed to execute curl: {e}")),
+        }
+    }
+
+    fn extract_html_title(html: &str) -> Option<String> {
+        let lower = html.to_ascii_lowercase();
+        let start = lower.find("<title>")?;
+        let end = lower[start..].find("</title>")?;
+        let title_raw = &html[start + 7..start + end];
+        let title = title_raw.trim().replace('\n', " ");
+        if title.is_empty() { None } else { Some(title) }
+    }
+
+    fn extract_paragraphs_from_html(html: &str, max_paragraphs: usize) -> Vec<String> {
+        let text = Self::extract_text_from_html(html);
+        let mut paragraphs = Vec::new();
+        let mut current = String::new();
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                if current.len() >= 40 {
+                    paragraphs.push(current.trim().to_string());
+                    current.clear();
+                    if paragraphs.len() >= max_paragraphs {
+                        break;
+                    }
+                }
+            } else {
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(line);
+                if current.len() >= 350 {
+                    paragraphs.push(current.trim().to_string());
+                    current.clear();
+                    if paragraphs.len() >= max_paragraphs {
+                        break;
+                    }
+                }
+            }
+        }
+        if !current.trim().is_empty() && paragraphs.len() < max_paragraphs && current.len() >= 30 {
+            paragraphs.push(current.trim().to_string());
+        }
+        paragraphs
+    }
+
     fn extract_text_from_html(html: &str) -> String {
         let mut in_tag = false;
         let mut in_script = false;
@@ -1336,7 +1468,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 23);
+        assert_eq!(tools.len(), 24);
 
         let names: Vec<_> = tools
             .iter()
@@ -1354,6 +1486,7 @@ mod schema_selection_tests {
         assert!(names.contains(&"vision_frame"));
         assert!(names.contains(&"github_issues"));
         assert!(names.contains(&"web_read"));
+        assert!(names.contains(&"web_speak"));
         assert!(names.contains(&"studio_audio_analyze"));
         assert!(names.contains(&"forge_enqueue"));
         assert!(names.contains(&"forge_status"));
@@ -1414,5 +1547,61 @@ mod schema_selection_tests {
             plain[0].clone(),
         ];
         assert_eq!(offered(&with_handles)[0], "memory_recall");
+    }
+
+    #[test]
+    fn web_speak_extracts_title_and_paragraphs_from_html() {
+        let sample_html = r#"
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Roko's Basilisk - LessWrong</title>
+                <style>body { font-family: sans-serif; }</style>
+                <script>console.log("analytics");</script>
+            </head>
+            <body>
+                <header><nav><a href="/">Home</a></nav></header>
+                <h1>Roko's Basilisk</h1>
+                <p>Roko's basilisk is a thought experiment about the potential risks involved in developing artificial intelligence.</p>
+                <p>The premise is that an otherwise benevolent AI could punish those who knew about its development but failed to help create it.</p>
+                <footer><p>© 2026 LessWrong</p></footer>
+            </body>
+            </html>
+        "#;
+        let title = super::LocalKernelToolBroker::extract_html_title(sample_html);
+        assert_eq!(title.as_deref(), Some("Roko's Basilisk - LessWrong"));
+
+        let paragraphs = super::LocalKernelToolBroker::extract_paragraphs_from_html(sample_html, 5);
+        assert!(!paragraphs.is_empty());
+        assert!(paragraphs[0].contains("thought experiment"));
+    }
+
+    #[test]
+    fn web_speak_rejects_loopback_and_invalid_urls() {
+        let loopback = super::LocalKernelToolBroker::execute_scheduled(&super::KernelToolCall {
+            tool: "web:speak".into(),
+            params: serde_json::json!({"url": "http://127.0.0.1:8080/secrets"}),
+        });
+        assert!(!loopback.success);
+        assert!(loopback.output.to_string().contains("restricted"));
+
+        let invalid_scheme =
+            super::LocalKernelToolBroker::execute_scheduled(&super::KernelToolCall {
+                tool: "web:speak".into(),
+                params: serde_json::json!({"url": "file:///etc/passwd"}),
+            });
+        assert!(!invalid_scheme.success);
+        assert!(
+            invalid_scheme
+                .output
+                .to_string()
+                .contains("must start with http")
+        );
+
+        let missing = super::LocalKernelToolBroker::execute_scheduled(&super::KernelToolCall {
+            tool: "web:speak".into(),
+            params: serde_json::json!({}),
+        });
+        assert!(!missing.success);
     }
 }

@@ -78,6 +78,7 @@ function syncActivityPill() {
     'forge:list':'Listing Forge tasks',
     'github:issues':'Checking GitHub repo',
     'web:read':'Reading web page',
+    'web:speak':'Reading web page aloud',
   };
   document.getElementById('activityText').textContent = activeTools.size ? labels[[...activeTools.keys()].at(-1)] || 'Using a local tool' : stateLabels[orbState] || '';
 }
@@ -344,6 +345,7 @@ function renderToolResult(result) {
   else if (output?.issue && output?.title) summary.textContent = `GitHub Issue #${output.number || output.issue.number}: ${output.title} (${output.state || 'OPEN'})`;
   else if (Array.isArray(output?.issues)) summary.textContent = `${output.count} GitHub issues retrieved (sorted by priority)`;
   else if (result?.tool === 'web:read' && output?.url) summary.textContent = `Fetched ${output.bytes || output.content?.length || 0} bytes from ${output.url}`;
+  else if ((result?.tool === 'web:speak' || result?.tool === 'web_speak') && output?.url) summary.textContent = `Streamed ${output.paragraphs?.length || 0} paragraphs from ${output.title || output.url} directly to voice`;
   else if (result?.tool === 'forge:enqueue' && output?.job_id) summary.textContent = `Forge job enqueued: ${output.job_id} (Issue #${output.issue_number || '—'})`;
   else if (result?.tool === 'forge:status' && output?.job_id) summary.textContent = `Forge job ${output.job_id}: ${output.state || 'active'} (${output.diff_stat || output.current_step || '—'})`;
   else if (output?.job_id) summary.textContent = `Forge job ${output.job_id}: ${output.state || 'active'}`;

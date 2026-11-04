@@ -345,6 +345,35 @@ fn test_web_read_read_only_internet_access() {
 }
 
 #[test]
+fn test_web_speak_direct_speech_extraction() {
+    let _fixture = GUARDIAN_FIXTURE.lock().unwrap();
+    let _guardian = GuardianSubsystem::new();
+
+    let speak_call = KernelToolCall {
+        tool: "web:speak".into(),
+        params: serde_json::json!({
+            "url": "https://httpbin.org/get",
+            "context_phrase": "Reading from httpbin:"
+        }),
+    };
+
+    let res = LocalKernelToolBroker::execute(&speak_call);
+    if res.success {
+        assert_eq!(res.output["url"], "https://httpbin.org/get");
+        assert_eq!(res.output["context_phrase"], "Reading from httpbin:");
+        assert!(res.output["paragraphs"].is_array());
+    }
+
+    // Ensure loopback addresses are restricted
+    let loopback_call = KernelToolCall {
+        tool: "web:speak".into(),
+        params: serde_json::json!({ "url": "http://127.0.0.1:8080/secret" }),
+    };
+    let loopback_res = LocalKernelToolBroker::execute(&loopback_call);
+    assert!(!loopback_res.success);
+}
+
+#[test]
 fn test_proc_list_learned_approval() {
     let _fixture = GUARDIAN_FIXTURE.lock().unwrap();
     let _guardian = GuardianSubsystem::new();

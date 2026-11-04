@@ -1476,6 +1476,7 @@ async fn run_turn(
 - vision_frame: measure luminance and edge density of attached image
 - github_issues: list recent open GitHub issues or fetch full details of a specific issue by number or URL (e.g. issue_number: 125, or url: \"https://github.com/owner/repo/issues/125\")
 - web_read: read-only public web page and documentation fetcher from the internet without write permissions (e.g. url: \"https://...\")
+- web_speak: fetch a web page, extract its important readable content, and stream it directly to voice synthesis so the user hears it immediately without waiting for model token generation. Pass a short context_phrase (e.g. \"Reading the article from LessWrong:\") to announce the page before speech begins.
 - studio_audio_analyze: measure a local audio file (integrated LUFS, true-peak estimate, loudness range, frequency balance, arrangement energy, tempo) and return grounded mixing recommendations plus a chart to display
 - pulse_create: create a local one-time reminder. Required: text, due_at as an RFC 3339 timestamp, and timezone (IANA name). Set preview=true to show the interpreted local time without saving when the request is ambiguous.
 - pulse_list: list the user's active reminders, including id, text, due time, status and snooze count
@@ -2101,7 +2102,58 @@ async fn reason_turn(
                     }
                     emit(tx, current, json!({"type":"tool_result","result":result})).await;
                 }
-                let content = serde_json::to_string(&result)?;
+                if (name == "web:speak" || name == "web_speak") && result.success {
+                    info!(
+                        round,
+                        "web:speak streaming extracted page paragraphs directly to voice generation"
+                    );
+                    if let Some(intro) = result.output.get("context_phrase").and_then(Value::as_str)
+                    {
+                        if !intro.trim().is_empty() {
+                            let phrase = intro.trim().to_string();
+                            emit(tx, current, json!({"type":"response_delta","channel":"voice:vlm","text":format!("{phrase}\n\n"),"turn_id":current})).await;
+                            reply.push_str(&phrase);
+                            reply.push_str("\n\n");
+                            let _ = speech_tx.send(phrase).await;
+                        }
+                    }
+                    if let Some(paragraphs) =
+                        result.output.get("paragraphs").and_then(Value::as_array)
+                    {
+                        for p in paragraphs {
+                            if let Some(text) = p.as_str() {
+                                if !text.trim().is_empty() {
+                                    let text = text.trim().to_string();
+                                    emit(tx, current, json!({"type":"response_delta","channel":"voice:vlm","text":format!("{text}\n\n"),"turn_id":current})).await;
+                                    reply.push_str(&text);
+                                    reply.push_str("\n\n");
+                                    let _ = speech_tx.send(text).await;
+                                }
+                            }
+                        }
+                    }
+                }
+                let content = if (name == "web:speak" || name == "web_speak") && result.success {
+                    let p_count = result
+                        .output
+                        .get("paragraphs")
+                        .and_then(Value::as_array)
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    let title = result
+                        .output
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or("the webpage");
+                    json!({
+                        "status": "streamed_to_voice",
+                        "title": title,
+                        "paragraphs_spoken": p_count,
+                        "note": "The page content has been extracted and streamed directly to the user's voice output. Do not repeat reading the full text. Provide only a brief closing sentence or offer follow-up discussion."
+                    }).to_string()
+                } else {
+                    serde_json::to_string(&result)?
+                };
                 let content = match &memory {
                     // Recall output is already bounded; re-archiving it would loop.
                     Some(scope)
@@ -2127,8 +2179,85 @@ async fn reason_turn(
             break;
         }
     }
-    let assistant =
+    let mut assistant =
         final_assistant.ok_or_else(|| SailError::Inference("Missing assistant response".into()))?;
+
+    // If the model response was cut off by token limit (finish_reason == "length"),
+    // continue generating seamlessly.
+    let mut continuations = 0usize;
+    const MAX_CONTINUATIONS: usize = 2;
+    while assistant["finish_reason"].as_str() == Some("length") && continuations < MAX_CONTINUATIONS
+    {
+        continuations += 1;
+        info!(
+            continuations,
+            "Model generation hit output token limit; continuing seamlessly"
+        );
+        let mut cont_messages = messages.clone();
+        cont_messages.push(assistant.clone());
+        cont_messages.push(json!({
+            "role": "user",
+            "content": "Continue generating your previous response exactly from where it was cut off without repeating what you already said."
+        }));
+        let (delta_tx, mut delta_rx) = mpsc::channel::<String>(64);
+        let completion =
+            vlm.stream_with_tools(final_answer_messages(&cont_messages), false, delta_tx);
+        tokio::pin!(completion);
+        let mut chunker = SpeechChunker::default();
+        let mut gate = SpeechTextGate::default();
+        let mut deltas_open = true;
+        let cont_assistant = loop {
+            tokio::select! {
+                delta = delta_rx.recv(), if deltas_open => {
+                    if let Some(delta) = delta {
+                        let est_tokens = delta.chars().count().div_ceil(4);
+                        total_token_count += est_tokens.max(1);
+                        let elapsed_sec = gen_start.elapsed().as_secs_f64();
+                        let tokens_per_sec = if elapsed_sec > 0.05 {
+                            total_token_count as f64 / elapsed_sec
+                        } else {
+                            0.0
+                        };
+                        let safe = gate.push(&delta);
+                        publish_spoken_text_with_stats(&safe, &mut reply, &mut chunker, tx, current, speech_tx, "model", total_token_count, tokens_per_sec, None).await;
+                    } else {
+                        deltas_open = false;
+                        let tail = gate.finish();
+                        if !tail.is_empty() {
+                            let est_tokens = tail.chars().count().div_ceil(4);
+                            total_token_count += est_tokens.max(1);
+                            let elapsed_sec = gen_start.elapsed().as_secs_f64();
+                            let tokens_per_sec = if elapsed_sec > 0.05 {
+                                total_token_count as f64 / elapsed_sec
+                            } else {
+                                0.0
+                            };
+                            publish_spoken_text_with_stats(&tail, &mut reply, &mut chunker, tx, current, speech_tx, "model", total_token_count, tokens_per_sec, None).await;
+                        }
+                        queue_speech(chunker.finish(), speech_tx).await;
+                    }
+                },
+                result = &mut completion => {
+                    match result {
+                        Ok(a) => break a,
+                        Err(e) => {
+                            warn!(error = %e, "Continuation generation failed; keeping output so far");
+                            break assistant.clone();
+                        }
+                    }
+                }
+            }
+        };
+        queue_speech(chunker.finish(), speech_tx).await;
+        if let Some(new_text) = cont_assistant["content"].as_str() {
+            let prev_text = assistant["content"].as_str().unwrap_or_default();
+            assistant["content"] = json!(format!("{prev_text}{new_text}"));
+        }
+        assistant["finish_reason"] = cont_assistant
+            .get("finish_reason")
+            .cloned()
+            .unwrap_or_else(|| json!("stop"));
+    }
     let gen_duration = gen_start.elapsed();
     let gen_sec = gen_duration.as_secs_f64();
     if total_token_count == 0 && !reply.is_empty() {

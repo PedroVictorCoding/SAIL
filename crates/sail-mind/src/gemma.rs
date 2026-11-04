@@ -176,6 +176,8 @@ impl GemmaRunner {
             .await
             .map_err(legacy)?;
         let _ = (&mut forward.0).await;
-        Ok(serde_json::to_value(response.message)?)
+        let mut value = serde_json::to_value(response.message)?;
+        value["finish_reason"] = serde_json::json!(response.finish_reason);
+        Ok(value)
     }
 }
