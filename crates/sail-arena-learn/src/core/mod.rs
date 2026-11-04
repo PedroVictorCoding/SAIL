@@ -1,11 +1,14 @@
 //! Pure domain core. Nothing in this module performs IO, reads a clock or calls a model;
 //! `tests/core_purity_test.rs` enforces that by scanning these sources.
 
+pub mod artifacts;
 pub mod events;
+pub mod graph;
 pub mod judgment;
 pub mod messages;
 pub mod plan;
 pub mod ports;
+pub mod practice;
 pub mod question;
 pub mod view;
 

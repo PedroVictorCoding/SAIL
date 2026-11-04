@@ -1,9 +1,12 @@
 //! The session view: a pure projection of the event log (#233), including teaching
 //! progress from node-tagged `explain`/`quiz` calls (#242). Visited never means understood,
 //! and the view has no mastery or score field.
+use super::artifacts::Artifact;
 use super::events::{AgentRole, Envelope, LearningEvent, PresentKind, TurnOutcome};
+use super::graph::GraphSummary;
 use super::judgment::Judgment;
 use super::plan::LessonPlan;
+use super::practice::PracticeSession;
 use super::question::{Answer, Grade, QuestionKind, QuestionOption, QuestionSpec};
 use serde::Serialize;
 
@@ -84,6 +87,12 @@ pub struct SessionView {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub last_seq: u64,
+    /// Session learning artifacts generated during this session.
+    pub artifacts: Vec<Artifact>,
+    /// Persistent learning graph summary.
+    pub graph_summary: Option<GraphSummary>,
+    /// Active practice session if in practice phase.
+    pub practice_session: Option<PracticeSession>,
 }
 
 impl SessionView {
@@ -103,6 +112,9 @@ impl SessionView {
             input_tokens: 0,
             output_tokens: 0,
             last_seq: 0,
+            artifacts: Vec::new(),
+            graph_summary: None,
+            practice_session: None,
         }
     }
 

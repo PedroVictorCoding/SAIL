@@ -18,7 +18,10 @@ pub mod core;
 pub mod store;
 
 pub use agent::{Engine, TurnError};
+pub use core::artifacts::{Artifact, ArtifactId, ArtifactKind, ValidationStatus};
 pub use core::events::{Envelope, LearningEvent};
+pub use core::graph::{Chain, ChainId, Confidence, GraphSummary, Proposition, PropId};
 pub use core::ports::{EventStore, Model, StoreError};
+pub use core::practice::{AttemptResult, PracticeAttempt, PracticeSession, ProblemId, ProblemSpec};
 pub use core::view::{SessionView, project_view};
 pub use store::SqliteEventStore;
