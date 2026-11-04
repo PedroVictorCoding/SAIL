@@ -527,6 +527,11 @@ impl KnowledgeStore<'_> {
     }
 }
 
+/// Weight of the BM25 rank next to term coverage, which is in 0..=1.
+const LEXICAL_RANK_WEIGHT: f64 = 0.25;
+/// Cosine similarity below this adds nothing: unrelated text still scores above zero.
+const MIN_VECTOR_SIMILARITY: f64 = 0.3;
+
 impl KnowledgeStore<'_> {
     /// Visible active claims. SQL permission filtering happens before limits or ranking.
     pub fn search(
@@ -556,39 +561,47 @@ impl KnowledgeStore<'_> {
                     AND (c.expires_at IS NULL OR c.expires_at>:now)",claim_from_clause());
                 let mut stmt=conn.prepare(&sql)?;
                 let claims=stmt.query_map(&*named(&a,&[(":now",&now)]),claim_from_row)?.collect::<Result<Vec<_>,_>>()?;
-                let terms:Vec<String>=query.text.split(|c:char|!c.is_alphanumeric()).filter(|s|!s.is_empty()).take(16).map(|s|format!("\"{}\"",s.replace('"',"\"\""))).collect();
-                let mut lexical=std::collections::HashMap::new();
+                // Score every visible claim cheaply, then build records only for those kept.
+                let terms=crate::store::knowledge_terms(&query.text);
+                let mut coverage:std::collections::HashMap<i64,usize>=std::collections::HashMap::new();
+                let mut bm25=std::collections::HashMap::new();
                 if !terms.is_empty() {
+                    let quoted:Vec<String>=terms.iter().map(|t|format!("\"{}\"",t.replace('"',"\"\""))).collect();
+                    let mut s=conn.prepare("SELECT rowid FROM kn_search WHERE kn_search MATCH ?1")?;
+                    for term in &quoted {
+                        for row in s.query_map([term],|r|r.get::<_,i64>(0))? {*coverage.entry(row?).or_default()+=1;}
+                    }
                     let mut s=conn.prepare("SELECT rowid,bm25(kn_search) FROM kn_search WHERE kn_search MATCH ?1")?;
-                    for row in s.query_map([terms.join(" OR ")],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,f64>(1)?)))? {let (id,rank)=row?;lexical.insert(id,1.0+(-rank).min(1.0));}
+                    for row in s.query_map([quoted.join(" OR ")],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,f64>(1)?)))? {let (id,rank)=row?;bm25.insert(id,(-rank).clamp(0.0,1.0));}
                 }
-                let mut hits=Vec::new();
-                let mut edges=Vec::new();
+                let mut scored=Vec::new();
                 for claim in claims {
-                    let mut score=*lexical.get(&claim.id).unwrap_or(&0.0);
+                    let mut score=0.0;
+                    if let Some(n)=coverage.get(&claim.id) {
+                        score+=*n as f64/terms.len() as f64+LEXICAL_RANK_WEIGHT*bm25.get(&claim.id).copied().unwrap_or(0.0);
+                    }
                     if let Some(q)=embedding {
                         let vector:Option<String>=conn.query_row("SELECT vector FROM kn_vectors WHERE claim_id=?1 AND model=?2 AND revision=?3",rusqlite::params![claim.id,q.model,q.revision],|r|r.get(0)).optional()?;
                         if let Some(v)=vector.and_then(|v|serde_json::from_str::<Vec<f32>>(&v).ok())
-                            && let Some(cos)=super::retrieval::cosine(&v,&q.values) {score+=cos.max(0.0);}
+                            && let Some(cos)=super::retrieval::cosine(&v,&q.values)
+                            && cos>=MIN_VECTOR_SIMILARITY {score+=cos;}
                     }
-                    if query.text.trim().is_empty() {score=0.1;}
-                    if let ClaimObject::Entity(target)=&claim.object {edges.push((claim.subject,*target));}
+                    if score>0.0 && claim.basis==Some(PreferenceBasis::Explicit) {score+=0.25;}
+                    scored.push((score,claim));
+                }
+                let selected=super::retrieval::select(&scored.iter().map(|(score,c)|super::retrieval::Candidate{
+                    claim:c.id,subject:c.subject,
+                    object:match &c.object {ClaimObject::Entity(e)=>Some(*e),ClaimObject::Value(_)=>None},
+                    observed_at:c.observed_at,score:*score}).collect::<Vec<_>>(),query.limit.min(100),query.expand_graph);
+                let mut hits=Vec::new();
+                for (index,score) in selected {
+                    let claim=&scored[index].1;
                     let entity_name:String=conn.query_row("SELECT name FROM kn_entities WHERE id=?1",[claim.subject],|r|r.get(0))?;
                     let value=match &claim.object {ClaimObject::Value(v)=>v.clone(),ClaimObject::Entity(e)=>conn.query_row("SELECT name FROM kn_entities WHERE id=?1",[e],|r|r.get(0))?};
                     let mut s=conn.prepare("SELECT ce.evidence_id FROM kn_claim_evidence ce JOIN kn_evidence e ON e.id=ce.evidence_id WHERE ce.claim_id=?1 AND (?2=1 OR e.scope IN (SELECT value FROM json_each(?3))) ORDER BY ce.evidence_id")?;
                     let evidence_ids=s.query_map(rusqlite::params![claim.id,a.all,a.scopes],|r|r.get(0))?.collect::<Result<_,_>>()?;
-                    let preference=if score>0.0 && claim.basis==Some(PreferenceBasis::Explicit) {0.25} else {0.0};
-                    hits.push(MemoryHit{claim_id:claim.id,entity_id:claim.subject,entity_name,predicate:claim.predicate,value,status:claim.status.as_str().into(),scope:claim.scope,observed_at:claim.observed_at,score:score+preference,evidence_ids});
+                    hits.push(MemoryHit{claim_id:claim.id,entity_id:claim.subject,entity_name,predicate:claim.predicate.clone(),value,status:claim.status.as_str().into(),scope:claim.scope.clone(),observed_at:claim.observed_at,score,evidence_ids});
                 }
-                if query.expand_graph {
-                    let seeds:std::collections::HashSet<i64>=hits.iter().filter(|h|h.score>0.0).map(|h|h.entity_id).collect();
-                    let mut expanded=seeds.clone();
-                    for (source,target) in edges {if seeds.contains(&source)||seeds.contains(&target) {expanded.insert(source);expanded.insert(target);}}
-                    for h in &mut hits {if h.score<=0.0 && expanded.contains(&h.entity_id) {h.score=0.2;}}
-                }
-                hits.retain(|h|h.score>0.0);
-                hits.sort_by(|a,b|b.score.total_cmp(&a.score).then(b.observed_at.cmp(&a.observed_at)).then(a.claim_id.cmp(&b.claim_id)));
-                hits.truncate(query.limit.min(100));
                 let context=super::retrieval::compose(&hits,query.token_budget,|s|s.len());
                 Ok(MemoryReply{version:VERSION,hits,context,generation})
             })();

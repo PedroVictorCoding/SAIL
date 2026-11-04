@@ -65,7 +65,8 @@ async fn probe_handoff_plan_explain_quiz_and_answer_once() {
         call(
             "quiz",
             json!({"node_id":"ack","kind":"free_recall",
-                            "prompt":"Why does the sender need ACKs?"}),
+                            "prompt":"Why does the sender need ACKs?",
+                            "rubric":"ACKs tell the sender which bytes arrived"}),
         ),
     ]));
     let (engine, _) = engine(model.clone());

@@ -107,6 +107,10 @@ impl Capability {
                         || tool == "forge:list"
                         || tool == "forge:cancel"
                         || tool == "forge:clear"
+                        || tool == "pulse:create"
+                        || tool == "pulse:list"
+                        || tool == "pulse:cancel"
+                        || tool == "pulse:snooze"
                         || tool == "studio:audio_analyze" =>
                 {
                     RiskLevel::Low

@@ -1,4 +1,5 @@
 'use strict';
+let liveContextEnabled = false, liveContextReplyPending = false;
 let learningSession = null, learningEnabled = false, learningBusy = false;
 let ws, audioCtx, micStream, processor, micSource;
 let workletLoaded=false;
@@ -82,6 +83,10 @@ function syncActivityPill() {
 }
 function sendAction(action, fields = {}) {
   if (!ws || ws.readyState !== WebSocket.OPEN) { showError('Connection unavailable. Wait for reconnection.'); return false; }
+  if (['text', 'set_live_context', 'toggle_mute', 'reset', 'interrupt'].includes(action)) {
+    discardListeningCapture();
+    liveContextReplyPending = liveContextEnabled && action === 'text';
+  }
   ws.send(JSON.stringify({ action, ...fields })); return true;
 }
 function connectWs() {
@@ -89,12 +94,13 @@ function connectWs() {
   ws = new WebSocket(`${proto}//${location.host}/ws/voice`);
   ws.onopen = () => {
     setConnection('Connected · local session', true);
-    micBtn.disabled = false;
+    micBtn.disabled = false; document.getElementById('liveContextBtn').disabled = false;
     if (orbState === 'disconnected') updateState('idle');
     sendAction('forge:list');
   };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
+    liveContextReplyPending = false; liveContextEnabled = false; renderLiveContext(); document.getElementById('liveContextBtn').disabled = true;
     learningSession = null; learningEnabled = false; renderLearning();
     pendingApprovalActions.clear(); lastToolCalls.clear();
     cancelVisualCapture(); captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
@@ -111,6 +117,11 @@ function connectWs() {
         cancelVisualCapture();
         document.getElementById('conversation').replaceChildren(); responseNode = null;
         applyControl(data.control); announceClientSpeech(); break;
+      case 'live_context_state':
+        discardListeningCapture(); liveContextReplyPending = false;
+        liveContextEnabled = data.enabled === true; renderLiveContext(); break;
+      case 'live_context_observed':
+        transcriptBox.textContent = `Context · ${data.text}`; break;
       case 'learning_state':
         learningEnabled = data.enabled === true; renderLearning(); break;
       case 'telemetry':
@@ -164,6 +175,7 @@ function connectWs() {
       case 'speech_text': queueClientSpeech(data); break;
       case 'client_speech': clientSpeechActive = { stt:data.stt === true, tts:data.tts === true }; renderSpeechPlacement(); break;
       case 'turn_finished':
+        liveContextReplyPending = false;
         setCaptureHeld(false);
         turnInProgress = false;
         document.getElementById('assistantAnnounce').textContent = responseText;
@@ -233,11 +245,13 @@ function connectWs() {
       case 'safety_review_completed':
         handleSafetyReviewCompleted(data);
         break;
-      case 'error': showError(data.message); break;
+      case 'error':
+        liveContextReplyPending = false; showError(data.message); break;
     }
   };
 }
 function applyControl(control) {
+  if (control.is_muted !== isMuted) discardListeningCapture();
   isMuted = control.is_muted;
   muteBtn.textContent = isMuted ? 'Unmute' : 'Mute'; muteBtn.setAttribute('aria-pressed', String(isMuted)); muteBtn.className = isMuted ? 'quiet-button muted' : 'quiet-button';
   const micIndicator = document.getElementById('micLiveIndicator');
@@ -547,7 +561,7 @@ function schedulePlayback(context, buffer, generation, telemetry) {
 
 // ---- Speech on this device (client-speech.js) ----
 let clientSpeechActive = { stt:false, tts:false };
-let clientFrames = Promise.resolve(), clientCapturing = false, clientCaptureSerial = 0;
+let clientFrames = Promise.resolve(), clientCapturing = false, clientCaptureSerial = 0, clientFrameGeneration = 0;
 const selectedVoice = () => document.getElementById('voiceSelect')?.value || 'af_heart';
 // Tell the server what this browser runs. TTS only for voices the browser engine has
 // (kokoro-js speaks English); other voices keep host synthesis.
@@ -619,11 +633,14 @@ async function loadClientSpeech() {
   await SailClientSpeech.load(renderSpeechPlacement);
   announceClientSpeech(); renderSpeechPlacement();
 }
-async function handleClientFrame(frame) {
-  if (!clientSpeechActive.stt || !isRecording || isMuted) return;
+async function handleClientFrame(frame, generation = clientFrameGeneration) {
+  if (generation !== clientFrameGeneration) return;
+  if (!clientSpeechActive.stt || !isRecording || isMuted || listeningReplyBusy()) return;
+  const serial = clientCaptureSerial;
   let result;
   try { result = await SailClientSpeech.frame(frame); }
   catch (error) { failClientSpeech(error); return; }
+  if (serial !== clientCaptureSerial || !isRecording || isMuted || listeningReplyBusy()) return;
   let rms = 0; for (const v of frame) rms += (v / 32768) ** 2; rms = Math.sqrt(rms / frame.length);
   if (!playingSources.size) {
     currentAmplitude = rms; wavePhase = (wavePhase + 0.12) % (Math.PI * 2); spectrum8 = Array(8).fill(Math.min(1, rms * 4));
@@ -635,7 +652,7 @@ async function handleClientFrame(frame) {
   document.getElementById('telVad').textContent = `VAD inference on this device: ${result.inferenceMs.toFixed(2)}ms`;
   if (result.event === 'start') {
     // Barge-in, as the host VAD does: stop playback and let the server preempt background work.
-    clientCapturing = true; clientCaptureSerial++; stopPlayback(); sendAction('speech_start');
+    clientCapturing = true; clientCaptureSerial++; stopPlayback(); sendAction('speech_start', { capture_id:clientCaptureSerial });
   } else if (result.event === 'end') {
     // Not awaited: the VAD keeps running during transcription so barge-in still works.
     void commitClientCapture();
@@ -652,9 +669,9 @@ async function commitClientCapture() {
   setCaptureHeld(false); updateState('transcribing');
   try {
     const { text } = await SailClientSpeech.transcribe(samples);
-    if (serial !== clientCaptureSerial) return;
-    if (text) sendAction('voice_text', { text }); else { sendAction('speech_cancel'); updateState(isRecording ? 'listening' : 'idle'); }
-  } catch (error) { sendAction('speech_cancel'); failClientSpeech(error); }
+    if (serial !== clientCaptureSerial || listeningReplyBusy()) return;
+    if (text) sendAction('voice_text', { text, capture_id:serial }); else { sendAction('speech_cancel'); updateState(isRecording ? 'listening' : 'idle'); }
+  } catch (error) { if (serial === clientCaptureSerial) { sendAction('speech_cancel'); failClientSpeech(error); } }
 }
 // Synthesize a reply fragment here and queue it behind earlier audio, in order.
 function queueClientSpeech(data) {
@@ -792,10 +809,10 @@ async function startMic() {
       }
       if (!(data instanceof ArrayBuffer)) return;
       if (clientSpeechActive.stt) {
-        if (isRecording && !isMuted) { const frame = new Int16Array(data); clientFrames = clientFrames.then(() => handleClientFrame(frame)); }
+        if (isRecording && !isMuted && !listeningReplyBusy()) { const frame = new Int16Array(data); const generation = clientFrameGeneration; clientFrames = clientFrames.then(() => handleClientFrame(frame, generation)); }
         return;
       }
-      if (isRecording && !isMuted && ws?.readyState === WebSocket.OPEN) {
+      if (isRecording && !isMuted && !listeningReplyBusy() && ws?.readyState === WebSocket.OPEN) {
         if (ws.bufferedAmount > 64000) { showError('Audio connection is too slow; microphone stopped.'); stopMic(); return; }
         ws.send(data);
       }
@@ -807,7 +824,7 @@ async function startMic() {
 }
 function stopMic(discardClientCapture = true) {
   if (pendingCaptureFlush) { const pending = pendingCaptureFlush; pendingCaptureFlush = null; pending.reject(); }
-  if (discardClientCapture && clientSpeechActive.stt && clientCapturing) { clientCapturing = false; clientCaptureSerial++; SailClientSpeech.resetCapture(); sendAction('speech_cancel'); }
+  if (discardClientCapture) { discardListeningCapture(); sendAction('speech_cancel'); }
   isRecording = false; micStream?.getTracks().forEach(track => track.stop());
   if (processor) { processor.port.onmessage = null; processor.disconnect(); processor = null; }
   micSource?.disconnect(); micSource = null; micStream = null;
@@ -970,6 +987,36 @@ window.addEventListener('sail:orb-telemetry', event => {
 window.sailUi = Object.freeze({
   setOrbTelemetry: data => window.dispatchEvent(new CustomEvent('sail:orb-telemetry', { detail:data })),
   resumeOrbAnimation: () => { orbFrozen = false; },
+});
+
+
+function listeningReplyBusy() {
+  return liveContextEnabled && (liveContextReplyPending || pendingAudio > 0 || playingSources.size > 0);
+}
+function discardListeningCapture() {
+  if (typeof transcriptBox !== 'undefined' && transcriptBox.textContent.startsWith('Context ·')) transcriptBox.textContent = '';
+  clientCaptureSerial++; clientFrameGeneration++; clientCapturing = false;
+  if (typeof SailClientSpeech !== 'undefined') SailClientSpeech.resetCapture();
+}
+function renderLiveContext() {
+  const button = document.getElementById('liveContextBtn');
+  button.setAttribute('aria-pressed', String(liveContextEnabled));
+  button.textContent = liveContextEnabled ? 'Disable and clear context' : 'Enable listening context';
+  document.getElementById('liveContextStatus').textContent = liveContextEnabled
+    ? 'Listening context enabled · start microphone to capture; type to ask'
+    : 'Listening context off';
+}
+document.getElementById('liveContextBtn').addEventListener('click', async () => {
+  const button = document.getElementById('liveContextBtn');
+  button.disabled = true;
+  const connection = ws;
+  try {
+    const owner_token = liveContextEnabled ? undefined : await getOrFetchOwnerToken();
+    if (ws !== connection || ws.readyState !== WebSocket.OPEN) return;
+    stopPlayback();
+    sendAction('set_live_context', {enabled: !liveContextEnabled, owner_token});
+  } catch (error) { showError(error.message); }
+  finally { button.disabled = !ws || ws.readyState !== WebSocket.OPEN; }
 });
 
 function renderLearning() {

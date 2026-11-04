@@ -2459,6 +2459,7 @@ dependencies = [
  "sail-guardian",
  "sail-mind",
  "sail-protocol",
+ "sail-pulse",
  "serde_json",
  "tokio",
  "tokio-util",
@@ -2495,6 +2496,7 @@ dependencies = [
  "sail-guardian",
  "sail-mind",
  "sail-protocol",
+ "sail-pulse",
  "sail-runner",
  "serde",
  "serde_json",
@@ -2617,6 +2619,21 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "sail-pulse"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rusqlite",
+ "sail-common",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 

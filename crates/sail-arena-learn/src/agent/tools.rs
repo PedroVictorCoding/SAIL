@@ -81,7 +81,9 @@ impl Tool {
                     "id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"]},
                     "description":"2-6 options for single/multiple; omit for free_recall"},
                 "correct": {"type":"array","items":{"type":"string"},
-                    "description":"Correct option ids; hidden from the learner until they answer"}
+                    "description":"Correct option ids; hidden from the learner until they answer"},
+                "rubric": {"type":"string",
+                    "description":"free_recall only: the idea a good answer must contain, in one to three short points. Never shown to the learner; used to judge the answer"}
             });
             let mut required = vec!["kind", "prompt"];
             if node {
@@ -168,6 +170,13 @@ mod tests {
         );
         assert_eq!(names(AgentRole::Practitioner), ["problem", "conclude"]);
         assert!(!allowed(AgentRole::Prober).contains(&Tool::PlanInit));
+    }
+
+    #[test]
+    fn question_tools_offer_a_rubric() {
+        for tool in [Tool::Probe, Tool::Quiz, Tool::AskUserQuestion] {
+            assert!(tool.schema()["properties"]["rubric"].is_object());
+        }
     }
 
     #[test]

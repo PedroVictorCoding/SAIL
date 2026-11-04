@@ -1,11 +1,13 @@
 //! The learning event log (#233). Session state is a projection of these events; the
 //! browser never owns transcript truth.
+use super::judgment::Judgment;
 use super::plan::LessonPlan;
 use super::question::{Answer, Grade, QuestionSpec};
 use serde::{Deserialize, Serialize};
 
 /// Bumped when an event changes shape. Stores refuse envelopes from a newer version.
-pub const SCHEMA_VERSION: u16 = 1;
+/// 2: `AnswerJudged` and `QuestionAsked.follow_up_of` (#243).
+pub const SCHEMA_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -72,11 +74,21 @@ pub enum LearningEvent {
     QuestionAsked {
         call_id: String,
         spec: QuestionSpec,
+        /// Set when the engine asked this as the follow-up to an `unclear` judgment of
+        /// another question (its call id).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        follow_up_of: Option<String>,
     },
     Answered {
         call_id: String,
         answer: Answer,
         grade: Grade,
+    },
+    /// The judge's verdict on a free-recall answer (#243). Recorded before the tutor
+    /// replies, so the reply and the learner's view agree on it.
+    AnswerJudged {
+        call_id: String,
+        judgment: Judgment,
     },
     ProbeDone {
         summary: String,

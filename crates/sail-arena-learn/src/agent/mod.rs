@@ -1,5 +1,6 @@
 //! Agent layer: role tools, argument healing, prompts and the turn runner.
 pub mod args;
+pub mod judge;
 pub mod mind;
 pub mod prompts;
 pub mod tools;

@@ -1,6 +1,7 @@
 //! Learner questions (#236). A question is a model tool call whose real result arrives
 //! later, when the learner answers. Select kinds are graded here by option id; free recall
-//! goes back to the model for judgment.
+//! is judged against the question's hidden rubric (#243, see [`super::judgment`]).
+use super::judgment::MAX_RUBRIC;
 use super::{Invalid, MAX_SHORT, MAX_TEXT, bounded};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -36,6 +37,10 @@ pub struct QuestionSpec {
     /// Plan node the question checks; required for `quiz`, absent for probes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// Free recall only: what a good answer must contain. Used to judge the answer and
+    /// never sent to the learner's view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rubric: Option<String>,
 }
 
 impl QuestionSpec {
@@ -48,8 +53,16 @@ impl QuestionSpec {
                         "a free_recall question takes no `options` or `correct`",
                     ));
                 }
+                if let Some(rubric) = &self.rubric {
+                    bounded("rubric", rubric, MAX_RUBRIC)?;
+                }
             }
             QuestionKind::Single | QuestionKind::Multiple => {
+                if self.rubric.is_some() {
+                    return Err(Invalid::new(
+                        "`rubric` is only for free_recall questions; select questions use `correct`",
+                    ));
+                }
                 if !(2..=6).contains(&self.options.len()) {
                     return Err(Invalid::new(format!(
                         "a {} question needs 2 to 6 `options`, got {}",
@@ -165,7 +178,7 @@ impl Answer {
 pub enum Grade {
     Correct,
     Incorrect,
-    /// Free recall: the model judges it on the next turn.
+    /// Free recall: judged against the rubric at the start of the next turn.
     NeedsJudgment,
 }
 
@@ -186,6 +199,7 @@ mod tests {
                 .collect(),
             correct: correct.iter().map(|s| s.to_string()).collect(),
             node_id: None,
+            rubric: None,
         }
     }
 
@@ -220,6 +234,19 @@ mod tests {
         assert!(free.validate().is_err());
         free.options.clear();
         free.validate().unwrap();
+        free.rubric = Some("x".repeat(MAX_RUBRIC + 1));
+        assert!(free.validate().unwrap_err().0.contains("too long"));
+        free.rubric = Some("Loss shrinks the window".into());
+        free.validate().unwrap();
+        let mut select_with_rubric = select(QuestionKind::Single, &["a"]);
+        select_with_rubric.rubric = Some("r".into());
+        assert!(
+            select_with_rubric
+                .validate()
+                .unwrap_err()
+                .0
+                .contains("only for free_recall")
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! progress from node-tagged `explain`/`quiz` calls (#242). Visited never means understood,
 //! and the view has no mastery or score field.
 use super::events::{AgentRole, Envelope, LearningEvent, PresentKind, TurnOutcome};
+use super::judgment::Judgment;
 use super::plan::LessonPlan;
 use super::question::{Answer, Grade, QuestionKind, QuestionOption, QuestionSpec};
 use serde::Serialize;
@@ -13,7 +14,8 @@ pub enum Mode {
     Teach,
 }
 
-/// A question as the learner sees it. `correct` appears only after it is answered.
+/// A question as the learner sees it. `correct` appears only after it is answered; a
+/// free-recall rubric never appears.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LearnerQuestion {
     pub id: String,
@@ -24,6 +26,10 @@ pub struct LearnerQuestion {
     pub answer: Option<Answer>,
     pub grade: Option<Grade>,
     pub correct: Option<Vec<String>>,
+    /// The judge's verdict on a free-recall answer, once recorded (#243).
+    pub judgment: Option<Judgment>,
+    /// Set when this question is the follow-up to an unclear answer to that question.
+    pub follow_up_of: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -32,7 +38,7 @@ pub enum Entry {
     Learner { text: String },
     Assistant { text: String },
     Explain { node_id: String, text: String },
-    Question(LearnerQuestion),
+    Question(Box<LearnerQuestion>),
     Notice { text: String },
 }
 
@@ -114,7 +120,7 @@ impl SessionView {
 
     fn question_mut(&mut self, id: &str) -> Option<&mut LearnerQuestion> {
         self.transcript.iter_mut().rev().find_map(|e| match e {
-            Entry::Question(q) if q.id == id => Some(q),
+            Entry::Question(q) if q.id == id => Some(q.as_mut()),
             _ => None,
         })
     }
@@ -152,19 +158,26 @@ impl SessionView {
                 }
             }
             LearningEvent::ToolResult { .. } => {}
-            LearningEvent::QuestionAsked { call_id, spec } => {
+            LearningEvent::QuestionAsked {
+                call_id,
+                spec,
+                follow_up_of,
+            } => {
                 specs.push((call_id.clone(), spec.clone()));
                 self.active_question = Some(call_id.clone());
-                self.transcript.push(Entry::Question(LearnerQuestion {
-                    id: call_id.clone(),
-                    kind: spec.kind,
-                    prompt: spec.prompt.clone(),
-                    options: spec.options.clone(),
-                    node_id: spec.node_id.clone(),
-                    answer: None,
-                    grade: None,
-                    correct: None,
-                }));
+                self.transcript
+                    .push(Entry::Question(Box::new(LearnerQuestion {
+                        id: call_id.clone(),
+                        kind: spec.kind,
+                        prompt: spec.prompt.clone(),
+                        options: spec.options.clone(),
+                        node_id: spec.node_id.clone(),
+                        answer: None,
+                        grade: None,
+                        correct: None,
+                        judgment: None,
+                        follow_up_of: follow_up_of.clone(),
+                    })));
             }
             LearningEvent::Answered {
                 call_id,
@@ -183,6 +196,11 @@ impl SessionView {
                     q.answer = Some(answer.clone());
                     q.grade = Some(*grade);
                     q.correct = correct;
+                }
+            }
+            LearningEvent::AnswerJudged { call_id, judgment } => {
+                if let Some(q) = self.question_mut(call_id) {
+                    q.judgment = Some(judgment.clone());
                 }
             }
             LearningEvent::ProbeDone {
@@ -292,7 +310,77 @@ pub fn latest_plan(events: &[Envelope]) -> Option<(u64, LessonPlan)> {
 /// The spec of a question by call id, for grading.
 pub fn question_spec<'a>(events: &'a [Envelope], call_id: &str) -> Option<&'a QuestionSpec> {
     events.iter().find_map(|e| match &e.event {
-        LearningEvent::QuestionAsked { call_id: id, spec } if id == call_id => Some(spec),
+        LearningEvent::QuestionAsked {
+            call_id: id, spec, ..
+        } if id == call_id => Some(spec),
+        _ => None,
+    })
+}
+
+/// A free-recall answer that still needs judging before the tutor replies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingJudgment {
+    pub call_id: String,
+    /// The tool that asked the question (`probe`, `quiz` or `ask_user_question`).
+    pub tool: String,
+    pub spec: QuestionSpec,
+    pub answer: Answer,
+    /// Set when the answered question was itself a follow-up; no second follow-up is asked.
+    pub follow_up_of: Option<String>,
+}
+
+/// The latest answer, if it is a free-recall answer with a rubric that has not been judged.
+/// Answers without a rubric (open clarifying questions, or sessions from before #243) are
+/// never judged: there is nothing to judge them against.
+pub fn pending_judgment(events: &[Envelope]) -> Option<PendingJudgment> {
+    let (call_id, answer) = events
+        .iter()
+        .rev()
+        .find_map(|e| match &e.event {
+            LearningEvent::Answered {
+                call_id,
+                answer,
+                grade,
+            } => Some((call_id, answer, *grade)),
+            _ => None,
+        })
+        .filter(|(_, _, grade)| *grade == Grade::NeedsJudgment)
+        .map(|(call_id, answer, _)| (call_id, answer))?;
+    if judgment_of(events, call_id).is_some() {
+        return None;
+    }
+    let (spec, follow_up_of) = events.iter().find_map(|e| match &e.event {
+        LearningEvent::QuestionAsked {
+            call_id: id,
+            spec,
+            follow_up_of,
+        } if id == call_id => Some((spec, follow_up_of)),
+        _ => None,
+    })?;
+    spec.rubric.as_ref()?;
+    let tool = events.iter().find_map(|e| match &e.event {
+        LearningEvent::AssistantMessage { tool_calls, .. } => tool_calls
+            .iter()
+            .find(|c| &c.id == call_id)
+            .map(|c| c.name.clone()),
+        _ => None,
+    })?;
+    Some(PendingJudgment {
+        call_id: call_id.clone(),
+        tool,
+        spec: spec.clone(),
+        answer: answer.clone(),
+        follow_up_of: follow_up_of.clone(),
+    })
+}
+
+/// The recorded judgment of a question, if any.
+pub fn judgment_of<'a>(events: &'a [Envelope], call_id: &str) -> Option<&'a Judgment> {
+    events.iter().find_map(|e| match &e.event {
+        LearningEvent::AnswerJudged {
+            call_id: id,
+            judgment,
+        } if id == call_id => Some(judgment),
         _ => None,
     })
 }
