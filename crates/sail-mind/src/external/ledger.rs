@@ -453,6 +453,9 @@ mod tests {
     #[test]
     fn ledger_files_are_private_and_links_and_special_files_are_refused() {
         use std::os::unix::fs::PermissionsExt;
+        // This establishes the narrowly documented equivalent mutant: disjoint
+        // flags have the same union under OR and XOR on the target platform.
+        assert_eq!(libc::O_NOFOLLOW & libc::O_NONBLOCK, 0);
         let directory = TemporaryLedger::new();
         let _ledger = directory.open();
         assert_eq!(
@@ -469,6 +472,11 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(UsageLedger::open(&link).is_err());
         assert_eq!(std::fs::read_to_string(target).unwrap(), "untouched");
+        // A valid target must still be refused, rather than merely failing later
+        // because SQLite cannot parse the sentinel contents above.
+        let database_link = directory.0.join("database-link");
+        std::os::unix::fs::symlink(directory.0.join("ledger.db"), &database_link).unwrap();
+        assert!(UsageLedger::open(&database_link).is_err());
         assert!(UsageLedger::open(&directory.0).is_err());
     }
     #[test]

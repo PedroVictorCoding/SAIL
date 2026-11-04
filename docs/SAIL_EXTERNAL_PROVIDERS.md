@@ -94,6 +94,12 @@ The test environment must permit loopback sockets. Tests cover denial, request m
 single-use authorization, default-provider rejection, quota/cooldown, redacted transport,
 voice interruption, tool-call rejection, oversized responses, and durable restart/dedup.
 
+Mutation testing also exercises the runtime directly in Mind, independently of Bridge's
+HTTP tests. `.cargo/mutants.toml` excludes one location-specific equivalent mutation:
+OR → XOR of the disjoint fixed `O_NOFOLLOW` and `O_NONBLOCK` flags has identical behavior.
+The file-safety test verifies that disjointness and refuses a symlink to a valid database;
+the behavior-changing OR → AND mutation remains covered. No test suites or CI jobs are disabled.
+
 ## Remaining roadmap
 
 - Finish P1: verified CLI sandbox/auth isolation, provider ordering, quota selection,

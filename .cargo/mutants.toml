@@ -1,0 +1,6 @@
+# O_NOFOLLOW and O_NONBLOCK are disjoint fixed flags. OR -> XOR at this exact
+# constant produces the identical integer and cannot change any behavior.
+# ledger_files_are_private_and_links_and_special_files_are_refused checks that
+# disjointness and the real symlink boundary. OR -> AND remains tested.
+# Keep this location-specific: moving/changing the constant requires reassessment.
+exclude_re = ['^crates/sail-mind/src/external/ledger\.rs:11:49: replace \| with \^$']
