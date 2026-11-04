@@ -4,6 +4,7 @@ members = [
     "crates/sail-protocol",
     "crates/sail-mind",
     "crates/sail-arena",
+    "crates/sail-arena-learn",
     "crates/sail-bridge",
     "crates/sail-agents",
     "crates/sail-dialogue",
@@ -52,6 +53,7 @@ sail-common = { path = "crates/sail-common" }
 sail-protocol = { path = "crates/sail-protocol" }
 sail-mind = { path = "crates/sail-mind" }
 sail-arena = { path = "crates/sail-arena" }
+sail-arena-learn = { path = "crates/sail-arena-learn" }
 sail-bridge = { path = "crates/sail-bridge" }
 sail-agents = { path = "crates/sail-agents" }
 sail-dialogue = { path = "crates/sail-dialogue" }

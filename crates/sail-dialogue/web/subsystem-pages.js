@@ -36,12 +36,13 @@ const subsystemPages = [
     "id": "arena",
     "name": "Arena",
     "icon": "arena",
-    "subtitle": "Knowledge and memory",
-    "description": "Connect memories, research collections, and semantic relationships.",
+    "subtitle": "Learn and remember",
+    "description": "Learn something step by step, and review what SAIL remembers.",
     "card": "memoryCard",
-    "panel": "memoryPanelMain",
+    "panel": "learnPanelMain",
     "settings": null,
     "details": [
+      "Arena Learn: assessment, a lesson map and step-by-step teaching",
       "Episodic memory",
       "Associative knowledge graph",
       "Research collections"

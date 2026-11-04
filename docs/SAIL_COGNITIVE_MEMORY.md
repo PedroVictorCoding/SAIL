@@ -8,6 +8,8 @@ memory, [#52](https://github.com/PedroVictorCoding/SAIL/issues/52) conversation 
 [#100](https://github.com/PedroVictorCoding/SAIL/issues/100) Evidence Ledger,
 [#68](https://github.com/PedroVictorCoding/SAIL/issues/68) contradiction audit.
 
+The main consumer of this store is [Arena Learn](SAIL_ARENA_LEARN.md), Arena's learning product (#215).
+
 Long-term memory in SAIL is structured knowledge: entities, claims backed by evidence,
 procedures and project state. Conversations are temporary evidence. Once their knowledge
 has been consolidated, they can be released, and a content hash and a short receipt
