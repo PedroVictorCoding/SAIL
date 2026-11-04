@@ -16,14 +16,14 @@ What works end to end today (merged and tested), as opposed to specified:
 | --- | --- | --- |
 | Voice (Dialogue) | Local VAD/STT/TTS chain, barge-in, speak-while-searching, optional on-device speech with measured gate | Speaker identity (#198 open), Android client |
 | Mind | One resident local model, GPU offload, voice-first admission on real memory pressure | External providers (P1) |
-| Memory (Arena) | Structured knowledge, validated change sets, scoped retrieval, consent, retention, owner views | Core profile block, review queue (P5); #52 conflicts with the memory design |
+| Memory (Arena) | Arena Learn is Arena's main product ([spec](SAIL_ARENA_LEARN.md), #215, not started). Memory substrate: structured knowledge, validated change sets, scoped retrieval, consent, retention, owner views | Core profile block, review queue (P5); #52 conflicts with the memory design |
 | Guardian | Grants, approvals, vault, nono/bwrap sandboxes, adversarially tested Forge sandbox | Dedicated runner verified end to end (#43); durable audit CI (#33) |
 | Forge | Local solver, sandboxed builds, gates, mutation gate, failure memory, nightly runner, draft PRs, pauses for voice | Issue decomposition (#118), escalation to external models (P1) |
 | Continuity | Durable task records, leases, recovery (Forge only) | General consumers: agent plans, scheduled jobs |
 | Bridge | Chromium CDP worker with site grants | Web research tool (#40) on top of it |
 | Agents | Goal → plan → approve → execute → verify → re-plan, durable across restarts; "Plan: …" by voice or text and a plan card ([design](SAIL_AGENT_PLANNING.md)) | Long-lived approvals, planner quality on the local model, chat and scheduled plans |
 | Pulse, Relay, Flow, Skills | Specs; Flow runs one scheduled safety review | Scheduler (P3), gateway (P2), skills (P4) |
-| Studio, Campus, Life, Health, Entertainment, Sense, Mesh, Lab | Specs | Later waves |
+| Studio, Life, Health, Entertainment, Sense, Mesh, Lab | Specs | Later waves |
 
 The largest gap against the vision's north-star test ("ask SAIL to carry forward a
 multi-step goal, close the UI, come back to an accurate progress view") is **Agents**.
@@ -43,7 +43,7 @@ flowchart LR
   P4 --> P5[P5 Memory improvements]
   A1 --> RES[#40 Web research]
   P1 --> RES
-  W5[Wave 5: Studio, Campus, Life, Dioxus clients]
+  W5[Wave 5: Studio, Life, Dioxus clients]
   P5 --> W5
 ```
 
@@ -91,7 +91,7 @@ These can be interleaved as one item per wave, because they protect everything a
 
 ### Wave 5: experiences
 
-Studio #129, Campus (#75, #76), Life constraint solver #103, Dioxus Web/Android clients #38
+Studio #129, course logistics (#75, #76), Life constraint solver #103, Dioxus Web/Android clients #38
 (vision decision 9: after SAIL is stable and hardened), Health #104/#105, Discovery #10,
 Entertainment, Sense, Mesh, Lab. Each builds on A1 plans, P3 schedules and P4 skills.
 

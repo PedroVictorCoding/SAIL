@@ -1,11 +1,14 @@
 # SAIL ARENA — Product and Technical Specification
 
-**Status:** Proposed / evolving — verify implementation against code · Implemented memory architecture: [SAIL_COGNITIVE_MEMORY.md](SAIL_COGNITIVE_MEMORY.md) · **Domain:** Intelligence & Knowledge · **Roadmap issue:** [#5](https://github.com/PedroVictorCoding/SAIL/issues/5) · **Priority:** P1 · **Platforms:** Ubuntu server, Dioxus Web + Android
+**Status:** Proposed / evolving — verify implementation against code · Main product: [Arena Learn](SAIL_ARENA_LEARN.md) ([#215](https://github.com/PedroVictorCoding/SAIL/issues/215)) · Implemented memory architecture: [SAIL_COGNITIVE_MEMORY.md](SAIL_COGNITIVE_MEMORY.md) · **Domain:** Intelligence & Knowledge · **Roadmap issue:** [#5](https://github.com/PedroVictorCoding/SAIL/issues/5) · **Priority:** P1 · **Platforms:** Ubuntu server, Dioxus Web + Android
 
 ## 1. Mission
-Privacy-scoped attributed long-term memory and searchable knowledge graph.
+**Arena Learn is Arena's main product:** a local, clean-room Rust reimplementation of the LearnHarness learning loop (probe → dependency plan → teach/check → separate practice) that grows a persistent graph of propositions and reasoning chains. See [SAIL_ARENA_LEARN.md](SAIL_ARENA_LEARN.md).
+
+Underneath it, Arena provides privacy-scoped, attributed long-term memory and a searchable knowledge graph. Arena Learn and the rest of SAIL build on that substrate.
 
 ## 2. Functional scope
+- Arena Learn: learning sessions, lesson plans, questions, practice and the learning graph ([spec](SAIL_ARENA_LEARN.md)).
 - SQLite WAL and typed blocks/relations.
 - full-text plus local vector retrieval.
 - provenance, deduplication and confidence provenance.
@@ -25,7 +28,7 @@ Core persistence, Mind embeddings, Dialogue, Friends, Lab, Cognitive Compiler #9
 - Handle partial failures, reconnects, cancellation and restarts without synthesizing successful outputs. Prefer local-first operation and persist only consented, minimized state.
 
 ## 5. UI and interaction mapping
-Existing Spaces knowledge context and optional graph explorer; explicit inspect, correct, forget and provenance UI.
+The Arena page opens on Arena Learn; memory views (knowledge context, graph explorer) are a secondary section; explicit inspect, correct, forget and provenance UI.
 
 Use the existing SAIL design: compact dark UI, contextual cards, ambient Orb, progressive disclosure, accessible keyboard/touch controls, and no permanent new tab unless justified by repeated user use. Show honest loading, empty, unavailable, permission-denied and reconnection states. Web and Android share one typed state model.
 
