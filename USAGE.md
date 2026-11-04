@@ -17,6 +17,15 @@ cd /home/main/SAIL
 
 Keep the terminal open while using SAIL. If an older SAIL process is already running, `./run.sh --restart` stops it before starting the new version (or stop it with **Ctrl+C in its terminal**).
 
+The model stays loaded between runs. **Ctrl+C** stops SAIL but leaves the model server (llama-server) running, so the next `./run.sh` or `./run.sh --restart` is ready in seconds instead of reloading the model. If you change model settings (backend, GPU layers, context, threads), SAIL replaces the warm server by itself.
+
+| To | Run |
+|---|---|
+| Stop SAIL and unload the model (frees its memory) | `./run.sh --stop` |
+| Unload only the model | `./run.sh --stop-model` |
+| See what is running | `./run.sh --status` |
+| Stop the model together with SAIL every time | `./run.sh --no-persist` (or `SAIL_LLAMA_PERSIST=0`) |
+
 1. Open **http://localhost:8088** on this computer.
 2. Wait for the page to show that it is connected.
 3. Open **Settings** and choose **Check local model status**. The first check loads the speech workers and may take longer than subsequent checks.
@@ -301,7 +310,7 @@ This generates speech, detects it with Silero, transcribes it with Whisper, and 
 
 ## End your session
 
-Use **Stop Microphone** when you no longer want capture. Use **Interrupt** if you also want the current reply to stop. Close the tab when finished, then press **Ctrl+C** in the SAIL terminal to shut down the runtime. A llama-server that SAIL started is stopped with it; a model server that was already running remains independently managed.
+Use **Stop Microphone** when you no longer want capture. Use **Interrupt** if you also want the current reply to stop. Close the tab when finished, then press **Ctrl+C** in the SAIL terminal to shut down the runtime. The model stays loaded for a fast next start; run `./run.sh --stop` to unload it and free its memory.
 
 ### Capture a picture or screenshot during conversation
 
