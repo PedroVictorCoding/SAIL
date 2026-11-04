@@ -10,6 +10,7 @@ pub mod profile;
 pub mod residency;
 pub mod service;
 mod validation;
+pub mod vision;
 pub use bench::{BenchmarkRunner, BenchmarkScenario};
 pub use config::{CpuMoe, LocalModelConfig};
 pub use hardware::HardwareProbe;

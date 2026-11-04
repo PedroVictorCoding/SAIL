@@ -142,7 +142,7 @@ SAIL streams its response into the conversation. Fenced Mermaid diagrams and JSO
 2. Type a specific question, such as “Describe the main elements of this diagram.”
 3. Send your question, or choose **Capture frame** in the camera preview.
 
-The image is shown in Canvas and sent to the local Gemma vision service with your question. Camera access begins only after choosing Vision, shows an active indicator and preview, and can be stopped from that preview. An image attachment is cleared after sending; attach it again for a follow-up that requires examining its pixels.
+The image is shown in Canvas and analyzed locally with your question. If the main model has no vision projector, the small local vision model (see below) describes the image in text first. Camera access begins only after choosing Vision, shows an active indicator and preview, and can be stopped from that preview. An image attachment is cleared after sending; attach it again for a follow-up that requires examining its pixels.
 
 For measured image statistics, select an image and ask SAIL to inspect the frame. This reports dimensions, luminance and edge density. Use a conversational image question for semantic reasoning.
 
@@ -312,20 +312,21 @@ This generates speech, detects it with Silero, transcribes it with Whisper, and 
 
 Use **Stop Microphone** when you no longer want capture. Use **Interrupt** if you also want the current reply to stop. Close the tab when finished, then press **Ctrl+C** in the SAIL terminal to shut down the runtime. The model stays loaded for a fast next start; run `./run.sh --stop` to unload it and free its memory.
 
-### Capture a picture or screenshot during conversation
+### Let SAIL look at your camera or screen
 
-Say or type “Take a screenshot and explain this error” for the screen, or
-“Take a camera picture and tell me what you see” for the camera. SAIL pauses
-reasoning until the browser captures an image. Click the capture button to open
-the browser permission picker. Screen capture lets you choose a screen, window,
-or tab; camera capture takes one frame. Both require HTTPS or localhost and
-browser support. Capture stops immediately after the frame is obtained.
+Ask naturally: "What does this error say?", "Can you read this label?", "What am I holding?". When SAIL needs to see something, the model takes a snapshot itself. It chooses the **camera** for the physical world and the **screen** for what is on your computer.
 
-“Capture an image and tell me what you see” uses the previous user message to
-resolve screen/camera context when possible; otherwise SAIL asks which source
-you mean. Permission denial or cancellation never submits an imageless request.
-The original request and captured image are sent together to the local model.
-Existing uploaded images are analyzed directly without requesting device capture.
+- **You approve every look.** If you are already sharing that source live (**Spaces → Vision**), SAIL uses the current frame from that preview. Otherwise a dialog asks you to allow one camera picture or one screenshot. You can pick the other source or **Cancel**; SAIL is then told you declined and answers without the image.
+- Capture takes a single frame (up to 768 px, JPEG) and stops the camera or screen share right after. It needs HTTPS or localhost.
+- A request waits up to 90 seconds for your choice.
+
+**Seeing with a text-only main model.** If the main model has no vision projector (the default Qwen3.6 setup), a small local vision model, LiquidAI **LFM3-Omni-2B**, describes the image in up to about 70 words, focused on what SAIL asked. The main model gets that text instead of pixels. Install it once (about 1.6 GB, LFM Open License v1.0), then restart SAIL:
+
+```bash
+./scripts/fetch-vision-model.sh
+```
+
+It starts on port 8082 the first time an image needs describing (about 2–3 s to load) and then takes roughly 9–11 s per image on CPU. It stays loaded like the main model and is stopped by `./run.sh --stop`. Override the files with `SAIL_VISION_MODEL` / `SAIL_VISION_MMPROJ`, or point at your own server with `SAIL_VISION_URL`.
 
 
 ### Authorize and continue a tool operation

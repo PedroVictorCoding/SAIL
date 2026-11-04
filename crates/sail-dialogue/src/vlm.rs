@@ -1371,6 +1371,18 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
         let search = ranked.remove(pos);
         ranked.insert(usize::from(has_handles), search);
     }
+    // Always offer visual_snapshot, as realtime voice assistants do: the model decides when
+    // to look, and the user approves each capture. It follows the memory tools.
+    if let Some(pos) = ranked
+        .iter()
+        .position(|(_, _, tool)| tool["function"]["name"] == crate::visual_snapshot::TOOL)
+    {
+        let snapshot = ranked.remove(pos);
+        ranked.insert(
+            usize::from(has_handles) + usize::from(more_knowledge),
+            snapshot,
+        );
+    }
     let mut bytes = 2;
     let mut selected = Vec::new();
     for (_, _, tool) in ranked {
@@ -1390,6 +1402,7 @@ pub fn tool_definitions() -> serde_json::Value {
         6,
         serde_json::json!({"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}}),
     );
+    tools.push(crate::visual_snapshot::tool_definition());
     tools.push(serde_json::json!({"type":"function","function":{"name":MEMORY_RECALL_TOOL,"description":"Read this conversation's archived memory: an earlier turn or a full tool result by id (mem:N), optionally only the parts matching query or a page from offset; or search the archive by query alone.","parameters":{"type":"object","properties":{"id":{"type":"string","description":"Archive handle such as mem:12"},"query":{"type":"string","maxLength":500,"description":"Words to look for"},"offset":{"type":"integer","minimum":0,"description":"Character offset to page through a long record"},"max_chars":{"type":"integer","minimum":200,"maximum":6000}},"additionalProperties":false}}}));
     tools.push(serde_json::json!({"type":"function","function":{"name":MEMORY_SEARCH_TOOL,"description":"Search what SAIL remembers long-term about the user: people, preferences, projects, decisions and facts from earlier conversations. Returns one fact per line.","parameters":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":500,"description":"Names or words to look for"},"limit":{"type":"integer","minimum":1,"maximum":20}},"required":["query"],"additionalProperties":false}}}));
     serde_json::Value::Array(tools)
@@ -1468,7 +1481,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 24);
+        assert_eq!(tools.len(), 25);
 
         let names: Vec<_> = tools
             .iter()
@@ -1495,6 +1508,7 @@ mod schema_selection_tests {
         assert!(names.contains(&"forge_clear"));
         assert!(names.contains(&"memory_recall"));
         assert!(names.contains(&"memory_search"));
+        assert!(names.contains(&"visual_snapshot"));
         for pulse in ["pulse_create", "pulse_list", "pulse_cancel", "pulse_snooze"] {
             assert!(names.contains(&pulse), "{pulse}");
         }

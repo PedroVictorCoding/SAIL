@@ -684,26 +684,63 @@ window.addEventListener('pagehide', () => {
   AdaptiveFeedEngine.stopDesktop();
 });
 
-// Screen sharing requires transient user activation: never invoke it from a
-// WebSocket callback. Preserve the original request until a frame is attached.
+// Model-requested snapshots (visual_snapshot tool). The model chooses camera or screen.
+// A source the user is already sharing live answers at once from its current frame; any
+// other capture needs the user's click in the dialog (screen sharing also requires
+// transient user activation, so it is never started from a WebSocket callback).
+// Matches what realtime voice demos send: enough for text on screen, few image tokens.
+const SNAPSHOT_MAX_EDGE = 768;
+const SNAPSHOT_QUALITY = 0.8;
 let pendingVisualCapture = null;
 const captureDialog = document.getElementById('captureDialog');
+
+function frameFromVideo(video) {
+  if (!video?.videoWidth) return null;
+  const scale = Math.min(1, SNAPSHOT_MAX_EDGE / Math.max(video.videoWidth, video.videoHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', SNAPSHOT_QUALITY);
+}
+function liveSnapshot(source) {
+  const engine = window.AdaptiveFeedEngine;
+  if (source === 'camera' && engine?.cameraActive) return frameFromVideo(document.getElementById('cameraVideo'));
+  if (source === 'screen' && engine?.desktopActive) return frameFromVideo(document.getElementById('desktopVideo'));
+  return null;
+}
+function deliverSnapshot(request, dataUrl) {
+  if (!sendAction('snapshot', { request_id:request.request_id, image:{ format:'image/jpeg', data_base64:dataUrl.split(',')[1] } })) return false;
+  renderArtifact({ artifact_type:'image', content:dataUrl });
+  updateState('thinking');
+  return true;
+}
 function cancelVisualCapture() {
   pendingVisualCapture = null;
   if (captureDialog.open) captureDialog.close();
 }
+// The user said no: tell the waiting turn so the model can answer without the image.
+function declineVisualCapture() {
+  const request = pendingVisualCapture;
+  cancelVisualCapture();
+  if (request) sendAction('snapshot', { request_id:request.request_id, error:'The user declined the capture.' });
+}
 function requestVisualCapture(request) {
   cancelVisualCapture();
+  const live = liveSnapshot(request.source);
+  if (live && deliverSnapshot(request, live)) return;
   pendingVisualCapture = request;
-  document.getElementById('captureExplanation').textContent = request.source === 'screen'
-    ? 'Share a screen or window to take one screenshot for local analysis.'
-    : request.source === 'camera'
-      ? 'Allow camera access to take one picture for local analysis.'
-      : 'Camera picture or screenshot? Choose what SAIL should see for local analysis.';
-  document.getElementById('captureCameraChoice').hidden = request.source === 'screen';
-  document.getElementById('captureScreenChoice').hidden = request.source === 'camera';
-  updateState('idle');
+  const why = request.question ? ` SAIL wants to know: “${request.question}”` : '';
+  document.getElementById('captureTitle').textContent = request.source === 'screen' ? 'SAIL wants to see your screen' : 'SAIL wants to see your camera';
+  document.getElementById('captureExplanation').textContent = (request.source === 'screen'
+    ? 'Share a screen or window to take one screenshot. It is analyzed locally.'
+    : 'Allow the camera to take one picture. It is analyzed locally.') + why;
+  // The model chose a source; the user can still pick the other one or cancel.
+  const cameraChoice = document.getElementById('captureCameraChoice');
+  const screenChoice = document.getElementById('captureScreenChoice');
+  cameraChoice.hidden = false; screenChoice.hidden = false;
   captureDialog.showModal();
+  (request.source === 'screen' ? screenChoice : cameraChoice).focus();
 }
 async function captureRequestedVisual(source) {
   const request = pendingVisualCapture;
@@ -713,6 +750,8 @@ async function captureRequestedVisual(source) {
   buttons.forEach(button => button.disabled = true);
   try {
     if (!window.isSecureContext) throw new Error('Capture requires HTTPS or localhost.');
+    const live = liveSnapshot(source);
+    if (live) { if (deliverSnapshot(request, live)) cancelVisualCapture(); return; }
     // Invoke the browser permission picker synchronously from this click.
     if (source === 'screen') {
       if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Screen capture is unavailable in this browser.');
@@ -729,16 +768,8 @@ async function captureRequestedVisual(source) {
       new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for an image frame.')), 10000))
     ]);
     if (pendingVisualCapture !== request) return;
-    const scale = Math.min(1, 960 / video.videoWidth, 720 / video.videoHeight);
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-    const data = canvas.toDataURL('image/jpeg', .86);
-    if (sendAction('text', { text:request.prompt, vision:{ format:'image/jpeg', data_base64:data.split(',')[1] } })) {
-      renderArtifact({ artifact_type:'image', content:data });
-      cancelVisualCapture(); updateState('thinking');
-    }
+    const data = frameFromVideo(video);
+    if (data && deliverSnapshot(request, data)) cancelVisualCapture();
   } catch (error) {
     if (pendingVisualCapture === request) showError(error.name === 'NotAllowedError'
       ? 'Capture cancelled or permission denied. Choose a source to retry, or cancel.' : error.message);
@@ -749,8 +780,8 @@ async function captureRequestedVisual(source) {
 }
 document.getElementById('captureCameraChoice').addEventListener('click', () => captureRequestedVisual('camera'));
 document.getElementById('captureScreenChoice').addEventListener('click', () => captureRequestedVisual('screen'));
-document.getElementById('captureCancel').addEventListener('click', cancelVisualCapture);
-captureDialog.addEventListener('cancel', cancelVisualCapture);
+document.getElementById('captureCancel').addEventListener('click', declineVisualCapture);
+captureDialog.addEventListener('cancel', (event) => { event.preventDefault(); declineVisualCapture(); });
 window.addEventListener('pagehide', cancelVisualCapture);
 
 // Auto-ping live metrics & models on page startup
