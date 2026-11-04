@@ -80,7 +80,7 @@ pub async fn run_dialogue_server(
         addr,
         bus,
         VoiceModelServices::new(),
-        Arc::new(sail_arena::ArenaSubsystem::new()),
+        Arc::new(sail_arena::ArenaSubsystem::open_default()),
     )
     .await
 }
@@ -2685,6 +2685,12 @@ mod tests {
                 file.write_all(&sample.to_le_bytes()).unwrap();
             }
         }
+    }
+
+    fn test_guardian() -> &'static sail_guardian::GuardianSubsystem {
+        static GUARDIAN: std::sync::OnceLock<sail_guardian::GuardianSubsystem> =
+            std::sync::OnceLock::new();
+        GUARDIAN.get_or_init(sail_guardian::GuardianSubsystem::new)
     }
 
     // The conversational route must reach the measurement tool through Guardian, return the

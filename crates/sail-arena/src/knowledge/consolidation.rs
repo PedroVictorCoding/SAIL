@@ -62,7 +62,10 @@ pub fn normalize_concept_name(raw: &str) -> String {
         .trim()
         .trim_matches(|c: char| matches!(c, '*' | '#' | '"' | '\'' | ':' | '-' | ' '))
         .to_string();
-    if let Some(rest) = s.strip_prefix("Reading ").or_else(|| s.strip_prefix("reading ")) {
+    if let Some(rest) = s
+        .strip_prefix("Reading ")
+        .or_else(|| s.strip_prefix("reading "))
+    {
         s = rest.trim().to_string();
     }
     for sep in [" — ", " – ", " - ", " | ", " · ", " from "] {
@@ -108,15 +111,16 @@ pub fn compute_concept_aliases(
     }
 
     if name.contains('\'') || name.contains('’') {
-        let stripped: String = name
-            .chars()
-            .filter(|&c| c != '\'' && c != '’')
-            .collect();
+        let stripped: String = name.chars().filter(|&c| c != '\'' && c != '’').collect();
         push(stripped);
     } else {
         // E.g. "Rokos Basilisk" -> "Roko's Basilisk"
         let words: Vec<&str> = name.split_whitespace().collect();
-        if words.len() >= 2 && words[0].len() >= 4 && words[0].ends_with('s') && !words[0].ends_with("ss") {
+        if words.len() >= 2
+            && words[0].len() >= 4
+            && words[0].ends_with('s')
+            && !words[0].ends_with("ss")
+        {
             let stem = &words[0][..words[0].len() - 1];
             let mut possessive = format!("{stem}'s");
             for w in &words[1..] {
@@ -147,7 +151,10 @@ pub fn compute_concept_aliases(
 fn first_url(text: &str) -> Option<String> {
     for token in text.split_whitespace() {
         let clean = token.trim_matches(|c: char| {
-            matches!(c, '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | ',' | '.' | ';')
+            matches!(
+                c,
+                '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | ',' | '.' | ';'
+            )
         });
         if (clean.starts_with("https://") || clean.starts_with("http://")) && clean.len() > 10 {
             return Some(clean.to_string());
@@ -219,12 +226,18 @@ pub(crate) fn extract_learned_turn(body: &str) -> Option<Candidate> {
     let asks_to_learn = url.is_some()
         || user_lower.starts_with("read ")
         || user_lower.starts_with("what is ")
+        || user_lower.starts_with("what are ")
         || user_lower.starts_with("who is ")
+        || user_lower.starts_with("how does ")
+        || user_lower.starts_with("how is ")
+        || user_lower.starts_with("tell me ")
         || user_lower.starts_with("explain ")
         || user_lower.starts_with("define ")
         || user_lower.starts_with("summarize ")
         || user_lower.contains("read me ")
-        || user_lower.contains("read this ");
+        || user_lower.contains("read this ")
+        || assistant.starts_with("## ")
+        || assistant.contains("\n## ");
     if !asks_to_learn {
         return None;
     }
@@ -233,10 +246,15 @@ pub(crate) fn extract_learned_turn(body: &str) -> Option<Candidate> {
     let mut paragraphs: Vec<String> = Vec::new();
 
     // 1. Check for `titled **"Title"**` or `titled "Title"`
-    for marker in ["titled **\"", "titled \"", "titled **'", "titled '"] {
+    for (marker, close_quote) in [
+        ("titled **\"", '"'),
+        ("titled \"", '"'),
+        ("titled **'", '\''),
+        ("titled '", '\''),
+    ] {
         if let Some(idx) = assistant.find(marker) {
             let after = &assistant[idx + marker.len()..];
-            if let Some(end) = after.find(['"', '\'']) {
+            if let Some(end) = after.find(close_quote) {
                 let candidate = normalize_concept_name(&after[..end]);
                 if candidate.chars().count() >= 2 && candidate.chars().count() <= 120 {
                     subject = Some(candidate);
@@ -284,7 +302,9 @@ pub(crate) fn extract_learned_turn(body: &str) -> Option<Candidate> {
         {
             let bold_lead = normalize_concept_name(&block[2..2 + end]);
             let after = block[2 + end + 2..].trim_start();
-            if (after.starts_with("is ") || after.starts_with("was ") || after.starts_with("refers to "))
+            if (after.starts_with("is ")
+                || after.starts_with("was ")
+                || after.starts_with("refers to "))
                 && bold_lead.chars().count() >= 2
                 && bold_lead.chars().count() <= 120
             {
@@ -486,12 +506,17 @@ impl KnowledgeStore<'_> {
     ) -> KnowledgeResult<Option<i64>> {
         let clean = normalize_concept_name(name);
         let aliases = compute_concept_aliases(&clean, extra_aliases, source_ref);
-        self.read(|conn| find_existing_learned_claim_in_conn(conn, scope, &clean, &aliases, predicate, source_ref))
+        self.read(|conn| {
+            find_existing_learned_claim_in_conn(
+                conn, scope, &clean, &aliases, predicate, source_ref,
+            )
+        })
     }
 
-    /// Add learned knowledge to memory at most once: checks if an active claim for the concept
-    /// (by canonical name, alias, or URL `source_ref`) already exists in `scope`. Returns
-    /// `(claim_id, true)` when newly added, or `(existing_claim_id, false)` when already present.
+    /// Add learned knowledge to memory at most once for redundant content, or expand an
+    /// existing memory when future observations bring substantive new details. Returns
+    /// `(claim_id, true)` when newly added or expanded, or `(existing_claim_id, false)`
+    /// when already covered by existing memory.
     #[allow(clippy::too_many_arguments)]
     pub fn learn_once(
         &self,
@@ -521,16 +546,17 @@ impl KnowledgeStore<'_> {
                 predicate,
                 source_ref,
             )? {
-                if let Ok(subject_id) = tx.conn.query_row(
-                    "SELECT subject_id FROM kn_claims WHERE id=?1",
-                    [existing_claim],
-                    |r| r.get::<_, i64>(0),
-                ) {
-                    for alias in &aliases {
-                        let _ = tx.add_alias(subject_id, alias);
-                    }
-                }
-                return Ok((existing_claim, false));
+                return maybe_expand_learned_claim_in_tx(
+                    tx,
+                    scope,
+                    existing_claim,
+                    &clean_name,
+                    &aliases,
+                    predicate,
+                    clean_value,
+                    source_ref,
+                    direct,
+                );
             }
             let observed_at = crate::store::now_ms();
             let src_ref = source_ref.unwrap_or("conversation:learned");
@@ -575,6 +601,208 @@ impl KnowledgeStore<'_> {
             Ok((claim, true))
         })
     }
+}
+
+const FRAMING_WORDS: &[&str] = &[
+    "page",
+    "titled",
+    "wiki",
+    "entry",
+    "explains",
+    "originally",
+    "posted",
+    "named",
+    "website",
+    "article",
+    "content",
+    "section",
+    "summary",
+    "overview",
+    "http",
+    "https",
+    "www",
+    "com",
+    "org",
+    "net",
+    "read",
+    "source",
+];
+
+fn split_source_suffix(text: &str) -> (&str, Option<&str>) {
+    if let Some(idx) = text.rfind(" (source: ")
+        && text.ends_with(')')
+    {
+        return (text[..idx].trim_end(), Some(&text[idx..]));
+    }
+    (text.trim(), None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn maybe_expand_learned_claim_in_tx(
+    tx: &mut KnowledgeTx<'_>,
+    scope: &str,
+    existing_claim: i64,
+    clean_name: &str,
+    aliases: &[String],
+    predicate: &str,
+    clean_value: &str,
+    source_ref: Option<&str>,
+    direct: bool,
+) -> KnowledgeResult<(i64, bool)> {
+    let Ok((subject_id, existing_value, existing_status_str)) = tx.conn.query_row(
+        "SELECT subject_id, COALESCE(object_value,''), status FROM kn_claims WHERE id=?1",
+        [existing_claim],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        },
+    ) else {
+        return Ok((existing_claim, false));
+    };
+    for alias in aliases {
+        let _ = tx.add_alias(subject_id, alias);
+    }
+
+    let mut existing_terms = crate::store::knowledge_terms(clean_name);
+    for alias in aliases {
+        for t in crate::store::knowledge_terms(alias) {
+            if !existing_terms.contains(&t) {
+                existing_terms.push(t);
+            }
+        }
+    }
+    let active_values: Vec<String> = {
+        let mut stmt = tx.conn.prepare(
+            "SELECT object_value FROM kn_claims
+             WHERE subject_id=?1 AND scope=?2 AND object_value IS NOT NULL
+               AND status NOT IN ('superseded','invalidated')",
+        )?;
+        stmt.query_map(params![subject_id, scope], |r| r.get(0))?
+            .collect::<Result<_, _>>()?
+    };
+    for val in &active_values {
+        let (body, _) = split_source_suffix(val);
+        for t in crate::store::knowledge_terms(body) {
+            if !existing_terms.contains(&t) {
+                existing_terms.push(t);
+            }
+        }
+    }
+
+    let (candidate_body, candidate_source) = split_source_suffix(clean_value);
+    let candidate_terms: Vec<String> = crate::store::knowledge_terms(candidate_body)
+        .into_iter()
+        .filter(|t| !FRAMING_WORDS.contains(&t.as_str()))
+        .collect();
+    let novel_terms: Vec<String> = candidate_terms
+        .iter()
+        .filter(|t| !existing_terms.contains(t))
+        .cloned()
+        .collect();
+    let novel_ratio = novel_terms.len() as f64 / candidate_terms.len().max(1) as f64;
+    if novel_terms.len() < 4 || novel_ratio < 0.45 {
+        return Ok((existing_claim, false));
+    }
+
+    // Extract sentences from candidate_body that carry novel terms.
+    let mut novel_sentences: Vec<String> = Vec::new();
+    for sentence in candidate_body.split(['.', '!', '?']) {
+        let s = sentence.trim();
+        if s.len() < 16 {
+            continue;
+        }
+        let s_terms = crate::store::knowledge_terms(s);
+        let hits = s_terms.iter().filter(|t| novel_terms.contains(t)).count();
+        if hits >= 2 {
+            novel_sentences.push(format!("{s}."));
+        }
+    }
+    let addition = if novel_sentences.is_empty() {
+        candidate_body.to_string()
+    } else {
+        novel_sentences.join(" ")
+    };
+
+    let (base_existing, existing_source) = split_source_suffix(&existing_value);
+    if base_existing.chars().count() >= 680 {
+        return Ok((existing_claim, false));
+    }
+    let base_trimmed = base_existing.trim_end();
+    let sep = if base_trimmed.ends_with(['.', '!', '?']) {
+        " "
+    } else {
+        ". "
+    };
+    let mut combined = crate::compaction::clip(&format!("{base_trimmed}{sep}{addition}"), 700);
+    if let Some(src_suffix) = existing_source.or(candidate_source)
+        && !combined.contains(src_suffix.trim())
+    {
+        combined = crate::compaction::clip(&format!("{combined}{src_suffix}"), 780);
+    }
+    if combined == existing_value {
+        return Ok((existing_claim, false));
+    }
+
+    let observed_at = crate::store::now_ms();
+    let src_ref = source_ref.unwrap_or("conversation:learned");
+    let new_evidence = tx.add_evidence(&NewEvidence {
+        source_kind: if direct {
+            SourceKind::ToolObservation
+        } else {
+            SourceKind::UserStatement
+        },
+        source_ref: Some(src_ref),
+        observed_at,
+        content: clean_value,
+        receipt: Some(clean_value),
+        derived_from: None,
+        verification: None,
+        scope,
+    })?;
+    let mut evidence_links: Vec<(i64, Stance)> = {
+        let mut stmt = tx.conn.prepare(
+            "SELECT evidence_id FROM kn_claim_evidence WHERE claim_id=?1 AND stance='supports'",
+        )?;
+        stmt.query_map([existing_claim], |r| Ok((r.get(0)?, Stance::Supports)))?
+            .collect::<Result<_, _>>()?
+    };
+    if !evidence_links.iter().any(|(id, _)| *id == new_evidence) {
+        evidence_links.push((new_evidence, Stance::Supports));
+    }
+    let status = if direct || existing_status_str == "verified" {
+        EpistemicStatus::Verified
+    } else {
+        EpistemicStatus::UserReported
+    };
+    let new_claim = tx.assert_claim(
+        &NewClaim {
+            subject: subject_id,
+            predicate,
+            object: ClaimObject::Value(combined),
+            category: ClaimCategory::Fact,
+            basis: None,
+            status,
+            inference_confidence: None,
+            observed_at,
+            valid_from: None,
+            valid_until: None,
+            retention: Retention::Durable,
+            scope,
+            sensitivity: Sensitivity::Private,
+        },
+        &evidence_links,
+    )?;
+    if new_claim != existing_claim {
+        tx.supersede(
+            existing_claim,
+            new_claim,
+            "expanded existing memory with additional context",
+        )?;
+    }
+    Ok((new_claim, true))
 }
 
 fn find_existing_learned_claim_in_conn(
@@ -659,16 +887,18 @@ pub(crate) fn apply_candidate(
             c.source_ref.as_deref(),
         )?
     {
-        if let Ok(subject_id) = tx.conn.query_row(
-            "SELECT subject_id FROM kn_claims WHERE id=?1",
-            [existing_claim],
-            |r| r.get::<_, i64>(0),
-        ) {
-            for alias in &aliases {
-                let _ = tx.add_alias(subject_id, alias);
-            }
-        }
-        return Ok(existing_claim);
+        let (claim_id, _) = maybe_expand_learned_claim_in_tx(
+            tx,
+            scope,
+            existing_claim,
+            &c.name,
+            &aliases,
+            &c.predicate,
+            &c.value,
+            c.source_ref.as_deref(),
+            c.direct,
+        )?;
+        return Ok(claim_id);
     }
     let mut lookup_keys = vec![name_key(&c.name)];
     for alias in &aliases {

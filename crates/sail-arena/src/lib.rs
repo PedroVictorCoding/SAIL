@@ -100,6 +100,18 @@ impl ArenaSubsystem {
             return Self::new();
         }
         let path = default_store_path();
+        if std::env::var_os("SAIL_ARENA_DB").is_none()
+            && matches!(
+                sail_common::storage::resolve().source,
+                sail_common::storage::DataRootSource::DataDisk
+            )
+        {
+            for legacy in legacy_store_paths() {
+                if legacy != path {
+                    let _ = sail_common::storage::migrate_legacy(&legacy, &path);
+                }
+            }
+        }
         match MemoryStore::open(&path) {
             Ok(store) => {
                 info!(path = %path.display(), "SAIL Arena memory store opened");
@@ -145,6 +157,17 @@ pub fn default_store_path() -> PathBuf {
         return PathBuf::from(path);
     }
     sail_common::storage::data_path("arena").join("arena.db")
+}
+
+fn legacy_store_paths() -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from(".local/arena.db")];
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
+        paths.push(xdg.join("sail/arena/arena.db"));
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        paths.push(home.join(".local/share/sail/arena/arena.db"));
+    }
+    paths
 }
 
 impl Default for ArenaSubsystem {

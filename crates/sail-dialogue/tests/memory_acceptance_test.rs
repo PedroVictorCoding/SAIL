@@ -297,6 +297,76 @@ fn website_conversation_adds_learned_knowledge_once_and_reuses_when_context_will
 
     // 4. Not included when context is unrelated.
     assert!(owner_knowledge_context(&arena, "What is the weather forecast tomorrow?").is_none());
+
+    // 5. Existing memories expand in the future when substantive new details are learned.
+    let (expanded_id, expanded_added) = arena
+        .learn_from_conversation_turn(
+            "voice",
+            "How does Roko's Basilisk relate to decision theory?",
+            "## Roko's Basilisk\n\n**Roko's Basilisk** relies on timeless decision theory and Newcomb's paradox, where a precommitted agent cooperates across acausal trade simulations, and was banned on LessWrong by Eliezer Yudkowsky as an information hazard.",
+        )
+        .expect("expanded claim should be created");
+    assert!(
+        expanded_added,
+        "substantive novel facts should expand the existing memory"
+    );
+    assert_ne!(expanded_id, claim_id);
+
+    let entities_after = store.knowledge().entities(&Access::owner(), 50).unwrap();
+    assert_eq!(
+        entities_after.len(),
+        1,
+        "expansion must reuse the existing entity: {entities_after:?}"
+    );
+    let active_claims = store
+        .knowledge()
+        .claims_about(entities_after[0].0.id, &Access::owner(), false)
+        .unwrap();
+    assert_eq!(
+        active_claims.len(),
+        1,
+        "expanded claim should supersede the previous summary so one active summary remains"
+    );
+    assert_eq!(active_claims[0].id, expanded_id);
+    let ClaimObject::Value(ref expanded_value) = active_claims[0].object else {
+        panic!("expected value claim");
+    };
+    assert!(expanded_value.contains("2010"), "{expanded_value}");
+    assert!(expanded_value.contains("Newcomb"), "{expanded_value}");
+    assert!(
+        expanded_value.contains("Eliezer Yudkowsky"),
+        "{expanded_value}"
+    );
+    let evidence = store
+        .knowledge()
+        .evidence(expanded_id, &Access::owner())
+        .unwrap();
+    assert_eq!(
+        evidence.len(),
+        2,
+        "expanded claim should preserve prior evidence and attach new evidence"
+    );
+
+    let ctx_expanded = owner_knowledge_context(
+        &arena,
+        "How does Roko's Basilisk relate to Newcomb's paradox and Eliezer Yudkowsky?",
+    )
+    .expect("expanded memory should be retrievable via newly added terms");
+    assert!(ctx_expanded.contains("2010"), "{ctx_expanded}");
+    assert!(
+        ctx_expanded.contains("timeless decision theory"),
+        "{ctx_expanded}"
+    );
+
+    if std::env::var_os("SAIL_ARENA_DB").is_none()
+        && std::env::var_os("SAIL_DATA").is_none()
+        && std::path::Path::new("/srv/sail-data").is_dir()
+    {
+        assert_eq!(
+            sail_arena::default_store_path(),
+            std::path::PathBuf::from("/srv/sail-data/arena/arena.db")
+        );
+    }
 }
 
 trait TestLearning {
