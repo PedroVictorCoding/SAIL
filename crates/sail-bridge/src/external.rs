@@ -574,6 +574,26 @@ mod tests {
             )
             .is_err()
         );
+        // A wildcard is valid in the vault, but this connector requires an exact
+        // provider inference scope. The vault's own scope check is not a substitute.
+        let wildcard = vault
+            .store_credential(
+                SubsystemId::Bridge,
+                "wildcard-key",
+                "wildcard-secret",
+                "*",
+                chrono::Duration::hours(1),
+            )
+            .unwrap();
+        assert!(
+            OpenAiTextConnector::new(
+                "https://example.org/v1/chat/completions",
+                "test",
+                vault.clone(),
+                wildcard,
+            )
+            .is_err()
+        );
         assert!(
             OpenAiTextConnector::new(
                 "https://example.org/v1/chat/completions",
