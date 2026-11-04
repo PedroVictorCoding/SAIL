@@ -45,6 +45,23 @@ impl Tool for NamedKernel {
             .await
     }
 }
+struct PulseTool(&'static str);
+#[async_trait]
+impl Tool for PulseTool {
+    async fn execute(&self, _context: ToolContext, input: Value) -> Result<Value, ToolFailure> {
+        let pulse = sail_pulse::global().ok_or_else(|| ToolFailure {
+            message: "Pulse reminders are not available in this session".into(),
+            retryable: false,
+        })?;
+        execute_pulse_tool(&pulse, self.0, input)
+            .map(|value| Value::String(value.to_string()))
+            .map_err(|message| ToolFailure {
+                message,
+                retryable: false,
+            })
+    }
+}
+
 struct Command;
 #[async_trait]
 impl Tool for Command {
@@ -122,7 +139,7 @@ impl Tool for Canvas {
 /// Dialogue's tools as the model sees them, in the order the voice tool list offers them
 /// (ties in tool selection keep this order). `vision_frame` and `memory_recall` are not
 /// here: they act on the current turn's image and archive, not through the scheduler.
-pub(crate) const MODEL_TOOL_ORDER: [&str; 16] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 20] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -134,6 +151,10 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 16] = [
     "github:issues",
     "web:read",
     "studio:audio_analyze",
+    "pulse:create",
+    "pulse:list",
+    "pulse:cancel",
+    "pulse:snooze",
     "forge:enqueue",
     "forge:status",
     "forge:list",
@@ -328,6 +349,70 @@ pub fn registry() -> Arc<ToolRegistry> {
             )
             .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
     }
+    let pulse_tools: [(&'static str, &'static str, Value, &'static [&'static str], ToolEffect, usize); 4] = [
+        (
+            "pulse:create",
+            "Create a local one-time reminder. Convert the requested time to a concrete RFC 3339 due_at. If the time is ambiguous, call with preview=true first and show the interpreted local time before saving.",
+            json!({
+                "text": string(2000, "What to remind the user about"),
+                "due_at": string(64, "Due time as an RFC 3339 timestamp, e.g. 2026-11-04T18:30:00Z"),
+                "timezone": string(64, "Optional IANA time zone; defaults to the user's saved zone"),
+                "utc_offset_minutes": {"type":"integer","minimum":-840,"maximum":840,"description":"Optional local offset from UTC in minutes"},
+                "preview": {"type":"boolean","description":"When true, show the interpreted time without saving"}
+            }),
+            &["text", "due_at"],
+            ToolEffect::Mutating,
+            2,
+        ),
+        (
+            "pulse:list",
+            "List the user's active local reminders with their ids, due times, status and snooze count.",
+            json!({"include_finished": {"type":"boolean","description":"Also include recently delivered and cancelled reminders"}}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "pulse:cancel",
+            "Cancel a pending or due local reminder by id.",
+            json!({"id": string(64, "Reminder id from pulse:list")}),
+            &["id"],
+            ToolEffect::Mutating,
+            2,
+        ),
+        (
+            "pulse:snooze",
+            "Move a local reminder to a later time. Provide either minutes or an RFC 3339 until timestamp.",
+            json!({
+                "id": string(64, "Reminder id from pulse:list"),
+                "minutes": {"type":"integer","minimum":1,"maximum":10080,"description":"Minutes from now"},
+                "until": string(64, "New due time as an RFC 3339 timestamp")
+            }),
+            &["id"],
+            ToolEffect::Mutating,
+            2,
+        ),
+    ];
+    for (id, description, properties, required, effect, concurrency_limit) in pulse_tools {
+        registry
+            .register(
+                ToolDescriptor {
+                    id: id.into(),
+                    version: 1,
+                    description: description.into(),
+                    input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+                    output_schema: json!({"type":"string","maxLength":65536}),
+                    security_effect: effect,
+                    required_capabilities: vec![id.into()],
+                    timeout_ms: 5000,
+                    resource_class: "io".into(),
+                    concurrency_limit,
+                },
+                Arc::new(PulseTool(id)),
+            )
+            .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
+    }
+
     registry.register(ToolDescriptor {
         id:"command:execute".into(),version:1,description:"Execute a command in the isolated no-network runner after exact owner approval. Never host shell execution. Runner may be unavailable.".into(),
         input_schema:json!({"type":"object","properties":{"executable":{"type":"string","maxLength":4096},"argv":{"type":"array","maxItems":128,"items":{"type":"string","maxLength":8192}}},"required":["executable","argv"],"additionalProperties":false}),
@@ -367,6 +452,103 @@ pub fn shared() -> Result<Arc<ToolScheduler>, sail_guardian::ExecutionDenied> {
     let instance = scheduler(sail_guardian::global_broker()?);
     Ok(SCHEDULER.get_or_init(|| instance).clone())
 }
+
+/// Execute one Pulse tool against the process-wide store and return a JSON observation.
+fn execute_pulse_tool(pulse: &sail_pulse::Pulse, tool: &str, input: Value) -> Result<Value, String> {
+    let settings = pulse.settings().map_err(|error| error.to_string())?;
+    match tool {
+        "pulse:create" => {
+            let text = input["text"].as_str().unwrap_or_default();
+            let due_text = input["due_at"].as_str().unwrap_or_default();
+            let due_at = chrono::DateTime::parse_from_rfc3339(due_text)
+                .map_err(|_| "due_at must be an RFC 3339 timestamp with an offset".to_string())?
+                .with_timezone(&chrono::Utc);
+            let timezone = input["timezone"]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(&settings.timezone)
+                .to_owned();
+            let utc_offset_minutes = input["utc_offset_minutes"]
+                .as_i64()
+                .map(|value| value as i32)
+                .unwrap_or(settings.utc_offset_minutes);
+            let new = sail_pulse::NewReminder::new(
+                text,
+                due_at,
+                timezone,
+                utc_offset_minutes,
+            )
+            .map_err(|error| error.to_string())?;
+            let local = due_at.with_timezone(
+                &chrono::FixedOffset::east_opt(utc_offset_minutes * 60)
+                    .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).expect("UTC offset")),
+            );
+            let interpreted = json!({
+                "text": new.text,
+                "due_at": due_at,
+                "due_local": local.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+                "timezone": new.timezone,
+            });
+            if input["preview"].as_bool() == Some(true) {
+                return Ok(json!({
+                    "preview": true,
+                    "saved": false,
+                    "interpreted": interpreted,
+                    "message": format!("This reminder would be set for {}. Confirm to save it.", interpreted["due_local"]),
+                }));
+            }
+            let reminder = pulse.create(new).map_err(|error| error.to_string())?;
+            Ok(json!({
+                "saved": true,
+                "reminder": reminder,
+                "message": format!("Reminder saved for {}.", interpreted["due_local"]),
+            }))
+        }
+        "pulse:list" => {
+            let reminders = pulse
+                .list_active(sail_pulse::DEFAULT_LIST_LIMIT)
+                .map_err(|error| error.to_string())?;
+            let mut output = json!({"reminders": reminders, "count": reminders.len()});
+            if input["include_finished"].as_bool() == Some(true) {
+                output["history"] = json!(
+                    pulse
+                        .list_history(sail_pulse::DEFAULT_HISTORY_LIMIT)
+                        .map_err(|error| error.to_string())?
+                );
+            }
+            Ok(output)
+        }
+        "pulse:cancel" => {
+            let id = input["id"]
+                .as_str()
+                .ok_or_else(|| "id is required".to_string())?;
+            let reminder = pulse.cancel(id).map_err(|error| error.to_string())?;
+            Ok(json!({"reminder": reminder, "message": format!("Reminder {} cancelled.", reminder.id)}))
+        }
+        "pulse:snooze" => {
+            let id = input["id"]
+                .as_str()
+                .ok_or_else(|| "id is required".to_string())?;
+            let until = match (
+                input["minutes"].as_u64(),
+                input["until"].as_str().filter(|value| !value.trim().is_empty()),
+            ) {
+                (Some(minutes), None) if (1..=10_080).contains(&minutes) => {
+                    chrono::Utc::now() + chrono::Duration::minutes(minutes as i64)
+                }
+                (Some(_), None) => return Err("minutes must be between 1 and 10080".into()),
+                (None, Some(until)) => chrono::DateTime::parse_from_rfc3339(until)
+                    .map_err(|_| "until must be an RFC 3339 timestamp".to_string())?
+                    .with_timezone(&chrono::Utc),
+                _ => return Err("provide either minutes or until, not both".into()),
+            };
+            let reminder = pulse.snooze(id, until).map_err(|error| error.to_string())?;
+            Ok(json!({"reminder": reminder, "message": format!("Reminder snoozed until {}.", reminder.due_at)}))
+        }
+        other => Err(format!("Unknown Pulse tool: {other}")),
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

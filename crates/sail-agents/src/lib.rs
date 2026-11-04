@@ -234,6 +234,10 @@ pub fn authorize_voice_operation(tool: &str) -> sail_common::error::Result<&'sta
         "github:issues" | "github_issues" => Ok("github:issues"),
         "web:read" | "web_read" => Ok("web:read"),
         "studio:audio_analyze" | "studio_audio_analyze" => Ok("studio:audio_analyze"),
+        "pulse:create" | "pulse_create" => Ok("pulse:create"),
+        "pulse:list" | "pulse_list" => Ok("pulse:list"),
+        "pulse:cancel" | "pulse_cancel" => Ok("pulse:cancel"),
+        "pulse:snooze" | "pulse_snooze" => Ok("pulse:snooze"),
         _ => Err(sail_common::error::SailError::ToolExecution(format!(
             "Operation {tool} is not authorized"
         ))),

@@ -324,6 +324,53 @@
           </div>
         </article>
 
+        <article class="workspace-card pulse-card" id="pulseCard" data-card="pulseCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">◷</span><div><h3 id="pulseCardHeading">Pulse</h3><p id="pulseCardSub">Local reminders and timing</p></div></div>
+            <div class="card-heading-actions">
+              <span class="card-live-badge" id="pulseLiveBadge" title="Server-owned reminder scheduler"><i class="live-dot"></i>Local</span>
+              <button class="card-action" id="pulseRefreshBtn" type="button" aria-label="Refresh reminders" title="Refresh reminders">↻</button>
+            </div>
+          </header>
+          <div class="pulse-layout">
+            <section class="pulse-compose" aria-labelledby="pulseComposeTitle">
+              <h4 id="pulseComposeTitle">New reminder</h4>
+              <form id="pulseForm">
+                <label for="pulseText">Remind me to</label>
+                <input id="pulseText" maxlength="2000" required placeholder="e.g. stretch and drink water" autocomplete="off">
+                <label for="pulseDue">When</label>
+                <input id="pulseDue" type="datetime-local" required>
+                <p class="pulse-tz" id="pulseTimezone">Times use your local time zone.</p>
+                <div class="pulse-presets" role="group" aria-label="Quick reminder times">
+                  <button type="button" data-pulse-preset="20">In 20 min</button>
+                  <button type="button" data-pulse-preset="60">In 1 hour</button>
+                  <button type="button" data-pulse-preset="1440">Tomorrow</button>
+                </div>
+                <button type="submit" class="pulse-primary" id="pulseCreateBtn">Create reminder</button>
+                <p class="pulse-status" id="pulseStatus" role="status"></p>
+              </form>
+            </section>
+            <section class="pulse-list-wrap" aria-labelledby="pulseListTitle">
+              <h4 id="pulseListTitle">Upcoming</h4>
+              <div id="pulseList" class="pulse-list" aria-live="polite"></div>
+              <details class="pulse-history"><summary>Recent</summary><div id="pulseHistory" class="pulse-list"></div></details>
+            </section>
+          </div>
+          <details class="pulse-settings">
+            <summary>Comfort settings</summary>
+            <form id="pulseSettingsForm">
+              <label class="pulse-check"><input type="checkbox" id="pulseQuietEnabled"> Quiet hours</label>
+              <div class="pulse-quiet-times"><label>From <input type="time" id="pulseQuietStart"></label><label>Until <input type="time" id="pulseQuietEnd"></label></div>
+              <label class="pulse-check"><input type="checkbox" id="pulseSpoken"> Speak reminders aloud (opt-in)</label>
+              <p class="pulse-note">Spoken reminders use your browser's local voice. Off by default.</p>
+              <label class="pulse-check"><input type="checkbox" id="pulseInApp"> Show in-app reminders</label>
+              <button type="submit" class="quiet-button" id="pulseSettingsSave">Save preferences</button>
+              <p class="pulse-status" id="pulseSettingsStatus" role="status"></p>
+            </form>
+          </details>
+        </article>
+
+
         <article class="workspace-card terminal-card" id="terminalCard" data-card="terminalCard">
           <header class="card-heading">
             <div class="card-title"><span class="card-icon" aria-hidden="true"></span><div><h3 id="terminalCardHeading">Terminal</h3><p id="terminalCardSub">Interactive developer shell</p></div></div>
@@ -432,6 +479,8 @@
         <video id="cameraPreview" autoplay muted playsinline aria-label="Live camera preview"></video>
         <button class="camera-capture" id="cameraCaptureBtn" type="button">Capture frame</button>
       </section>
+      <div class="reminder-alerts" id="reminderAlerts" aria-live="assertive" aria-label="Due reminders"></div>
+
       <div class="conversation" id="conversation" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions"></div>
       <div class="sr-only" id="assistantAnnounce" aria-live="polite" aria-atomic="true"></div>
       <div class="error-toast" id="error" role="alert" hidden></div>
@@ -871,6 +920,7 @@
 <script src="/forge.js" defer></script>
 <script src="/approvals.js" defer></script>
 <script src="/plans.js" defer></script>
+<script src="/reminders.js" defer></script>
 <script src="/subsystem-pages.js" defer></script>
 <script src="/memory.js" defer></script>
 <script src="/learn.js" defer></script>

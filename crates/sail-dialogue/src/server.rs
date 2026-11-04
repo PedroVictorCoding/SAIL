@@ -47,6 +47,7 @@ pub struct ServerState {
     arena: Arc<sail_arena::ArenaSubsystem>,
     inference: sail_mind::MindService,
     plans: Option<Arc<crate::plans::Plans>>,
+    pulse: Option<Arc<sail_pulse::Pulse>>,
 }
 /// Arena Learn's owner API over the resident model. Learning is unavailable (and logged)
 /// if its store cannot be opened; the rest of Dialogue still starts.
@@ -86,7 +87,7 @@ pub async fn run_dialogue_server_with_services(
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    run_dialogue_server_with_plans(addr, bus, services, arena, None).await
+    run_dialogue_server_with_plans(addr, bus, services, arena, None, None).await
 }
 pub async fn run_dialogue_server_with_plans(
     addr: SocketAddr,
@@ -94,6 +95,7 @@ pub async fn run_dialogue_server_with_plans(
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
     plans: Option<Arc<crate::plans::Plans>>,
+    pulse: Option<Arc<sail_pulse::Pulse>>,
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inference = match services.inference() {
         Some(service) => service,
@@ -111,6 +113,9 @@ pub async fn run_dialogue_server_with_plans(
     let plan_routes = plans
         .clone()
         .map(|plans| crate::plans::router(plans, authority()));
+    let pulse_routes = pulse
+        .clone()
+        .map(|pulse| crate::pulse_http::router(pulse, authority()));
     let approval_routes = crate::approval_http::router_with_token(
         owner_authority,
         sail_guardian::global_broker().ok(),
@@ -272,6 +277,15 @@ pub async fn run_dialogue_server_with_plans(
             }),
         )
         .route(
+            "/reminders.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/reminders.js"),
+                )
+            }),
+        )
+        .route(
             "/terminal.js",
             get(|| async {
                 (
@@ -317,10 +331,13 @@ pub async fn run_dialogue_server_with_plans(
             arena,
             inference,
             plans,
+            pulse,
         }));
     if let Some(routes) = plan_routes {
         app = app.nest_service("/api/plans", routes);
     }
+    if let Some(routes) = pulse_routes {
+        app = app.nest_service("/api/pulse", routes);
     if let Some(routes) = learn_routes {
         app = app.nest_service("/api/learn", routes);
     }
@@ -670,6 +687,15 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
             }
         }
     }));
+    let _reminder_forwarder = state.pulse.as_ref().map(|pulse| {
+        let mut events = pulse.subscribe();
+        let tx = tx.clone();
+        AbortTask(tokio::spawn(async move {
+            while let Ok(reminder) = events.recv().await {
+                emit_session(&tx, json!({"type":"reminder_due","reminder":reminder})).await;
+            }
+        }))
+    });
     loop {
         tokio::select! {
             _=client_tools.0.join_next(), if !client_tools.0.is_empty()=>{},
@@ -1341,6 +1367,19 @@ async fn run_turn(
     let root = std::fs::canonicalize(&root)
         .map(|p| p.display().to_string())
         .unwrap_or(root);
+    let pulse_context = state
+        .pulse
+        .as_ref()
+        .and_then(|pulse| pulse.settings().ok())
+        .map(|settings| {
+            format!(
+                "\nCurrent time is {} UTC. The user's reminder time zone is {} (UTC offset {:+} minutes). For a phrase such as 'remind me in 20 minutes', compute the concrete UTC due time from the current time and call pulse_create with an RFC 3339 due_at. Tell the user the exact local time. If the requested time is ambiguous (for example 'later' or a bare date), call pulse_create with preview=true first, show the interpreted time, and save only after the user confirms.",
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+                settings.timezone,
+                settings.utc_offset_minutes
+            )
+        })
+        .unwrap_or_default();
     let mut messages = vec![
         json!({"role":"system","content":format!("You are SAIL, a unified local assistant with autonomous coding capabilities powered by SAIL Forge. Respond in the user's language, concisely. Describe available capabilities without calling tools when the user asks what tools you have. Only call tools for observations or tasks actually requested by the user. Available tools:
 - local_time: read the device UTC clock
@@ -1355,6 +1394,11 @@ async fn run_turn(
 - github_issues: list recent open GitHub issues or fetch full details of a specific issue by number or URL (e.g. issue_number: 125, or url: \"https://github.com/owner/repo/issues/125\")
 - web_read: read-only public web page and documentation fetcher from the internet without write permissions (e.g. url: \"https://...\")
 - studio_audio_analyze: measure a local audio file (integrated LUFS, true-peak estimate, loudness range, frequency balance, arrangement energy, tempo) and return grounded mixing recommendations plus a chart to display
+- pulse_create: create a local one-time reminder. Required: text, due_at as an RFC 3339 timestamp, and timezone (IANA name). Set preview=true to show the interpreted local time without saving when the request is ambiguous.
+- pulse_list: list the user's active reminders, including id, text, due time, status and snooze count
+- pulse_cancel: cancel a pending or due reminder by id
+- pulse_snooze: move a reminder to a later time by id, using either minutes (1-10080) or an RFC 3339 until timestamp
+
 
 - forge_enqueue: enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting
 - forge_status: check the status, review verdict and diff of a Forge coding job (accepts job_id or issue number, e.g. \"5\" or \"job-5\")
