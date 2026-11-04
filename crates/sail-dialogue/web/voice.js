@@ -809,7 +809,7 @@ async function startMic() {
       }
       if (!(data instanceof ArrayBuffer)) return;
       if (clientSpeechActive.stt) {
-        if (isRecording && !isMuted) { const frame = new Int16Array(data); const generation = clientFrameGeneration; clientFrames = clientFrames.then(() => handleClientFrame(frame, generation)); }
+        if (isRecording && !isMuted && !listeningReplyBusy()) { const frame = new Int16Array(data); const generation = clientFrameGeneration; clientFrames = clientFrames.then(() => handleClientFrame(frame, generation)); }
         return;
       }
       if (isRecording && !isMuted && !listeningReplyBusy() && ws?.readyState === WebSocket.OPEN) {
