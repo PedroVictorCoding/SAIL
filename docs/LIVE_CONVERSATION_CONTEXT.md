@@ -56,3 +56,33 @@ events, bounded context and absence
 of assistant/tool/archive activity, not acoustic accuracy. Real microphone/STT
 accuracy, end-to-end answer quality and Android capture still need target-device
 validation; no accuracy, latency or model-resource measurements are claimed.
+
+## Integration and review readiness
+
+Host PCM and on-device Whisper transcripts share the same observation-only policy.
+On-device captures carry a `capture_id` from `speech_start` to `voice_text`; reset,
+mute, consent changes and explicit typed turns invalidate pending capture. The
+browser also discards queued frames and late decoder results across those changes.
+Capture pauses while an explicit answer is being generated or played back, then
+resumes without treating synthesized speech as a new question.
+
+The protocol regression uses the real supervised worker bridge with fixture STT
+and a labelled loopback model stand-in: ambient speech makes no model request,
+an explicit question includes the quoted context, and reset removes that context
+and rejects late speech. It does not measure the resident model's answer quality.
+The fixture runs in a separate process so it cannot change parallel tests' speech
+worker configuration.
+
+For an optional real-Whisper smoke test, supply 16 kHz mono signed little-endian
+PCM containing the phrase “The launch is on Tuesday”, configure `SAIL_VOICE_PYTHON`,
+`SAIL_VOICE_WORKER` and `SAIL_VOICE_MODELS` for the installed offline runtime, then:
+
+```sh
+SAIL_TEST_CONTEXT_PCM=/path/to/consented-or-synthetic.pcm \
+  cargo test -p sail-dialogue --lib live_local_audio_smoke -- --ignored --nocapture
+```
+
+The sample is read only for this test; no microphone is opened or model downloaded.
+Target-device microphone/noise/overlap quality and Android capture remain manual
+acceptance checks. Review readiness covers implementation and deterministic
+integration; it is not an acoustic-accuracy or deployment claim.

@@ -255,6 +255,7 @@ impl LocalKernelToolBroker {
             "forge:clear" => Self::tool_forge_clear(&call.params),
             "github:issues" => Self::tool_github_issues(&call.params),
             "web:read" => Self::tool_web_read(&call.params),
+            "studio:audio_analyze" => Self::tool_studio_audio_analyze(&call.params),
             unknown => KernelToolResult {
                 tool: unknown.to_string(),
                 success: false,
@@ -268,6 +269,53 @@ impl LocalKernelToolBroker {
             tool: tool.into(),
             success: false,
             output: serde_json::json!({"error":message}),
+        }
+    }
+
+    /// studio:audio_analyze — objective loudness/peak/spectral/arrangement receipt for a local
+    /// audio file, plus the measurement-grounded strategist review and a Canvas chart.
+    fn tool_studio_audio_analyze(params: &serde_json::Value) -> KernelToolResult {
+        const TOOL: &str = "studio:audio_analyze";
+        let Some(file_path) = params.get("file_path").and_then(|value| value.as_str()) else {
+            return Self::error(TOOL, "file_path is required");
+        };
+        let path = match sail_bridge::studio_audio::confine_to_workspace(file_path) {
+            Ok(path) => path,
+            Err(error) => return Self::error(TOOL, &error),
+        };
+        let target_lufs = params.get("target_lufs").and_then(|value| value.as_f64());
+        let receipt = match sail_bridge::studio_audio::analyze_audio_file(&path, target_lufs) {
+            Ok(receipt) => receipt,
+            Err(error) => return Self::error(TOOL, &error),
+        };
+        let genre = params.get("genre_hint").and_then(|value| value.as_str());
+        let review =
+            sail_bridge::studio_audio::generate_strategist_review(&receipt, genre, target_lufs);
+        KernelToolResult {
+            tool: TOOL.into(),
+            success: true,
+            output: serde_json::json!({
+                "file_name": receipt.file_name,
+                "duration_seconds": receipt.duration_seconds,
+                "sample_rate": receipt.sample_rate,
+                "channels": receipt.channels,
+                "integrated_lufs": receipt.integrated_lufs,
+                "loudness_range_lu": receipt.loudness_range_lra,
+                "true_peak_dbtp": receipt.true_peak_db,
+                "rms_db": receipt.rms_db,
+                "clipping_detected": receipt.clipping_detected,
+                "estimated_bpm": receipt.estimated_bpm,
+                "frequency_bands": receipt.frequency_bands,
+                "sections": receipt.sections,
+                "review": {
+                    "loudness": review.loudness_verdict,
+                    "headroom": review.headroom_verdict,
+                    "dynamics": review.dynamic_contrast_verdict,
+                    "tonal_balance": review.tonal_balance_findings,
+                    "recommendations": review.strategic_recommendations,
+                },
+                "mermaid": review.canvas_card_mermaid,
+            }),
         }
     }
     /// os:status — Query OS kernel status, load averages, memory info directly from /proc
@@ -1146,26 +1194,16 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
     }
     serde_json::Value::Array(selected)
 }
+/// Every tool the voice model may call: the shared registry's tools
+/// (`crate::execution::registry`), plus the two that act on the current turn itself.
 pub fn tool_definitions() -> serde_json::Value {
-    serde_json::json!([
-        {"type":"function","function":{"name":"os_status","description":"Read local OS memory, uptime and load","parameters":{"type":"object","properties":{}}}},
-        {"type":"function","function":{"name":"proc_list","description":"List local processes","parameters":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":100}}}}},
-        {"type":"function","function":{"name":"fs_query","description":"Inspect a file or directory inside the authorized workspace. Use relative paths; dot (.) means the workspace root. Never probe outside paths or retry a denied query.","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}},
-        {"type":"function","function":{"name":"canvas_publish","description":"Display a diagram or structured visual beside the conversation","parameters":{"type":"object","properties":{"artifact_type":{"type":"string","enum":["mermaid","json","svg"]},"content":{"type":"string","maxLength":32700}},"required":["artifact_type","content"],"additionalProperties":false}}},
-        {"type":"function","function":{"name":"local_time","description":"Read the current local device UTC clock","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
-        {"type":"function","function":{"name":"command_execute","description":"Execute a command in the isolated no-network runner after exact owner approval. Never host shell execution. Runner may be unavailable.","parameters":{"type":"object","properties":{"executable":{"type":"string","maxLength":4096},"argv":{"type":"array","maxItems":128,"items":{"type":"string","maxLength":8192}}},"required":["executable","argv"],"additionalProperties":false}}},
-        {"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}},
-        {"type":"function","function":{"name":"fs_read","description":"Read text contents of a file inside the authorized workspace.","parameters":{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Relative path to the file in the workspace"}}}}},
-        {"type":"function","function":{"name":"fs_write","description":"Create or write a file inside the authorized workspace. Requires explicit user approval.","parameters":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string","description":"Relative path to write"},"content":{"type":"string","description":"File content to write"}}}}},
-        {"type":"function","function":{"name":"github_issues","description":"Retrieve open GitHub issues ordered by priority, or fetch full details of a specific issue by number or URL","parameters":{"type":"object","properties":{"url":{"type":"string","description":"Specific GitHub issue URL (e.g. https://github.com/owner/repo/issues/125)"},"issue_number":{"type":"integer","description":"Specific GitHub issue number to fetch full title, body, state and labels for"},"limit":{"type":"integer","minimum":1,"maximum":50},"priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}},"additionalProperties":false}}},
-        {"type":"function","function":{"name":"web_read","description":"Fetch and read the text contents of any public web page, URL, documentation, or online issue without write permissions","parameters":{"type":"object","required":["url"],"properties":{"url":{"type":"string","description":"The HTTP or HTTPS URL to fetch and read"}},"additionalProperties":false}}},
-        {"type":"function","function":{"name":"forge_enqueue","description":"Enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting.","parameters":{"type":"object","properties":{"issue_number":{"type":"integer","description":"GitHub issue number to solve"},"repo":{"type":"string","description":"Repository name, defaults to PedroVictorCoding/SAIL"},"task":{"type":"string","description":"Optional description or instructions for the task"}}}}},
-        {"type":"function","function":{"name":"forge_status","description":"Check the status, current step, test outcome, and diff of a Forge autonomous coding job. Accepts exact job IDs (e.g. job-5-61c992ad), prefix (e.g. job-5), or issue numbers (e.g. 5 or #5).","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)"}}}}},
-        {"type":"function","function":{"name":"forge_list","description":"List all active, recent, and stored Forge autonomous coding jobs and tasks.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
-        {"type":"function","function":{"name":"forge_cancel","description":"Cancel or stop a running or in-progress Forge autonomous coding task.","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID or issue number to cancel"},"reason":{"type":"string","description":"Optional cancellation reason"}}}}},
-        {"type":"function","function":{"name":"forge_clear","description":"Remove, clear, or archive blocked, cancelled, or completed Forge coding jobs from the active queue and delete their local checkpoints. Pass 'all' to clear all finished/blocked jobs, or specify a job_id.","parameters":{"type":"object","properties":{"job_id":{"type":"string","description":"Specific job ID to remove, or 'all' to clear all finished and blocked jobs (defaults to 'all')"}}}}},
-        {"type":"function","function":{"name":MEMORY_RECALL_TOOL,"description":"Read this conversation's archived memory: an earlier turn or a full tool result by id (mem:N), optionally only the parts matching query or a page from offset; or search the archive by query alone.","parameters":{"type":"object","properties":{"id":{"type":"string","description":"Archive handle such as mem:12"},"query":{"type":"string","maxLength":500,"description":"Words to look for"},"offset":{"type":"integer","minimum":0,"description":"Character offset to page through a long record"},"max_chars":{"type":"integer","minimum":200,"maximum":6000}},"additionalProperties":false}}}
-    ])
+    let mut tools = crate::execution::model_tool_definitions();
+    tools.insert(
+        6,
+        serde_json::json!({"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}}),
+    );
+    tools.push(serde_json::json!({"type":"function","function":{"name":MEMORY_RECALL_TOOL,"description":"Read this conversation's archived memory: an earlier turn or a full tool result by id (mem:N), optionally only the parts matching query or a page from offset; or search the archive by query alone.","parameters":{"type":"object","properties":{"id":{"type":"string","description":"Archive handle such as mem:12"},"query":{"type":"string","maxLength":500,"description":"Words to look for"},"offset":{"type":"integer","minimum":0,"description":"Character offset to page through a long record"},"max_chars":{"type":"integer","minimum":200,"maximum":6000}},"additionalProperties":false}}}));
+    serde_json::Value::Array(tools)
 }
 pub fn multimodal_content(
     prompt: &str,
@@ -1241,7 +1279,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 18);
 
         let names: Vec<_> = tools
             .iter()
@@ -1259,6 +1297,7 @@ mod schema_selection_tests {
         assert!(names.contains(&"vision_frame"));
         assert!(names.contains(&"github_issues"));
         assert!(names.contains(&"web_read"));
+        assert!(names.contains(&"studio_audio_analyze"));
         assert!(names.contains(&"forge_enqueue"));
         assert!(names.contains(&"forge_status"));
         assert!(names.contains(&"forge_list"));

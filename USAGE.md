@@ -57,6 +57,23 @@ The old automatic 30-second split is removed. A turn can now hold up to **3 minu
 
 Settings apply to the current connection and keep already captured audio. A service can set defaults with `SAIL_VOICE_TURN_MODE=manual` (or `automatic`) and `SAIL_VOICE_PAUSE_MS=3000`. Restart the service and refresh the page after updating.
 
+### Analyze an audio track (Studio Audio)
+
+Ask in the conversation, for example: "Analyze `mixdown.wav` for streaming and tell me what to
+fix." SAIL calls the local measurement tool and answers from the receipt, not from guesswork:
+
+| Measurement | Meaning |
+|---|---|
+| **Integrated LUFS** | ITU-R BS.1770-4 gated loudness; a -23 dBFS 1 kHz test tone reads -23.0 |
+| **Loudness range (LU)** | EBU Tech 3342 short-term range; `0` means the clip is too short to measure |
+| **True peak (dBTP)** | 4x inter-sample estimate; at or above 0 dBTP is flagged as clipping |
+| **Bands and sections** | Six-band balance and per-section energy, charted in Canvas |
+
+The file must be a RIFF/WAVE file inside the tool workspace (`SAIL_TOOL_ROOT`, or the SAIL
+working directory when it is unset). The reply includes the chart, so it also appears in Canvas;
+nothing is uploaded and no cloud service is involved.
+
+
 ### Choose a hardware tier
 
 | Tier | Recommended use | STT/TTS CPU threads | Partial transcript cadence |
@@ -124,6 +141,23 @@ For measured image statistics, select an image and ask SAIL to inspect the frame
 
 Type in the message field and click **Send**. This uses the same session, local Gemma inference, speech output and Canvas. Microphone permission is not required. Sending a new message cancels the previous assistant turn.
 
+### Give SAIL a multi-step goal
+
+Start a message or spoken request with **Plan:**, for example:
+
+> Plan: read today's date and write it to notes/today.txt
+
+SAIL drafts the steps with its tools and shows them as a plan card on Canvas instead of
+answering at once. A plan that only reads things starts right away. A plan that changes
+something waits until you choose **Approve plan**; **Edit** lets you change the remaining
+steps first. Guardian may still ask about a step when it runs; approve it on the card.
+Each step's result is checked, a failed step leads to a revised plan (at most three
+times), and **Cancel** stops the plan.
+
+Plans continue after a restart. If SAIL stopped while a step that changes something was
+running, the card says it needs your attention: check whether the change happened, then
+choose **It did not happen: retry** or **Cancel plan**.
+
 ## Hear the reply before all the text is finished
 
 SAIL starts synthesizing the first complete sentence while Gemma generates the rest. Longer sentences can be committed at a natural clause boundary. Punctuation, questions, quoted endings, common abbreviations and decimal numbers are kept together so speech is not cut at arbitrary model-token boundaries. Kokoro keeps the selected voice and speed, and short pauses preserve the cadence between sentences and clauses.
@@ -155,6 +189,14 @@ From the repository root, run:
 ```
 
 This installs speech dependencies into `.venv-voice` and downloads Silero, Whisper, Kokoro and the Gemma vision projector into `models/voice`. Internet access is needed for setup. Missing runtime models produce errors rather than being downloaded automatically.
+
+To let browsers run speech on their own device (freeing the host for the language model), also run:
+
+```bash
+python3 scripts/voice/download_web.py
+```
+
+This downloads the same speech models as ONNX, plus pinned browser runtimes, into `$SAIL_RUNTIME/models/voice/web` (about 0.7 GB). Each browser measures its own speed and only takes over speech if it is fast enough; Settings → Voice & Audio → *Where Speech Runs* shows the result. See [On-device speech](docs/SAIL_DIALOGUE.md#6a-on-device-speech-decided-2026-11-03).
 
 The default llama-server binary is `/home/main/llama.cpp/build/bin/llama-server`. For a different installation:
 

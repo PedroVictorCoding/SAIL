@@ -15,7 +15,9 @@
     <div class="top-actions">
       <span class="privacy-indicator" id="learningIndicator" role="status" hidden>Learning enabled</span>
       <span class="privacy-indicator" id="micLiveIndicator" hidden><i></i><span>Mic on</span></span>
+      <span class="loading-indicator" id="speechLoadIndicator" hidden><span id="speechLoadLabel">Loading voice models</span><progress id="speechLoadBar" max="100" aria-labelledby="speechLoadLabel" aria-describedby="speechLoadValue"></progress><span id="speechLoadValue" aria-live="off"></span></span>
       <span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span>
+      <button class="icon-button" id="terminalHeaderBtn" type="button" aria-label="Open Terminal" title="Terminal (Ctrl+`)"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#terminal"></use></svg></button>
       <button class="icon-button mobile-spaces" id="spacesTop" type="button" aria-label="Open Spaces"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#spaces"></use></svg></button>
       <button class="icon-button" id="settingsOpen" aria-label="Open settings" title="Settings"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#settings"></use></svg></button>
     </div>
@@ -24,6 +26,7 @@
   <div class="dashboard-layout">
     <nav class="side-rail" aria-label="Main navigation">
       <a class="quiet-button nav-item selected" id="homeNav" href="#home" data-page="home" aria-current="page"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#home"></use></svg></span><span>Home</span></a>
+      <button class="quiet-button nav-item" id="terminalRailBtn" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#terminal"></use></svg></span><span>Terminal</span></button>
       <button class="quiet-button nav-item" id="spacesOpen" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#spaces"></use></svg></span><span>Spaces</span></button>
       <div class="subsystem-nav" id="subsystemNav" aria-label="Subsystem pages"></div>
       <button class="quiet-button nav-item nav-settings" id="settingsRail" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#settings"></use></svg></span><span>Settings</span></button>
@@ -201,7 +204,7 @@
           </header>
           <!-- Tab 1: Canvas Output -->
           <div class="card-tab-panel active" id="canvasPanelMain">
-            <div class="canvas-panel" id="canvasPanel" aria-label="Canvas output"><p class="canvas-empty" id="canvasEmptyState">Diagrams, images, structured results and Guardian approvals appear here.</p></div>
+            <div class="canvas-panel" id="canvasPanel" aria-label="Canvas output"><p class="canvas-empty" id="canvasEmptyState">Diagrams, images, structured results, plans and Guardian approvals appear here. Say “Plan: …” to plan a goal.</p></div>
           </div>
           <!-- Tab 2: Live Camera Feed (Adaptive slow frame mode) -->
           <div class="card-tab-panel" id="canvasPanelCamera" hidden>
@@ -317,6 +320,29 @@
               <pre class="forge-live-diff" id="forgeLiveDiff"><code>// Waiting for Forge coding phase...</code></pre>
               <div class="forge-live-logs" id="forgeLiveLogs"></div>
             </div>
+          </div>
+        </article>
+
+        <article class="workspace-card terminal-card" id="terminalCard" data-card="terminalCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true"></span><div><h3 id="terminalCardHeading">Terminal</h3><p id="terminalCardSub">Interactive developer shell</p></div></div>
+            <div class="card-heading-actions">
+              <span class="card-live-badge" id="terminalLiveBadge" title="Terminal WebSocket status"><i class="live-dot"></i>Connecting…</span>
+              <button class="card-action" id="terminalRestartBtn" type="button" aria-label="Restart terminal" title="Restart shell">↺</button>
+              <button class="card-action" id="terminalClearBtn" type="button" aria-label="Clear screen" title="Clear scrollback">⌫</button>
+              <button class="card-action" id="terminalMaximizeBtn" type="button" aria-label="Expand terminal" title="Toggle fullscreen">⤢</button>
+            </div>
+          </header>
+          <div class="card-tab-panel active" id="terminalPanel">
+            <div class="terminal-quick-bar" aria-label="Quick commands">
+              <button type="button" class="quick-cmd-btn" data-cmd="git status">git status</button>
+              <button type="button" class="quick-cmd-btn" data-cmd="cargo check">cargo check</button>
+              <button type="button" class="quick-cmd-btn" data-cmd="ls -la">ls -la</button>
+              <button type="button" class="quick-cmd-btn" data-cmd="cargo test">cargo test</button>
+              <button type="button" class="quick-cmd-btn" data-cmd="clear">clear</button>
+            </div>
+            <div class="terminal-container" id="terminalContainer" role="region" aria-label="Interactive terminal"></div>
+            <p class="card-footnote">Interactive PTY shell running in host workspace. Supports Tab completion, ANSI colors, and Ctrl+C.</p>
           </div>
         </article>
       </section>
@@ -491,6 +517,20 @@
               <option value="pm_alex">Português · Alex (Masculine)</option>
               <option value="ef_dora">Español · Dora (Natural)</option>
             </select>
+          </div>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="speech device browser webgpu host whisper kokoro silero offload">
+          <div class="vscode-setting-info">
+            <label for="speechPlacementSelect" class="vscode-setting-name">Where Speech Runs</label>
+            <p class="vscode-setting-desc">Listening, transcription and the spoken voice can run on this device, leaving the SAIL host free for the language model. Same models as the host; nothing is downloaded from the internet.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <select id="speechPlacementSelect" aria-label="Where speech runs" aria-describedby="speechPlacementStatus">
+              <option value="device">This device when available</option>
+              <option value="host">SAIL host</option>
+            </select>
+            <span id="speechPlacementStatus" role="status" aria-live="polite">Checking this device…</span>
           </div>
         </div>
 
@@ -790,11 +830,17 @@
 </dialog>
 <script src="/mermaid.js" defer></script>
 <script src="/card-modal.js" defer></script>
+<script src="/client-speech.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/forge.js" defer></script>
 <script src="/approvals.js" defer></script>
+<script src="/plans.js" defer></script>
 <script src="/subsystem-pages.js" defer></script>
 <script src="/memory.js" defer></script>
 <script src="/ui.js" defer></script>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<script src="/vendor/xterm.js" defer></script>
+<script src="/vendor/addon-fit.js" defer></script>
+<script src="/terminal.js" defer></script>
 </body>
 </html>

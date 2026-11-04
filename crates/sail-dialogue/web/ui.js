@@ -196,7 +196,12 @@ document.getElementById('interruptBtn').addEventListener('click', () => interrup
 document.getElementById('newConversationBtn').addEventListener('click', () => { resetSession(); closeSheet(); });
 document.getElementById('muteBtn').addEventListener('click', () => toggleMute());
 document.getElementById('tierBtn').addEventListener('click', () => cycleTier());
-document.getElementById('voiceSelect').addEventListener('change', event => sendAction('set_voice', { voice:event.target.value }));
+document.getElementById('voiceSelect').addEventListener('change', event => { sendAction('set_voice', { voice:event.target.value }); announceClientSpeech(); renderSpeechPlacement(); });
+document.getElementById('speechPlacementSelect').addEventListener('change', event => {
+  SailClientSpeech.setPreferred(event.target.value === 'device');
+  if (event.target.value === 'device') loadClientSpeech();
+  else { SailClientSpeech.stop('Speech runs on the SAIL host (chosen in settings).'); announceClientSpeech(); renderSpeechPlacement(); }
+});
 document.getElementById('turnModeSelect').addEventListener('change', setTurnDetection);
 document.getElementById('turnPauseInput').addEventListener('change', setTurnDetection);
 document.getElementById('checkModelsBtn').addEventListener('click', () => checkModels());

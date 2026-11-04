@@ -24,18 +24,23 @@ bytes.workspace = true
 sail-mind.workspace = true
 sail-arena.workspace = true
 sail-agents.workspace = true
+sail-continuity.workspace = true
 sail-flow.workspace = true
 sail-canvas.workspace = true
 sail-guardian.workspace = true
 sail-protocol.workspace = true
 sail-runner = { path = "../sail-runner" }
-tokio-util = { version = "0.7", features = ["rt"] }
+sail-bridge.workspace = true
+tokio-util = { version = "0.7", features = ["rt", "io"] }
 sail-forge.workspace = true
 axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustfft = "6.4"
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 chrono.workspace = true

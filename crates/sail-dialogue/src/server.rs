@@ -49,6 +49,7 @@ pub struct ServerState {
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
     inference: sail_mind::MindService,
+    plans: Option<Arc<crate::plans::Plans>>,
 }
 pub async fn run_dialogue_server(
     addr: SocketAddr,
@@ -68,29 +69,43 @@ pub async fn run_dialogue_server_with_services(
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    run_dialogue_server_with_plans(addr, bus, services, arena, None).await
+}
+pub async fn run_dialogue_server_with_plans(
+    addr: SocketAddr,
+    bus: EventBus,
+    services: VoiceModelServices,
+    arena: Arc<sail_arena::ArenaSubsystem>,
+    plans: Option<Arc<crate::plans::Plans>>,
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inference = match services.inference() {
         Some(service) => service,
         None => sail_mind::MindService::from_env()?,
     };
     let services = services.with_inference(inference.clone());
     let (owner_authority, active_token) = resolve_or_generate_owner_token();
-    let live_context_authority = active_token
-        .as_deref()
-        .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok());
-    let memory_routes = crate::memory_http::router_with_arena(
-        arena.clone(),
+    let authority = || {
         active_token
             .as_deref()
-            .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok()),
-    );
+            .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok())
+    };
+    let live_context_authority = authority();
+    let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
+    let plan_routes = plans
+        .clone()
+        .map(|plans| crate::plans::router(plans, authority()));
     let approval_routes = crate::approval_http::router_with_token(
         owner_authority,
         sail_guardian::global_broker().ok(),
         active_token,
     );
-    let app = Router::new()
+    let mut app = Router::new()
         .nest_service("/api/guardian", approval_routes)
         .nest_service("/api/memory", memory_routes)
+        .nest_service(
+            "/voice-assets",
+            crate::web_assets::router(crate::web_assets::assets_dir()),
+        )
         .route(
             "/",
             get(|| async { Html(include_str!("../web/index.html")) }),
@@ -186,6 +201,24 @@ pub async fn run_dialogue_server_with_services(
             }),
         )
         .route(
+            "/client-speech.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/client-speech.js"),
+                )
+            }),
+        )
+        .route(
+            "/client-speech-worker.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/client-speech-worker.js"),
+                )
+            }),
+        )
+        .route(
             "/capture.js",
             get(|| async {
                 (
@@ -203,16 +236,67 @@ pub async fn run_dialogue_server_with_services(
                 )
             }),
         )
+        .route(
+            "/plans.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/plans.js"),
+                )
+            }),
+        )
+        .route(
+            "/terminal.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/terminal.js"),
+                )
+            }),
+        )
+        .route(
+            "/vendor/xterm.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/vendor/xterm/xterm.js"),
+                )
+            }),
+        )
+        .route(
+            "/vendor/addon-fit.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/vendor/xterm/addon-fit.js"),
+                )
+            }),
+        )
+        .route(
+            "/vendor/xterm.css",
+            get(|| async {
+                (
+                    [("content-type", "text/css; charset=utf-8")],
+                    include_str!("../web/vendor/xterm/xterm.css"),
+                )
+            }),
+        )
         .route("/api/health", get(health))
         .route("/api/mind/status", get(mind_status))
         .route("/ws/voice", get(ws_handler))
+        .route("/ws/terminal", get(ws_terminal_handler))
         .with_state(Arc::new(ServerState {
             live_context_authority,
             bus,
             services,
             arena,
             inference,
+            plans,
         }));
+    if let Some(routes) = plan_routes {
+        app = app.nest_service("/api/plans", routes);
+    }
+    let app = app.layer(axum::middleware::map_response(cross_origin_isolation));
     match (
         std::env::var("SAIL_TLS_CERT"),
         std::env::var("SAIL_TLS_KEY"),
@@ -279,6 +363,33 @@ async fn ws_handler(
     ws.max_message_size(6_000_000)
         .max_frame_size(6_000_000)
         .on_upgrade(move |socket| handle_voice_socket(socket, state))
+        .into_response()
+}
+
+async fn ws_terminal_handler(headers: HeaderMap, ws: WebSocketUpgrade) -> axum::response::Response {
+    if let Some(origin) = headers.get("origin") {
+        let origin = origin
+            .to_str()
+            .ok()
+            .and_then(|v| reqwest::Url::parse(v).ok());
+        let host = headers.get("host").and_then(|v| v.to_str().ok());
+        if !origin.as_ref().is_some_and(|o| {
+            matches!(o.scheme(), "http" | "https")
+                && Some(
+                    format!(
+                        "{}{}",
+                        o.host_str().unwrap_or_default(),
+                        o.port().map(|p| format!(":{p}")).unwrap_or_default()
+                    )
+                    .as_str(),
+                ) == host
+        }) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+    ws.max_message_size(1_048_576)
+        .max_frame_size(1_048_576)
+        .on_upgrade(|socket| crate::terminal::handle_terminal_socket(socket, None))
         .into_response()
 }
 struct Outbound {
@@ -365,6 +476,8 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     let mut pending = Vec::<i16>::new();
     let mut speech_frames = 0usize;
     let mut capture_priority = None;
+    let mut client_speech = ClientSpeech::default();
+    let mut client_capture: Option<(Option<u64>, u64)> = None;
     let mut capture_learning_epoch = None;
     let mut previous_learning_epoch = None;
     let hello = json!({"type":"session","session_id":session,"sample_rate":16000,"frame_samples":512,"learning":false,"control":pipe.control_state()});
@@ -597,7 +710,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                         info!(turn_id=current,samples=audio.len(),audio_ms=audio.len()/16,"Speech boundary finalized; scheduling STT and assistant turn");
                                         partial.take();turn.take();pipe.advance_turn();
                                         emit(&tx,current,json!({"type":"turn_committed","cause":"silence","audio_ms":audio.len()/16})).await;
-                                        let task=start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone(),live_context.clone());if live_context.lock().expect("live context lock").enabled(){observation=Some(task);}else{turn=Some(task);}capture_priority.take();
+                                        let task=start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone(),live_context.clone(),client_speech.output());if live_context.lock().expect("live context lock").enabled(){observation=Some(task);}else{turn=Some(task);}capture_priority.take();
                                     }
                                 },
                                 Err(error)=>{capture_priority.take();error!(%error,"PCM/VAD processing failed");pending.clear();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":error.to_string()})).await;break;}
@@ -616,19 +729,19 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                     emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Enabling live context requires owner authentication and explicit consent"})).await;
                                     continue;
                                 }
-                                capture_priority.take();observation.take();turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.reset_capture();
+                                client_capture.take();capture_priority.take();observation.take();turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.reset_capture();
                                 live_context.lock().expect("live context lock").set_enabled(enabled.unwrap());
                                 state.services.reset_vad(&session).await;
                                 emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"live_context_state","enabled":enabled,"segments":0})).await;
                             },
                             "interrupt"|"reset"=>{
                                 client_tools.0.abort_all();
-                                capture_priority.take();observation.take();turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.interrupt();
+                                client_capture.take();capture_priority.take();observation.take();turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.interrupt();
                                 if action=="reset"{live_context.lock().expect("live context lock").set_enabled(false);emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"live_context_state","enabled":false,"segments":0})).await;state.arena.clear_voice_session(&session);state.arena.begin_voice_session(&session);pipe.reset();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"learning_state","enabled":false})).await;}
                                 state.services.reset_vad(&session).await;
                                 emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"interruption","state":"interrupted"})).await;
                             },
-                            "toggle_mute"=>{live_context.lock().expect("live context lock").clear();observation.take();capture_priority.take();partial.take();pending.clear();pipe.toggle_mute();state.services.reset_vad(&session).await;},
+                            "toggle_mute"=>{client_capture.take();live_context.lock().expect("live context lock").clear();observation.take();capture_priority.take();partial.take();pending.clear();pipe.toggle_mute();state.services.reset_vad(&session).await;},
                             "set_tier"=>{
                                 let profile=match value["profile"].as_str(){Some("LowPower")=>HardwareTierProfile::LowPower,Some("HighPerformance")=>HardwareTierProfile::HighPerformance,_=>HardwareTierProfile::Balanced};pipe.set_hardware_profile(profile);
                             },
@@ -643,14 +756,65 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 if let Some(language)=language{pipe.tts.set_voice(voice,language);}else{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Unsupported voice"})).await;}
                             },
                             "end_turn"=>{
-                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;let task=start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone(),live_context.clone());if live_context.lock().expect("live context lock").enabled(){observation=Some(task);}else{turn=Some(task);}capture_priority.take();}
+                                if let Some(audio)=pipe.force_end_turn(){partial.take();turn.take();pipe.advance_turn();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"turn_committed","cause":"manual","audio_ms":audio.len()/16})).await;let task=start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Audio(audio, capture_learning_epoch),epoch.clone(),live_context.clone(),client_speech.output());if live_context.lock().expect("live context lock").enabled(){observation=Some(task);}else{turn=Some(task);}capture_priority.take();}
+                            },
+                            "client_speech"=>{
+                                // What the browser verified it can run. Unreported parts stay on
+                                // the host workers; turning STT off discards any client capture.
+                                client_speech=ClientSpeech{stt:value["stt"].as_bool()==Some(true),tts:value["tts"].as_bool()==Some(true)};
+                                if !client_speech.stt{client_capture.take();capture_priority.take();}
+                                info!(stt=client_speech.stt,tts=client_speech.tts,engine=%value["engine"],"Client speech capabilities");
+                                emit_session(&tx,json!({"type":"client_speech","stt":client_speech.stt,"tts":client_speech.tts})).await;
+                            },
+                            "speech_start"=>{
+                                // Browser VAD heard speech: the same priority and barge-in as the
+                                // host VAD's speech onset.
+                                if !client_speech.stt||pipe.control_state().is_muted{continue;}
+                                if live_context.lock().expect("live context lock").enabled()
+                                    && turn.as_ref().is_some_and(|t| !t.0.is_finished()) { continue; }
+                                client_capture = Some((value["capture_id"].as_u64(), live_context.lock().expect("live context lock").generation()));
+                                capture_learning_epoch=state.arena.learning_epoch(&session);
+                                capture_priority=Some(sail_common::resources::global().voice_turn());
+                                info!("Client speech onset; cancelling previous response for barge-in");
+                                if live_context.lock().expect("live context lock").enabled() { observation.take(); }
+                                else { turn.take();epoch.fetch_add(1,Ordering::SeqCst); }
+                                partial.take();
+                                emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"interruption","state":"listening"})).await;
+                            },
+                            "speech_cancel"=>{client_capture.take();capture_priority.take();},
+                            "voice_text"=>{
+                                let text=value["text"].as_str().unwrap_or_default().trim();
+                                if !client_speech.stt||pipe.control_state().is_muted||text.is_empty()||text.len()>16000{capture_priority.take();continue;}
+                                let Some((capture_id, generation)) = client_capture else { continue; };
+                                if capture_id != value["capture_id"].as_u64()
+                                    || generation != live_context.lock().expect("live context lock").generation() { continue; }
+                                client_capture.take();
+                                if live_context.lock().expect("live context lock").enabled() {
+                                    capture_priority.take();
+                                    if turn.as_ref().is_some_and(|t| !t.0.is_finished()) { continue; }
+                                    let accepted = live_context.lock().expect("live context lock").observe(generation, text, Instant::now());
+                                    if accepted {
+                                        emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"live_context_observed","text":text,"speaker":"unknown"})).await;
+                                    }
+                                    emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"turn_finished","state":"idle"})).await;
+                                    continue;
+                                }
+                                // Learn only under the consent that was in force when capture
+                                // began; a change during capture means no learning for the turn.
+                                let consent=capture_learning_epoch.take().filter(|e|Some(*e)==state.arena.learning_epoch(&session));
+                                partial.take();turn.take();pipe.advance_turn();
+                                let current=epoch.load(Ordering::SeqCst);
+                                emit(&tx,current,json!({"type":"transcript","channel":"voice:stt","text":text,"is_final":true,"source":"client"})).await;
+                                emit(&tx,current,json!({"type":"turn_committed","cause":"client","chars":text.chars().count()})).await;
+                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(text.into(),None,consent),epoch.clone(),live_context.clone(),client_speech.output()));
+                                capture_priority.take();
                             },
                             "text"=>{
                                 let prompt=value["text"].as_str().unwrap_or_default();
                                 if prompt.trim().is_empty()||prompt.len()>16000{continue;}
                                 let vision=match parse_vision(&value["vision"]) {Ok(v)=>v,Err(e)=>{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":e.to_string()})).await;continue;}};
-                                capture_priority.take();observation.take();turn.take();partial.take();pipe.reset_capture();pipe.advance_turn();pending.clear();let current=epoch.fetch_add(1,Ordering::SeqCst)+1;
-                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision,state.arena.learning_epoch(&session)),epoch.clone(),live_context.clone()));
+                                client_capture.take();capture_priority.take();observation.take();turn.take();partial.take();pipe.reset_capture();pipe.advance_turn();pending.clear();let current=epoch.fetch_add(1,Ordering::SeqCst)+1;
+                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision,state.arena.learning_epoch(&session)),epoch.clone(),live_context.clone(),client_speech.output()));
                             },
                             "kernel_tool"=>{
                                 let name=value["tool"].as_str().unwrap_or_default();
@@ -954,6 +1118,50 @@ enum TurnInput {
     Audio(Vec<i16>, Option<u64>),
     Text(String, Option<VisionFrameInput>, Option<u64>),
 }
+
+/// Where the reply is turned into speech. `Client`: the browser runs Kokoro and the
+/// server sends `speech_text` fragments in order instead of synthesizing audio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpeechOutput {
+    Host,
+    Client,
+}
+
+/// What this connection's browser runs itself, as it reported with `client_speech`.
+/// Anything it does not report stays on the host workers.
+#[derive(Clone, Copy, Debug, Default)]
+struct ClientSpeech {
+    /// Browser VAD and Whisper: it sends `speech_start` and `voice_text`, not PCM.
+    stt: bool,
+    /// Browser Kokoro: the server sends `speech_text` instead of audio.
+    tts: bool,
+}
+impl ClientSpeech {
+    fn output(self) -> SpeechOutput {
+        if self.tts {
+            SpeechOutput::Client
+        } else {
+            SpeechOutput::Host
+        }
+    }
+}
+/// Cross-origin isolation, so on-device speech can use WebAssembly threads
+/// (SharedArrayBuffer). Every resource the page loads is same-origin.
+async fn cross_origin_isolation(
+    mut response: axum::response::Response,
+) -> axum::response::Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        "cross-origin-opener-policy",
+        axum::http::HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        "cross-origin-embedder-policy",
+        axum::http::HeaderValue::from_static("require-corp"),
+    );
+    response
+}
+
 #[allow(clippy::too_many_arguments)]
 fn start_turn(
     state: Arc<ServerState>,
@@ -966,6 +1174,7 @@ fn start_turn(
     input: TurnInput,
     epoch: Arc<AtomicU64>,
     live_context: SessionLiveContext,
+    speech_output: SpeechOutput,
 ) -> AbortTask {
     let capture_generation = live_context.lock().expect("live context lock").generation();
     let voice_priority = sail_common::resources::global().voice_turn();
@@ -986,6 +1195,7 @@ fn start_turn(
                 epoch,
                 live_context,
                 capture_generation,
+                speech_output,
             )
             .await
             {
@@ -1015,6 +1225,7 @@ async fn run_turn(
     epoch: Arc<AtomicU64>,
     live_context: SessionLiveContext,
     capture_generation: u64,
+    speech_output: SpeechOutput,
 ) -> Result<()> {
     let start = Instant::now();
     // Held across STT, inference, tool calls and TTS; abort/drop releases priority.
@@ -1109,6 +1320,8 @@ async fn run_turn(
 - vision_frame: measure luminance and edge density of attached image
 - github_issues: list recent open GitHub issues or fetch full details of a specific issue by number or URL (e.g. issue_number: 125, or url: \"https://github.com/owner/repo/issues/125\")
 - web_read: read-only public web page and documentation fetcher from the internet without write permissions (e.g. url: \"https://...\")
+- studio_audio_analyze: measure a local audio file (integrated LUFS, true-peak estimate, loudness range, frequency balance, arrangement energy, tempo) and return grounded mixing recommendations plus a chart to display
+
 - forge_enqueue: enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting
 - forge_status: check the status, review verdict and diff of a Forge coding job (accepts job_id or issue number, e.g. \"5\" or \"job-5\")
 - forge_list: list active and recent Forge autonomous coding tasks
@@ -1172,6 +1385,13 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         let mut fragments=0usize;
         while let Some(text) = speech_rx.recv().await {
             fragments+=1;
+            if speech_output==SpeechOutput::Client {
+                // The browser synthesizes and plays fragments in arrival order; it keeps
+                // the same punctuation-aware pause the host adds between phrases.
+                debug!(fragment=fragments,text_chars=text.chars().count(),"Sending response fragment for client speech");
+                emit(&tx_speech,current,json!({"type":"speech_text","channel":"voice:tts","text":text,"pause_ms":pause_after_ms(&text),"fragment":fragments,"state":"speaking","turn_id":current})).await;
+                continue;
+            }
             info!(fragment=fragments,text_chars=text.chars().count(),"Synthesizing response fragment");
             match tts.synthesize_pcm(&text).await {
                 Ok((mut pcm, rate)) => {
@@ -1203,22 +1423,27 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         }
         debug!(fragments,"Speech output queue drained");
     }.instrument(speech_span)));
-    let (reply, _assistant, stats) = reason_turn(
-        &vlm,
-        &mut messages,
-        &prompt,
-        visual_frame.as_ref(),
-        &tx,
-        current,
-        &speech_tx,
-        Some(tool_correlation(&session, current)),
-        Some(MemoryScope {
-            arena: &state.arena,
-            session: &session,
-            learning_epoch,
-        }),
-    )
-    .await?;
+    let (reply, _assistant, stats) = match crate::plans::requested_goal(&prompt) {
+        Some(goal) => plan_turn(state.plans.as_ref(), goal, &tx, current, &speech_tx).await,
+        None => {
+            reason_turn(
+                &vlm,
+                &mut messages,
+                &prompt,
+                visual_frame.as_ref(),
+                &tx,
+                current,
+                &speech_tx,
+                Some(tool_correlation(&session, current)),
+                Some(MemoryScope {
+                    arena: &state.arena,
+                    session: &session,
+                    learning_epoch,
+                }),
+            )
+            .await?
+        }
+    };
     emit(
         &tx,
         current,
@@ -1293,6 +1518,37 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
     )
     .await;
     Ok(())
+}
+/// A "Plan: …" turn: draft the plan, show it as a plan card, and say briefly what happens
+/// next. The plan itself runs in the background, not in this turn.
+async fn plan_turn(
+    plans: Option<&Arc<crate::plans::Plans>>,
+    goal: &str,
+    tx: &mpsc::Sender<Outbound>,
+    current: u64,
+    speech_tx: &mpsc::Sender<String>,
+) -> (String, Value, GenerationStats) {
+    let start = Instant::now();
+    let reply = match plans {
+        None => "Planning is not available in this session.".to_owned(),
+        Some(plans) => match plans.create(goal).await {
+            Ok(view) => {
+                info!(plan_id=%view.plan.id,steps=view.plan.steps.len(),state=?view.plan.state,"Planned a goal from conversation");
+                emit(tx, current, json!({"type":"plan","plan":view})).await;
+                crate::plans::spoken_summary(&view)
+            }
+            Err(error) => {
+                warn!(%error, "Planning a goal failed");
+                format!("I could not plan that: {error}")
+            }
+        },
+    };
+    let _ = speech_tx.send(reply.clone()).await;
+    let stats = GenerationStats {
+        generation_ms: start.elapsed().as_millis() as u64,
+        ..GenerationStats::default()
+    };
+    (reply, Value::Null, stats)
 }
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GenerationStats {
@@ -1834,6 +2090,114 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use tokio::sync::Mutex;
+
+    struct FixedHost;
+    impl sail_common::resources::HostProbe for FixedHost {
+        fn sample(&self) -> std::io::Result<sail_protocol::resources::HostSample> {
+            Ok(sail_protocol::resources::HostSample {
+                total_ram_bytes: 32 * sail_common::resources::GIB,
+                available_ram_bytes: 24 * sail_common::resources::GIB,
+                swap_used_bytes: 0,
+                swap_total_bytes: 0,
+                logical_cpus: 12,
+                memory_pressure_avg10: None,
+            })
+        }
+    }
+
+    /// A model service whose admission uses host measurements the test controls. The real broker
+    /// reads `/proc`, so on a small or busy machine it can refuse work for reasons unrelated to
+    /// the protocol being tested.
+    fn test_vlm(addr: std::net::SocketAddr) -> VoiceVlm {
+        let scheduler = std::sync::Arc::new(sail_common::resources::ResourceScheduler::new(
+            std::sync::Arc::new(FixedHost),
+            sail_common::resources::AdmissionPolicy::default(),
+        ));
+        let service = sail_mind::GemmaRunner::with_scheduler(
+            sail_mind::GemmaConfig {
+                server_url: format!("http://{addr}/v1/chat/completions"),
+                // Not a real file, so the service never tries to spawn a model process.
+                model_path: std::path::PathBuf::from("/nonexistent/test-model.gguf"),
+                ..Default::default()
+            },
+            scheduler,
+        )
+        .service()
+        .expect("test model service");
+        VoiceVlm::with_service(service)
+    }
+
+    /// A stereo 1 kHz tone at `dbfs`, written as a 16-bit RIFF/WAVE file.
+    fn write_tone_wav(path: &std::path::Path, sample_rate: u32, seconds: f64, dbfs: f64) {
+        use std::io::Write;
+        let channels = 2u16;
+        let frames = (sample_rate as f64 * seconds) as usize;
+        let data_len = (frames * channels as usize * 2) as u32;
+        let mut file = std::fs::File::create(path).expect("create tone");
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36 + data_len).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&16u32.to_le_bytes()).unwrap();
+        file.write_all(&1u16.to_le_bytes()).unwrap();
+        file.write_all(&channels.to_le_bytes()).unwrap();
+        file.write_all(&sample_rate.to_le_bytes()).unwrap();
+        file.write_all(&(sample_rate * channels as u32 * 2).to_le_bytes())
+            .unwrap();
+        file.write_all(&(channels * 2).to_le_bytes()).unwrap();
+        file.write_all(&16u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_len.to_le_bytes()).unwrap();
+        let amplitude = 10f64.powf(dbfs / 20.0);
+        for frame in 0..frames {
+            let t = frame as f64 / sample_rate as f64;
+            let sample =
+                (amplitude * (2.0 * std::f64::consts::PI * 1000.0 * t).sin() * 32767.0) as i16;
+            for _ in 0..channels {
+                file.write_all(&sample.to_le_bytes()).unwrap();
+            }
+        }
+    }
+
+    // The conversational route must reach the measurement tool through Guardian, return the
+    // receipt and hand the model a chart it can show. A tool that only exists in a unit test
+    // is not a delivered capability.
+    #[tokio::test]
+    async fn studio_audio_tool_returns_a_measured_receipt_through_the_guarded_route() {
+        let _guardian = sail_guardian::GuardianSubsystem::new();
+        let dir = std::env::temp_dir().join(format!("sail-studio-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("tone.wav");
+        write_tone_wav(&wav, 48_000, 10.0, -23.0);
+
+        let result = execute_tool_for(
+            "studio_audio_analyze",
+            json!({"file_path": wav.to_string_lossy(), "target_lufs": -23.0}),
+            None,
+            None,
+        );
+        assert!(result.success, "tool failed: {}", result.output);
+        let lufs = result.output["integrated_lufs"]
+            .as_f64()
+            .expect("measured loudness");
+        assert!(
+            (lufs + 23.0).abs() <= 0.3,
+            "-23 dBFS stereo tone must measure about -23 LUFS, got {lufs}"
+        );
+        assert!(
+            result.output["mermaid"]
+                .as_str()
+                .is_some_and(|chart| chart.starts_with("xychart-beta")),
+            "the tool must hand back a Canvas chart"
+        );
+        assert!(
+            result.output["review"]["recommendations"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty()),
+            "the review must be grounded in the receipt"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn client_tool_completes_while_voice_turn_is_active() {
         let turn = AbortTask(tokio::spawn(std::future::pending()));
@@ -1964,10 +2328,7 @@ mod tests {
         let server = AbortTask(tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         }));
-        let vlm = VoiceVlm::with_config(sail_mind::GemmaConfig {
-            server_url: format!("http://{addr}/v1/chat/completions"),
-            ..Default::default()
-        });
+        let vlm = test_vlm(addr);
         let (tx, mut rx) = mpsc::channel(128);
         let (speech_tx, mut speech_rx) = mpsc::channel(16);
         let mut messages = vec![
@@ -2038,10 +2399,7 @@ mod tests {
             let server = AbortTask(tokio::spawn(async move {
                 axum::serve(listener, app).await.unwrap();
             }));
-            let vlm = VoiceVlm::with_config(sail_mind::GemmaConfig {
-                server_url: format!("http://{addr}/v1/chat/completions"),
-                ..Default::default()
-            });
+            let vlm = test_vlm(addr);
             let (speech_tx, mut speech_rx) = mpsc::channel::<String>(16);
             let (tx, _rx) = mpsc::channel(128);
             let expected_first = first_sentence.to_string();
@@ -2200,231 +2558,90 @@ mod tests {
         assert!(tok.len() >= 32);
         assert!(authority.unwrap().authenticates(&tok));
     }
+
+    #[tokio::test]
+    async fn ws_terminal_handler_origin_validation() {
+        let app = Router::new().route("/ws/terminal", get(ws_terminal_handler));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = reqwest::Client::new();
+        let host_str = addr.to_string();
+        let ftp_origin = format!("ftp://{addr}");
+        let valid_origin = format!("http://{addr}");
+
+        // 1. Disallowed scheme (ftp)
+        let res = client
+            .get(format!("http://{addr}/ws/terminal"))
+            .header("origin", &ftp_origin)
+            .header("host", &host_str)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 2. Mismatched origin host
+        let res = client
+            .get(format!("http://{addr}/ws/terminal"))
+            .header("origin", "http://evil.com")
+            .header("host", &host_str)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 3. Matching origin and host upgrades successfully
+        let res = client
+            .get(format!("http://{addr}/ws/terminal"))
+            .header("origin", &valid_origin)
+            .header("host", &host_str)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::SWITCHING_PROTOCOLS);
+    }
+
+    #[tokio::test]
+    async fn run_dialogue_server_fails_on_privileged_port() {
+        let bus = EventBus::new();
+        let scheduler = std::sync::Arc::new(sail_common::resources::ResourceScheduler::new(
+            std::sync::Arc::new(FixedHost),
+            sail_common::resources::AdmissionPolicy::default(),
+        ));
+        let service = sail_mind::GemmaRunner::with_scheduler(
+            sail_mind::GemmaConfig {
+                server_url: "http://127.0.0.1:9/v1/chat/completions".to_string(),
+                model_path: std::path::PathBuf::from("/nonexistent/test-model.gguf"),
+                ..Default::default()
+            },
+            scheduler,
+        )
+        .service()
+        .expect("test model service");
+        let services = VoiceModelServices::new().with_inference(service);
+        let arena = Arc::new(sail_arena::ArenaSubsystem::new());
+        let res =
+            run_dialogue_server_with_services("127.0.0.1:1".parse().unwrap(), bus, services, arena)
+                .await;
+        assert!(res.is_err(), "Expected bind error on privileged port 1");
+    }
 }
 
 #[cfg(test)]
-mod live_conversation_tests {
-    use super::*;
-    struct FixtureHost;
-    impl sail_common::resources::HostProbe for FixtureHost {
-        fn sample(&self) -> std::io::Result<sail_protocol::resources::HostSample> {
-            use sail_common::resources::GIB;
-            Ok(sail_protocol::resources::HostSample {
-                available_ram_bytes: 24 * GIB,
-                total_ram_bytes: 32 * GIB,
-                swap_used_bytes: 0,
-                swap_total_bytes: 8 * GIB,
-                logical_cpus: 12,
-            })
-        }
-    }
-    #[tokio::test]
-    async fn live_audio_builds_context_without_inference_tools_tts_or_archive() {
-        // Explicit fixture STT, through the real supervised worker and run_turn path.
-        // Run this filtered test alone: worker configuration is process environment.
-        let path =
-            std::env::temp_dir().join(format!("sail-live-fixture-{}.py", uuid::Uuid::new_v4()));
-        std::fs::write(&path, r#"import sys,json
-for line in sys.stdin:
-    request=json.loads(line)
-    assert sys.argv[1] == 'stt', 'listen-only must not run other models'
-    if len(request['pcm']) < 8:
-        print(json.dumps({'ok':False,'error':'fixture STT unavailable'}),flush=True)
-        continue
-    print(json.dumps({'ok':True,'result':{'text':'The launch is on Tuesday.','tokens':[]}}),flush=True)
-"#).unwrap();
-        let old_python = std::env::var_os("SAIL_VOICE_PYTHON");
-        let old_worker = std::env::var_os("SAIL_VOICE_WORKER");
-        unsafe {
-            std::env::set_var("SAIL_VOICE_PYTHON", "/usr/bin/python3");
-            std::env::set_var("SAIL_VOICE_WORKER", &path);
-        }
-        let services = VoiceModelServices::with_scheduler(Arc::new(
-            sail_common::resources::ResourceScheduler::new(
-                Arc::new(FixtureHost),
-                Default::default(),
-            ),
-        ));
-        let arena = Arc::new(sail_arena::ArenaSubsystem::new());
-        arena.begin_voice_session("fixture");
-        arena.set_session_learning("fixture", true).unwrap();
-        let state = Arc::new(ServerState {
-            bus: EventBus::new(),
-            services: services.clone(),
-            arena: arena.clone(),
-            inference: sail_mind::MindService::from_env().unwrap(),
-            live_context_authority: None,
-        });
-        let context = Arc::new(std::sync::Mutex::new(
-            crate::live_context::LiveContext::default(),
-        ));
-        context.lock().unwrap().set_enabled(true);
-        let generation = context.lock().unwrap().generation();
-        let (tx, mut rx) = mpsc::channel(16);
-        let result = run_turn(
-            state.clone(),
-            "fixture".into(),
-            1,
-            tx,
-            LocalStreamingStt::with_services(services.clone()),
-            LocalNeuralTts::with_services(Default::default(), services.clone()),
-            Arc::new(VoiceVlm::new("fixture-unused")),
-            TurnInput::Audio(vec![1; 16000], arena.learning_epoch("fixture")),
-            Arc::new(AtomicU64::new(1)),
-            context.clone(),
-            generation,
-        )
-        .await;
-        result.unwrap();
-        // A decoder failure must neither fabricate an observation nor clear prior context.
-        let (failure_tx, mut failure_rx) = mpsc::channel(16);
-        let failure = run_turn(
-            state.clone(),
-            "fixture".into(),
-            2,
-            failure_tx,
-            LocalStreamingStt::with_services(services.clone()),
-            LocalNeuralTts::with_services(Default::default(), services.clone()),
-            Arc::new(VoiceVlm::new("fixture-unused")),
-            TurnInput::Audio(vec![1], None),
-            Arc::new(AtomicU64::new(2)),
-            context.clone(),
-            generation,
-        )
-        .await;
-        assert!(failure.is_err());
-        assert!(failure_rx.try_recv().is_err());
-
-        // Exercise real WebSocket consent/authentication/reset handling, with fixture workers.
-        use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
-        async fn receive_type<S>(
-            socket: &mut tokio_tungstenite::WebSocketStream<S>,
-            wanted: &str,
-        ) -> Value
-        where
-            S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-        {
-            tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                loop {
-                    let message = socket.next().await.unwrap().unwrap();
-                    if let WsMessage::Text(text) = message {
-                        let value: Value = serde_json::from_str(&text).unwrap();
-                        if value["type"] == wanted {
-                            return value;
-                        }
-                    }
-                }
-            })
-            .await
-            .unwrap()
-        }
-        let token = "fixture-live-context-owner-token-32-bytes";
-        let socket_state = Arc::new(ServerState {
-            bus: EventBus::new(),
-            services: services.clone(),
-            arena: arena.clone(),
-            inference: state.inference.clone(),
-            live_context_authority: Some(
-                sail_guardian::authority::ApprovalAuthority::new(token).unwrap(),
-            ),
-        });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let router = Router::new()
-            .route("/ws/voice", get(ws_handler))
-            .with_state(socket_state);
-        let server = AbortTask(tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        }));
-        let (mut socket, _) = connect_async(format!("ws://{addr}/ws/voice"))
-            .await
-            .unwrap();
-        receive_type(&mut socket, "session").await;
-        socket
-            .send(WsMessage::Text(
-                json!({"action":"set_live_context","enabled":true}).to_string(),
-            ))
-            .await
-            .unwrap();
-        assert!(
-            receive_type(&mut socket, "error").await["message"]
-                .as_str()
-                .unwrap()
-                .contains("owner authentication")
-        );
-        socket
-            .send(WsMessage::Text(
-                json!({"action":"set_live_context","enabled":true,"owner_token":token}).to_string(),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(
-            receive_type(&mut socket, "live_context_state").await["enabled"],
-            true
-        );
-        socket
-            .send(WsMessage::Text(json!({"action":"reset"}).to_string()))
-            .await
-            .unwrap();
-        assert_eq!(
-            receive_type(&mut socket, "live_context_state").await["enabled"],
-            false
-        );
-        // Stopping does not require an available owner token.
-        socket
-            .send(WsMessage::Text(
-                json!({"action":"set_live_context","enabled":false}).to_string(),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(
-            receive_type(&mut socket, "live_context_state").await["enabled"],
-            false
-        );
-        socket.close(None).await.unwrap();
-        drop(server);
-        unsafe {
-            match old_python {
-                Some(v) => std::env::set_var("SAIL_VOICE_PYTHON", v),
-                None => std::env::remove_var("SAIL_VOICE_PYTHON"),
-            };
-            match old_worker {
-                Some(v) => std::env::set_var("SAIL_VOICE_WORKER", v),
-                None => std::env::remove_var("SAIL_VOICE_WORKER"),
-            };
-        }
-        std::fs::remove_file(path).unwrap();
-        let mut events = Vec::new();
-        while let Ok(event) = rx.try_recv() {
-            events.push(event.value);
-        }
-        assert!(events.iter().any(|e| e["type"] == "live_context_observed"));
-        assert!(!events.iter().any(|e| matches!(
-            e["type"].as_str(),
-            Some("turn_started" | "tool_started" | "audio")
-        )));
-        assert!(
-            arena
-                .conversation_context("fixture", "launch")
-                .hot
-                .is_empty(),
-            "ambient speech must not enter normal learning/archive"
-        );
-        assert!(
-            context
-                .lock()
-                .unwrap()
-                .prompt_context(Instant::now())
-                .unwrap()
-                .contains("Tuesday")
-        );
-        context.lock().unwrap().set_enabled(false);
-        assert!(
-            context
-                .lock()
-                .unwrap()
-                .prompt_context(Instant::now())
-                .is_none()
-        );
-    }
-}
+#[path = "server/live_context_tests.rs"]
+mod live_conversation_tests;

@@ -82,8 +82,14 @@ impl Capability {
             },
             Capability::Tool(t) => match t {
                 ToolCapability::KernelTool(name) => match name.as_str() {
-                    "os:status" | "forge:status" | "forge:list" | "forge:cancel"
-                    | "forge:clear" | "github:issues" | "web:read" => RiskLevel::Low,
+                    "os:status"
+                    | "forge:status"
+                    | "forge:list"
+                    | "forge:cancel"
+                    | "forge:clear"
+                    | "github:issues"
+                    | "web:read"
+                    | "studio:audio_analyze" => RiskLevel::Low,
                     "proc:list" | "fs:query" | "fs:read" => RiskLevel::Medium,
                     "vision:frame" | "fs:write" | "forge:enqueue" => RiskLevel::High,
                     _ => RiskLevel::High,
@@ -100,7 +106,8 @@ impl Capability {
                         || tool == "forge:status"
                         || tool == "forge:list"
                         || tool == "forge:cancel"
-                        || tool == "forge:clear" =>
+                        || tool == "forge:clear"
+                        || tool == "studio:audio_analyze" =>
                 {
                     RiskLevel::Low
                 }

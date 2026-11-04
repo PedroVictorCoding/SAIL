@@ -26,6 +26,38 @@ GitHub branch protection. Review the proposed changes before merging. Agents mus
 respect any configured GitHub rules and report authentication or permission
 blockers rather than bypassing the pull-request workflow.
 
+## Local build loop
+
+The reference host keeps Ubuntu on a 116 GB root partition; a debug `target/` there once
+reached 54 GB and filled it (a `cargo test` link then died with `ld terminated with signal 7`,
+and when the disk reached zero free no build could start at all). `run.sh` therefore defaults
+`CARGO_TARGET_DIR` to `${SAIL_RUNTIME:-/srv/sail}/cargo-target` when that path is writable, and
+falls back to `./target` otherwise.
+
+For an isolated task, keep one worktree per active pull request and remove it after the
+pull request merges:
+
+```sh
+git worktree add ../sail-worktrees/<task> -b agent/<task> origin/main
+git worktree remove ../sail-worktrees/<task>
+```
+
+**Give each worktree its own target directory.** Two checkouts of the same package versions
+can share one Cargo target directory and reuse each other's fresh-looking artifacts; a
+worktree then compiles against a stale `sail-protocol`/`sail-common` rlib and reports
+imports that plainly exist in its own source. Keep builds off the root partition *and*
+separate per branch:
+
+```sh
+export CARGO_TARGET_DIR="${SAIL_RUNTIME:-/srv/sail}/cargo-target/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"
+```
+
+Install `cargo-nextest`. Without it, run libtest single-threaded
+(`cargo test --workspace -- --test-threads=1`): the daemon has one process-wide resource
+broker, so tests that assert admission or build concurrency assume the per-process
+isolation nextest provides. A failure that appears only when other tests in the same
+binary run alongside it is an isolation artifact, not a scheduling bug.
+
 ## Required checks and branch protection
 
 Every pull request and every push to `main` runs **Rust CI** (`.github/workflows/rust-ci.yml`).

@@ -1,15 +1,22 @@
 """Offline browser fixture: settings consent, acknowledged state and mobile layout."""
 import threading
+import os
 from pathlib import Path
 from http.server import ThreadingHTTPServer
 from playwright.sync_api import sync_playwright, expect
 from subsystem_pages_test import UIHandler
 
-server = ThreadingHTTPServer(('127.0.0.1', 0), UIHandler)
+class LiveContextHandler(UIHandler):
+    def do_GET(self):
+        if self.path.startswith('/vendor/'):
+            self.path = '/vendor/xterm/' + self.path.split('/')[-1]
+        super().do_GET()
+
+server = ThreadingHTTPServer(('127.0.0.1', 0), LiveContextHandler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 try:
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True, executable_path=os.environ.get('SAIL_TEST_CHROMIUM'))
         page = browser.new_page(viewport={'width':1280,'height':900}, reduced_motion='reduce')
         errors=[]
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -18,7 +25,7 @@ try:
           window.WebSocket=class {
             static OPEN=1;
             constructor(){this.readyState=1;setTimeout(()=>this.onopen?.(),30);}
-            send(raw){const data=JSON.parse(raw);sentActions.push(data);
+            send(raw){if(typeof raw!=='string')return; const data=JSON.parse(raw);sentActions.push(data);
               if(data.action==='set_live_context') setTimeout(()=>this.onmessage({data:JSON.stringify({type:'live_context_state',enabled:data.enabled})}),20);
             }
             close(){this.readyState=3;}
@@ -43,6 +50,16 @@ try:
         box=button.bounding_box();assert box['x']>=0 and box['x']+box['width']<=390
         Path('.local').mkdir(exist_ok=True)
         page.screenshot(path='.local/live-context-mobile.png',full_page=True)
+        # A delayed on-device transcript must not survive a consent/mute/reset change.
+        page.evaluate('''async () => {
+          clientSpeechActive.stt = true;
+          let finish;
+          SailClientSpeech.takeCapture = () => new Float32Array(512);
+          SailClientSpeech.transcribe = () => new Promise(resolve => { finish = resolve; });
+          const pending = commitClientCapture();
+          discardListeningCapture(); finish({text:'late ambient private speech'}); await pending;
+          if (sentActions.some(a => a.action === 'voice_text')) throw Error('revoked transcript sent');
+        }''')
         button.click();expect(button).to_have_attribute('aria-pressed','false')
         assert not errors,errors
         browser.close()

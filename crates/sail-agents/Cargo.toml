@@ -17,6 +17,8 @@ uuid.workspace = true
 
 sail-guardian.workspace = true
 sail-protocol.workspace = true
+sail-continuity.workspace = true
+sail-mind.workspace = true
 tokio-util.workspace = true
 thiserror.workspace = true
 chrono.workspace = true

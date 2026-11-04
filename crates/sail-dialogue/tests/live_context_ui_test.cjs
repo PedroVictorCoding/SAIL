@@ -40,3 +40,45 @@ test('failed authentication and connection replacement cannot enable capture', a
   assert.equal(denied.actions[0].error,'owner denied');
   assert.equal(denied.context.liveContextEnabled,false);
 });
+
+function captureUI(overrides = {}) {
+  const actions = [];
+  const context = vm.createContext({
+    liveContextEnabled:true, liveContextReplyPending:false,
+    pendingAudio:0, playingSources:new Set(),
+    clientCaptureSerial:1, clientFrameGeneration:0, clientCapturing:false,
+    clientSpeechActive:{stt:true}, isRecording:true, isMuted:false,
+    captureHeld:false, turnInProgress:false,
+    SailClientSpeech:{resetCapture(){}, takeCapture:()=>new Float32Array(512), transcribe:async()=>({text:'ambient'})},
+    sendAction:(action, fields)=>actions.push({action,...fields}),
+    setCaptureHeld(){}, updateState(){}, failClientSpeech(error){throw error;},
+    ...overrides,
+  });
+  vm.runInContext(source.slice(source.indexOf('function listeningReplyBusy()'),source.indexOf('function renderLiveContext()')),context);
+  vm.runInContext(source.slice(source.indexOf('async function commitClientCapture()'),source.indexOf('// Synthesize a reply fragment')),context);
+  return {context,actions};
+}
+test('revoking capture discards a delayed browser transcript', async () => {
+  let resolve;
+  const {context,actions} = captureUI({SailClientSpeech:{resetCapture(){},takeCapture:()=>new Float32Array(512),transcribe:()=>new Promise(r=>{resolve=r;})}});
+  const pending = context.commitClientCapture();
+  context.discardListeningCapture(); resolve({text:'late private speech'}); await pending;
+  assert.equal(actions.length,0);
+  assert.equal(context.clientFrameGeneration,1);
+});
+test('ambient client speech carries capture identity and pauses during an explicit reply', async () => {
+  const {context,actions} = captureUI();
+  await context.commitClientCapture();
+  assert.deepEqual(actions,[{action:'voice_text',text:'ambient',capture_id:1}]);
+  context.liveContextReplyPending=true;
+  await context.commitClientCapture();
+  assert.equal(actions.length,1);
+  context.liveContextReplyPending=false; context.pendingAudio=1;
+  assert.equal(context.listeningReplyBusy(),true);
+});
+test('queued browser frames from before revocation never reach VAD', async () => {
+  const {context} = captureUI({SailClientSpeech:{frame(){throw Error('stale frame reached VAD');}}});
+  vm.runInContext(source.slice(source.indexOf('async function handleClientFrame('),source.indexOf('// Transcribe the captured turn')),context);
+  context.clientFrameGeneration=2;
+  await context.handleClientFrame(new Int16Array(512),1);
+});
