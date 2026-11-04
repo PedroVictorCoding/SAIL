@@ -305,6 +305,32 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 .message-user { align-self:stretch; border-bottom-right-radius:7px; background:linear-gradient(130deg,color-mix(in srgb,var(--ambient-one) 7%,#1b1e2a),#171a23) }
 .message-assistant { align-self:stretch; border-bottom-left-radius:7px; background:linear-gradient(130deg,#1a1d27,#151821) }
 .message-label { display:block; margin-bottom:5px; color:#a0a5b5; font-size:10px; letter-spacing:.09em; text-transform:uppercase }
+/* Rendered Markdown in assistant replies: calm, flat reading surface (DESIGN.md). */
+.message-body.markdown { white-space:normal }
+.markdown > :first-child { margin-top:0 }
+.markdown > :last-child { margin-bottom:0 }
+.markdown p, .markdown ul, .markdown ol, .markdown blockquote, .markdown pre, .markdown .md-table-wrap { margin:0 0 var(--space-2) }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin:var(--space-3) 0 var(--space-1); color:var(--text); font-weight:650; line-height:1.3 }
+.markdown h1 { font-size:17px } .markdown h2 { font-size:15.5px } .markdown h3 { font-size:14px }
+.markdown h4, .markdown h5, .markdown h6 { font-size:13px; color:var(--muted) }
+.markdown strong { color:var(--text); font-weight:650 }
+.markdown ul, .markdown ol { padding-left:1.4em }
+.markdown li + li, .markdown li > ul, .markdown li > ol { margin-top:2px }
+.markdown li > ul, .markdown li > ol { margin-bottom:0 }
+.markdown li::marker { color:var(--muted) }
+.markdown a { color:var(--focus); text-decoration:underline; text-underline-offset:2px }
+.markdown a:hover { color:var(--accent) }
+.markdown a:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:3px }
+.markdown code { padding:1px 5px; border-radius:6px; background:var(--recessed); font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; overflow-wrap:anywhere }
+.markdown pre { padding:var(--space-2) var(--space-3); border:var(--border); border-radius:var(--radius-control); background:var(--recessed); box-shadow:var(--depth-inset); overflow-x:auto; white-space:pre }
+.markdown pre code { padding:0; background:none; overflow-wrap:normal }
+.markdown blockquote { padding:2px 0 2px var(--space-3); border-left:3px solid color-mix(in srgb,var(--accent) 55%,transparent); color:var(--muted) }
+.markdown hr { margin:var(--space-3) 0; border:0; border-top:1px solid var(--stroke) }
+.markdown .md-table-wrap { overflow-x:auto }
+.markdown table { border-collapse:collapse; font-size:12.5px }
+.markdown th, .markdown td { padding:4px 10px; border:1px solid var(--stroke); text-align:left; vertical-align:top }
+.markdown th { background:var(--recessed); color:var(--text); font-weight:650 }
+@media (forced-colors: active) { .markdown pre, .markdown code { border:1px solid CanvasText } .markdown a { color:LinkText } }
 .composer { display:flex; flex:0 0 auto; align-items:center; gap:5px; width:100%; min-height:56px; margin-top:10px; padding:6px; border:var(--border); border-radius:var(--radius-pill); background:var(--recessed); box-shadow:var(--depth-inset); transition:background var(--transition-fast),border-color var(--transition-fast) }
 .composer input[type="text"] { min-width:0; flex:1; height:42px; padding:0 8px; border:0; outline:0; background:transparent; color:var(--text); font-size:12px }
 .composer input::placeholder { color:var(--muted) }

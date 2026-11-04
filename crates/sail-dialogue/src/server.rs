@@ -146,6 +146,15 @@ pub async fn run_dialogue_server_with_plans(
             }),
         )
         .route(
+            "/markdown.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/markdown.js"),
+                )
+            }),
+        )
+        .route(
             "/voice.js",
             get(|| async {
                 (
