@@ -51,6 +51,51 @@ Use four named surface treatments:
 
 Create shared tokens for these treatments. Do not invent a different shadow for each component.
 
+### Sculpted surfaces: blending, raised and inset relief
+
+The intended effect is **surface continuity**: a button, field or selection appears
+formed from the same material as its immediate background. The control remains
+recognisable, while its colour stays close to that surrounding surface.
+
+- **Flush:** the resting surface flows into its parent with little or no shadow.
+  Use for quiet content and secondary areas, with clear affordances for actions.
+- **Raised / embossed / convex:** the control gently protrudes from the surface.
+  Pair an upper-left outer highlight with a lower-right outer shadow; a subtle
+  surface gradient may suggest curvature.
+- **Inset / debossed / concave:** the control is pressed into the surface. Use an
+  upper-left inner shadow and a lower-right inner highlight. This is the inverse
+  edge response under the same light source, not a change of lighting direction.
+
+These describe the existing Base/Panel/Raised control/Inset treatments, not a new
+set of components or a separate theme. Derive the fill from the immediate parent
+surface and use shared surface, raised-shadow and inset-shadow tokens. Maintain
+SAIL's graphite palette and restrained orange accent; do not copy a reference's
+colours wholesale.
+
+Relief should be shallow and soft, with enough separation to read at normal size.
+Avoid making controls look like detached floating cards, outlining every element,
+adding glossy bevels, or using glow as the main depth cue. Text and dense content
+stay relatively flat.
+
+**State mapping:** use raised relief for a resting primary button, a small
+highlight change on hover, and reduced elevation or the shared inset treatment
+when pressed. A latched selection needs an additional persistent indicator,
+position, text or icon plus appropriate semantics (for example, `aria-pressed`
+on a toggle button). Do not use inset depth alone to mean both "held down" and
+"selected". Inputs and switch tracks may remain recessed with a raised thumb.
+
+The owner's reference is
+[Neumorphism Button on Dribbble](https://dribbble.com/shots/25989383-Neumorphism-Button).
+It records the requested visual direction, not permission to reuse assets or code.
+
+**Acceptance:** compare raised, inset and flush treatments on their actual parent
+surfaces at normal desktop and mobile viewing sizes. Verify labels, control
+boundaries, hit areas and focus remain identifiable with mouse, keyboard and
+touch. Check reduced-motion and forced-colours/shadow-free fallbacks; depth must
+never be the only cue for action or state. Contrast requirements in
+[DESIGN.md](../DESIGN.md) take precedence over visual blending. This is guidance
+for future UI work, not a claim that existing screens have been revalidated.
+
 ### Component behaviour
 
 **Buttons**
