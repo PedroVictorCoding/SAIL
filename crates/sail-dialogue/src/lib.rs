@@ -21,7 +21,7 @@ mod tool_policy;
 pub mod tts;
 pub mod turn_coordinator;
 pub mod vad;
-mod visual_capture;
+pub mod visual_snapshot;
 pub mod vlm;
 pub mod web_assets;
 

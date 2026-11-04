@@ -984,6 +984,20 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 }
                             },
                             "playback_finished"=>{pipe.set_orb_state(OrbState::Idle);},
+                            "snapshot"=>{
+                                // The browser's answer to a model-requested visual_snapshot.
+                                let Some(id)=value["request_id"].as_u64() else {continue};
+                                let reply=match value["error"].as_str() {
+                                    Some(error)=>Err(error.chars().take(300).collect::<String>()),
+                                    None=>match parse_vision(&value["image"]) {
+                                        Ok(Some(frame))=>Ok(frame),
+                                        Ok(None)=>Err("No image was captured".into()),
+                                        Err(e)=>Err(e.to_string()),
+                                    },
+                                };
+                                if !crate::visual_snapshot::fulfil(&session,id,reply){debug!(request_id=id,"Snapshot arrived after its request was withdrawn");}
+                                continue;
+                            },
                             _=>{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Unknown voice action"})).await;}
                         }
                         emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"control","channel":"voice:control","control":pipe.control_state()})).await;
@@ -996,6 +1010,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
         }
     }
     info!("Voice client disconnected; cancelling tasks and clearing session context");
+    crate::visual_snapshot::cancel_session(&session);
     drop(turn);
     drop(observation);
     drop(partial);
@@ -1413,15 +1428,6 @@ async fn run_turn(
         emit(&tx, current, json!({"type":"turn_finished","state":"idle"})).await;
         return Ok(());
     }
-    if vision.is_none() {
-        let previous = state.arena.last_user_prompt(&session);
-        if let Some(source) = crate::visual_capture::requested_source(&prompt, previous.as_deref())
-        {
-            info!(source, "Requesting browser visual capture before reasoning");
-            emit(&tx, current, json!({"type":"capture_required","source":source,"prompt":prompt,"turn_id":current})).await;
-            return Ok(());
-        }
-    }
     emit(
         &tx,
         current,
@@ -1474,6 +1480,7 @@ async fn run_turn(
 - fs_read: read text contents of a file inside the authorized workspace
 - fs_write: create or write a file inside the authorized workspace
 - vision_frame: measure luminance and edge density of attached image
+- visual_snapshot: take one camera picture (physical world) or screenshot (the user's computer) when the user refers to something visual or asks you to look; the user approves each capture
 - github_issues: list recent open GitHub issues or fetch full details of a specific issue by number or URL (e.g. issue_number: 125, or url: \"https://github.com/owner/repo/issues/125\")
 - web_read: read-only public web page and documentation fetcher from the internet without write permissions (e.g. url: \"https://...\")
 - web_speak: fetch a web page, extract its important readable content, and stream it directly to voice synthesis so the user hears it immediately without waiting for model token generation. Pass a short context_phrase (e.g. \"Reading the article from LessWrong:\") to announce the page before speech begins.
@@ -1523,7 +1530,34 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         messages.push(json!({"role":"user","content":turn.user}));
         messages.push(json!({"role":"assistant","content":turn.assistant}));
     }
-    let user = json!({"role":"user","content":crate::vlm::multimodal_content(&crate::vlm::with_memory_context(&prompt,&memory_block),vision)?});
+    let (model_prompt, vision) = match vision {
+        Some(frame) => {
+            match crate::visual_snapshot::observe(&vlm, &frame, "upload", Some(&prompt)).await {
+                Ok(crate::visual_snapshot::Observation::Native) => (prompt.clone(), Some(frame)),
+                Ok(crate::visual_snapshot::Observation::Text(description)) => {
+                    info!(
+                        chars = description.chars().count(),
+                        "Attached image described locally for a text-only model"
+                    );
+                    (
+                        crate::visual_snapshot::attached_image_context(&description, &prompt),
+                        None,
+                    )
+                }
+                Err(error) => {
+                    warn!(%error, "Attached image could not be analyzed");
+                    (
+                        format!(
+                            "[The user attached an image, but it could not be analyzed: {error}]\n\n{prompt}"
+                        ),
+                        None,
+                    )
+                }
+            }
+        }
+        None => (prompt.clone(), None),
+    };
+    let user = json!({"role":"user","content":crate::vlm::multimodal_content(&crate::vlm::with_memory_context(&model_prompt,&memory_block),vision)?});
     messages.push(user.clone());
     fn text_bytes(message: &Value) -> usize {
         if let Some(text) = message["content"].as_str() {
@@ -1740,6 +1774,88 @@ struct MemoryScope<'a> {
     learning_epoch: Option<u64>,
 }
 
+/// Run a model-requested `visual_snapshot`: ask the browser for one frame, wait for the
+/// user to allow it, then hand the model the image (vision model) or a compact local
+/// description (text-only model). Returns the tool result and, for a vision model, the
+/// message carrying the image.
+async fn take_snapshot(
+    vlm: &VoiceVlm,
+    session: Option<&str>,
+    params: &Value,
+    tx: &mpsc::Sender<Outbound>,
+    current: u64,
+) -> (crate::KernelToolResult, Option<Value>) {
+    use crate::visual_snapshot as snapshot;
+    let failed = |error: String| {
+        (
+            crate::KernelToolResult {
+                tool: snapshot::TOOL.into(),
+                success: false,
+                output: json!({"error": error}),
+            },
+            None,
+        )
+    };
+    let (source, question) = match snapshot::parse_params(params) {
+        Ok(parsed) => parsed,
+        Err(error) => return failed(error),
+    };
+    let Some(session) = session else {
+        return failed("No browser is connected to take a snapshot".into());
+    };
+    let mut request = snapshot::SnapshotRequest::begin(session);
+    info!(
+        source = source.as_str(),
+        request_id = request.id,
+        "Model requested a visual snapshot"
+    );
+    emit(
+        tx,
+        current,
+        json!({"type":"snapshot_request","request_id":request.id,"source":source.as_str(),"question":question,"turn_id":current}),
+    )
+    .await;
+    let frame = match request.wait(snapshot::SNAPSHOT_TIMEOUT).await {
+        Ok(frame) => frame,
+        Err(error) => {
+            info!(%error, "Visual snapshot not taken");
+            return failed(error);
+        }
+    };
+    drop(request);
+    let started = Instant::now();
+    match snapshot::observe(vlm, &frame, source.as_str(), question.as_deref()).await {
+        Ok(observation) => {
+            info!(
+                source = source.as_str(),
+                image_bytes = frame.data.len(),
+                native = observation == snapshot::Observation::Native,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "Visual snapshot observed"
+            );
+            let image = match &observation {
+                snapshot::Observation::Native => {
+                    let label = format!("[Snapshot from the {}]", source.as_str());
+                    match crate::vlm::multimodal_content(&label, Some(frame)) {
+                        Ok(content) => Some(json!({"role":"user","content":content})),
+                        Err(error) => return failed(error.to_string()),
+                    }
+                }
+                snapshot::Observation::Text(_) => None,
+            };
+            (
+                crate::KernelToolResult {
+                    tool: snapshot::TOOL.into(),
+                    success: true,
+                    output: snapshot::tool_output(source, &observation),
+                },
+                image,
+            )
+        }
+        Err(error) => failed(error),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn reason_turn(
     vlm: &VoiceVlm,
@@ -1928,6 +2044,7 @@ async fn reason_turn(
             }
             info!(round, calls = calls.len(), "Model requested local tools");
             for call in calls {
+                let mut snapshot_image = None;
                 let name = call["function"]["name"].as_str().unwrap_or_default();
                 let arguments = call["function"]["arguments"].as_str().unwrap_or("{}");
                 trace!(
@@ -1974,6 +2091,19 @@ async fn reason_turn(
                                 success,
                                 output,
                             };
+                            guard.record(name, &params, result.clone());
+                            result
+                        } else if name == crate::visual_snapshot::TOOL {
+                            emit(
+                                tx,
+                                current,
+                                json!({"type":"tool_started","channel":"voice:vlm","tool":name}),
+                            )
+                            .await;
+                            let session = memory.as_ref().map(|scope| scope.session);
+                            let (result, image) =
+                                take_snapshot(vlm, session, &params, tx, current).await;
+                            snapshot_image = image;
                             guard.record(name, &params, result.clone());
                             result
                         } else if name == crate::vlm::MEMORY_SEARCH_TOOL {
@@ -2173,6 +2303,10 @@ async fn reason_turn(
                 messages.push(
                     json!({"role":"tool","name":name,"tool_call_id":call["id"],"content":content}),
                 );
+                // A vision-capable model sees the snapshot itself, right after its tool result.
+                if let Some(image) = snapshot_image {
+                    messages.push(image);
+                }
             }
         } else {
             final_assistant = Some(assistant);
@@ -2621,6 +2755,126 @@ mod tests {
     fn call(name: &str, params: Value) -> Value {
         json!({"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":name,"arguments":params.to_string()}}]})
     }
+    async fn snapshot_fixture(vision: bool) -> (AbortTask, VoiceVlm) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let props = json!({"modalities":{"vision":vision,"tools":true},"default_generation_settings":{"n_ctx":4096}});
+        let app = Router::new()
+            .route(
+                "/health",
+                axum::routing::get(|| async { axum::Json(json!({"status":"ok"})) }),
+            )
+            .route(
+                "/props",
+                axum::routing::get(move || {
+                    let props = props.clone();
+                    async move { axum::Json(props) }
+                }),
+            );
+        let server = AbortTask(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        (server, test_vlm(addr))
+    }
+
+    #[tokio::test]
+    async fn model_snapshot_waits_for_the_browser_and_attaches_the_image_for_a_vision_model() {
+        let (_server, vlm) = snapshot_fixture(true).await;
+        let (tx, mut rx) = mpsc::channel::<Outbound>(16);
+        let browser = tokio::spawn(async move {
+            // The browser receives the request, captures, and answers on the session socket.
+            while let Some(out) = rx.recv().await {
+                if out.value["type"] == "snapshot_request" {
+                    assert_eq!(out.value["source"], "screen");
+                    assert_eq!(out.value["question"], "Which error is shown?");
+                    let id = out.value["request_id"].as_u64().unwrap();
+                    let frame = crate::VisionFrameInput {
+                        width: 0,
+                        height: 0,
+                        format: "image/jpeg".into(),
+                        data: vec![0xff, 0xd8, 0xff],
+                    };
+                    assert!(crate::visual_snapshot::fulfil(
+                        "snap-session",
+                        id,
+                        Ok(frame)
+                    ));
+                    return true;
+                }
+            }
+            false
+        });
+        let (result, image) = take_snapshot(
+            &vlm,
+            Some("snap-session"),
+            &json!({"source":"screen","question":"Which error is shown?"}),
+            &tx,
+            1,
+        )
+        .await;
+        drop(tx);
+        assert!(browser.await.unwrap(), "browser saw the snapshot request");
+        assert!(result.success, "{:?}", result.output);
+        assert_eq!(result.output["source"], "screen");
+        let image = image.expect("vision model receives the image itself");
+        assert_eq!(image["role"], "user");
+        assert!(
+            image["content"][1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/jpeg;base64,")
+        );
+    }
+
+    #[tokio::test]
+    async fn declined_or_unroutable_snapshots_fail_cleanly_without_an_image() {
+        let (_server, vlm) = snapshot_fixture(true).await;
+        let (tx, mut rx) = mpsc::channel::<Outbound>(16);
+        tokio::spawn(async move {
+            while let Some(out) = rx.recv().await {
+                if let Some(id) = out.value["request_id"].as_u64() {
+                    crate::visual_snapshot::fulfil(
+                        "declining-session",
+                        id,
+                        Err("The user declined the capture.".into()),
+                    );
+                }
+            }
+        });
+        let (declined, image) = take_snapshot(
+            &vlm,
+            Some("declining-session"),
+            &json!({"source":"camera"}),
+            &tx,
+            1,
+        )
+        .await;
+        assert!(!declined.success);
+        assert!(
+            declined.output["error"]
+                .as_str()
+                .unwrap()
+                .contains("declined")
+        );
+        assert!(image.is_none());
+        let (no_browser, _) = take_snapshot(&vlm, None, &json!({"source":"camera"}), &tx, 1).await;
+        assert!(
+            no_browser.output["error"]
+                .as_str()
+                .unwrap()
+                .contains("No browser")
+        );
+        let (bad_source, _) = take_snapshot(
+            &vlm,
+            Some("declining-session"),
+            &json!({"source":"microphone"}),
+            &tx,
+            1,
+        )
+        .await;
+        assert!(!bad_source.success);
+    }
+
     async fn exercise(prompt: &str, replies: Vec<Value>) -> (Vec<Value>, Vec<Value>, String) {
         let _guardian = sail_guardian::GuardianSubsystem::new();
         // Explicit trusted fixture grant; production has no implicit process access.
