@@ -148,6 +148,180 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_text_rejects_each_disallowed_request_field() {
+        use sail_protocol::{
+            ContentPart, FunctionCall, FunctionDefinition, ImageUrl, Message, ToolCall,
+            ToolDefinition,
+        };
+        let vault = CredentialStore::new();
+        let valid = InferenceRequest::text("ordinary text");
+        let mut cases = Vec::new();
+        let mut request = valid.clone();
+        request.version += 1;
+        cases.push(request);
+        let mut request = valid.clone();
+        request.messages.clear();
+        cases.push(request);
+        let mut request = valid.clone();
+        request.messages[0].role = Role::System;
+        cases.push(request);
+        let mut request = valid.clone();
+        request.tool_choice = ToolChoice::Auto;
+        cases.push(request);
+        let mut request = valid.clone();
+        request.tools.push(ToolDefinition {
+            kind: "function".into(),
+            function: FunctionDefinition {
+                name: "read".into(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+            },
+        });
+        cases.push(request);
+        let mut request = valid.clone();
+        request.messages[0].tool_calls.push(ToolCall {
+            id: "call".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "read".into(),
+                arguments: "{}".into(),
+            },
+        });
+        cases.push(request);
+        let mut request = valid.clone();
+        request.messages[0].tool_call_id = Some("call".into());
+        cases.push(request);
+        let mut request = valid.clone();
+        request.messages[0].name = Some("memory".into());
+        cases.push(request);
+        let mut request = valid.clone();
+        request.messages[0].content = Content::Parts(vec![ContentPart::ImageUrl {
+            image_url: ImageUrl {
+                url: "private-image".into(),
+            },
+        }]);
+        cases.push(request);
+        let mut request = valid.clone();
+        request
+            .messages
+            .push(Message::text(Role::User, "prior turn"));
+        cases.push(request);
+        for request in cases {
+            assert!(
+                prepare_text(&request, &vault, &[]).is_err(),
+                "accepted disallowed request: {request:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_inventory_and_sanitized_output_budgets_include_their_exact_boundaries() {
+        let vault = CredentialStore::new();
+        for length in [1, 32767, 32768] {
+            let input = "x".repeat(length);
+            assert_eq!(
+                prepare_text(&InferenceRequest::text(&input), &vault, &[])
+                    .unwrap()
+                    .text(),
+                input
+            );
+        }
+        for input in [
+            String::new(),
+            "x".repeat(32769),
+            "x".repeat(32770),
+            // Oversized raw input must fail even when redaction would shrink it.
+            format!("{}@example.org", "x".repeat(32768)),
+            "x\0x".into(),
+            "x\u{200b}x".into(),
+            "x\u{202e}x".into(),
+        ] {
+            assert!(prepare_text(&InferenceRequest::text(input), &vault, &[]).is_err());
+        }
+        assert_eq!(
+            prepare_text(&InferenceRequest::text("a\nb\rc\td"), &vault, &[])
+                .unwrap()
+                .text(),
+            "a\nb\rc\td"
+        );
+        let request = InferenceRequest::text("ordinary text");
+        for names in [vec!["x".repeat(512)], vec!["unused".into(); 4096]] {
+            assert!(prepare_text(&request, &vault, &names).is_ok());
+        }
+        for names in [
+            vec!["".into()],
+            vec!["  ".into()],
+            vec!["x".repeat(513)],
+            vec!["x".repeat(514)],
+            vec!["unused".into(); 4097],
+            vec!["unused".into(); 4098],
+        ] {
+            assert!(prepare_text(&request, &vault, &names).is_err());
+        }
+        // Ten bytes per [ENTITY_1], plus eight untouched bytes, exactly fills the budget.
+        let expanded = format!("{}zzzzzzzz", "a".repeat(3276));
+        assert_eq!(
+            prepare_text(&InferenceRequest::text(&expanded), &vault, &["a".into()])
+                .unwrap()
+                .text()
+                .len(),
+            32768
+        );
+        assert!(
+            prepare_text(
+                &InferenceRequest::text(format!("a{expanded}")),
+                &vault,
+                &["a".into()]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn redaction_receipts_and_debug_output_describe_the_actual_sanitized_payload() {
+        let vault = CredentialStore::new();
+        let plain = prepare_text(&InferenceRequest::text("ordinary text"), &vault, &[]).unwrap();
+        assert_eq!(plain.text(), "ordinary text");
+        assert_eq!(plain.redactions(), 0);
+        let debug = format!("{plain:?}");
+        assert!(debug.contains("PreparedText"));
+        assert!(debug.contains(plain.sha256()));
+        assert!(debug.contains("bytes: 13"));
+        assert!(!debug.contains("ordinary text"));
+        let identifiers = prepare_text(
+            &InferenceRequest::text("a@example.org a@example.org b@example.org"),
+            &vault,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            identifiers.text(),
+            "[IDENTIFIER_1] [IDENTIFIER_1] [IDENTIFIER_2]"
+        );
+        assert_eq!(identifiers.redactions(), 3);
+        let entities = prepare_text(
+            &InferenceRequest::text("Alice and Bob"),
+            &vault,
+            &["Alice".into(), "Bob".into()],
+        )
+        .unwrap();
+        assert_eq!(entities.text(), "[ENTITY_1] and [ENTITY_2]");
+        assert_eq!(entities.redactions(), 2);
+        vault
+            .store_credential(
+                sail_common::types::SubsystemId::Bridge,
+                "key",
+                "secret-api-key",
+                "external:test:infer",
+                chrono::Duration::hours(1),
+            )
+            .unwrap();
+        let secret = prepare_text(&InferenceRequest::text("secret-api-key"), &vault, &[]).unwrap();
+        assert_eq!(secret.redactions(), 1);
+        assert!(!secret.text().contains("secret-api-key"));
+    }
+
+    #[test]
     fn wildcard_learned_rules_cannot_authorize_egress() {
         use crate::{RiskLevel, policy::LearnedPattern};
         let prepared = prepare_text(
@@ -171,6 +345,20 @@ mod tests {
             LearnedPattern::from_capability(&capability),
             LearnedPattern::ExactCapability(_)
         ));
+        let ordinary = Capability::Tool(ToolCapability::Invocation {
+            tool: "other:tool".into(),
+            arguments: "{}".into(),
+        });
+        assert_eq!(ordinary.risk_level(), RiskLevel::High);
+        assert!(matches!(
+            LearnedPattern::from_capability(&ordinary),
+            LearnedPattern::AnyToolInvocation { .. }
+        ));
+        let command = Capability::Tool(ToolCapability::Invocation {
+            tool: "command:execute".into(),
+            arguments: "{}".into(),
+        });
+        assert_eq!(command.risk_level(), RiskLevel::Critical);
     }
 
     #[test]

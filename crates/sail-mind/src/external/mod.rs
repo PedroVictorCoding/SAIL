@@ -1,5 +1,7 @@
 //! Opt-in external text providers. Local inference never falls through to this path.
 pub mod ledger;
+#[cfg(test)]
+mod tests;
 
 use crate::backend::InferenceBackend;
 use async_trait::async_trait;

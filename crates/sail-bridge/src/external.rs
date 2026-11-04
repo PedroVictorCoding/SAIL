@@ -542,14 +542,38 @@ mod tests {
             .unwrap();
         for endpoint in [
             "http://example.org/v1/chat/completions",
+            "http://127.0.0.1/v1/chat/completions",
+            "https://user@example.org/v1/chat/completions",
             "https://user:pass@example.org/v1/chat/completions",
             "https://example.org/v1/chat/completions?key=secret",
             "https://example.org/v1/chat/completions#secret",
+            "https://example.org/wrong-path",
         ] {
             assert!(
                 OpenAiTextConnector::new(endpoint, "test", vault.clone(), handle.clone()).is_err()
             );
         }
+        let connector = OpenAiTextConnector::new(
+            "https://example.org/v1/chat/completions",
+            "test",
+            vault.clone(),
+            handle.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            connector.endpoint(),
+            "https://example.org/v1/chat/completions"
+        );
+        assert!(
+            OpenAiTextConnector::build(
+                "http://203.0.113.1/v1/chat/completions",
+                "test",
+                vault.clone(),
+                handle.clone(),
+                true
+            )
+            .is_err()
+        );
         assert!(
             OpenAiTextConnector::new(
                 "https://example.org/v1/chat/completions",
@@ -559,5 +583,90 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn text_protocol_accepts_empty_optional_tool_fields_but_rejects_actual_tools_and_wrong_roles()
+     {
+        for (message, accepted) in [
+            (
+                serde_json::json!({"role":"assistant","content":"text","tool_calls":null,"function_call":null}),
+                true,
+            ),
+            (
+                serde_json::json!({"role":"assistant","content":"text","tool_calls":[]}),
+                true,
+            ),
+            (serde_json::json!({"role":"user","content":"text"}), false),
+            (
+                serde_json::json!({"role":"assistant","content":"text","function_call":{"name":"shell"}}),
+                false,
+            ),
+            (
+                serde_json::json!({"role":"assistant","content":"text","tool_calls":{}}),
+                false,
+            ),
+            (
+                serde_json::json!({"role":"assistant","content":"text","tool_calls":[{}]}),
+                false,
+            ),
+        ] {
+            let response = serde_json::json!({"model":"test-model","choices":[{"message":message,"finish_reason":"stop"}]});
+            let f = fixture(StatusCode::OK, response, Duration::ZERO, 10).await;
+            let request = InferenceRequest::text("explain ownership");
+            let result = f
+                .backend
+                .infer_authorized(
+                    &request,
+                    Some(approve(&f, &request)),
+                    &CancellationToken::new(),
+                    &ResourceLimits::default(),
+                )
+                .await;
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "unexpected acceptance for {message}"
+            );
+            if !accepted {
+                assert_eq!(result.unwrap_err().code, ErrorCode::BackendProtocol);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn http_response_byte_budget_accepts_exact_size_and_rejects_larger_bodies() {
+        let response = answer();
+        let bytes = serde_json::to_vec(&response).unwrap().len();
+        for (limit, accepted) in [
+            (bytes, true),
+            (bytes + 1, true),
+            (bytes - 1, false),
+            (bytes - 2, false),
+        ] {
+            let f = fixture(StatusCode::OK, response.clone(), Duration::ZERO, 10).await;
+            let request = InferenceRequest::text("explain ownership");
+            let limits = ResourceLimits {
+                max_response_bytes: limit,
+                ..Default::default()
+            };
+            let result = f
+                .backend
+                .infer_authorized(
+                    &request,
+                    Some(approve(&f, &request)),
+                    &CancellationToken::new(),
+                    &limits,
+                )
+                .await;
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "HTTP response length {bytes}, limit {limit}"
+            );
+            if !accepted {
+                assert_eq!(result.unwrap_err().code, ErrorCode::BackendProtocol);
+            }
+        }
     }
 }

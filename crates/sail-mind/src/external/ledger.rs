@@ -7,6 +7,9 @@ use uuid::Uuid;
 
 pub struct UsageLedger(Mutex<Connection>);
 
+// Fixed descriptor policy; OpenOptions itself supplies CLOEXEC.
+const LEDGER_OPEN_FLAGS: i32 = libc::O_NOFOLLOW | libc::O_NONBLOCK;
+
 impl UsageLedger {
     /// Explicit paths support tests/embedders. Production uses `open_default`.
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -17,7 +20,7 @@ impl UsageLedger {
             .write(true)
             .create(true)
             .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .custom_flags(LEDGER_OPEN_FLAGS)
             .open(path)
             .map_err(|_| "external ledger file unavailable")?;
         if !file
@@ -48,10 +51,15 @@ impl UsageLedger {
     /// Never fall back to a root-disk or in-memory quota ledger.
     pub fn open_default() -> Result<Self, String> {
         let root = sail_common::storage::resolve();
+        let mounted = sail_common::storage::is_mount_point(&root.path);
+        Self::open_data_root(root, mounted)
+    }
+
+    fn open_data_root(root: sail_common::storage::DataRoot, mounted: bool) -> Result<Self, String> {
         if matches!(
             root.source,
             sail_common::storage::DataRootSource::Fallback(_)
-        ) || !sail_common::storage::is_mount_point(&root.path)
+        ) || !mounted
         {
             return Err("external providers require a mounted SAIL_DATA directory".into());
         }
@@ -245,6 +253,223 @@ mod tests {
             input_tokens: None,
             output_tokens: None,
         }
+    }
+
+    struct TemporaryLedger(std::path::PathBuf);
+    impl TemporaryLedger {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("external-tests-{}", Uuid::new_v4()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        fn open(&self) -> UsageLedger {
+            UsageLedger::open(&self.0.join("ledger.db")).unwrap()
+        }
+    }
+    impl Drop for TemporaryLedger {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn each_reservation_invariant_is_enforced_before_inserting_a_row() {
+        let directory = TemporaryLedger::new();
+        let ledger = directory.open();
+        let now = 1_800_000_000;
+        let mut cases = Vec::new();
+        let mut r = sample(now);
+        r.outcome = AttemptOutcome::Completed;
+        cases.push(r);
+        let mut r = sample(now);
+        r.reserved_at = now - 6;
+        cases.push(r);
+        let mut r = sample(now);
+        r.reserved_at = now + 1;
+        cases.push(r);
+        let mut r = sample(now);
+        r.version = 2;
+        cases.push(r);
+        for hash in ["a".repeat(63), "a".repeat(65), "z".repeat(64)] {
+            let mut r = sample(now);
+            r.request_sha256 = hash;
+            cases.push(r);
+        }
+        for bytes in [32769, 32770] {
+            let mut r = sample(now);
+            r.input_bytes = bytes;
+            cases.push(r);
+        }
+        for name in [String::new(), "x".repeat(65), "x".repeat(66)] {
+            let mut r = sample(now);
+            r.provider = name;
+            cases.push(r);
+        }
+        for model in [String::new(), "x".repeat(129), "x".repeat(130)] {
+            let mut r = sample(now);
+            r.model = model;
+            cases.push(r);
+        }
+        let mut r = sample(now);
+        r.purpose = "implicit_memory".into();
+        cases.push(r);
+        let mut r = sample(now);
+        r.finished_at = Some(now);
+        cases.push(r);
+        for receipt in cases {
+            assert!(
+                ledger.reserve_at(&receipt, 10000, now).is_err(),
+                "invalid reservation accepted: {receipt:?}"
+            );
+            assert!(ledger.receipt(receipt.request_id).unwrap().is_none());
+        }
+        for cap in [0, 10001, 10002] {
+            assert!(ledger.reserve_at(&sample(now), cap, now).is_err());
+        }
+        let mut boundary = sample(now);
+        boundary.input_bytes = 32768;
+        boundary.provider = "p".repeat(64);
+        boundary.model = "m".repeat(128);
+        boundary.reserved_at = now - 5;
+        ledger.reserve_at(&boundary, 10000, now).unwrap();
+        assert_eq!(
+            ledger
+                .receipt(boundary.request_id)
+                .unwrap()
+                .unwrap()
+                .input_bytes,
+            32768
+        );
+        let receipt = sample(Utc::now().timestamp());
+        ledger.reserve(&receipt, 10000).unwrap();
+        assert_eq!(
+            ledger.receipt(receipt.request_id).unwrap().unwrap().outcome,
+            AttemptOutcome::Reserved
+        );
+    }
+
+    #[test]
+    fn dispatch_and_finish_are_monotonic_and_preserve_usage_and_terminal_timestamps() {
+        let directory = TemporaryLedger::new();
+        let ledger = directory.open();
+        let now = 1_800_000_000;
+        let receipt = sample(now);
+        ledger.reserve_at(&receipt, 1, now).unwrap();
+        for outcome in [AttemptOutcome::Reserved, AttemptOutcome::Dispatched] {
+            assert!(
+                ledger
+                    .finish(receipt.request_id, outcome, None, None, None)
+                    .is_err()
+            );
+        }
+        ledger.dispatch(receipt.request_id).unwrap();
+        let dispatched = ledger.receipt(receipt.request_id).unwrap().unwrap();
+        assert_eq!(dispatched.outcome, AttemptOutcome::Dispatched);
+        assert!(dispatched.finished_at.is_none());
+        assert!(ledger.dispatch(receipt.request_id).is_err());
+        ledger
+            .finish(
+                receipt.request_id,
+                AttemptOutcome::Completed,
+                Some(12),
+                Some(8),
+                None,
+            )
+            .unwrap();
+        let completed = ledger.receipt(receipt.request_id).unwrap().unwrap();
+        assert_eq!(completed.outcome, AttemptOutcome::Completed);
+        assert!(completed.finished_at.is_some());
+        assert_eq!(
+            (completed.input_tokens, completed.output_tokens),
+            (Some(12), Some(8))
+        );
+        assert!(ledger.dispatch(receipt.request_id).is_err());
+        assert!(
+            ledger
+                .finish(receipt.request_id, AttemptOutcome::Failed, None, None, None)
+                .is_err()
+        );
+        assert_eq!(
+            ledger.receipt(receipt.request_id).unwrap().unwrap().outcome,
+            AttemptOutcome::Completed
+        );
+        assert!(ledger.dispatch(Uuid::new_v4()).is_err());
+    }
+
+    #[test]
+    fn cooldown_expires_at_the_reported_second_not_one_second_later() {
+        let directory = TemporaryLedger::new();
+        let ledger = directory.open();
+        let now = 1_800_000_000;
+        let receipt = sample(now);
+        ledger.reserve_at(&receipt, 10, now).unwrap();
+        ledger
+            .finish(
+                receipt.request_id,
+                AttemptOutcome::RateLimited,
+                None,
+                None,
+                Some(now + 100),
+            )
+            .unwrap();
+        assert!(ledger.reserve_at(&sample(now + 99), 10, now + 99).is_err());
+        ledger
+            .reserve_at(&sample(now + 100), 10, now + 100)
+            .unwrap();
+    }
+
+    #[test]
+    fn default_storage_refuses_fallbacks_and_unmounted_paths_without_creating_files() {
+        use sail_common::storage::{DataRoot, DataRootSource};
+        let directory = TemporaryLedger::new();
+        for (source, mounted) in [
+            (DataRootSource::Fallback("unavailable".into()), true),
+            (DataRootSource::Env, false),
+        ] {
+            assert!(
+                UsageLedger::open_data_root(
+                    DataRoot {
+                        path: directory.0.clone(),
+                        source
+                    },
+                    mounted
+                )
+                .is_err()
+            );
+            assert!(!directory.0.join("mind").exists());
+        }
+        let ledger = UsageLedger::open_data_root(
+            DataRoot {
+                path: directory.0.clone(),
+                source: DataRootSource::DataDisk,
+            },
+            true,
+        )
+        .unwrap();
+        assert!(ledger.receipt(Uuid::new_v4()).unwrap().is_none());
+        assert!(directory.0.join("mind/external-usage.sqlite3").is_file());
+    }
+
+    #[test]
+    fn ledger_files_are_private_and_links_and_special_files_are_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = TemporaryLedger::new();
+        let _ledger = directory.open();
+        assert_eq!(
+            std::fs::metadata(directory.0.join("ledger.db"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let target = directory.0.join("target");
+        std::fs::write(&target, "untouched").unwrap();
+        let link = directory.0.join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(UsageLedger::open(&link).is_err());
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "untouched");
+        assert!(UsageLedger::open(&directory.0).is_err());
     }
     #[test]
     fn cap_dedup_restart_and_cooldown_are_durable() {
