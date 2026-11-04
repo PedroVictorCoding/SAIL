@@ -2613,6 +2613,10 @@ fn generate_and_persist_token(token_path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// `GuardianSubsystem::new()` installs a process-wide broker. Tests that create one and
+    /// grant it capabilities must not overlap, or a later test replaces the broker holding an
+    /// earlier test's grants and that test's tool call waits for an approval that never comes.
+    static GUARDIAN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     use std::collections::VecDeque;
     use tokio::sync::Mutex;
 
@@ -2694,7 +2698,8 @@ mod tests {
     // is not a delivered capability.
     #[tokio::test]
     async fn studio_audio_tool_returns_a_measured_receipt_through_the_guarded_route() {
-        let _guardian = test_guardian();
+        let _serial = GUARDIAN_TEST_LOCK.lock().await;
+        let _guardian = sail_guardian::GuardianSubsystem::new();
         let dir = std::env::temp_dir().join(format!("sail-studio-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let wav = dir.join("tone.wav");
@@ -2950,7 +2955,8 @@ mod tests {
     }
 
     async fn exercise(prompt: &str, replies: Vec<Value>) -> (Vec<Value>, Vec<Value>, String) {
-        let _guardian = test_guardian();
+        let _serial = GUARDIAN_TEST_LOCK.lock().await;
+        let _guardian = sail_guardian::GuardianSubsystem::new();
         // Explicit trusted fixture grant; production has no implicit process access.
         for limit in 1..=3 {
             _guardian.policy().grant_scoped(
