@@ -2358,6 +2358,7 @@ name = "sail-arena-learn"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "rusqlite",
  "sail-common",
  "sail-mind",
@@ -2458,6 +2459,7 @@ dependencies = [
  "sail-mind",
  "sail-protocol",
  "sail-pulse",
+ "sail-ui",
  "serde_json",
  "tokio",
  "tokio-util",
