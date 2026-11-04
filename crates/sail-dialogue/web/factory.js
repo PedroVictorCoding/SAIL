@@ -59,18 +59,114 @@ function setScene(i) {
 }
 
 function injectFactoryStyles() {
-  const s = document.createElement('style'); s.textContent = `
-  .factory-mode .workspace, .factory-mode aside, .factory-mode nav {display:none !important;}
-  .factory-floor {position:absolute;inset:96px 0 0 138px;background:#17191D;overflow:hidden;}
-  .factory-canvas {width:100%;height:100%;display:block;}
-  .factory-top-bar {position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:24px;color:#C9CDD4;font:11px monospace;}
-  .factory-bottom-bar {position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;color:#C9CDD4;font:11px monospace;}
-  .scene-nav, .scene-btn {background:#22262A;border:1px solid #3A3E45;color:#C9CDD4;border-radius:6px;padding:4px 10px;cursor:pointer;}
-  .scene-btn.active {border-color:#F26B21;color:#F26B21;}
-  .factory-inspector {position:absolute;right:12px;top:12px;width:320px;background:#22262A;border:1px solid #3A3E45;border-radius:12px;padding:14px;color:#C9CDD4;}
+  // Check if styles already injected
+  if (document.getElementById('factory-styles')) return;
+  const s = document.createElement('style');
+  s.id = 'factory-styles';
+  s.textContent = `
+  .factory-mode {
+    background: #17191D !important;
+  }
+  .factory-mode .workspace,
+  .factory-mode aside {
+    display: none !important;
+  }
+  .factory-mode .side-rail {
+    background: #17191D;
+  }
+  .factory-floor {
+    position: absolute;
+    inset: 96px 0 0 138px;
+    background: #17191D;
+    overflow: hidden;
+    z-index: 100;
+  }
+  .factory-canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    cursor: pointer;
+  }
+  .factory-top-bar {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 24px;
+    color: #C9CDD4;
+    font: 11px monospace;
+  }
+  .factory-bottom-bar {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #C9CDD4;
+    font: 11px monospace;
+  }
+  .scene-nav, .scene-btn {
+    background: #22262A;
+    border: 1px solid #3A3E45;
+    color: #C9CDD4;
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+  .scene-btn.active {
+    border-color: #F26B21;
+    color: #F26B21;
+  }
+  .factory-inspector {
+    position: absolute;
+    right: 12px;
+    top: 12px;
+    width: 320px;
+    background: #22262A;
+    border: 1px solid #3A3E45;
+    border-radius: 12px;
+    padding: 14px;
+    color: #C9CDD4;
+  }
+  .factory-live i {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #5FD3A6;
+    margin-right: 6px;
+  }
   `;
   document.head.appendChild(s);
 }
+
+// Exit factory mode and restore normal UI
+window.sailExitFactory = () => {
+  const shell = document.getElementById('appShell');
+  if (shell) shell.classList.remove('factory-mode');
+  const floor = document.getElementById('factoryFloor');
+  if (floor) floor.remove();
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('selected'));
+  document.getElementById('homeNav')?.classList.add('selected');
+  location.hash = '#home';
+  return false;
+};
+
+// Wire up home nav to exit factory mode
+document.addEventListener('DOMContentLoaded', () => {
+  const homeNav = document.getElementById('homeNav');
+  if (homeNav) {
+    homeNav.addEventListener('click', (e) => {
+      if (document.getElementById('factoryFloor')) {
+        e.preventDefault();
+        window.sailExitFactory();
+      }
+    });
+  }
+});
 
 function renderFactory() {
   const canvas = document.getElementById('factoryCanvas'); if (!canvas) return;
@@ -136,21 +232,63 @@ function initCanvasEvents() {
 // Add canvas event init to initFactory
 const origInit = initFactory; initFactory = () => { origInit(); setTimeout(initCanvasEvents, 100); };
 
-// Wire factory to global navigation
 window.sailShowFactory = () => {
   closeSheet?.();
+  // Deselect all nav items
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('selected'));
+  const navBtn = document.getElementById('factoryNav');
+  if (navBtn) navBtn.classList.add('selected');
   initFactory();
   location.hash = '#factory';
+  return false;
 };
 
-// Add factory to spaces list
-if (typeof spaces !== 'undefined') {
-  spaces.unshift({
-    id:'factory', name:'FACTORY FLOOR', subtitle:'Isometric room-as-index view', available:true,
-    action:() => window.sailShowFactory()
+// Add factory to nav after DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  // Add button to side rail
+  const sideRail = document.querySelector('.side-rail');
+  if (sideRail) {
+    const navBtn = document.createElement('button');
+    navBtn.id = 'factoryNav';
+    navBtn.className = 'quiet-button nav-item';
+    navBtn.type = 'button';
+    navBtn.innerHTML = '<span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#arena"></use></svg></span><span>Factory</span>';
+    navBtn.onclick = window.sailShowFactory;
+    // Insert right after Home nav
+    const homeNav = document.getElementById('homeNav');
+    if (homeNav && homeNav.nextSibling) {
+      sideRail.insertBefore(navBtn, homeNav.nextSibling);
+    } else {
+      sideRail.insertBefore(navBtn, sideRail.firstChild);
+    }
+  }
+  
+  // Add to spaces list (once spaces is defined)
+  if (typeof ui === 'undefined' && typeof spaces !== 'undefined') {
+    const existing = spaces.find(s => s.id === 'factory');
+    if (!existing) {
+      spaces.unshift({
+        id:'factory', name:'FACTORY FLOOR', subtitle:'Isometric room-as-index view', available:true,
+        action:() => window.sailShowFactory()
+      });
+      if (typeof renderSpaces === 'function') renderSpaces();
+    }
+  }
+  
+  // Handle hash change for #factory
+  window.addEventListener('hashchange', () => {
+    if (location.hash === '#factory') {
+      window.sailShowFactory();
+    }
   });
-  // Re-render spaces if already initialized
-  if (typeof renderSpaces === 'function') renderSpaces();
-}
+});
 
-if (typeof module !== 'undefined') module.exports = {initFactory, FACTORY};
+// Resize listener for canvas
+window.addEventListener('resize', () => {
+  const canvas = document.getElementById('factoryCanvas');
+  if (canvas && typeof renderFactory === 'function') {
+    renderFactory();
+  }
+});
+
+if (typeof module !== 'undefined') module.exports = {initFactory, FACTORY, sailShowFactory};
