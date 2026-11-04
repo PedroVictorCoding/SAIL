@@ -132,6 +132,24 @@ Illustrative only: reuse existing Core IDs/bus and persist event origin, orderin
 - Ensure model-generated graph links, answers and scores are validated. Answers are not automatically facts; cite imported sources.
 - If model is offline, preserve draft and show unavailable/retry, never fabricate feedback.
 
+### Free-recall judgment (#243, implemented)
+
+- A `free_recall` question asked by `probe` or `quiz` must carry a `rubric`: the one to three
+  ideas a good answer contains. The engine stores it with the question and never puts it in the
+  learner's view. `ask_user_question` may ask an open question without a rubric; such answers are
+  not judged, and the tutor is told not to give a verdict.
+- At the start of the next turn, before the tutor runs, a separate judge call sees only the
+  question, the rubric and the answer (not the lesson transcript). It returns
+  `correct | partial | incorrect | unclear`. `partial` and `incorrect` must name the specific
+  missing or wrong relation. The verdict is stored as an `AnswerJudged` event, and the tutor then
+  sees it as part of the question's result.
+- `unclear` gives no verdict. The engine asks the judge's follow-up question on the same node
+  with the same rubric. It asks at most one follow-up per question; if the answer is still
+  unclear, the tutor explains the idea another way.
+- If the judge's output cannot be used, the call is retried once with the reason. After that the
+  answer is recorded as `could_not_judge`, and the tutor is told not to guess. If the model is
+  unavailable, nothing is recorded and the next turn retries the judgment.
+
 ## 6. Product integration use cases
 
 1. **Computer engineering:** import course PDF with consent → discover prerequisites (BGP, NAT, networking) → interactive diagnostic → explain one mechanism → test edge cases → graph record with PDF page provenance.

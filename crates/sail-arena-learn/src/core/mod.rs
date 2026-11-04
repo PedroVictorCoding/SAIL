@@ -2,6 +2,7 @@
 //! `tests/core_purity_test.rs` enforces that by scanning these sources.
 
 pub mod events;
+pub mod judgment;
 pub mod messages;
 pub mod plan;
 pub mod ports;

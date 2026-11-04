@@ -143,7 +143,8 @@ async fn learn_loop_over_http_survives_reconnect_and_restart() {
         ]),
         tool(&[(
             "quiz",
-            json!({"node_id":"loss","kind":"free_recall","prompt":"Why do routers drop packets?"}),
+            json!({"node_id":"loss","kind":"free_recall","prompt":"Why do routers drop packets?",
+                   "rubric":"A full queue has no room for new packets"}),
         )]),
     ];
     let server = serve(&path, script).await;

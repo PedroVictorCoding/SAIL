@@ -1691,7 +1691,7 @@ a.nav-item { text-decoration:none; color:var(--muted) }
 .learn-entry.learner { padding-left:var(--space-3); border-left:2px solid var(--stroke) }
 .learn-entry .learn-answer,.learn-notice { color:var(--muted) !important; font-size:13px !important }
 .learn-grade.correct { color:var(--good) !important }
-.learn-grade.incorrect { color:var(--warning) !important }
+.learn-grade.incorrect,.learn-grade.partial { color:var(--warning) !important }
 .learn-dock { padding:var(--space-4); background:var(--panel); border:1px solid var(--accent); border-radius:var(--radius-card); box-shadow:var(--depth-panel); display:flex; flex-direction:column; gap:var(--space-3) }
 .learn-dock fieldset { border:0; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--space-2) }
 .learn-dock legend { margin-bottom:var(--space-2); font-size:15px; line-height:1.5; color:var(--text); white-space:pre-wrap }
