@@ -444,6 +444,7 @@ impl InferenceBackend for BlockingBackend {
             last_error: None,
             active_profile: None,
             hardware: None,
+            load: None,
         }
     }
     async fn infer(
@@ -683,6 +684,7 @@ impl InferenceBackend for NamedBackend {
             last_error: None,
             active_profile: None,
             hardware: None,
+            load: None,
         }
     }
     async fn infer(

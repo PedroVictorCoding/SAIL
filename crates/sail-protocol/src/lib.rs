@@ -245,6 +245,13 @@ pub enum ModelState {
     Unavailable,
     Stopped,
 }
+/// Progress of a model the runtime is starting: how much of its weights is in memory. The
+/// model is not ready when `loaded_bytes` reaches `total_bytes`; it then still initializes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelLoad {
+    pub loaded_bytes: u64,
+    pub total_bytes: u64,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelStatus {
     pub version: u16,
@@ -260,6 +267,9 @@ pub struct ModelStatus {
     pub active_profile: Option<InferenceProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hardware: Option<HardwareDiagnostics>,
+    /// Present only while this runtime is starting the model itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<ModelLoad>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InferenceMetrics {

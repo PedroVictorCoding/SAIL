@@ -1739,9 +1739,13 @@ a.nav-item { text-decoration:none; color:var(--muted) }
 .loading-indicator progress::-webkit-progress-bar { background:transparent }
 .loading-indicator progress::-webkit-progress-value { background:var(--accent); border-radius:var(--radius-pill); transition:width .2s }
 .loading-indicator progress::-moz-progress-bar { background:var(--accent); border-radius:var(--radius-pill) }
-.loading-indicator #speechLoadValue { min-width:3ch; font-variant-numeric:tabular-nums; color:var(--text) }
+.loading-short { display:none }
+.loading-indicator #speechLoadValue, .loading-indicator #modelLoadValue { min-width:3ch; font-variant-numeric:tabular-nums; color:var(--text) }
 /* Narrow screens: just the bar (its value is still exposed to assistive technology). */
-@media (max-width:640px) { .loading-indicator { padding:0 10px } .loading-indicator #speechLoadLabel,.loading-indicator #speechLoadValue { display:none } .loading-indicator progress { width:32px } }
+@media (max-width:640px) { .loading-indicator { padding:0 8px; gap:5px; font-size:11px } .loading-indicator #speechLoadLabel,.loading-indicator #speechLoadValue,.loading-indicator #modelLoadLabel,.loading-indicator #modelLoadValue { display:none } .loading-short { display:inline } .loading-indicator progress { width:20px } }
+@media (max-width:380px) { .loading-indicator progress { width:14px } }
+/* Phones, voice and model both loading: the wordmark gives way so the header still fits. */
+@media (max-width:480px) { .dashboard-header:has(#speechLoadIndicator:not([hidden])):has(#modelLoadIndicator:not([hidden])) .brand > span:last-child { display:none } }
 .loading-indicator progress:indeterminate { background:linear-gradient(90deg,#0d1016 0,var(--accent) 50%,#0d1016 100%) 0 0/200% 100%; animation:load-sweep 1.4s linear infinite }
 @keyframes load-sweep { to { background-position:-200% 0 } }
 

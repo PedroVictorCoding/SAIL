@@ -6,6 +6,7 @@ pub mod gemma;
 pub mod hardware;
 pub mod local;
 pub mod profile;
+pub mod residency;
 pub mod service;
 mod validation;
 pub use bench::{BenchmarkRunner, BenchmarkScenario};

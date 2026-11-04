@@ -575,6 +575,37 @@ function renderSpeechLoad() {
     bar.value = percent; value.textContent = `${percent}%`;
   } else { bar.removeAttribute('value'); value.textContent = ''; }
 }
+// Loading bar for the resident model (Qwen): how much of its weights is in memory, then an
+// indeterminate bar while it initializes; hidden once it is ready. Polled quickly only
+// while a model is starting.
+async function refreshModelLoad() {
+  let starting = false;
+  try {
+    const response = await fetch('/api/mind/status', { cache:'no-store' });
+    if (response.ok) starting = renderModelLoad(await response.json());
+  } catch (_) {}
+  setTimeout(refreshModelLoad, starting ? 1000 : 5000);
+}
+function renderModelLoad(status) {
+  const indicator = document.getElementById('modelLoadIndicator'); if (!indicator) return false;
+  const model = (status.models || []).find(m => m.state === 'starting');
+  indicator.hidden = !model; if (!model) return false;
+  const bar = document.getElementById('modelLoadBar'), value = document.getElementById('modelLoadValue');
+  const label = document.getElementById('modelLoadLabel');
+  const load = model.load;
+  // The last few percent of a GGUF may never be read; past 95% the wait is initialization.
+  const percent = load && load.total_bytes > 0 ? Math.floor(load.loaded_bytes * 100 / load.total_bytes) : 100;
+  if (percent < 95) {
+    label.textContent = `Loading ${model.model}`;
+    bar.value = percent; value.textContent = `${percent}%`;
+  } else {
+    // Weights are in memory (or this runtime is not the one loading): still initializing.
+    label.textContent = `Starting ${model.model}`;
+    bar.removeAttribute('value'); value.textContent = '';
+  }
+  return true;
+}
+refreshModelLoad();
 function renderSpeechPlacement() {
   renderSpeechLoad();
   const status = document.getElementById('speechPlacementStatus'); if (!status) return;

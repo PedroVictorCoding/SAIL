@@ -2573,6 +2573,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "image",
+ "libc",
  "reqwest",
  "sail-common",
  "sail-protocol",
