@@ -5,6 +5,7 @@ pub mod embedding;
 pub mod gemma;
 pub mod hardware;
 pub mod local;
+pub mod persist;
 pub mod profile;
 pub mod residency;
 pub mod service;

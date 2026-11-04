@@ -23,6 +23,8 @@ ENABLE_TLS=true
 RELEASE=false
 KILL_FIRST=false
 ACTION="run"
+# Keep the model server loaded across SAIL restarts unless --no-persist / SAIL_LLAMA_PERSIST=0.
+export SAIL_LLAMA_PERSIST="${SAIL_LLAMA_PERSIST:-1}"
 EXTRA_ARGS=()
 
 # 2. Parse command-line flags
@@ -54,6 +56,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --kill|--stop)
       ACTION="kill"
+      shift
+      ;;
+    --stop-model)
+      ACTION="stop-model"
+      shift
+      ;;
+    --no-persist)
+      export SAIL_LLAMA_PERSIST=0
       shift
       ;;
     --restart)
@@ -152,9 +162,11 @@ Options:
   --cache-type-v, -ctv KV cache V quant type (q4_0, q8_0, f16; default: q4_0)
   --no-flash-attn      Disable Flash Attention (enabled by default)
   --cache-reuse N      Chunk size for KV shifting/cache reuse (default: 256)
-  --restart            Stop any running SAIL processes before launching
-  --stop, --kill       Stop running SAIL and llama processes and exit
-  --status             Display active SAIL processes and exit
+  --restart            Stop running SAIL before launching (a warm model stays loaded)
+  --stop, --kill       Stop SAIL and the model server, freeing its memory, and exit
+  --stop-model         Stop only the model server (SAIL reloads it on next use) and exit
+  --no-persist         Stop the model server together with SAIL (old behaviour)
+  --status             Display active SAIL processes and model server, then exit
   -h, --help           Show this help message
 
 Examples:
@@ -162,7 +174,7 @@ Examples:
   ./run.sh --release        # Run in release mode
   ./run.sh --restart        # Terminate existing instance and start fresh
   ./run.sh --port 8090      # Run on custom port 8090
-  ./run.sh --kill           # Stop all running instances
+  ./run.sh --stop           # Stop SAIL and unload the model
 EOF
       exit 0
       ;;
@@ -179,35 +191,80 @@ EOF
 done
 
 # 3. Process management helpers
-kill_sail_processes() {
-  echo "Stopping active SAIL and llama processes..."
-  pkill -f "sail-core|sail-dialogue|llama-server" 2>/dev/null || true
+# The model server (llama-server) is kept warm between runs: Ctrl+C stops SAIL but leaves
+# the model loaded, and the next ./run.sh adopts it in seconds. It is recorded in
+# .local/llama-server.<port>.json; SAIL replaces it by itself if the launch settings change.
+MODEL_PORTS=(8081 8080)
+model_server_pids() {
+  pgrep -x "llama-server" 2>/dev/null || true
+}
+stop_sail() {
+  echo "Stopping SAIL..."
+  pkill -x "sail-core|sail-dialogue" 2>/dev/null || true
   if command -v fuser >/dev/null 2>&1; then
     fuser -k "${PORT}/tcp" 2>/dev/null || true
-    fuser -k "8080/tcp" 2>/dev/null || true
-    fuser -k "8081/tcp" 2>/dev/null || true
   fi
-  sleep 0.5
-  echo "Stopped."
+}
+stop_model() {
+  local pids
+  pids="$(model_server_pids)"
+  if [[ -z "$pids" ]]; then
+    echo "Model server is not running."
+  else
+    echo "Stopping model server (pid $(echo $pids | tr ' ' ',')) and freeing its memory..."
+    kill $pids 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      [[ -z "$(model_server_pids)" ]] && break
+      sleep 0.2
+    done
+    pids="$(model_server_pids)"
+    [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null || true
+  fi
+  if command -v fuser >/dev/null 2>&1; then
+    for model_port in "${MODEL_PORTS[@]}"; do fuser -k "${model_port}/tcp" 2>/dev/null || true; done
+  fi
+  rm -f "$REPO_ROOT"/.local/llama-server.*.json
+}
+model_status() {
+  local pids
+  pids="$(model_server_pids)"
+  if [[ -z "$pids" ]]; then
+    echo "Model server: not running (loads on first use)"
+  elif curl -fsS --max-time 2 "http://127.0.0.1:${MODEL_PORTS[0]}/health" >/dev/null 2>&1; then
+    echo "Model server: warm and ready on port ${MODEL_PORTS[0]} (pid $(echo $pids | tr ' ' ',')) · stop with ./run.sh --stop-model"
+  else
+    echo "Model server: running, still loading (pid $(echo $pids | tr ' ' ','))"
+  fi
 }
 
 if [[ "$ACTION" == "kill" ]]; then
-  kill_sail_processes
+  stop_sail
+  stop_model
+  sleep 0.5
+  echo "Stopped."
+  exit 0
+fi
+
+if [[ "$ACTION" == "stop-model" ]]; then
+  stop_model
   exit 0
 fi
 
 if [[ "$ACTION" == "status" ]]; then
   echo "Checking active SAIL processes:"
-  if pgrep -la -f "sail-core|sail-dialogue|llama-server"; then
-    echo "Status: Running"
+  if pgrep -a -x "sail-core|sail-dialogue"; then
+    echo "SAIL: Running"
   else
-    echo "Status: No running SAIL processes found."
+    echo "SAIL: not running"
   fi
+  model_status
   exit 0
 fi
 
 if [[ "$KILL_FIRST" == "true" ]]; then
-  kill_sail_processes
+  stop_sail
+  [[ "$SAIL_LLAMA_PERSIST" == "1" ]] || stop_model
+  sleep 0.5
 fi
 
 # 4. Check for port conflicts
@@ -322,7 +379,13 @@ if [[ -f "$REPO_ROOT/.local/sail_owner_token" ]]; then
 fi
 echo " Web UI (loc): $PROTOCOL://localhost:${PORT}"
 echo " Web UI (LAN): $PROTOCOL://${LAN_IP}:${PORT}"
-echo " Stop server:  Press Ctrl+C (or run ./run.sh --stop)"
+if [[ "$SAIL_LLAMA_PERSIST" == "1" ]]; then
+  model_status | sed 's/^Model server:/ Model:       /'
+  echo " Stop SAIL:    Ctrl+C (the model stays loaded for a fast next start)"
+  echo " Stop all:     ./run.sh --stop  (also unloads the model and frees its memory)"
+else
+  echo " Stop server:  Press Ctrl+C (or run ./run.sh --stop)"
+fi
 echo "=================================================="
 
 # 10. Execute cargo run replacing shell process

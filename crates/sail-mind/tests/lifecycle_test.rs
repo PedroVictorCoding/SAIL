@@ -287,3 +287,50 @@ async fn constrained_memory_adapts_context_window_and_admits() {
     );
     backend.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn persistent_model_outlives_shutdown_is_adopted_and_replaced_when_settings_change() {
+    use sail_mind::persist::{PersistedServer, record_path};
+    let (mut config, _files) = config_script(None);
+    config.persist = true;
+    let port = reqwest::Url::parse(&config.endpoint)
+        .unwrap()
+        .port()
+        .unwrap();
+    let record_file = record_path(port);
+
+    // First run launches the server and detaches from it on shutdown.
+    let first = LocalGemmaBackend::new(config.clone(), 1).unwrap();
+    let pid = first.start().await.unwrap().process_id.unwrap();
+    first.shutdown().await.unwrap();
+    drop(first);
+    let record = PersistedServer::read(&record_file).expect("warm server recorded");
+    assert_eq!(record.pid, pid);
+    assert!(
+        record.is_alive(),
+        "shutdown must leave a persistent model running"
+    );
+
+    // Next run with identical settings adopts it instead of reloading.
+    let second = LocalGemmaBackend::new(config.clone(), 1).unwrap();
+    let adopted = second.start().await.unwrap();
+    assert_eq!(adopted.state, ModelState::Ready);
+    assert!(!adopted.owned_process);
+    assert!(record.is_alive());
+    drop(second);
+
+    // Changed launch settings replace the warm server.
+    config.threads += 1;
+    let third = LocalGemmaBackend::new(config, 1).unwrap();
+    let replaced = third.start().await.unwrap();
+    assert!(!record.is_alive(), "stale warm server must be stopped");
+    assert!(replaced.owned_process);
+    assert_ne!(replaced.process_id, Some(pid));
+    let fresh = PersistedServer::read(&record_file).unwrap();
+    assert_eq!(Some(fresh.pid), replaced.process_id);
+
+    third.shutdown().await.unwrap();
+    fresh.terminate(Duration::from_secs(5)).await;
+    assert!(!fresh.is_alive());
+    let _ = std::fs::remove_file(record_file);
+}
