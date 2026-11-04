@@ -58,7 +58,8 @@ function filesFor(role, gpu) {
   return [
     ...['config.json', 'generation_config.json', 'preprocessor_config.json', 'tokenizer.json', 'tokenizer_config.json'].map(f => WHISPER + f),
     ...(gpu ? ['onnx/encoder_model.onnx', 'onnx/decoder_model_merged_q4.onnx'] : ['onnx/encoder_model_quantized.onnx', 'onnx/decoder_model_merged_quantized.onnx']).map(f => WHISPER + f),
-    ...['config.json', 'tokenizer.json', 'tokenizer_config.json', gpu ? 'onnx/model.onnx' : 'onnx/model_quantized.onnx'].map(f => KOKORO + f),
+    // Kokoro TTS uses quantized WASM on both GPU and CPU devices to avoid the WebGPU ConvTranspose vocoder distortion.
+    ...['config.json', 'tokenizer.json', 'tokenizer_config.json', 'onnx/model_quantized.onnx'].map(f => KOKORO + f),
   ];
 }
 async function reportExpected(gpu) {
@@ -107,7 +108,14 @@ async function loadSpeech() {
   });
   const { KokoroTTS, env: kokoroEnv } = await import(`${ASSETS}lib/kokoro.web.js`);
   kokoroEnv.wasmPaths = `${ASSETS}lib/`;
-  tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', { device, dtype: gpu ? 'fp32' : 'q8', progress_callback: reportProgress });
+  // Kokoro TTS runs on WASM with q8 quantization even when WebGPU is available for Whisper:
+  // ONNX Runtime Web's WebGPU ConvTranspose kernel corrupts vocoder upsampling into harsh,
+  // robotic, metallic noise, while WASM CPU SIMD produces pristine, natural human speech.
+  tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+    device: 'wasm',
+    dtype: 'q8',
+    progress_callback: reportProgress,
+  });
   return { device, voices: Object.keys(tts.voices) };
 }
 

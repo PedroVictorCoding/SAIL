@@ -219,6 +219,7 @@ impl ConversationController {
                 .send(serde_json::json!({
                     "type": "conversation_stopped",
                     "reason": reason,
+                    "turn_id": active.turn_id.0,
                     "generation": active.generation.0,
                 }))
                 .await;
