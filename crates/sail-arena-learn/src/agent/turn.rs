@@ -6,6 +6,11 @@
 //! plain message, or the loop bound is hit. Each assistant message and all of its tool
 //! effects are appended in one atomic batch. A browser disconnect never cancels a turn;
 //! only `abort` does.
+//!
+//! When the latest answer is free recall with a rubric, the turn first runs the judge
+//! (#243) and records its verdict. An `unclear` verdict asks the judge's follow-up question
+//! straight away (once per question) and the tutor is not called.
+use super::judge::{self, JudgeError};
 use super::{args, prompts, tools};
 use crate::core::events::{
     AgentRole, Envelope, LearningEvent, NewEvent, PresentKind, ToolCallRecord, TurnOutcome,
@@ -13,8 +18,11 @@ use crate::core::events::{
 use crate::core::messages::{to_llm_messages, window};
 use crate::core::plan::LessonPlan;
 use crate::core::ports::{EventStore, Model, SessionSummary, StoreError};
-use crate::core::question::{Answer, Grade, QuestionSpec};
-use crate::core::view::{SessionView, latest_plan, project_view, question_spec, recorded_answer};
+use crate::core::question::{Answer, Grade, QuestionKind, QuestionSpec};
+use crate::core::view::{
+    PendingJudgment, SessionView, latest_plan, pending_judgment, project_view, question_spec,
+    recorded_answer,
+};
 use crate::core::{Invalid, MAX_SHORT, MAX_TEXT, bounded};
 use sail_protocol::{Generation, InferenceRequest, ToolChoice};
 use serde::Deserialize;
@@ -406,127 +414,157 @@ impl Engine {
         let mut calls = 0usize;
         let mut events = events;
 
-        let outcome = loop {
-            if calls == MAX_CALLS {
-                break TurnOutcome::LoopLimit;
+        let outcome = 'turn: {
+            if let Some(pending) = pending_judgment(&events) {
+                let (judgment, usage) = match judge::judge(
+                    self.model.as_ref(),
+                    &pending.spec,
+                    &pending.answer,
+                    &cancel,
+                )
+                .await
+                {
+                    Ok(done) => done,
+                    Err(JudgeError::Aborted) => break 'turn TurnOutcome::Aborted,
+                    Err(JudgeError::Unavailable(message)) => {
+                        break 'turn TurnOutcome::Failed { message };
+                    }
+                };
+                input_tokens += usage.input_tokens;
+                output_tokens += usage.output_tokens;
+                let batch = judged_batch(&pending, judgment, role, input_tokens, output_tokens);
+                // More than the judgment itself means a follow-up question was asked.
+                let asked = batch.len() > 1;
+                self.append(session, view.last_seq, batch)?;
+                if asked {
+                    return Ok(TurnOutcome::AwaitingLearner);
+                }
+                events = self.store.events(session)?;
+                view = project_view(session, &events);
             }
-            calls += 1;
-            let messages = window(to_llm_messages(&prompts::system(role, &view), &events));
-            let request = InferenceRequest {
-                version: sail_protocol::VERSION,
-                request_id: uuid::Uuid::new_v4(),
-                model: None,
-                messages,
-                tools: tools::definitions(role),
-                tool_choice: ToolChoice::Auto,
-                generation: Generation {
-                    max_tokens: sail_protocol::ResourceLimits::default().max_output_tokens,
-                    temperature: 0.3,
-                },
-            };
-            let response = tokio::select! {
-                _ = cancel.cancelled() => break TurnOutcome::Aborted,
-                r = self.model.complete(request, cancel.clone()) => r,
-            };
-            let response = match response {
-                Ok(r) => r,
-                Err(_) if cancel.is_cancelled() => break TurnOutcome::Aborted,
-                Err(message) => break TurnOutcome::Failed { message },
-            };
-            input_tokens += u64::from(response.usage.input_tokens.unwrap_or(0));
-            output_tokens += u64::from(response.usage.output_tokens.unwrap_or(0));
-            let text = response
-                .message
-                .content
-                .text()
-                .unwrap_or_default()
-                .to_string();
-            // Fresh ids: Mind rejects duplicate tool-call ids anywhere in history.
-            let calls_made: Vec<ToolCallRecord> = response
-                .message
-                .tool_calls
-                .iter()
-                .map(|c| ToolCallRecord {
-                    id: new_id("call"),
-                    name: c.function.name.clone(),
-                    arguments: c.function.arguments.clone(),
-                })
-                .collect();
-            let mut batch = vec![NewEvent::new(
-                key(),
-                LearningEvent::AssistantMessage {
-                    role,
-                    text: text.clone(),
-                    tool_calls: calls_made.clone(),
-                },
-            )];
-            let mut asked = false;
-            for call in &calls_made {
-                if asked || state.handed_off {
+            loop {
+                if calls == MAX_CALLS {
+                    break TurnOutcome::LoopLimit;
+                }
+                calls += 1;
+                let messages = window(to_llm_messages(&prompts::system(role, &view), &events));
+                let request = InferenceRequest {
+                    version: sail_protocol::VERSION,
+                    request_id: uuid::Uuid::new_v4(),
+                    model: None,
+                    messages,
+                    tools: tools::definitions(role),
+                    tool_choice: ToolChoice::Auto,
+                    generation: Generation {
+                        max_tokens: sail_protocol::ResourceLimits::default().max_output_tokens,
+                        temperature: 0.3,
+                    },
+                };
+                let response = tokio::select! {
+                    _ = cancel.cancelled() => break TurnOutcome::Aborted,
+                    r = self.model.complete(request, cancel.clone()) => r,
+                };
+                let response = match response {
+                    Ok(r) => r,
+                    Err(_) if cancel.is_cancelled() => break TurnOutcome::Aborted,
+                    Err(message) => break TurnOutcome::Failed { message },
+                };
+                input_tokens += u64::from(response.usage.input_tokens.unwrap_or(0));
+                output_tokens += u64::from(response.usage.output_tokens.unwrap_or(0));
+                let text = response
+                    .message
+                    .content
+                    .text()
+                    .unwrap_or_default()
+                    .to_string();
+                // Fresh ids: Mind rejects duplicate tool-call ids anywhere in history.
+                let calls_made: Vec<ToolCallRecord> = response
+                    .message
+                    .tool_calls
+                    .iter()
+                    .map(|c| ToolCallRecord {
+                        id: new_id("call"),
+                        name: c.function.name.clone(),
+                        arguments: c.function.arguments.clone(),
+                    })
+                    .collect();
+                let mut batch = vec![NewEvent::new(
+                    key(),
+                    LearningEvent::AssistantMessage {
+                        role,
+                        text: text.clone(),
+                        tool_calls: calls_made.clone(),
+                    },
+                )];
+                let mut asked = false;
+                for call in &calls_made {
+                    if asked || state.handed_off {
+                        batch.push(NewEvent::new(
+                            key(),
+                            LearningEvent::ToolResult {
+                                call_id: call.id.clone(),
+                                content: if asked {
+                                    "Skipped: a question is already waiting for the learner.".into()
+                                } else {
+                                    "Skipped: the assessment just ended; the teacher continues."
+                                        .into()
+                                },
+                                ok: false,
+                            },
+                        ));
+                        continue;
+                    }
+                    let mut effects = Vec::new();
+                    match execute(role, call, &mut state, &mut effects) {
+                        Ok(effect) => {
+                            for event in effects {
+                                batch.push(NewEvent::new(key(), event));
+                            }
+                            match effect {
+                                Effect::Continue => {}
+                                Effect::Question => asked = true,
+                                Effect::Handoff => state.handed_off = true,
+                            }
+                        }
+                        Err(error) => batch.push(NewEvent::new(
+                            key(),
+                            LearningEvent::ToolResult {
+                                call_id: call.id.clone(),
+                                content: format!("Error: {error}"),
+                                ok: false,
+                            },
+                        )),
+                    }
+                }
+                let settle = if asked {
+                    Some(TurnOutcome::AwaitingLearner)
+                } else if calls_made.is_empty() {
+                    Some(TurnOutcome::Completed)
+                } else {
+                    None
+                };
+                if let Some(outcome) = &settle {
                     batch.push(NewEvent::new(
                         key(),
-                        LearningEvent::ToolResult {
-                            call_id: call.id.clone(),
-                            content: if asked {
-                                "Skipped: a question is already waiting for the learner.".into()
-                            } else {
-                                "Skipped: the assessment just ended; the teacher continues.".into()
-                            },
-                            ok: false,
+                        LearningEvent::TurnSettled {
+                            role,
+                            outcome: outcome.clone(),
+                            input_tokens,
+                            output_tokens,
                         },
                     ));
-                    continue;
                 }
-                let mut effects = Vec::new();
-                match execute(role, call, &mut state, &mut effects) {
-                    Ok(effect) => {
-                        for event in effects {
-                            batch.push(NewEvent::new(key(), event));
-                        }
-                        match effect {
-                            Effect::Continue => {}
-                            Effect::Question => asked = true,
-                            Effect::Handoff => state.handed_off = true,
-                        }
-                    }
-                    Err(error) => batch.push(NewEvent::new(
-                        key(),
-                        LearningEvent::ToolResult {
-                            call_id: call.id.clone(),
-                            content: format!("Error: {error}"),
-                            ok: false,
-                        },
-                    )),
+                self.append(session, view.last_seq, batch)?;
+                if let Some(outcome) = settle {
+                    return Ok(outcome);
                 }
-            }
-            let settle = if asked {
-                Some(TurnOutcome::AwaitingLearner)
-            } else if calls_made.is_empty() {
-                Some(TurnOutcome::Completed)
-            } else {
-                None
-            };
-            if let Some(outcome) = &settle {
-                batch.push(NewEvent::new(
-                    key(),
-                    LearningEvent::TurnSettled {
-                        role,
-                        outcome: outcome.clone(),
-                        input_tokens,
-                        output_tokens,
-                    },
-                ));
-            }
-            self.append(session, view.last_seq, batch)?;
-            if let Some(outcome) = settle {
-                return Ok(outcome);
-            }
-            events = self.store.events(session)?;
-            view = project_view(session, &events);
-            if state.handed_off {
-                debug!(session, "assessment finished; teacher takes over");
-                role = AgentRole::Teacher;
-                state.handed_off = false;
+                events = self.store.events(session)?;
+                view = project_view(session, &events);
+                if state.handed_off {
+                    debug!(session, "assessment finished; teacher takes over");
+                    role = AgentRole::Teacher;
+                    state.handed_off = false;
+                }
             }
         };
         // Aborted, failed or bounded: record it so nothing looks like a successful turn.
@@ -545,6 +583,74 @@ impl Engine {
         )?;
         Ok(outcome)
     }
+}
+
+/// The events that record a judgment. For an `unclear` answer to a question that was not
+/// itself a follow-up, they also ask the judge's follow-up question with the same rubric and
+/// settle the turn; otherwise the tutor continues with the verdict in its history.
+fn judged_batch(
+    pending: &PendingJudgment,
+    mut judgment: crate::core::judgment::Judgment,
+    role: AgentRole,
+    input_tokens: u64,
+    output_tokens: u64,
+) -> Vec<NewEvent> {
+    let follow_up = judge::wants_follow_up(&judgment) && pending.follow_up_of.is_none();
+    if !follow_up {
+        judgment.follow_up = None;
+    }
+    let mut batch = vec![NewEvent::new(
+        format!("judgment:{}", pending.call_id),
+        LearningEvent::AnswerJudged {
+            call_id: pending.call_id.clone(),
+            judgment: judgment.clone(),
+        },
+    )];
+    let Some(prompt) = judgment.follow_up.filter(|_| follow_up) else {
+        return batch;
+    };
+    let spec = QuestionSpec {
+        kind: QuestionKind::FreeRecall,
+        prompt,
+        options: Vec::new(),
+        correct: Vec::new(),
+        node_id: pending.spec.node_id.clone(),
+        rubric: pending.spec.rubric.clone(),
+    };
+    // Recorded as a call of the same tool, so the model's history shows the question it
+    // will later see answered. The text is the judge's, asked on the tutor's behalf.
+    let call = ToolCallRecord {
+        id: new_id("call"),
+        name: pending.tool.clone(),
+        arguments: serde_json::to_string(&spec).unwrap_or_default(),
+    };
+    let key = |part: &str| format!("followup:{}:{part}", pending.call_id);
+    batch.push(NewEvent::new(
+        key("message"),
+        LearningEvent::AssistantMessage {
+            role,
+            text: String::new(),
+            tool_calls: vec![call.clone()],
+        },
+    ));
+    batch.push(NewEvent::new(
+        key("question"),
+        LearningEvent::QuestionAsked {
+            call_id: call.id,
+            spec,
+            follow_up_of: Some(pending.call_id.clone()),
+        },
+    ));
+    batch.push(NewEvent::new(
+        key("settled"),
+        LearningEvent::TurnSettled {
+            role,
+            outcome: TurnOutcome::AwaitingLearner,
+            input_tokens,
+            output_tokens,
+        },
+    ));
+    batch
 }
 
 /// Validates and applies one tool call, pushing its events. Errors become tool results.
@@ -586,9 +692,24 @@ fn execute(
         Ok(())
     };
     let decode = |raw: &str| -> Result<QuestionSpec, Invalid> {
-        let (spec, steps) = args::decode::<QuestionSpec>(raw, &schema)?;
+        let (mut spec, steps) = args::decode::<QuestionSpec>(raw, &schema)?;
         if !steps.is_empty() {
             debug!(tool = tool.name(), ?steps, "healed tool arguments");
+        }
+        if spec.kind != QuestionKind::FreeRecall {
+            // A rubric means nothing for a select question; dropping it costs no retry.
+            spec.rubric = None;
+        }
+        // Questions that check knowledge must say what a good answer contains (#243).
+        // `ask_user_question` may ask an open question with no right answer.
+        if spec.kind == QuestionKind::FreeRecall
+            && tool != Tool::AskUserQuestion
+            && spec.rubric.as_deref().is_none_or(|r| r.trim().is_empty())
+        {
+            return Err(Invalid::new(format!(
+                "a free_recall `{}` needs a `rubric`: the idea a good answer must contain (hidden from the learner)",
+                tool.name()
+            )));
         }
         spec.validate()?;
         Ok(spec)
@@ -600,6 +721,7 @@ fn execute(
             out.push(LearningEvent::QuestionAsked {
                 call_id: call.id.clone(),
                 spec,
+                follow_up_of: None,
             });
             Ok(Effect::Question)
         }
@@ -618,6 +740,7 @@ fn execute(
             out.push(LearningEvent::QuestionAsked {
                 call_id: call.id.clone(),
                 spec,
+                follow_up_of: None,
             });
             Ok(Effect::Question)
         }

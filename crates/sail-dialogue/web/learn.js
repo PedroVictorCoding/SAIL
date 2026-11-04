@@ -65,9 +65,33 @@ function learnBuildAnswer(kind, fields) {
   return {answer};
 }
 
+/** The verdict class for styling: a free-recall judgment wins over the id grade. */
+function learnVerdict(question) {
+  return (question.judgment && question.judgment.verdict) || question.grade || '';
+}
+
 function learnGradeText(question) {
+  const judgment = question.judgment;
+  if (judgment) {
+    if (judgment.verdict === 'unclear') {
+      return judgment.follow_up ? 'Not clear enough to judge yet. Answer the follow-up question.'
+        : 'Still not clear enough to judge. The tutor will explain it another way.';
+    }
+    return {correct: 'Correct.', partial: 'Partly there.', incorrect: 'Not quite. The tutor will go over it.',
+      could_not_judge: 'SAIL could not judge this answer. The tutor will respond to your reasoning.'}[judgment.verdict] || '';
+  }
   if (!question.grade) return '';
   return {correct: 'Correct.', incorrect: 'Not quite. The tutor will go over it.', needs_judgment: 'Sent to the tutor.'}[question.grade] || '';
+}
+
+/** Feedback lines under a judged free-recall answer: the missing relation, then the reasoning note. */
+function learnJudgmentLines(question) {
+  const judgment = question.judgment;
+  if (!judgment || judgment.verdict === 'could_not_judge') return [];
+  const lines = [];
+  if (judgment.missing && judgment.verdict !== 'correct') lines.push(`Missing: ${judgment.missing}`);
+  if (judgment.feedback) lines.push(judgment.feedback);
+  return lines;
 }
 
 // ---- Page ----
@@ -185,13 +209,14 @@ if (typeof document !== 'undefined' && document.getElementById('learnPanelMain')
       else if (entry.type === 'explain') li.append(node('span', titles.get(entry.node_id) || 'Explanation', 'learn-who'), node('p', entry.text));
       else if (entry.type === 'notice') li.append(node('p', entry.text, 'learn-notice'));
       else if (entry.type === 'question') {
-        li.append(node('span', 'Question', 'learn-who'), node('p', entry.prompt));
+        li.append(node('span', entry.follow_up_of ? 'Follow-up' : 'Question', 'learn-who'), node('p', entry.prompt));
         if (entry.answer) {
           const chosen = (entry.answer.choices || []).map(id => (entry.options.find(o => o.id === id) || {}).text || id);
           li.append(node('p', `Your answer: ${entry.answer.text || chosen.join(', ')}`, 'learn-answer'));
           const correct = (entry.correct || []).map(id => (entry.options.find(o => o.id === id) || {}).text || id);
           if (entry.grade === 'incorrect' && correct.length) li.append(node('p', `Expected: ${correct.join(', ')}`, 'learn-answer'));
-          li.append(node('p', learnGradeText(entry), `learn-grade ${entry.grade}`));
+          li.append(node('p', learnGradeText(entry), `learn-grade ${learnVerdict(entry)}`));
+          for (const line of learnJudgmentLines(entry)) li.append(node('p', line, 'learn-answer'));
         } else li.append(node('p', 'Waiting for your answer below.', 'learn-answer'));
       }
       list.append(li);
@@ -280,4 +305,4 @@ if (typeof document !== 'undefined' && document.getElementById('learnPanelMain')
   });
 })();
 
-if (typeof module !== 'undefined') module.exports = {learnParseSse, learnStepStates, learnStatus, learnShouldAutoTurn, learnBuildAnswer, learnGradeText};
+if (typeof module !== 'undefined') module.exports = {learnParseSse, learnStepStates, learnStatus, learnShouldAutoTurn, learnBuildAnswer, learnGradeText, learnJudgmentLines, learnVerdict};

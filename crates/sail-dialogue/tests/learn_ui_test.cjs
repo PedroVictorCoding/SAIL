@@ -48,3 +48,19 @@ test('answers are validated before sending; optional signals are kept', () => {
 test('grade text never claims mastery', () => {
   for (const grade of ['correct', 'incorrect', 'needs_judgment']) assert.doesNotMatch(ui.learnGradeText({grade}), /master/i);
 });
+
+test('free-recall judgments show the verdict and the missing relation, never a guess', () => {
+  const judged = verdict => ({grade: 'needs_judgment', judgment: {verdict, missing: 'a full queue drops packets', feedback: 'You named buffers.'}});
+  assert.equal(ui.learnGradeText(judged('partial')), 'Partly there.');
+  assert.equal(ui.learnVerdict(judged('partial')), 'partial');
+  assert.deepEqual(ui.learnJudgmentLines(judged('incorrect')), ['Missing: a full queue drops packets', 'You named buffers.']);
+  assert.deepEqual(ui.learnJudgmentLines(judged('correct')), ['You named buffers.']);
+  assert.match(ui.learnGradeText({grade: 'needs_judgment', judgment: {verdict: 'unclear', follow_up: 'Why?'}}), /follow-up/);
+  assert.match(ui.learnGradeText({grade: 'needs_judgment', judgment: {verdict: 'unclear'}}), /Still not clear/);
+  const failed = {grade: 'needs_judgment', judgment: {verdict: 'could_not_judge'}};
+  assert.match(ui.learnGradeText(failed), /could not judge/);
+  assert.deepEqual(ui.learnJudgmentLines(failed), []);
+  for (const verdict of ['correct', 'partial', 'incorrect', 'unclear', 'could_not_judge']) {
+    assert.doesNotMatch(ui.learnGradeText(judged(verdict)), /master/i);
+  }
+});
