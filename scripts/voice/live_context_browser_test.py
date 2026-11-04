@@ -43,6 +43,8 @@ try:
         assert page.evaluate("sentActions.find(a=>a.action==='set_live_context').owner_token") == 'fixture-owner-token-not-a-secret'
         assert page.evaluate('isRecording') is False, 'enabling must not acquire microphone'
         expect(page.locator('#liveContextStatus')).to_contain_text('type to ask')
+        Path('.local').mkdir(exist_ok=True)
+        page.locator('#liveContextSetting').screenshot(path='.local/live-context-desktop.png')
         page.set_viewport_size({'width':390,'height':844})
         page.locator('#liveContextSetting').scroll_into_view_if_needed()
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
