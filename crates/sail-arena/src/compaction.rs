@@ -104,9 +104,13 @@ impl WorkingContext {
     }
 
     /// Prompt lines, oldest breadcrumb first so the model reads the conversation in order.
+    /// A record that is also recalled appears once, as its excerpt.
     pub fn lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         for b in self.breadcrumbs.iter().rev() {
+            if self.recalled.iter().any(|r| r.id == b.id) {
+                continue;
+            }
             out.push(format!("[mem:{} t{}] {}", b.id, b.turn, b.gist));
         }
         for r in &self.recalled {
@@ -122,6 +126,27 @@ impl WorkingContext {
     pub fn chars(&self) -> usize {
         self.lines().iter().map(|l| l.chars().count()).sum()
     }
+}
+
+/// A message with fewer meaningful terms than this borrows the previous turn's terms.
+const FOLLOW_UP_TERMS: usize = 3;
+
+/// The text memory should be searched with for `prompt`, or `None` when the turn needs no
+/// retrieval. Acknowledgements ("ok thanks") need none. Short follow-ups ("and her?") are
+/// searched together with the previous user message, which names what they refer to; the
+/// current message's terms come first.
+pub fn retrieval_query(prompt: &str, previous: Option<&str>) -> Option<String> {
+    if crate::store::is_acknowledgement(prompt) {
+        return None;
+    }
+    let own = crate::store::knowledge_terms(prompt).len();
+    let text = match previous {
+        Some(previous) if own < FOLLOW_UP_TERMS && !previous.trim().is_empty() => {
+            format!("{}\n{}", prompt.trim(), clip(previous, 1000))
+        }
+        _ => prompt.trim().to_string(),
+    };
+    (!crate::store::knowledge_terms(&text).is_empty()).then_some(text)
 }
 
 /// Keep at most `max` characters, cutting on a char boundary and marking the cut.
@@ -377,5 +402,35 @@ mod tests {
                 "[mem:1 t1 turn excerpt] x"
             ]
         );
+    }
+
+    #[test]
+    fn recalled_breadcrumb_appears_once() {
+        let wc = WorkingContext {
+            breadcrumbs: vec![Breadcrumb {
+                id: 1,
+                turn: 1,
+                gist: "gist".into(),
+            }],
+            recalled: vec![Recall {
+                id: 1,
+                turn: Some(1),
+                kind: "turn".into(),
+                excerpt: "detail".into(),
+            }],
+        };
+        assert_eq!(wc.lines(), vec!["[mem:1 t1 turn excerpt] detail"]);
+    }
+
+    #[test]
+    fn retrieval_query_skips_acknowledgements_and_widens_follow_ups() {
+        assert_eq!(retrieval_query("ok thanks", Some("thesis deadline")), None);
+        assert_eq!(retrieval_query("and her?", None), None);
+        assert_eq!(
+            retrieval_query("and her birthday?", Some("Tell me about Alex")).as_deref(),
+            Some("and her birthday?\nTell me about Alex")
+        );
+        let full = "When is the SAIL thesis deadline for chapter three?";
+        assert_eq!(retrieval_query(full, Some("Alex")).as_deref(), Some(full));
     }
 }

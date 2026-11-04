@@ -173,3 +173,117 @@ async fn low_host_memory_prevents_managed_model_process_launch() {
     assert_eq!(scheduler.status().pending_ram_bytes, 0);
     backend.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn quantized_kv_cache_calculation_fits_qwen_16k_on_32gb_host() {
+    struct ReferenceHostMemory;
+    impl sail_common::resources::HostProbe for ReferenceHostMemory {
+        fn sample(&self) -> std::io::Result<sail_protocol::resources::HostSample> {
+            Ok(sail_protocol::resources::HostSample {
+                total_ram_bytes: 32 * sail_common::resources::GIB,
+                available_ram_bytes: 24_900_000_000, // ~24.9 GB available on 32GB host
+                swap_used_bytes: 0,
+                swap_total_bytes: 0,
+                logical_cpus: 12,
+                memory_pressure_avg10: Some(0.0),
+            })
+        }
+    }
+    let (mut config, files) = config_script(None);
+    // Simulate ~20.42 GB weights file (Qwen3.6-35B-A3B)
+    let weights_size: u64 = 20_419_565_568;
+    std::fs::File::create(&config.model_path)
+        .unwrap()
+        .set_len(weights_size)
+        .unwrap();
+
+    config.context_tokens = 16384;
+    config.cache_type_k = "q4_0".into();
+    config.cache_type_v = "q4_0".into();
+
+    assert_eq!(config.kv_cache_bytes_per_token(), 64 * 1024);
+    let est = config.estimated_ram_bytes(1).unwrap();
+    // 20.42 GB weights + 512 MB buffer + 16384 * 64 KiB = ~22.03 GB
+    assert!(
+        est < 22_500_000_000,
+        "Estimated RAM for 16k context with q4_0 KV must be ~22.0 GB, got {est}"
+    );
+
+    let marker = files.root.join("launched");
+    std::fs::write(
+        &config.server_binary,
+        format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
+    )
+    .unwrap();
+    config.compute = ComputeBackend::Cpu;
+    let scheduler = std::sync::Arc::new(sail_common::resources::ResourceScheduler::new(
+        std::sync::Arc::new(ReferenceHostMemory),
+        Default::default(),
+    ));
+    let backend = LocalGemmaBackend::with_scheduler(config, 1, scheduler.clone()).unwrap();
+
+    let started = tokio::select! {
+        res = backend.start() => res.is_ok(),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+            marker.exists()
+        }
+    };
+    assert!(
+        started,
+        "Model must be admitted and launched on reference 32GB host"
+    );
+    backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn constrained_memory_adapts_context_window_and_admits() {
+    struct TightMemory;
+    impl sail_common::resources::HostProbe for TightMemory {
+        fn sample(&self) -> std::io::Result<sail_protocol::resources::HostSample> {
+            Ok(sail_protocol::resources::HostSample {
+                total_ram_bytes: 32 * sail_common::resources::GIB,
+                // Exactly 23.5 GB available: enough for ~20.42 GB weights + 512 MB buffer + 2 GB headroom + ~500 MB KV
+                available_ram_bytes: 23_500_000_000,
+                swap_used_bytes: 0,
+                swap_total_bytes: 0,
+                logical_cpus: 12,
+                memory_pressure_avg10: Some(0.0),
+            })
+        }
+    }
+    let (mut config, files) = config_script(None);
+    let weights_size: u64 = 20_419_565_568;
+    std::fs::File::create(&config.model_path)
+        .unwrap()
+        .set_len(weights_size)
+        .unwrap();
+
+    config.context_tokens = 16384;
+    config.cache_type_k = "q4_0".into();
+    config.cache_type_v = "q4_0".into();
+
+    let marker = files.root.join("launched");
+    std::fs::write(
+        &config.server_binary,
+        format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
+    )
+    .unwrap();
+    config.compute = ComputeBackend::Cpu;
+    let scheduler = std::sync::Arc::new(sail_common::resources::ResourceScheduler::new(
+        std::sync::Arc::new(TightMemory),
+        Default::default(),
+    ));
+    let backend = LocalGemmaBackend::with_scheduler(config, 1, scheduler.clone()).unwrap();
+
+    let started = tokio::select! {
+        res = backend.start() => res.is_ok(),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+            marker.exists()
+        }
+    };
+    assert!(
+        started,
+        "Model must adapt context window and be admitted when host RAM is tight"
+    );
+    backend.shutdown().await.unwrap();
+}

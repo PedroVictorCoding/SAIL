@@ -8,7 +8,7 @@ Manage personal plans, scheduling and commitments with explicit, user-controlled
 ## 2. Functional scope
 - Calendar/context aggregation.
 - feasible schedule computation #103.
-- Campus #75–77.
+- Course logistics #75–77 (adaptive learning is [Arena Learn](SAIL_ARENA_LEARN.md), owned by Arena).
 - possessions #85.
 - dependency/priority constraints.
 - change previews..

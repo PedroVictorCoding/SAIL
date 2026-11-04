@@ -520,7 +520,64 @@ const STOPWORDS: &[&str] = &[
     "how", "can", "could", "would", "should", "about", "from", "have", "has", "had", "not", "but",
     "all", "any", "please", "tell", "me", "que", "para", "com", "uma", "um", "por", "como", "mais",
     "isso", "esse", "essa", "est", "voc", "nao", "sim", "the", "did", "does", "its", "it's",
+    // Pronouns and question words: a follow-up such as "and her?" has no topic of its own.
+    "her", "him", "his", "she", "they", "them", "their", "there", "then", "who", "which", "when",
+    "where", "why", "will", "just", "also", "know", "remember", "ele", "ela", "eles", "elas",
+    "dele", "dela", "quando", "onde", "qual", "quem", "porque", "sobre", "lembra",
 ];
+
+/// Two-letter and shorter words that carry no signal. Knowledge search keeps other short
+/// words, because entity names such as "Go", "AI" or "λ" are often that short.
+const SHORT_STOPWORDS: &[&str] = &[
+    "a", "an", "i", "is", "am", "my", "me", "to", "of", "in", "on", "at", "do", "be", "it", "or",
+    "as", "so", "we", "us", "if", "no", "by", "up", "de", "da", "e", "o", "os", "em", "eu", "se",
+    "na", "ao", "é", "um",
+];
+
+/// Words that make a whole message an acknowledgement rather than a request.
+const ACKNOWLEDGEMENTS: &[&str] = &[
+    "ok", "okay", "k", "thanks", "thank", "you", "thx", "ty", "cool", "great", "nice", "good",
+    "yes", "yeah", "yep", "no", "nope", "sure", "fine", "perfect", "got", "it", "alright", "right",
+    "awesome", "sounds", "very", "much", "obrigado", "obrigada", "valeu", "beleza", "certo", "sim",
+    "nao", "não", "perfeito", "otimo", "ótimo", "legal", "show", "ta", "tá", "bom", "entendi",
+    "muito",
+];
+
+/// True for short messages made only of acknowledgement words ("ok thanks", "valeu").
+/// Retrieval is skipped for them: nothing in memory is needed to reply.
+pub fn is_acknowledgement(text: &str) -> bool {
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    !words.is_empty()
+        && words.len() <= 6
+        && words.iter().all(|w| ACKNOWLEDGEMENTS.contains(&w.as_str()))
+}
+
+/// Distinct lowercase terms for knowledge search: stopwords dropped, short names kept.
+pub fn knowledge_terms(query: &str) -> Vec<String> {
+    let mut terms: Vec<String> = Vec::new();
+    for word in query
+        .split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+    {
+        if word.is_empty()
+            || STOPWORDS.contains(&word.as_str())
+            || SHORT_STOPWORDS.contains(&word.as_str())
+        {
+            continue;
+        }
+        if !terms.contains(&word) {
+            terms.push(word);
+        }
+        if terms.len() == MAX_QUERY_TERMS {
+            break;
+        }
+    }
+    terms
+}
 
 /// Distinct lowercase terms worth searching for, in order of first appearance.
 pub fn query_terms(query: &str) -> Vec<String> {
@@ -698,6 +755,19 @@ mod tests {
         conn.execute_batch(&format!("PRAGMA user_version={};", SCHEMA_VERSION + 1))
             .unwrap();
         assert!(migrate(&conn).is_err());
+    }
+
+    #[test]
+    fn acknowledgements_and_knowledge_terms() {
+        assert!(is_acknowledgement("Ok, thanks!"));
+        assert!(is_acknowledgement("valeu"));
+        assert!(!is_acknowledgement("ok, and her deadline?"));
+        assert!(!is_acknowledgement(""));
+        assert_eq!(
+            knowledge_terms("What is my thesis deadline? And Go, AI or λ?"),
+            vec!["thesis", "deadline", "go", "ai", "λ"]
+        );
+        assert!(knowledge_terms("and what about her?").is_empty());
     }
 
     #[test]
