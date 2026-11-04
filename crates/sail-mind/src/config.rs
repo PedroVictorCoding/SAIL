@@ -341,6 +341,44 @@ impl LocalModelConfig {
             device: self.device.clone(),
         }
     }
+    /// Estimated memory required per context token in bytes for the KV cache.
+    pub fn kv_cache_bytes_per_token(&self) -> u64 {
+        let bytes_per_elem = |t: &str| match t.to_ascii_lowercase().as_str() {
+            "q4_0" | "q4_1" => 1u64,
+            "q8_0" => 2u64,
+            "f32" => 4u64,
+            _ => 2u64, // f16 / bf16 default
+        };
+        let k_bytes = bytes_per_elem(&self.cache_type_k);
+        let v_bytes = bytes_per_elem(&self.cache_type_v);
+        // KV cache stores key and value tensors for each attention layer across KV heads and head dimensions.
+        // For Qwen 3.6 35B A3B (40 layers, 2 KV heads, dim 128 = 10,240 elements per K/V tensor per token),
+        // q4_0 takes ~11.5 KiB total, f16 takes ~40 KiB total.
+        // For larger dense architectures (up to 16 KV heads, 48 layers, dim 128 = ~98k elements),
+        // q4_0 takes ~55 KiB, f16 takes ~192 KiB.
+        // Using 32 KiB per byte-per-element (i.e. 64 KiB for q4_0/q4_0, 128 KiB for f16/f16) provides
+        // a safe, conservative upper bound that fits 16k context comfortably within 32 GB hosts.
+        (k_bytes.saturating_add(v_bytes)).saturating_mul(32 * 1024)
+    }
+
+    /// Estimated RAM bytes needed to host model weights, projector, working buffers,
+    /// and parallel KV cache slots during startup admission.
+    pub fn estimated_ram_bytes(&self, parallel: usize) -> std::io::Result<u64> {
+        let weights = std::fs::metadata(&self.model_path)?.len();
+        let projector = self
+            .projector
+            .as_ref()
+            .map(|p| std::fs::metadata(p).map(|m| m.len()))
+            .transpose()?
+            .unwrap_or(0);
+        let kv_bytes = (self.context_tokens as u64)
+            .saturating_mul(parallel.max(1) as u64)
+            .saturating_mul(self.kv_cache_bytes_per_token());
+        Ok(weights
+            .saturating_add(projector)
+            .saturating_add(512 * sail_common::resources::MIB)
+            .saturating_add(kv_bytes))
+    }
     pub fn launch_args(&self, parallel: usize) -> Result<Vec<String>> {
         let url = self.validate()?;
         let threads_batch = self.threads_batch.unwrap_or(self.threads);

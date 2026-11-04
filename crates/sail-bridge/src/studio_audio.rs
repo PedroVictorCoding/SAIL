@@ -259,37 +259,43 @@ fn decode_pcm_bytes(
 ) -> Result<Vec<f32>, String> {
     match (audio_format, bits_per_sample) {
         (1, 16) => {
-            let mut out = Vec::with_capacity(bytes.len() / 2);
-            for chunk in bytes.chunks(2).take_while(|chunk| chunk.len() == 2) {
-                let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-                out.push(sample as f32 / 32768.0);
+            let num_samples = bytes.len() / 2;
+            let mut out = Vec::with_capacity(num_samples);
+            for chunk in bytes.as_chunks::<2>().0 {
+                let sample_i16 = i16::from_le_bytes(*chunk);
+                out.push(sample_i16 as f32 / 32768.0);
             }
             Ok(out)
         }
         (1, 24) => {
-            let mut out = Vec::with_capacity(bytes.len() / 3);
-            for chunk in bytes.chunks(3).take_while(|chunk| chunk.len() == 3) {
-                let (b0, b1, b2) = (chunk[0], chunk[1], chunk[2]);
+            let num_samples = bytes.len() / 3;
+            let mut out = Vec::with_capacity(num_samples);
+            for chunk in bytes.as_chunks::<3>().0 {
+                let b0 = chunk[0];
+                let b1 = chunk[1];
+                let b2 = chunk[2];
                 // sign extend 24-bit to 32-bit
-                let sample =
+                let sample_i32 =
                     i32::from_le_bytes([b0, b1, b2, if (b2 & 0x80) != 0 { 0xFF } else { 0x00 }]);
-                out.push(sample as f32 / 8388608.0);
+                out.push(sample_i32 as f32 / 8388608.0);
             }
             Ok(out)
         }
         (1, 32) => {
-            let mut out = Vec::with_capacity(bytes.len() / 4);
-            for chunk in bytes.chunks(4).take_while(|chunk| chunk.len() == 4) {
-                let sample = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                out.push(sample as f32 / 2147483648.0);
+            let num_samples = bytes.len() / 4;
+            let mut out = Vec::with_capacity(num_samples);
+            for chunk in bytes.as_chunks::<4>().0 {
+                let sample_i32 = i32::from_le_bytes(*chunk);
+                out.push(sample_i32 as f32 / 2147483648.0);
             }
             Ok(out)
         }
         (3, 32) => {
-            let mut out = Vec::with_capacity(bytes.len() / 4);
-            for chunk in bytes.chunks(4).take_while(|chunk| chunk.len() == 4) {
-                let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                out.push(sample);
+            let num_samples = bytes.len() / 4;
+            let mut out = Vec::with_capacity(num_samples);
+            for chunk in bytes.as_chunks::<4>().0 {
+                let sample_f32 = f32::from_le_bytes(*chunk);
+                out.push(sample_f32);
             }
             Ok(out)
         }

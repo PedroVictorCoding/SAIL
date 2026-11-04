@@ -1,0 +1,147 @@
+//! The learning event log (#233). Session state is a projection of these events; the
+//! browser never owns transcript truth.
+use super::plan::LessonPlan;
+use super::question::{Answer, Grade, QuestionSpec};
+use serde::{Deserialize, Serialize};
+
+/// Bumped when an event changes shape. Stores refuse envelopes from a newer version.
+pub const SCHEMA_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRole {
+    Prober,
+    Teacher,
+    Practitioner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentKind {
+    Explain,
+    Quiz,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolCallRecord {
+    pub id: String,
+    pub name: String,
+    /// Raw arguments as the model sent them (healed copies are not stored).
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TurnOutcome {
+    /// A question is waiting for the learner.
+    AwaitingLearner,
+    /// The model finished with a message and no question.
+    Completed,
+    Aborted,
+    /// The model was unavailable or failed. Nothing was fabricated in its place.
+    Failed {
+        message: String,
+    },
+    /// The tool loop hit its bound.
+    LoopLimit,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LearningEvent {
+    SessionCreated {
+        goal: String,
+    },
+    LearnerMessage {
+        text: String,
+    },
+    AssistantMessage {
+        role: AgentRole,
+        text: String,
+        #[serde(default)]
+        tool_calls: Vec<ToolCallRecord>,
+    },
+    /// The result of a non-question tool call (or of a rejected call).
+    ToolResult {
+        call_id: String,
+        content: String,
+        ok: bool,
+    },
+    /// A question tool call. Its result is the learner's answer, recorded later.
+    QuestionAsked {
+        call_id: String,
+        spec: QuestionSpec,
+    },
+    Answered {
+        call_id: String,
+        answer: Answer,
+        grade: Grade,
+    },
+    ProbeDone {
+        summary: String,
+        #[serde(default)]
+        known: Vec<String>,
+        #[serde(default)]
+        gaps: Vec<String>,
+    },
+    PlanUpdated {
+        revision: u64,
+        plan: LessonPlan,
+    },
+    ConceptPresented {
+        node_id: String,
+        kind: PresentKind,
+        /// Explanation text for `explain`; the question prompt for `quiz`.
+        text: String,
+    },
+    TurnSettled {
+        role: AgentRole,
+        outcome: TurnOutcome,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
+    Paused,
+    Resumed,
+}
+
+impl LearningEvent {
+    /// Events after which the model owes the learner a turn.
+    pub fn is_input(&self) -> bool {
+        matches!(
+            self,
+            Self::SessionCreated { .. }
+                | Self::LearnerMessage { .. }
+                | Self::Answered { .. }
+                | Self::ProbeDone { .. }
+                | Self::Resumed
+        )
+    }
+}
+
+/// One stored event. `key` is an idempotency key: appending the same key twice is a no-op.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Envelope {
+    pub session: String,
+    pub seq: u64,
+    pub at_ms: i64,
+    pub key: String,
+    pub version: u16,
+    pub event: LearningEvent,
+}
+
+/// An event waiting to be appended; the store assigns `seq`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewEvent {
+    pub key: String,
+    pub event: LearningEvent,
+}
+
+impl NewEvent {
+    pub fn new(key: impl Into<String>, event: LearningEvent) -> Self {
+        Self {
+            key: key.into(),
+            event,
+        }
+    }
+}

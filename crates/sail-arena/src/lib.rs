@@ -53,7 +53,14 @@ struct SessionLedger {
 pub struct ConversationContext {
     pub hot: Vec<HotTurn>,
     pub memory: WorkingContext,
+    /// What memory was searched with this turn (see `compaction::retrieval_query`), so
+    /// knowledge retrieval uses the same query; `None` when the turn needs no retrieval.
+    pub query: Option<String>,
 }
+
+/// An archived hit is recalled only if its relevance is at least this fraction of the best
+/// hit's, so one shared word does not pull a whole unrelated turn into the prompt.
+const RECALL_RELATIVE_FLOOR: f64 = 0.5;
 
 pub struct ArenaSubsystem {
     bus: Option<EventBus>,
@@ -208,10 +215,21 @@ impl ArenaSubsystem {
         access: &knowledge::Access,
         token_budget: usize,
     ) -> Option<sail_protocol::memory::MemoryReply> {
+        self.knowledge_lookup(text, access, 8, token_budget)
+    }
+
+    /// As `knowledge_context`, returning at most `limit` facts.
+    pub fn knowledge_lookup(
+        &self,
+        text: &str,
+        access: &knowledge::Access,
+        limit: usize,
+        token_budget: usize,
+    ) -> Option<sail_protocol::memory::MemoryReply> {
         let query = sail_protocol::memory::MemoryQuery {
             version: sail_protocol::memory::VERSION,
             text: compaction::clip(text, 4000),
-            limit: 8,
+            limit,
             token_budget,
             expand_graph: true,
         };
@@ -371,8 +389,12 @@ impl ArenaSubsystem {
             used += len;
             memory.breadcrumbs.push(crumb.clone());
         }
-        memory.recalled = self.recall_excerpts(session, query, &hot);
-        ConversationContext { hot, memory }
+        let previous = hot.last().map(|t| t.user.as_str());
+        let query = compaction::retrieval_query(query, previous);
+        if let Some(query) = &query {
+            memory.recalled = self.recall_excerpts(session, query, &hot);
+        }
+        ConversationContext { hot, memory, query }
     }
 
     fn recall_excerpts(&self, session: &str, query: &str, hot: &[HotTurn]) -> Vec<Recall> {
@@ -393,6 +415,12 @@ impl ArenaSubsystem {
                 return Vec::new();
             }
         };
+        // bm25 is negative and lower is better; keep hits close to the best one.
+        let best = hits.first().map(|h| h.score).unwrap_or(0.0);
+        let hits: Vec<_> = hits
+            .into_iter()
+            .filter(|h| best >= 0.0 || h.score <= best * RECALL_RELATIVE_FLOOR)
+            .collect();
         let terms = store::query_terms(query);
         let per_hit = self.budget.recall_chars / self.budget.recall_hits;
         let mut out = Vec::new();
