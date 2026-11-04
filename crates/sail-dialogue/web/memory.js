@@ -69,6 +69,7 @@
     for(const [name,records] of [['Procedures',data.procedures],['Project items',data.project_items]]) {const section=node('details');section.append(node('summary',name),node('pre',JSON.stringify(records||[],null,2)));detail.append(section);}
   }
   document.getElementById('memoryRefresh').addEventListener('click',()=>load().catch(fail));
+  document.getElementById('memoryTab')?.addEventListener('click',()=>load().catch(fail));
   document.getElementById('memorySearch').addEventListener('submit',async event=>{
     event.preventDefault();const ticket=++serial;
     try {const data=await request('read',{action:'search',query:{version:1,text:document.getElementById('memoryQuery').value,limit:100,token_budget:0,expand_graph:true}});if(ticket!==serial)return;generation=data.generation;entities.replaceChildren();for(const hit of data.hits||[])entities.append(button(`${hit.entity_name}: ${hit.predicate} ${hit.value} · ${hit.status}`,()=>showEntity(hit.entity_id)));status.textContent=`${(data.hits||[]).length} matching claims.`;} catch(error){fail(error);}

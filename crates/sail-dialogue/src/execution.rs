@@ -149,8 +149,8 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 21] = [
     "fs:read",
     "fs:write",
     "github:issues",
-    "web:read",
     "web:speak",
+    "web:read",
     "studio:audio_analyze",
     "pulse:create",
     "pulse:list",
@@ -249,21 +249,21 @@ pub fn registry() -> Arc<ToolRegistry> {
             2,
         ),
         (
-            "web:read",
-            "Fetch and read the text contents of any public web page, URL, documentation, or online issue without write permissions",
-            json!({"url":string(2048, "The HTTP or HTTPS URL to fetch and read")}),
-            &["url"],
-            ToolEffect::ReadOnly,
-            2,
-        ),
-        (
             "web:speak",
-            "Fetch a web page, extract its important readable content, and stream it directly to voice synthesis so the user hears it immediately without waiting for model token generation. Pass a short context_phrase (e.g. 'Reading the article from LessWrong:') to announce the page before speech begins.",
+            "Read a website or web page to the user (e.g. 'Read me this website: https://...', 'Read this page for me: https://...'). Fetches the page, extracts its important readable content, and streams it directly to voice synthesis with a short introductory context_phrase so the user hears it immediately without waiting for full model generation.",
             json!({
                 "url":string(2048, "The HTTP or HTTPS URL of the page to read aloud"),
                 "context_phrase":string(256, "A short introductory phrase to speak before reading the content, e.g. 'Reading Roko's Basilisk from LessWrong:'"),
                 "max_paragraphs":{"type":"integer","minimum":1,"maximum":20,"description":"Maximum number of paragraphs to read aloud (defaults to 6)"}
             }),
+            &["url"],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "web:read",
+            "Fetch the text contents of a public web page or documentation for silent inspection/analysis when the user does not ask to have the page read to them",
+            json!({"url":string(2048, "The HTTP or HTTPS URL to fetch and read")}),
             &["url"],
             ToolEffect::ReadOnly,
             2,
@@ -362,14 +362,7 @@ pub fn registry() -> Arc<ToolRegistry> {
             )
             .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
     }
-    let pulse_tools: [(
-        &'static str,
-        &'static str,
-        Value,
-        &'static [&'static str],
-        ToolEffect,
-        usize,
-    ); 4] = [
+    let pulse_tools: [KernelTool; 4] = [
         (
             "pulse:create",
             "Create a local one-time reminder. Convert the requested time to a concrete RFC 3339 due_at. If the time is ambiguous, call with preview=true first and show the interpreted local time before saving.",

@@ -1211,11 +1211,15 @@ async fn execute_scheduled_tool(
     // Yield so the final sequenced event reaches the client before its result.
     tokio::task::yield_now().await;
     forward.0.abort();
+    let data = observation.data["payload_ref"]
+        .as_str()
+        .and_then(|id| scheduler.payload(id, &context))
+        .unwrap_or(observation.data);
     let output = if observation.success {
-        if let Some(text) = observation.data.as_str() {
+        if let Some(text) = data.as_str() {
             serde_json::from_str(text).unwrap_or_else(|_| json!({"text":text}))
         } else {
-            observation.data
+            data
         }
     } else {
         json!({"error":observation.error,"request_id":observation.request_id})
@@ -1482,8 +1486,8 @@ async fn run_turn(
 - vision_frame: measure luminance and edge density of attached image
 - visual_snapshot: take one camera picture (physical world) or screenshot (the user's computer) when the user refers to something visual or asks you to look; the user approves each capture
 - github_issues: list recent open GitHub issues or fetch full details of a specific issue by number or URL (e.g. issue_number: 125, or url: \"https://github.com/owner/repo/issues/125\")
-- web_read: read-only public web page and documentation fetcher from the internet without write permissions (e.g. url: \"https://...\")
-- web_speak: fetch a web page, extract its important readable content, and stream it directly to voice synthesis so the user hears it immediately without waiting for model token generation. Pass a short context_phrase (e.g. \"Reading the article from LessWrong:\") to announce the page before speech begins.
+- web_speak: read a website or web page aloud to the user (e.g. \"Read me this website: https://...\", \"Read this page for me: https://...\"). Fetches the page, extracts its important readable content, and streams it directly to voice synthesis with a short introductory context_phrase (e.g. \"Reading Roko's Basilisk from LessWrong:\") so the user hears it immediately without waiting for model token generation.
+- web_read: fetch the text contents of a public web page or documentation for silent inspection when the user does not ask to have the page read to them (e.g. url: \"https://...\")
 - studio_audio_analyze: measure a local audio file (integrated LUFS, true-peak estimate, loudness range, frequency balance, arrangement energy, tempo) and return grounded mixing recommendations plus a chart to display
 - pulse_create: create a local one-time reminder. Required: text, due_at as an RFC 3339 timestamp, and timezone (IANA name). Set preview=true to show the interpreted local time without saving when the request is ambiguous.
 - pulse_list: list the user's active reminders, including id, text, due time, status and snooze count
@@ -1683,6 +1687,10 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
     state
         .arena
         .record_turn_at_epoch(&session, current, &prompt, &reply, learning_epoch);
+    // Extract and add learned knowledge from the conversation turn once if not already in memory.
+    state
+        .arena
+        .learn_from_conversation_turn("voice", &prompt, &reply);
     for artifact in sail_canvas::voice_artifacts(&reply) {
         debug!(artifact_type=%artifact.artifact_type,content_chars=artifact.content.chars().count(),"Publishing Canvas artifact alongside the conversation");
         emit(
@@ -2029,7 +2037,11 @@ async fn reason_turn(
             assistant = json!({"role":"assistant","content":format!("{round_text}{addition}")});
         }
         queue_speech(chunker.finish(), speech_tx).await;
-        messages.push(assistant.clone());
+        let mut msg_for_history = assistant.clone();
+        if let Some(obj) = msg_for_history.as_object_mut() {
+            obj.remove("finish_reason");
+        }
+        messages.push(msg_for_history);
         if let Some(calls) = assistant["tool_calls"]
             .as_array()
             .filter(|calls| !calls.is_empty())
@@ -2232,33 +2244,89 @@ async fn reason_turn(
                     }
                     emit(tx, current, json!({"type":"tool_result","result":result})).await;
                 }
+                if (name == "web:speak"
+                    || name == "web_speak"
+                    || name == "web:read"
+                    || name == "web_read")
+                    && result.success
+                    && let Some(scope) = &memory
+                {
+                    let url = result.output.get("url").and_then(Value::as_str);
+                    let title = result
+                        .output
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let summary = result
+                        .output
+                        .get("paragraphs")
+                        .and_then(Value::as_array)
+                        .and_then(|arr| {
+                            let parts: Vec<&str> = arr
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::trim)
+                                .filter(|s| s.len() >= 40)
+                                .take(2)
+                                .collect();
+                            (!parts.is_empty()).then(|| parts.join(" "))
+                        })
+                        .or_else(|| {
+                            result
+                                .output
+                                .get("content")
+                                .and_then(Value::as_str)
+                                .map(|c| sail_arena::compaction::clip(c, 420))
+                        });
+                    if let Some(summary) = summary
+                        && !title.trim().is_empty()
+                        && summary.trim().len() >= 40
+                    {
+                        let value = match url {
+                            Some(u) if !summary.contains(u) => sail_arena::compaction::clip(
+                                &format!("{summary} (source: {u})"),
+                                500,
+                            ),
+                            _ => sail_arena::compaction::clip(&summary, 500),
+                        };
+                        scope.arena.learn_knowledge_once(
+                            "voice",
+                            title,
+                            &[],
+                            sail_arena::knowledge::EntityKind::Concept,
+                            "summary",
+                            &value,
+                            url,
+                            true,
+                        );
+                    }
+                }
                 if (name == "web:speak" || name == "web_speak") && result.success {
                     info!(
                         round,
                         "web:speak streaming extracted page paragraphs directly to voice generation"
                     );
                     if let Some(intro) = result.output.get("context_phrase").and_then(Value::as_str)
+                        && !intro.trim().is_empty()
                     {
-                        if !intro.trim().is_empty() {
-                            let phrase = intro.trim().to_string();
-                            emit(tx, current, json!({"type":"response_delta","channel":"voice:vlm","text":format!("{phrase}\n\n"),"turn_id":current})).await;
-                            reply.push_str(&phrase);
-                            reply.push_str("\n\n");
-                            let _ = speech_tx.send(phrase).await;
-                        }
+                        let phrase = intro.trim().to_string();
+                        emit(tx, current, json!({"type":"response_delta","channel":"voice:vlm","text":format!("{phrase}\n\n"),"turn_id":current})).await;
+                        reply.push_str(&phrase);
+                        reply.push_str("\n\n");
+                        let _ = speech_tx.send(phrase).await;
                     }
                     if let Some(paragraphs) =
                         result.output.get("paragraphs").and_then(Value::as_array)
                     {
                         for p in paragraphs {
-                            if let Some(text) = p.as_str() {
-                                if !text.trim().is_empty() {
-                                    let text = text.trim().to_string();
-                                    emit(tx, current, json!({"type":"response_delta","channel":"voice:vlm","text":format!("{text}\n\n"),"turn_id":current})).await;
-                                    reply.push_str(&text);
-                                    reply.push_str("\n\n");
-                                    let _ = speech_tx.send(text).await;
-                                }
+                            if let Some(text) = p.as_str()
+                                && !text.trim().is_empty()
+                            {
+                                let text = text.trim().to_string();
+                                emit(tx, current, json!({"type":"response_delta","channel":"voice:vlm","text":format!("{text}\n\n"),"turn_id":current})).await;
+                                reply.push_str(&text);
+                                reply.push_str("\n\n");
+                                let _ = speech_tx.send(text).await;
                             }
                         }
                     }

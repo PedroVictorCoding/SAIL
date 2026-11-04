@@ -103,6 +103,14 @@ impl ArenaSubsystem {
         match MemoryStore::open(&path) {
             Ok(store) => {
                 info!(path = %path.display(), "SAIL Arena memory store opened");
+                if let Ok(generation) = store.knowledge().deletion_generation() {
+                    let _ = store.knowledge().consolidate(
+                        VOICE_SCOPE,
+                        &knowledge::Access::owner(),
+                        generation,
+                        256,
+                    );
+                }
                 Self::with_store(Arc::new(store))
             }
             Err(error) => {
@@ -245,6 +253,77 @@ impl ArenaSubsystem {
                 None
             }
         }
+    }
+
+    /// Check whether a concept or webpage (`name` / `source_ref`) has already been added to memory.
+    pub fn has_learned_knowledge(&self, scope: &str, name: &str, source_ref: Option<&str>) -> bool {
+        self.store
+            .knowledge()
+            .has_learned_knowledge(scope, name, source_ref)
+            .unwrap_or(false)
+    }
+
+    /// Add learned knowledge to memory at most once (checks if it is already in memory first).
+    /// Returns `Some((claim_id, added))` where `added` is `true` if newly inserted and `false`
+    /// if it was already present in memory.
+    #[allow(clippy::too_many_arguments)]
+    pub fn learn_knowledge_once(
+        &self,
+        scope: &str,
+        name: &str,
+        extra_aliases: &[String],
+        kind: knowledge::EntityKind,
+        predicate: &str,
+        value: &str,
+        source_ref: Option<&str>,
+        direct: bool,
+    ) -> Option<(i64, bool)> {
+        match self.store.knowledge().learn_once(
+            scope,
+            name,
+            extra_aliases,
+            kind,
+            predicate,
+            value,
+            source_ref,
+            direct,
+        ) {
+            Ok((claim_id, added)) => {
+                if added {
+                    info!(
+                        scope,
+                        name, predicate, claim_id, "SAIL Arena added learned knowledge to memory"
+                    );
+                }
+                Some((claim_id, added))
+            }
+            Err(error) => {
+                warn!(%error, scope, name, "SAIL Arena could not record learned knowledge");
+                None
+            }
+        }
+    }
+
+    /// Extract learned concept/webpage knowledge from a completed conversation turn (`user` and
+    /// `assistant`) and add it to memory once if not already present.
+    pub fn learn_from_conversation_turn(
+        &self,
+        scope: &str,
+        user: &str,
+        assistant: &str,
+    ) -> Option<(i64, bool)> {
+        let body = format!("User: {user}\nSAIL: {assistant}");
+        let candidate = knowledge::consolidation::extract_learned_turn(&body)?;
+        self.learn_knowledge_once(
+            scope,
+            &candidate.name,
+            &[],
+            candidate.kind,
+            &candidate.predicate,
+            &candidate.value,
+            candidate.source_ref.as_deref(),
+            candidate.direct,
+        )
     }
 }
 
