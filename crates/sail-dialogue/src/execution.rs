@@ -568,6 +568,108 @@ mod tests {
     use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
     use uuid::Uuid;
+
+    #[test]
+    fn pulse_preview_has_an_interpretation_but_never_creates_a_reminder() {
+        let pulse = sail_pulse::Pulse::open_in_memory().unwrap();
+        let due =
+            chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp() + 3600, 0).unwrap();
+        let preview = execute_pulse_tool(
+            &pulse,
+            "pulse:create",
+            json!({"text":"Continue the project","due_at":due.to_rfc3339(),
+                "timezone":"Etc/GMT-1","utc_offset_minutes":60,"preview":true}),
+        )
+        .unwrap();
+        assert_eq!(preview["preview"], true);
+        assert_eq!(preview["saved"], false);
+        assert_eq!(preview["interpreted"]["text"], "Continue the project");
+        assert_eq!(preview["interpreted"]["timezone"], "Etc/GMT-1");
+        let local = chrono::DateTime::parse_from_rfc3339(
+            preview["interpreted"]["due_local"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(local.offset().local_minus_utc(), 3600);
+        assert_eq!(local.timestamp(), due.timestamp());
+        assert!(pulse.list_all(100).unwrap().is_empty());
+        for input in [
+            json!({"text":"Continue","due_at":"not-a-time","preview":true}),
+            json!({"text":"","due_at":due.to_rfc3339(),"preview":true}),
+            json!({"text":"Continue","due_at":due.to_rfc3339(),"utc_offset_minutes":841,"preview":true}),
+        ] {
+            assert!(execute_pulse_tool(&pulse, "pulse:create", input).is_err());
+            assert!(pulse.list_all(100).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn pulse_tools_return_receipts_for_the_actual_stored_lifecycle() {
+        use sail_pulse::ReminderStatus;
+        let pulse = sail_pulse::Pulse::open_in_memory().unwrap();
+        let due =
+            chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp() + 3600, 0).unwrap();
+        let saved = execute_pulse_tool(
+            &pulse,
+            "pulse:create",
+            json!({"text":"Continue the project","due_at":due.to_rfc3339()}),
+        )
+        .unwrap();
+        assert_eq!(saved["saved"], true);
+        let id = saved["reminder"]["id"].as_str().unwrap();
+        let stored = pulse.get(id).unwrap();
+        assert_eq!(stored.text, "Continue the project");
+        assert_eq!(stored.due_at, due);
+        assert_eq!(stored.status, ReminderStatus::Pending);
+        assert_eq!(stored.timezone, "UTC");
+        let listed = execute_pulse_tool(&pulse, "pulse:list", json!({})).unwrap();
+        assert_eq!(listed["count"], 1);
+        assert_eq!(listed["reminders"][0]["id"], id);
+        assert!(listed.get("history").is_none());
+
+        for input in [
+            json!({"id":id,"minutes":0}),
+            json!({"id":id,"minutes":10081}),
+            json!({"id":id,"minutes":10,"until":due.to_rfc3339()}),
+            json!({"id":id,"until":"not-a-time"}),
+            json!({"id":id}),
+            json!({"minutes":10}),
+        ] {
+            assert!(execute_pulse_tool(&pulse, "pulse:snooze", input).is_err());
+            assert_eq!(pulse.get(id).unwrap().due_at, due);
+        }
+        let later = due + chrono::Duration::hours(1);
+        let snoozed = execute_pulse_tool(
+            &pulse,
+            "pulse:snooze",
+            json!({"id":id,"until":later.to_rfc3339()}),
+        )
+        .unwrap();
+        assert_eq!(snoozed["reminder"]["snooze_count"], 1);
+        assert_eq!(pulse.get(id).unwrap().due_at, later);
+        let before = chrono::Utc::now();
+        // Blank optional input is absent, so a relative snooze remains valid.
+        let relative = execute_pulse_tool(
+            &pulse,
+            "pulse:snooze",
+            json!({"id":id,"minutes":10,"until":"  "}),
+        )
+        .unwrap();
+        let after = chrono::Utc::now();
+        assert_eq!(relative["reminder"]["snooze_count"], 2);
+        let stored = pulse.get(id).unwrap();
+        assert!(stored.due_at.timestamp() >= before.timestamp() + 600);
+        assert!(stored.due_at.timestamp() <= after.timestamp() + 600);
+        let cancelled = execute_pulse_tool(&pulse, "pulse:cancel", json!({"id":id})).unwrap();
+        assert_eq!(cancelled["reminder"]["status"], "cancelled");
+        assert_eq!(pulse.get(id).unwrap().status, ReminderStatus::Cancelled);
+        let history =
+            execute_pulse_tool(&pulse, "pulse:list", json!({"include_finished":true})).unwrap();
+        assert_eq!(history["count"], 0);
+        assert_eq!(history["history"][0]["id"], id);
+        assert!(execute_pulse_tool(&pulse, "pulse:cancel", json!({})).is_err());
+        assert!(execute_pulse_tool(&pulse, "pulse:cancel", json!({"id":"missing"})).is_err());
+        assert!(execute_pulse_tool(&pulse, "pulse:unknown", json!({})).is_err());
+    }
     #[tokio::test]
     async fn owner_http_approval_resumes_real_registered_tool_and_caches_its_result() {
         let broker = Arc::new(GuardianExecutionBroker::new(
