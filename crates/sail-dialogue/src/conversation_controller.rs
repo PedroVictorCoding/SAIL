@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -18,23 +18,51 @@ pub struct Generation(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SessionState { Connected, Reconnecting, Closed }
+pub enum SessionState {
+    Connected,
+    Reconnecting,
+    Closed,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum InputState { Muted, Listening, SpeechDetected, Transcribing }
+pub enum InputState {
+    Muted,
+    Listening,
+    SpeechDetected,
+    Transcribing,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ResponseState { Idle, Queued, Generating, Speaking, Interrupted, Failed }
+pub enum ResponseState {
+    Idle,
+    Queued,
+    Generating,
+    Speaking,
+    Interrupted,
+    Failed,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolActionState { AwaitingApproval, Running, Completed, Cancelled, OutcomeUncertain }
+pub enum ToolActionState {
+    AwaitingApproval,
+    Running,
+    Completed,
+    Cancelled,
+    OutcomeUncertain,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum StopReason { UserInterrupt, NewInput, ConnectionLost, ModelFailure, PermissionRevoked }
+pub enum StopReason {
+    UserInterrupt,
+    NewInput,
+    ConnectionLost,
+    ModelFailure,
+    PermissionRevoked,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancellationOutcome {
@@ -126,7 +154,7 @@ impl ConversationController {
 
     pub async fn start_new_turn(&self) -> (TurnId, Generation, CancellationToken) {
         let mut inner = self.inner.lock().await;
-        
+
         if let Some(active) = &inner.active_response {
             active.cancel_token.cancel();
         }
@@ -156,7 +184,7 @@ impl ConversationController {
 
     pub async fn stop(&self, reason: StopReason) -> CancellationOutcome {
         let mut inner = self.inner.lock().await;
-        
+
         let Some(active) = inner.active_response.take() else {
             return CancellationOutcome {
                 reason,
@@ -178,18 +206,23 @@ impl ConversationController {
         for (tool_id, state) in active.tool_tasks {
             match state {
                 ToolActionState::Running => tools_stopped.push(tool_id),
-                ToolActionState::Completed | ToolActionState::AwaitingApproval => already_completed.push(tool_id),
+                ToolActionState::Completed | ToolActionState::AwaitingApproval => {
+                    already_completed.push(tool_id)
+                }
                 ToolActionState::OutcomeUncertain => outcome_uncertain.push(tool_id),
                 ToolActionState::Cancelled => {}
             }
         }
 
         if let Some(tx) = &inner.outbound_tx {
-            let _ = tx.send(serde_json::json!({
-                "type": "conversation_stopped",
-                "reason": reason,
-                "generation": active.generation.0,
-            })).await;
+            let _ = tx
+                .send(serde_json::json!({
+                    "type": "conversation_stopped",
+                    "reason": reason,
+                    "turn_id": active.turn_id.0,
+                    "generation": active.generation.0,
+                }))
+                .await;
         }
 
         inner.input_state = InputState::Listening;
@@ -209,10 +242,10 @@ impl ConversationController {
 
     pub async fn set_response_state(&self, generation: Generation, state: ResponseState) {
         let mut inner = self.inner.lock().await;
-        if let Some(active) = &mut inner.active_response {
-            if active.generation == generation {
-                active.state = state;
-            }
+        if let Some(active) = &mut inner.active_response
+            && active.generation == generation
+        {
+            active.state = state;
         }
     }
 
@@ -243,5 +276,7 @@ impl ConversationController {
 }
 
 impl Default for ConversationController {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

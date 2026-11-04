@@ -135,6 +135,7 @@ for line in sys.stdin:
         arena: arena.clone(),
         inference: sail_mind::MindService::from_env().unwrap(),
         plans: None,
+        pulse: None,
         live_context_authority: None,
         pulse: None,
     });
@@ -245,6 +246,7 @@ for line in sys.stdin:
         arena: arena.clone(),
         inference,
         plans: None,
+        pulse: None,
         live_context_authority: Some(
             sail_guardian::authority::ApprovalAuthority::new(token).unwrap(),
         ),
