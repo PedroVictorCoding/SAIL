@@ -104,7 +104,8 @@ const subsystemPages = [
     "details": [
       "Goal decomposition",
       "Tool proposals and authorization",
-      "Step verification"
+      "Step verification",
+      "Plan cards on Canvas, with approval, edit and cancel"
     ]
   },
   {
