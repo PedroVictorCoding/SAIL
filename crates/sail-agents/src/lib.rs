@@ -233,6 +233,7 @@ pub fn authorize_voice_operation(tool: &str) -> sail_common::error::Result<&'sta
         "forge:clear" | "forge_clear" => Ok("forge:clear"),
         "github:issues" | "github_issues" => Ok("github:issues"),
         "web:read" | "web_read" => Ok("web:read"),
+        "studio:audio_analyze" | "studio_audio_analyze" => Ok("studio:audio_analyze"),
         _ => Err(sail_common::error::SailError::ToolExecution(format!(
             "Operation {tool} is not authorized"
         ))),

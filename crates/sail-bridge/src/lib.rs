@@ -1,5 +1,6 @@
 pub mod aistudio;
 pub mod browser;
+pub mod studio_audio;
 
 use async_trait::async_trait;
 use tracing::info;
@@ -22,6 +23,8 @@ impl BridgeSubsystem {
         let registry = std::sync::Arc::new(sail_agents::tools::ToolRegistry::default());
         sail_agents::tools::register_builtin_time(&registry)
             .expect("valid built-in time descriptor");
+        studio_audio::register_studio_audio_tool(&registry)
+            .expect("valid studio audio tool descriptor");
         Self {
             bus: None,
             registry,

@@ -255,6 +255,7 @@ impl LocalKernelToolBroker {
             "forge:clear" => Self::tool_forge_clear(&call.params),
             "github:issues" => Self::tool_github_issues(&call.params),
             "web:read" => Self::tool_web_read(&call.params),
+            "studio:audio_analyze" => Self::tool_studio_audio_analyze(&call.params),
             unknown => KernelToolResult {
                 tool: unknown.to_string(),
                 success: false,
@@ -268,6 +269,53 @@ impl LocalKernelToolBroker {
             tool: tool.into(),
             success: false,
             output: serde_json::json!({"error":message}),
+        }
+    }
+
+    /// studio:audio_analyze — objective loudness/peak/spectral/arrangement receipt for a local
+    /// audio file, plus the measurement-grounded strategist review and a Canvas chart.
+    fn tool_studio_audio_analyze(params: &serde_json::Value) -> KernelToolResult {
+        const TOOL: &str = "studio:audio_analyze";
+        let Some(file_path) = params.get("file_path").and_then(|value| value.as_str()) else {
+            return Self::error(TOOL, "file_path is required");
+        };
+        let path = match sail_bridge::studio_audio::confine_to_workspace(file_path) {
+            Ok(path) => path,
+            Err(error) => return Self::error(TOOL, &error),
+        };
+        let target_lufs = params.get("target_lufs").and_then(|value| value.as_f64());
+        let receipt = match sail_bridge::studio_audio::analyze_audio_file(&path, target_lufs) {
+            Ok(receipt) => receipt,
+            Err(error) => return Self::error(TOOL, &error),
+        };
+        let genre = params.get("genre_hint").and_then(|value| value.as_str());
+        let review =
+            sail_bridge::studio_audio::generate_strategist_review(&receipt, genre, target_lufs);
+        KernelToolResult {
+            tool: TOOL.into(),
+            success: true,
+            output: serde_json::json!({
+                "file_name": receipt.file_name,
+                "duration_seconds": receipt.duration_seconds,
+                "sample_rate": receipt.sample_rate,
+                "channels": receipt.channels,
+                "integrated_lufs": receipt.integrated_lufs,
+                "loudness_range_lu": receipt.loudness_range_lra,
+                "true_peak_dbtp": receipt.true_peak_db,
+                "rms_db": receipt.rms_db,
+                "clipping_detected": receipt.clipping_detected,
+                "estimated_bpm": receipt.estimated_bpm,
+                "frequency_bands": receipt.frequency_bands,
+                "sections": receipt.sections,
+                "review": {
+                    "loudness": review.loudness_verdict,
+                    "headroom": review.headroom_verdict,
+                    "dynamics": review.dynamic_contrast_verdict,
+                    "tonal_balance": review.tonal_balance_findings,
+                    "recommendations": review.strategic_recommendations,
+                },
+                "mermaid": review.canvas_card_mermaid,
+            }),
         }
     }
     /// os:status — Query OS kernel status, load averages, memory info directly from /proc
@@ -1159,6 +1207,7 @@ pub fn tool_definitions() -> serde_json::Value {
         {"type":"function","function":{"name":"fs_write","description":"Create or write a file inside the authorized workspace. Requires explicit user approval.","parameters":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string","description":"Relative path to write"},"content":{"type":"string","description":"File content to write"}}}}},
         {"type":"function","function":{"name":"github_issues","description":"Retrieve open GitHub issues ordered by priority, or fetch full details of a specific issue by number or URL","parameters":{"type":"object","properties":{"url":{"type":"string","description":"Specific GitHub issue URL (e.g. https://github.com/owner/repo/issues/125)"},"issue_number":{"type":"integer","description":"Specific GitHub issue number to fetch full title, body, state and labels for"},"limit":{"type":"integer","minimum":1,"maximum":50},"priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}},"additionalProperties":false}}},
         {"type":"function","function":{"name":"web_read","description":"Fetch and read the text contents of any public web page, URL, documentation, or online issue without write permissions","parameters":{"type":"object","required":["url"],"properties":{"url":{"type":"string","description":"The HTTP or HTTPS URL to fetch and read"}},"additionalProperties":false}}},
+        {"type":"function","function":{"name":"studio_audio_analyze","description":"Measure a local audio file for Studio: integrated loudness (LUFS, ITU-R BS.1770-4 gated), true-peak estimate, loudness range, frequency balance, arrangement energy and tempo, with concrete mixing recommendations and a chart ready to display.","parameters":{"type":"object","required":["file_path"],"properties":{"file_path":{"type":"string","description":"Path to the audio file inside the authorized workspace"},"genre_hint":{"type":"string","maxLength":64,"description":"Optional genre such as electronic, hip-hop, pop or rock"},"target_lufs":{"type":"number","minimum":-30,"maximum":-3,"description":"Optional loudness target; defaults to the genre or -14 LUFS"},"reference_file_path":{"type":"string","maxLength":1024,"description":"Optional reference track path"}},"additionalProperties":false}}},
         {"type":"function","function":{"name":"forge_enqueue","description":"Enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting.","parameters":{"type":"object","properties":{"issue_number":{"type":"integer","description":"GitHub issue number to solve"},"repo":{"type":"string","description":"Repository name, defaults to PedroVictorCoding/SAIL"},"task":{"type":"string","description":"Optional description or instructions for the task"}}}}},
         {"type":"function","function":{"name":"forge_status","description":"Check the status, current step, test outcome, and diff of a Forge autonomous coding job. Accepts exact job IDs (e.g. job-5-61c992ad), prefix (e.g. job-5), or issue numbers (e.g. 5 or #5).","parameters":{"type":"object","required":["job_id"],"properties":{"job_id":{"type":"string","description":"The job ID or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)"}}}}},
         {"type":"function","function":{"name":"forge_list","description":"List all active, recent, and stored Forge autonomous coding jobs and tasks.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
@@ -1241,7 +1290,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 18);
 
         let names: Vec<_> = tools
             .iter()
@@ -1259,6 +1308,7 @@ mod schema_selection_tests {
         assert!(names.contains(&"vision_frame"));
         assert!(names.contains(&"github_issues"));
         assert!(names.contains(&"web_read"));
+        assert!(names.contains(&"studio_audio_analyze"));
         assert!(names.contains(&"forge_enqueue"));
         assert!(names.contains(&"forge_status"));
         assert!(names.contains(&"forge_list"));
