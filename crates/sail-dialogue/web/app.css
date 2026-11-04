@@ -1643,6 +1643,20 @@ a.nav-item { text-decoration:none; color:var(--muted) }
 .memory-graph text { fill:var(--text); font-size:12px }
 @media(max-width:1180px) { .memory-layout { grid-template-columns:minmax(0,1fr) } }
 
+/* Reuse Voice settings controls while allowing the consent copy to wrap. */
+#liveContextSetting { flex-wrap: wrap; }
+#liveContextSetting .vscode-setting-info { flex-basis: 260px; }
+#liveContextSetting .vscode-setting-control {
+  flex: 1 1 240px; min-width: 0; flex-wrap: wrap; gap: 8px;
+}
+#liveContextSetting button { max-width: 100%; white-space: normal; min-height: 44px; }
+#liveContextStatus { color: var(--text); overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  #settingsPanel-voice .vscode-setting-item { flex-direction: column; gap: 12px; }
+  #settingsPanel-voice .vscode-setting-info { flex-basis: auto; }
+  #settingsPanel-voice .vscode-setting-control { flex-basis: auto; max-width: 100%; flex-wrap: wrap; }
+}
+
 /* Arena Learn (#247): reuses Arena card tokens; states use text labels as well as color. */
 .learn-card-tabs { margin-bottom:var(--space-2) }
 .learn-start { display:flex; flex-wrap:wrap; align-items:end; gap:var(--space-3) }
@@ -1695,6 +1709,7 @@ a.nav-item { text-decoration:none; color:var(--muted) }
   .learn-dock { position:sticky; bottom:var(--space-2) }
 }
 @media(prefers-reduced-motion:reduce) { .learn-transcript { scroll-behavior:auto } }
+>>>>>>> origin/main
 
 /* -------------------------------------------------------------------------- */
 /* In-Browser Interactive Terminal                                            */

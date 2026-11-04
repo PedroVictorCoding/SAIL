@@ -3,6 +3,7 @@ pub mod conversation_controller;
 pub mod control;
 mod execution;
 pub mod learn_http;
+pub mod live_context;
 pub mod memory_http;
 pub mod orb;
 pub mod pipeline;

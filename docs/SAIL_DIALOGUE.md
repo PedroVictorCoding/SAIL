@@ -105,6 +105,14 @@ One complete local voice turn with measured STT/first-audio latency, barge-in, n
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
 
+## Live conversation context
+
+Voice settings provide opt-in, owner-authenticated listening without replies using
+the existing local VAD/STT. A bounded session-only buffer supplies anonymous speech
+as untrusted background to explicit typed questions. No pyannote or voiceprints are
+required. See [live conversation context](LIVE_CONVERSATION_CONTEXT.md) for consent,
+clearing/expiry, usage, verification and limitations.
+
 ## In-browser terminal implementation
 
 The existing terminal card uses locally served MIT-licensed xterm.js 5.5.0 and

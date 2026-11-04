@@ -20,13 +20,15 @@ struct Worker {
 #[derive(Clone)]
 struct WorkerClient {
     mode: &'static str,
+    scheduler: Arc<sail_common::resources::ResourceScheduler>,
     worker: Arc<Mutex<Option<Worker>>>,
     capacity: Arc<Semaphore>,
 }
 impl WorkerClient {
-    fn new(mode: &'static str) -> Self {
+    fn new(mode: &'static str, scheduler: Arc<sail_common::resources::ResourceScheduler>) -> Self {
         Self {
             mode,
+            scheduler,
             worker: Arc::new(Mutex::new(None)),
             capacity: Arc::new(Semaphore::new(8)),
         }
@@ -49,7 +51,7 @@ impl WorkerClient {
             let _permit = permit;
             // Draining an accepted speech request retains voice priority even if its
             // original turn is aborted; the worker still consumes compute.
-            let _voice = (this.mode != "vad").then(|| sail_common::resources::global().voice_turn());
+            let _voice = (this.mode != "vad").then(|| this.scheduler.voice_turn());
             let mut slot = this.worker.lock().await;
             let started=Instant::now();
             if this.mode!="vad"{debug!(engine=this.mode,queue_wait_ms=queued.elapsed().as_millis(),"Acquired speech worker; sending request");}
@@ -59,7 +61,7 @@ impl WorkerClient {
                 let script =
                     std::env::var("SAIL_VOICE_WORKER").unwrap_or("scripts/voice/worker.py".into());
                 info!(engine=this.mode,%python,%script,"Starting persistent offline speech worker");
-                let lease = sail_common::resources::global().try_admit(
+                let lease = this.scheduler.try_admit(
                     sail_common::resources::ResourceClaim {
                         kind: sail_protocol::resources::WorkKind::Speech,
                         priority: sail_protocol::resources::WorkPriority::Voice,
@@ -167,10 +169,15 @@ impl Default for VoiceModelServices {
 }
 impl VoiceModelServices {
     pub fn new() -> Self {
+        Self::with_scheduler(sail_common::resources::global())
+    }
+    /// Inject a shared admission broker, e.g. with a deterministic host probe in tests.
+    /// Production defaults to Core's process-shared scheduler.
+    pub fn with_scheduler(scheduler: Arc<sail_common::resources::ResourceScheduler>) -> Self {
         Self {
-            vad: WorkerClient::new("vad"),
-            stt: WorkerClient::new("stt"),
-            tts: WorkerClient::new("tts"),
+            vad: WorkerClient::new("vad", scheduler.clone()),
+            stt: WorkerClient::new("stt", scheduler.clone()),
+            tts: WorkerClient::new("tts", scheduler),
             inference: None,
         }
     }
@@ -239,7 +246,10 @@ impl VoiceModelServices {
             .request(json!({"pcm":encode_pcm(samples),"partial":partial,"threads":threads}))
             .await?;
         info!(elapsed_ms=started.elapsed().as_millis(),partial,language=?result["language"],words=result["tokens"].as_array().map_or(0,Vec::len),"Whisper transcription completed");
-        debug!(transcript=?result["text"],"Recognized speech hypothesis");
+        debug!(
+            transcript_chars = result["text"].as_str().map_or(0, str::len),
+            "Recognized speech hypothesis"
+        );
         Ok(result)
     }
     pub async fn synthesize(

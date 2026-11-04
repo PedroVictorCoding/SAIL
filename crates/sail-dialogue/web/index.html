@@ -665,6 +665,17 @@
           </div>
         </div>
 
+        <div class="vscode-setting-item" id="liveContextSetting" data-search-terms="live conversation context listen privacy">
+          <div class="vscode-setting-info">
+            <label for="liveContextBtn" class="vscode-setting-name">Listen without replying</label>
+            <p id="liveContextDescription" class="vscode-setting-desc">With everyone’s consent, enable this and start the microphone. SAIL keeps up to 10 minutes of recent speech as temporary context; type a question to use it. Speakers stay unknown. No voiceprints or automatic actions. Disabling, muting, resetting or disconnecting clears this context.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <button class="quiet-button" id="liveContextBtn" type="button" aria-pressed="false" aria-describedby="liveContextDescription" disabled>Enable listening context</button>
+            <span id="liveContextStatus" role="status" aria-live="polite">Listening context off</span>
+          </div>
+        </div>
+
         <div class="vscode-setting-item" data-search-terms="microphone mic mute audio input record hardware">
           <div class="vscode-setting-info">
             <label class="vscode-setting-name">Microphone State</label>
