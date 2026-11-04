@@ -47,7 +47,7 @@ function showError(error) {
 function normalizeToolName(name) { return String(name || '').replaceAll('_', ':'); }
 function toolCard(tool) {
   const name = normalizeToolName(tool);
-  if (name.startsWith('vision:')) return document.getElementById('canvasCard');
+  if (name.startsWith('vision:') || name === 'visual:snapshot') return document.getElementById('canvasCard');
   if (name === 'os:status') return document.getElementById('systemCard');
   if (name.startsWith('proc:') || name.startsWith('fs:') || name.startsWith('github:')) return document.getElementById('toolsCard');
   if (name.startsWith('forge:')) return document.getElementById('forgeCard');
@@ -73,6 +73,7 @@ function syncActivityPill() {
     'fs:read':'Reading workspace file',
     'fs:write':'Writing workspace file',
     'vision:frame':'Analyzing image',
+    'visual:snapshot':'Looking',
     'forge:enqueue':'Dispatching Forge task',
     'forge:status':'Checking Forge job',
     'forge:list':'Listing Forge tasks',
@@ -110,8 +111,8 @@ function connectWs() {
     let data;
     try { data = JSON.parse(event.data); } catch { showError('Invalid server message'); return; }
     switch (data.type) {
-      case 'capture_required':
-        setCaptureHeld(false); turnInProgress = false; stopPlayback(); requestVisualCapture(data); break;
+      case 'snapshot_request':
+        requestVisualCapture(data); break;
       case 'session':
         learningSession = data.session_id; learningEnabled = data.learning === true; renderLearning();
         cancelVisualCapture();
