@@ -136,7 +136,12 @@ impl GemmaRunner {
         let service = self.service().map_err(legacy)?;
         let messages = messages
             .into_iter()
-            .map(serde_json::from_value)
+            .map(|mut m| {
+                if let Some(obj) = m.as_object_mut() {
+                    obj.remove("finish_reason");
+                }
+                serde_json::from_value(m)
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let tools = serde_json::from_value(tools)?;
         let mut request = InferenceRequest {
