@@ -75,15 +75,82 @@ function injectFactoryStyles() {
 function renderFactory() {
   const canvas = document.getElementById('factoryCanvas'); if (!canvas) return;
   const ctx = canvas.getContext('2d'); canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight;
-  const grid = FACTORY.gridSize; ctx.fillStyle = FACTORY.floorColor; ctx.fillRect(0,0,canvas.width,canvas.height);
-  ctx.fillStyle = FACTORY.gridDotColor; for(let x=0;x<canvas.width;x+=grid)for(let y=0;y<canvas.height;y+=grid)ctx.fillRect(x,y,1,1);
-  ctx.strokeStyle = FACTORY.lineColor; ctx.lineWidth=3; FACTORY.pipeRegistry.forEach(p=>{ctx.beginPath();ctx.moveTo(p.from.x*grid*2,p.from.y*grid*2);ctx.lineTo(p.to.x*grid*2,p.to.y*grid*2);ctx.stroke();});
-  FACTORY.machineRegistry.forEach(m=>{const x=m.x*grid*2,y=m.y*grid*2,w=m.w*grid*2,h=m.h*grid*2;
-    ctx.fillStyle='#22262A'; ctx.strokeStyle=m===FACTORY.selectedMachine?FACTORY.accent:FACTORY.lineColor; ctx.lineWidth=m===FACTORY.selectedMachine?2:1;
-    ctx.fillRect(x,y,w,h); ctx.strokeRect(x,y,w,h);
-    for(let i=0;i<4;i++){ctx.fillStyle=i<3?FACTORY.accent:'#333';ctx.fillRect(x+4,y+8+i*8,8,6);}
-    ctx.fillStyle=FACTORY.textColor; ctx.font='10px monospace'; ctx.fillText(m.name,x+12,y+h-8);
+  const grid = FACTORY.gridSize * 2; ctx.fillStyle = FACTORY.floorColor; ctx.fillRect(0,0,canvas.width,canvas.height);
+  // Draw dotted grid
+  ctx.fillStyle = FACTORY.gridDotColor; for(let x=0;x<canvas.width;x+=FACTORY.gridSize)for(let y=0;y<canvas.height;y+=FACTORY.gridSize)ctx.fillRect(x,y,1,1);
+  // Draw pipe network
+  ctx.strokeStyle = FACTORY.lineColor; ctx.lineWidth=3; ctx.lineCap='round';
+  FACTORY.pipeRegistry.forEach(p=>{ctx.beginPath();ctx.moveTo(p.from.x*grid,p.from.y*grid);ctx.lineTo(p.to.x*grid,p.to.y*grid);ctx.stroke();});
+  // Draw 3D isometric machines
+  FACTORY.machineRegistry.forEach(m=>{
+    const x=m.x*grid, y=m.y*grid, w=m.w*grid, h=m.h*grid;
+    const selected = m === FACTORY.selectedMachine;
+    // Machine base
+    ctx.fillStyle='#22262A'; ctx.fillRect(x,y,w,h);
+    // Selected orange outline
+    ctx.strokeStyle = selected ? FACTORY.accent : FACTORY.lineColor;
+    ctx.lineWidth = selected ? 2 : 1; ctx.strokeRect(x,y,w,h);
+    // Vertical status indicator bars
+    for(let i=0;i<4;i++){
+      ctx.fillStyle = i<3 ? FACTORY.accent : '#333';
+      ctx.fillRect(x + 6, y + 10 + i*9, 10, 7);
+    }
+    // Machine label uppercase condensed
+    ctx.fillStyle = FACTORY.textColor; ctx.font = '11px "Consolas", monospace'; ctx.textAlign='left';
+    ctx.fillText(m.name, x + 22, y + h - 10);
+    // Floating anchored spec card when selected
+    if (selected) {
+      ctx.fillStyle = 'rgba(45, 48, 52, 0.95)';
+      ctx.fillRect(x + w + 12, y, 220, 80);
+      ctx.strokeStyle = FACTORY.accent; ctx.lineWidth = 1;
+      ctx.strokeRect(x + w + 12, y, 220, 80);
+      ctx.fillStyle = FACTORY.accent; ctx.font = 'bold 12px monospace';
+      ctx.fillText(`MACHINE #${FACTORY.machineRegistry.indexOf(m)+1}`, x + w + 20, y + 22);
+      ctx.fillStyle = FACTORY.textColor; ctx.font = '11px monospace';
+      ctx.fillText(`${m.metric}: 84%`, x + w + 20, y + 45);
+      ctx.fillText(`Temp: ${42 + Math.floor(Math.random()*80)}°C`, x + w + 20, y + 62);
+    }
   });
 }
 
-if (typeof module !== 'undefined') module.exports = {initFactory};
+// Canvas click/hover handler
+function initCanvasEvents() {
+  const canvas = document.getElementById('factoryCanvas'); if (!canvas) return;
+  const grid = FACTORY.gridSize * 2;
+  canvas.onclick = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    FACTORY.selectedMachine = null;
+    for (const m of FACTORY.machineRegistry) {
+      const mx = m.x*grid, my = m.y*grid, mw = m.w*grid, mh = m.h*grid;
+      if (x >= mx && x <= mx+mw && y >= my && y <= my+mh) {
+        FACTORY.selectedMachine = m; break;
+      }
+    }
+    renderFactory();
+  };
+  // Re-render every 500ms for live status
+  setInterval(renderFactory, 500);
+}
+
+// Add canvas event init to initFactory
+const origInit = initFactory; initFactory = () => { origInit(); setTimeout(initCanvasEvents, 100); };
+
+// Wire factory to global navigation
+window.sailShowFactory = () => {
+  closeSheet?.();
+  initFactory();
+  location.hash = '#factory';
+};
+
+// Add factory to spaces list
+if (typeof spaces !== 'undefined') {
+  spaces.unshift({
+    id:'factory', name:'FACTORY FLOOR', subtitle:'Isometric room-as-index view', available:true,
+    action:() => window.sailShowFactory()
+  });
+  // Re-render spaces if already initialized
+  if (typeof renderSpaces === 'function') renderSpaces();
+}
+
+if (typeof module !== 'undefined') module.exports = {initFactory, FACTORY};
