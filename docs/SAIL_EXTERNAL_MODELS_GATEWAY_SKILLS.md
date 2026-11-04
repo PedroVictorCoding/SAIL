@@ -1,6 +1,6 @@
 # External models, messaging gateway, skills and scheduling
 
-**Status:** decided design, not yet implemented · **Decided:** 2026-11-03 by the owner ·
+**Status:** partial P1 implementation; P2–P5 remain planned · **Decided:** 2026-11-03 by the owner ·
 **Vision:** [decisions 12–15](SAIL_MASTER_VISION.md#decisions-requiring-explicit-migration-rather-than-assumptions) ·
 **Reference:** [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT) and the
 [Agent Skills specification](https://agentskills.io/specification)
@@ -11,6 +11,17 @@ work. It keeps what makes SAIL different: local-first operation, authority enfor
 Guardian at the OS/adapter boundary, memory that is validated knowledge rather than
 stored transcripts, and receipts instead of claims. Each borrowed feature is placed in
 the subsystem that owns it; none becomes a separate service or tab.
+
+### Implementation status
+
+The first P1 slice adds an explicitly constructed, text-only API backend, a Bridge
+OpenAI-compatible connector, Guardian egress preparation and exact-request approval,
+and a durable quota/receipt ledger. An interactive owner-terminal example exercises
+the path. It is **not registered in the daemon**, and does not yet implement automatic
+Forge escalation, subscription CLI adapters, provider ordering, or shareable Arena
+context. Those remain P1 work; no later phase is implied complete.
+
+See [external provider implementation and demo](SAIL_EXTERNAL_PROVIDERS.md).
 
 ## 1. Owner decisions
 

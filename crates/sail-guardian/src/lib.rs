@@ -5,6 +5,7 @@ pub mod broker;
 pub mod capability;
 pub mod confined;
 pub mod credentials;
+pub mod egress;
 pub mod memory;
 pub mod policy;
 pub mod runtime;

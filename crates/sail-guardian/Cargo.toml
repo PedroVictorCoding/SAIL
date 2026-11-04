@@ -21,3 +21,4 @@ ring.workspace = true
 libc = "0.2"
 zeroize = { version = "1.8", features = ["derive", "zeroize_derive", "serde"] }
 nono.workspace = true
+regex = "1"

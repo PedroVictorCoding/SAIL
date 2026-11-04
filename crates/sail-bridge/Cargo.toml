@@ -16,6 +16,8 @@ tracing.workspace = true
 uuid.workspace = true
 
 sail-agents.workspace = true
+sail-mind.workspace = true
+reqwest.workspace = true
 sail-protocol.workspace = true
 sail-guardian.workspace = true
 tokio-util.workspace = true
