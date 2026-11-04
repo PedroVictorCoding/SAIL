@@ -51,23 +51,37 @@ impl SpeechTextGate {
     }
 }
 
+/// Words required before the first spoken segment may be committed. Kept small so audio
+/// starts after the first short sentence instead of waiting for a long run of text.
+pub const DEFAULT_FIRST_SEGMENT_MIN_WORDS: usize = 4;
+/// Steady-state word minimum per segment once playback is under way. Later segments are
+/// synthesized while earlier ones play, so they can be longer (fewer render seams, better
+/// prosody) without adding latency.
 pub const DEFAULT_MIN_WORDS_PER_SEGMENT: usize = 20;
 
+/// Splits streamed model text into speakable segments at prosodic boundaries.
+///
+/// The per-segment word minimum ramps up: the first segment needs only
+/// `first_min_words`, and each following segment doubles that until `min_words`.
+/// For example, the defaults give 4, 8, 16, 20, 20, ... words.
+/// That keeps time-to-first-audio low and still avoids stop/start renders between
+/// many short sentences.
 #[derive(Debug, Clone)]
 pub struct SpeechChunker {
     pending: String,
+    first_min_words: usize,
     min_words: usize,
+    emitted: usize,
+}
+fn env_words(name: &str) -> Option<usize> {
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
 }
 impl Default for SpeechChunker {
     fn default() -> Self {
-        let min_words = std::env::var("SAIL_VOICE_MIN_WORDS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_MIN_WORDS_PER_SEGMENT);
-        Self {
-            pending: String::new(),
-            min_words,
-        }
+        let min_words = env_words("SAIL_VOICE_MIN_WORDS").unwrap_or(DEFAULT_MIN_WORDS_PER_SEGMENT);
+        let first_min_words =
+            env_words("SAIL_VOICE_FIRST_MIN_WORDS").unwrap_or(DEFAULT_FIRST_SEGMENT_MIN_WORDS);
+        Self::with_ramp(first_min_words, min_words)
     }
 }
 impl SpeechChunker {
@@ -75,13 +89,21 @@ impl SpeechChunker {
     pub fn new() -> Self {
         Self::default()
     }
+    /// A flat minimum for every segment (0 disables the minimum).
     #[allow(dead_code)]
     pub fn with_min_words(min_words: usize) -> Self {
+        Self::with_ramp(min_words, min_words)
+    }
+    /// Start at `first_min_words` and double per segment up to `min_words`.
+    pub fn with_ramp(first_min_words: usize, min_words: usize) -> Self {
         Self {
             pending: String::new(),
+            first_min_words: first_min_words.min(min_words),
             min_words,
+            emitted: 0,
         }
     }
+    /// The steady-state (maximum) word minimum.
     #[allow(dead_code)]
     pub fn min_words(&self) -> usize {
         self.min_words
@@ -89,6 +111,16 @@ impl SpeechChunker {
     #[allow(dead_code)]
     pub fn set_min_words(&mut self, min_words: usize) {
         self.min_words = min_words;
+        self.first_min_words = self.first_min_words.min(min_words);
+    }
+    /// Word minimum that applies to the next committed segment.
+    pub fn current_min_words(&self) -> usize {
+        let shift = self.emitted.min(usize::BITS as usize - 1) as u32;
+        self.first_min_words
+            .checked_shl(shift)
+            .filter(|n| n >> shift == self.first_min_words)
+            .unwrap_or(usize::MAX)
+            .min(self.min_words)
     }
     pub fn push(&mut self, text: &str) -> Vec<String> {
         self.pending.push_str(text);
@@ -99,14 +131,17 @@ impl SpeechChunker {
     }
     pub fn discard_pending(&mut self) {
         self.pending.clear();
+        // Speech after an interruption starts from silence again, so ramp from the start.
+        self.emitted = 0;
     }
     fn drain(&mut self, finished: bool) -> Vec<String> {
         let mut result = Vec::new();
-        while let Some(end) = boundary(&self.pending, finished, self.min_words) {
+        while let Some(end) = boundary(&self.pending, finished, self.current_min_words()) {
             let chunk = self.pending.drain(..end).collect::<String>();
             let chunk = chunk.trim().replace(['`', '*', '#'], "");
             if !chunk.trim().is_empty() {
                 result.push(chunk);
+                self.emitted += 1;
             }
         }
         if finished {
@@ -193,11 +228,12 @@ fn boundary(text: &str, finished: bool, min_words: usize) -> Option<usize> {
             }
         }
 
-        // Segment at sentence boundaries when the accumulated text exceeds min_words (e.g. >20 words).
-        // This avoids starting and stopping audio renders between short sentences.
-        if !finished && min_words > 0 {
+        // A segment needs at least `min_words` words so audio does not start and stop
+        // between very short sentences. On finish, a shorter remainder is flushed whole
+        // as the tail rather than split per sentence.
+        if min_words > 0 {
             let word_count = text[..end].split_whitespace().count();
-            if word_count <= min_words {
+            if word_count < min_words {
                 continue;
             }
         }
@@ -296,20 +332,44 @@ mod tests {
         );
     }
     #[test]
-    fn segmenting_by_sentences_requires_more_than_twenty_words_while_streaming() {
-        let mut c = SpeechChunker::default();
+    fn first_segment_starts_early_and_later_segments_grow() {
+        let mut c = SpeechChunker::with_ramp(4, 20);
         assert_eq!(c.min_words(), 20);
-        // Short sentences under 20 words must not trigger independent renders while streaming.
-        assert!(c.push("First short sentence. ").is_empty());
-        assert!(c.push("Second short sentence. ").is_empty());
-        // Once accumulated text across sentence boundaries exceeds 20 words, it emits in one render.
-        let addition = "Now we stream an additional sentence with enough extra words to push the total word count over twenty words for synthesis.";
-        let chunks = c.push(addition);
-        assert_eq!(chunks.len(), 1);
-        assert!(chunks[0].starts_with("First short sentence. Second short sentence."));
-        assert!(chunks[0].ends_with("for synthesis."));
-        // Final tail under 20 words flushes cleanly on finish.
-        c.push("Remaining short tail.");
-        assert_eq!(c.finish(), vec!["Remaining short tail."]);
+        assert_eq!(c.current_min_words(), 4);
+        // A one-word opener waits for enough words, then audio starts promptly.
+        assert!(c.push("Sure. ").is_empty());
+        assert_eq!(
+            c.push("Let me check that. "),
+            vec!["Sure. Let me check that."]
+        );
+        // The second segment needs 8 words: a 5-word sentence is held back.
+        assert_eq!(c.current_min_words(), 8);
+        assert!(c.push("The disk is mostly full. ").is_empty());
+        assert_eq!(
+            c.push("Cargo builds use most of it. "),
+            vec!["The disk is mostly full. Cargo builds use most of it."]
+        );
+        assert_eq!(c.current_min_words(), 16);
+        c.push("Two. ");
+        c.push("Three. ");
+        assert_eq!(c.current_min_words(), 16);
+        // A short tail always flushes when the turn finishes.
+        assert_eq!(c.finish(), vec!["Two. Three."]);
+    }
+    #[test]
+    fn ramp_caps_at_the_steady_state_minimum_and_resets_on_interruption() {
+        let mut c = SpeechChunker::with_ramp(4, 20);
+        let sentence = "One two three four five six seven eight nine ten eleven twelve. ";
+        for _ in 0..12 {
+            c.push(sentence);
+        }
+        assert_eq!(c.current_min_words(), 20);
+        c.discard_pending();
+        assert_eq!(c.current_min_words(), 4);
+        // A flat minimum keeps the old behaviour; 0 disables the minimum entirely.
+        assert_eq!(SpeechChunker::with_min_words(20).current_min_words(), 20);
+        assert_eq!(SpeechChunker::with_min_words(0).current_min_words(), 0);
+        // An oversized first minimum is clamped to the steady-state minimum.
+        assert_eq!(SpeechChunker::with_ramp(50, 10).current_min_words(), 10);
     }
 }
