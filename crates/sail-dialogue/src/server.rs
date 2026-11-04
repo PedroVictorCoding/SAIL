@@ -80,7 +80,7 @@ pub async fn run_dialogue_server(
         addr,
         bus,
         VoiceModelServices::new(),
-        Arc::new(sail_arena::ArenaSubsystem::new()),
+        Arc::new(sail_arena::ArenaSubsystem::open_default()),
     )
     .await
 }
@@ -2683,12 +2683,18 @@ mod tests {
         }
     }
 
+    fn test_guardian() -> &'static sail_guardian::GuardianSubsystem {
+        static GUARDIAN: std::sync::OnceLock<sail_guardian::GuardianSubsystem> =
+            std::sync::OnceLock::new();
+        GUARDIAN.get_or_init(sail_guardian::GuardianSubsystem::new)
+    }
+
     // The conversational route must reach the measurement tool through Guardian, return the
     // receipt and hand the model a chart it can show. A tool that only exists in a unit test
     // is not a delivered capability.
     #[tokio::test]
     async fn studio_audio_tool_returns_a_measured_receipt_through_the_guarded_route() {
-        let _guardian = sail_guardian::GuardianSubsystem::new();
+        let _guardian = test_guardian();
         let dir = std::env::temp_dir().join(format!("sail-studio-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let wav = dir.join("tone.wav");
@@ -2944,7 +2950,7 @@ mod tests {
     }
 
     async fn exercise(prompt: &str, replies: Vec<Value>) -> (Vec<Value>, Vec<Value>, String) {
-        let _guardian = sail_guardian::GuardianSubsystem::new();
+        let _guardian = test_guardian();
         // Explicit trusted fixture grant; production has no implicit process access.
         for limit in 1..=3 {
             _guardian.policy().grant_scoped(

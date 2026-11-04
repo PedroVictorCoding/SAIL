@@ -74,7 +74,7 @@ impl DialogueSubsystem {
                     .expect("Invalid SAIL_VOICE_BIND"),
             ),
             services: sail_mind::VoiceModelServices::new(),
-            arena: Arc::new(sail_arena::ArenaSubsystem::new()),
+            arena: Arc::new(sail_arena::ArenaSubsystem::open_default()),
             plans: None,
             pulse: None,
         }
