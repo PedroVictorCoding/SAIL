@@ -1481,7 +1481,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 24);
+        assert_eq!(tools.len(), 25);
 
         let names: Vec<_> = tools
             .iter()
