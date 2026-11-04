@@ -1,11 +1,13 @@
-# SAIL Campus Learning — Adaptive Learning Experience and UI Specification
+# SAIL Arena Learn — Adaptive Learning Experience and UI Specification
 
-**Status:** Proposed; upstream-based architectural design, not implemented. **Owner:** Life/Campus with Arena, Agents, Mind, Canvas and Dialogue. **UI target:** Dioxus Web + Android. **Reference:** https://github.com/amosblomqvist/learnharness (AGPL-3.0; TypeScript/Next.js/Electron).
-**Links:** [Life](SAIL_LIFE.md), [Arena](SAIL_ARENA.md), [Canvas](SAIL_CANVAS.md), [Dialogue](SAIL_DIALOGUE.md), [Mind](SAIL_MIND.md), [Guardian](SAIL_GUARDIAN.md).
+**Status:** Proposed; implementation tracked in [#215](https://github.com/PedroVictorCoding/SAIL/issues/215). **Owner:** Arena (main product), with Agents, Mind, Canvas and Dialogue. **UI target:** the existing web UI in `crates/sail-dialogue/web` now, Dioxus Web + Android later (#38). **Reference:** https://github.com/amosblomqvist/learnharness (AGPL-3.0; TypeScript/Next.js/Electron).
+**Links:** [Arena](SAIL_ARENA.md), [Cognitive memory](SAIL_COGNITIVE_MEMORY.md), [Life](SAIL_LIFE.md), [Canvas](SAIL_CANVAS.md), [Dialogue](SAIL_DIALOGUE.md), [Mind](SAIL_MIND.md), [Guardian](SAIL_GUARDIAN.md).
 
 ## 1. Purpose and upstream verification
 
-Build a **SAIL Campus learning experience** inspired by LearnHarness's UI/pedagogical workflow, not a new top-level SAIL subsystem or a wholesale TypeScript/Electron port.
+Build **Arena Learn**, Arena's main product: a full Rust, clean-room reimplementation of LearnHarness's learning loop and UI workflow. It is not a wholesale TypeScript/Electron port, and no upstream source, prompts or assets are copied.
+
+> **Migration note (November 2026).** This spec was previously *SAIL Campus Learning*, owned by Life/Campus as a secondary feature. The owner decided that the learning experience is Arena's main product. Arena's knowledge store (claims, evidence, retrieval, correct/forget) is the substrate it builds on. Life keeps course logistics (#75–#77); "Campus" no longer names the learning product.
 
 Verified from upstream README and current architecture/teaching documentation (2026-11-02):
 - LearnHarness assesses (probe), plans a dependency path, teaches in small reasoning steps with comprehension checks and repairs, and runs separate practice sessions with varied transfer problems.
@@ -18,9 +20,11 @@ Source-derived learning theory is **not established scientific consensus**. In p
 
 ## 2. Architecture and boundary ownership
 
-Campus belongs within **Life** and is presented as an existing Campus Space; no new 22nd subsystem. The reusable mechanisms are:
+**Code layout.** `crates/sail-arena-learn` holds the domain core (events, plan, questions; no IO), the SQLite session store and the agent turn runner. It is a separate crate so that `sail-arena`, which Flow, Dialogue and Core depend on, gains no model dependency. The learning graph is stored in `sail-arena` under `learning:*` scopes, read and written with Guardian's `MemoryPurpose::Learn` grant. HTTP routes are `/api/learn/*` in `sail-dialogue`.
 
-- **Campus (Life):** courses, learning goals, study sessions, prerequisites, diagnostic coverage, learning plans, practice orchestration and assessment scheduling.
+Arena Learn belongs to **Arena** and is the first view of Arena's existing page; no new subsystem or top-level navigation entry. The reusable mechanisms are:
+
+- **Arena Learn:** learning goals, study sessions, prerequisites, diagnostic coverage, learning plans, practice orchestration and assessment scheduling.
 - **Arena:** evidence-attributed propositions, prerequisite and inference edges, retrieval of prior learning and user-controlled revision/deletion. Graph stores knowledge representations and their provenance; avoid unsupported “mastery scores”.
 - **Mind:** local model role routing (prober, planner/teacher, evaluator/practitioner); use small model where adequate, Qwen for harder reasoning. Never require hosted inference.
 - **Agents/Flow:** bounded source retrieval, task orchestration and background jobs; typed tools and durable Continuity lifecycle.
@@ -28,16 +32,16 @@ Campus belongs within **Life** and is presented as an existing Campus Space; no 
 - **Dialogue:** PT-PT/English narration, dictation and optional voice-first checks with barge-in.
 - **Guardian/Bridge:** authorize imported material and optional web lookup; never secretly upload source files or transcripts.
 - **Pulse:** voluntary spaced practice scheduling and quiet-hour-aware reminders.
-- **Studio:** user-editable notes/workbooks; Campus can reference Studio files but never silently change them.
+- **Studio:** user-editable notes/workbooks; Arena Learn can reference Studio files but never silently change them.
 
 ## 3. UI strategy — one learning workspace, multiple modes
 
-**Entry:** Spaces → Campus → Learning, or “Teach me X” from existing SAIL chat. Preserve existing SAIL shell, Orb, conversational right panel and dark minimal layout. No separate global navigation entry named LearnHarness.
+**Entry:** Arena → Learn (the Arena page's default view), or “Teach me X” from existing SAIL chat. Preserve existing SAIL shell, Orb, conversational right panel and dark minimal layout. No separate global navigation entry named LearnHarness.
 
 ### Desktop shell (conceptual)
 
 ```text
-┌──────── SAIL · Campus / Topic ────────────────────────────────────┐
+┌──────── SAIL · Arena / Learn    ────────────────────────────────────┐
 │ Goal: Understand TCP congestion control    Assess Learn Practice │
 ├─────────────────────────┬───────────────────────┬────────────────┤
 │ LEARNING MAP            │ LESSON / EXPLANATION  │ SAIL CONTEXT   │
@@ -138,7 +142,7 @@ Illustrative only: reuse existing Core IDs/bus and persist event origin, orderin
 ## 7. Release milestones and verification
 
 ### L1 — Minimal UI vertical slice (P1)
-- Spaces → Campus launches a learning session from a topic.
+- Arena → Learn launches a learning session from a topic.
 - Real local model asks 2–4 meaningful diagnostic questions, stores answers and reasoning.
 - Present a compact dependency map (at least 3 concepts) and one lesson step with a dedicated question dock.
 - Persist and reconnect; accept answer exactly once; pause and resume.

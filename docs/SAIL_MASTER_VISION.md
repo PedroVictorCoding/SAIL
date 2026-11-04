@@ -66,7 +66,7 @@ A browser/Android client is a projection of authoritative server state. Closing 
 
 **Development:** “Continue SAIL development.” SAIL retrieves approved work priorities, assesses what is blocked, proposes or selects a scoped Forge issue, reserves compute, builds in isolated worktree, runs actual tests, requests user approval for external effects and shows diff/review. A model-unavailable fallback must be blocked, **not** a comment-only patch that claims to fix the issue.
 
-**Learning:** “Teach me NAT traversal for my exam.” Campus inside Life finds course context and prerequisites, probes understanding, maps dependencies, teaches one step at a time, presents a dedicated answer/reasoning dock, supports deliberate retrieval practice and updates Arena's knowledge graph. It should not be merely a tutor prompt.
+**Learning:** “Teach me NAT traversal for my exam.” Arena Learn, Arena's main product, finds course context and prerequisites, probes understanding, maps dependencies, teaches one step at a time, presents a dedicated answer/reasoning dock, supports deliberate retrieval practice and updates Arena's knowledge graph. It should not be merely a tutor prompt.
 
 **Documents:** “Shorten this paragraph.” Studio identifies an actual open document and selection, requests scoped edit authority, applies a typed real edit, shows changed text, persists the native file and can undo. Canvas, by contrast, may show a transient visual explanation.
 
@@ -78,7 +78,7 @@ A browser/Android client is a projection of authoritative server state. Closing 
 
 ## 2. System boundaries and ownership
 
-The roadmap [#15](https://github.com/PedroVictorCoding/SAIL/issues/15) originally specified 20 product subsystems in six domains; Health [#104](https://github.com/PedroVictorCoding/SAIL/issues/104) extends product intent to 21 subsystems/seven domains. **Core is shared foundation outside the product subsystem count.** Studio, Campus, Skillsmith and the browser worker are experiences/cross-cutting capabilities unless formally promoted through a roadmap decision. Domain groupings are *not* process boundaries.
+The roadmap [#15](https://github.com/PedroVictorCoding/SAIL/issues/15) originally specified 20 product subsystems in six domains; Health [#104](https://github.com/PedroVictorCoding/SAIL/issues/104) extends product intent to 21 subsystems/seven domains. **Core is shared foundation outside the product subsystem count.** Studio, Skillsmith and the browser worker are experiences/cross-cutting capabilities unless formally promoted through a roadmap decision. Domain groupings are *not* process boundaries.
 
 ### 2.1 Intelligence and Knowledge
 
@@ -103,7 +103,7 @@ The roadmap [#15](https://github.com/PedroVictorCoding/SAIL/issues/15) originall
 
 ### 2.4 Personal and Social
 
-- **Life #16:** user goals, calendar and time constraints, plans, academic Campus, project/group context, possessions and choices.
+- **Life #16:** user goals, calendar and time constraints, plans, course logistics, project/group context, possessions and choices.
 - **Pulse #11:** reminders, routines, recurring schedules, notification timing, snooze and quiet hours; distinct from Discovery's suggestion selection.
 - **Friends #20:** consented context about people and relationships, privacy-specific permissioning and social continuity; not a separate generic memory database.
 - **Entertainment #17:** music, video, reading and media continuation; discovery, Audio DNA, release tracking, approved playback adapters and optional mood-based “Moment Discovery” inspired by Taranify *as a product reference, not as open-source code*. Avoid pretending a color quiz is a validated psychological test.
@@ -126,7 +126,7 @@ Core owns daemon lifecycle, versioned typed protocols, event bus, structured per
 ### 2.8 Cross-cutting experiences
 
 - **Studio:** real editable projects/documents using verified native/browser editor adapters, typed commands, save/undo, CAS revision checks. ArtCraft ecosystem candidates require verified SDK/browser/format/licensing feasibility.
-- **Campus:** adaptive learning UI within Life, using Arena graph and Mind/Agents; diagnostic probe → dependency plan → teach/check → separate transfer practice. LearnHarness is an architectural/pedagogical reference, not copied code.
+- **Arena Learn:** Arena's main product, an adaptive learning experience built on the Arena graph and Mind/Agents; diagnostic probe → dependency plan → teach/check → separate transfer practice. LearnHarness is an architectural/pedagogical reference, not copied code.
 - **Skills and Skillsmith:** Skills registry is callable permissions/contracts; Skillsmith is bounded Flow-based skill proposal and approval. Skills should be testable, versioned, reproducible and revocable.
 - **Continuity:** server-owned task execution that survives UI and daemon lifecycle events. It is distinct from Relay and Flow's user-defined automation graph.
 - **Headless browser runtime:** Bridge/Guardian worker available to Forge, research, Discovery and user-directed actions; not its own unrestricted system root.
@@ -273,15 +273,15 @@ Forge builds or modifies **software**. Skillsmith constructs **versioned, typed 
 
 This difference determines state ownership and prevents coding agents from building a fake editor out of chat-generated HTML without file round-trips or undo.
 
-## 10. Campus and adaptive learning
+## 10. Arena Learn and adaptive learning
 
-Campus is **inside Life**, not an extra backend subsystem. LearnHarness supplies a pedagogical/UI reference: probe prerequisites → visible plan DAG → incremental explanation/check/repair → independent recall and transfer practice → knowledge graph. A compact lesson map and dedicated reasoning/question dock should remain available without long scrollback. Learner reasoning and self-reported confidence are signals, not proof of mastery. Arena stores source-linked propositions and demonstrated evidence, not psychological or academic ability ratings. User can import course material with permission. Reference: [Campus spec](SAIL_CAMPUS_LEARNING.md).
+Arena Learn is **Arena's main product** (decided November 2026; previously "Campus" inside Life). It is a clean-room Rust reimplementation, not copied code. LearnHarness supplies a pedagogical/UI reference: probe prerequisites → visible plan DAG → incremental explanation/check/repair → independent recall and transfer practice → knowledge graph. A compact lesson map and dedicated reasoning/question dock should remain available without long scrollback. Learner reasoning and self-reported confidence are signals, not proof of mastery. Arena stores source-linked propositions and demonstrated evidence, not psychological or academic ability ratings. User can import course material with permission. Reference: [Arena Learn spec](SAIL_ARENA_LEARN.md).
 
 ## 11. Entertainment and other personal experiences
 
 Entertainment unifies approved playback, media discovery, reading state, release tracking and optional audio similarity. “Moment Discovery” may offer a short, playful color-preference/mood-direction exercise using **Taranify as a public product reference**. The color method is not a validated mental-health assessment and source code is not confirmed reusable. Cross-service media catalog/playback requires actual Bridge adapters and user permissions.
 
-Life manages commitments, campus, routine constraints, practical scheduling and personal workspace; Pulse times reminders; Friends manages opt-in people context; Health has stricter private scopes. These must never be bundled into Forge's coding context as a default.
+Life manages commitments, course logistics, routine constraints, practical scheduling and personal workspace; Pulse times reminders; Friends manages opt-in people context; Health has stricter private scopes. These must never be bundled into Forge's coding context as a default.
 
 ## 12. Discovery, proactive research and continuity
 
@@ -327,7 +327,7 @@ Avoid:
 
 Prefer:
 - one large work area with contextual assistant and action surfaces;
-- contextual views (Forge issue/diff, Studio editor, Campus reasoning dock, Canvas transient chart, browser live view);
+- contextual views (Forge issue/diff, Studio editor, Arena Learn question dock, Canvas transient chart, browser live view);
 - staged complexity with collapsible expert tools;
 - durable per-task state restoration and cross-device handoff;
 - accessibility through keyboard, screen reader, meaningful statuses and touch.
@@ -412,7 +412,7 @@ Right: open a real editable file, use typed selection-based operation, enforce r
 - [Subsystem specification index](README.md): full product ownership and per-feature contracts.
 - [Roadmap #15](https://github.com/PedroVictorCoding/SAIL/issues/15): taxonomy and cross-cutting issues; note later Health addition.
 - [Core](SAIL_CORE.md), [Mind](SAIL_MIND.md), [Arena](SAIL_ARENA.md), [Agents](SAIL_AGENTS.md), [Guardian](SAIL_GUARDIAN.md), [Bridge](SAIL_BRIDGE.md), [Forge](SAIL_FORGE.md), [Discovery](SAIL_DISCOVERY.md), [Dialogue](SAIL_DIALOGUE.md).
-- [Studio](SAIL_STUDIO.md), [Campus](SAIL_CAMPUS_LEARNING.md), [Craft Anything for Forge](SAIL_FORGE_CRAFT_ANYTHING.md), [Entertainment](SAIL_ENTERTAINMENT.md).
+- [Studio](SAIL_STUDIO.md), [Arena Learn](SAIL_ARENA_LEARN.md), [Craft Anything for Forge](SAIL_FORGE_CRAFT_ANYTHING.md), [Entertainment](SAIL_ENTERTAINMENT.md).
 - [Repository README](../README.md): describes portions of the current executable system, including supervised Python speech workers and earlier ten-subsystem runtime; not a complete description of the 21-subsystem target.
 - [DESIGN.md](../DESIGN.md): concrete UI design requirements.
 - [AGENTS.md](../AGENTS.md): mandatory branch/PR workflow; must be followed even for docs.
@@ -471,7 +471,7 @@ A first-time user launches SAIL on Web/Android, grants only narrow permissions, 
 | Browser | Navigated real allowed page; returned observation screenshot/structured state; closed isolated session; policy enforced |
 | Studio | Native document changed, saved, reloaded, and undo verified |
 | Studio Audio | Validated audio file → objective AudioReceipt (LUFS, True Peak, BPM, EQ) → grounded strategist review + Canvas visual receipt |
-| Campus | Probe answer persisted, relevant plan graph projected, lesson check resolved, independent practice scored |
+| Arena Learn | Probe answer persisted, relevant plan graph projected, lesson check resolved, independent practice scored |
 | Discovery | Sourced useful suggestion delivered once, snooze retained, no quiet-hours notification |
 | Flow | Authorized DAG nodes execute with receipts; restart resumes without replaying committed side effects |
 | Model routing | Correct local model selected with real memory/latency metrics and available fallback |
@@ -484,7 +484,7 @@ These outside projects may inform SAIL designs or, after review, be adapted into
 | Resource | Possible use in SAIL | Owner | Status | License / reuse notes |
 |---|---|---|---|---|
 | [nottelabs/notte](https://github.com/nottelabs/notte) | Observe-act-extract browser automation ideas for the headless browser worker (§7.2) | Bridge, authorized by Guardian | Architecture reference only | SSPL-1.0; Python-first SDK with a Node SDK. Do not add as a dependency or copy code. Build browser control as Rust-owned CDP orchestration. |
-| [LearnHarness](https://learnharness.ai) ([source](https://github.com/amosblomqvist/learnharness)) | Teaching workflow (probe → plan → teach/check → practice) and UI reference for Campus (§10) | Life/Campus | Pedagogical/UI reference | AGPL-3.0 source repo; TypeScript/Next.js/Electron. Do not port it as a whole. Audit assets and AGPL obligations before any reuse. See [Campus spec](SAIL_CAMPUS_LEARNING.md). |
+| [LearnHarness](https://learnharness.ai) ([source](https://github.com/amosblomqvist/learnharness)) | Teaching workflow (probe → plan → teach/check → practice) and UI reference for Arena Learn (§10) | Arena | Pedagogical/UI reference | AGPL-3.0 source repo; TypeScript/Next.js/Electron. Reimplement clean-room in Rust; do not copy code. Audit assets and AGPL obligations before any reuse. See [Arena Learn spec](SAIL_ARENA_LEARN.md). |
 | [muftiarfan/noop](https://github.com/muftiarfan/noop) | Offline WHOOP strap pairing and on-device storage, related to Health ingestion (#105) | Health (Android ingest via Bridge) | Candidate to evaluate | No license file found as of 2026-11-02 (README: "as-is" for personal/educational use). Treat as all rights reserved: study the behavior only, no code reuse unless a license is granted. Swift/macOS app plus a Kotlin Android app; unofficial and not affiliated with WHOOP. |
 | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | Reference for the messaging gateway and pairing, skills, cron-style scheduling and memory hygiene ([design](SAIL_EXTERNAL_MODELS_GATEWAY_SKILLS.md)) | Relay, Flow/Skillsmith, Pulse, Arena | Architecture reference; skill format adopted via the open spec | MIT. Python. Compatibility is through the Agent Skills format, not a code dependency. |
 | [mahseema/awesome-ai-tools](https://github.com/mahseema/awesome-ai-tools) | List for finding candidate tools; not a component | No single owner (whichever subsystem picks a tool) | Discovery list | MIT applies to the list itself. Each listed tool has its own license and maturity and must be evaluated separately. |
