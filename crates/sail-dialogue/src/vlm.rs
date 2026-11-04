@@ -1336,7 +1336,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 19);
+        assert_eq!(tools.len(), 23);
 
         let names: Vec<_> = tools
             .iter()
@@ -1362,6 +1362,9 @@ mod schema_selection_tests {
         assert!(names.contains(&"forge_clear"));
         assert!(names.contains(&"memory_recall"));
         assert!(names.contains(&"memory_search"));
+        for pulse in ["pulse_create", "pulse_list", "pulse_cancel", "pulse_snooze"] {
+            assert!(names.contains(&pulse), "{pulse}");
+        }
     }
 
     #[test]
