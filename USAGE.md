@@ -167,6 +167,19 @@ Plans continue after a restart. If SAIL stopped while a step that changes someth
 running, the card says it needs your attention: check whether the change happened, then
 choose **It did not happen: retry** or **Cancel plan**.
 
+## Watch your world on the Tracker board
+
+Choose **Tracker** in the side rail (or open `/tracker`) for a live situation room: one dense board that updates in place.
+
+- **Anomalies** lists what is deviating from its own baseline right now, strongest first. Select one to jump to its panel. A market move is compared with that symbol's usual daily move, weather with the same hour over the past week, and air traffic and news volume with the same time on earlier days. Those last two baselines need a few days of use before they report anything.
+- **Tape**, **Markets** and **Numbers** show prices, currency rates and the figures you pin with ☆, as changes rather than plain levels.
+- **News** merges headlines from your feeds and topic searches. One story carried by several outlets appears once, with a count of the other sources. Filter by topic or type to search.
+- **Odds**, **Conditions**, **Routes & traffic**, **Hazards**, **Clock** and **Map** cover prediction markets, weather and air quality, road corridors and aircraft overhead, earthquakes, local times with your countdowns, and a map of your places.
+
+Choose **Watchlists** to set your places, routes, tickers, news topics and feeds, prediction markets, currencies and countdowns. Choose **Edit layout** (or press `E`) to move, resize or hide panels. Your changes are saved on this SAIL host.
+
+All sources are free and need no account or key. SAIL fetches them only while a board is open, and keeps the history it uses for baselines in its local data directory. Road times are free-flow estimates; live road delays would need a traffic provider key, which the Tracker does not use yet. Quotes and other figures are unofficial and may be delayed.
+
 ## Hear the reply before all the text is finished
 
 SAIL starts synthesizing the first complete sentence while Gemma generates the rest. Longer sentences can be committed at a natural clause boundary. Punctuation, questions, quoted endings, common abbreviations and decimal numbers are kept together so speech is not cut at arbitrary model-token boundaries. Kokoro keeps the selected voice and speed, and short pauses preserve the cadence between sentences and clauses.

@@ -72,6 +72,24 @@ fn learn_routes(
     }
 }
 
+/// SAIL Tracker's owner API. The tracker is unavailable (and logged) if its store cannot be
+/// opened; the rest of Dialogue still starts. Its refresh loop only fetches while a board
+/// is open or was used recently.
+fn tracker_routes(
+    authority: Option<sail_guardian::authority::ApprovalAuthority>,
+) -> Option<Router> {
+    match sail_tracker::Tracker::open_default() {
+        Ok(tracker) => {
+            tracker.start();
+            Some(crate::tracker_http::router(tracker, authority))
+        }
+        Err(error) => {
+            warn!(%error, "Tracker store unavailable; tracker disabled");
+            None
+        }
+    }
+}
+
 pub async fn run_dialogue_server(
     addr: SocketAddr,
     bus: EventBus,
@@ -114,6 +132,7 @@ pub async fn run_dialogue_server_with_plans(
     let live_context_authority = authority();
     let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
     let learn_routes = learn_routes(&inference, authority());
+    let tracker_routes = tracker_routes(authority());
     let plan_routes = plans
         .clone()
         .map(|plans| crate::plans::router(plans, authority()));
@@ -136,6 +155,7 @@ pub async fn run_dialogue_server_with_plans(
             "/",
             get(|| async { Html(include_str!("../web/index.html")) }),
         )
+        .merge(crate::tracker_http::pages())
         .route(
             "/card-modal.js",
             get(|| async {
@@ -355,6 +375,9 @@ pub async fn run_dialogue_server_with_plans(
     }
     if let Some(routes) = learn_routes {
         app = app.nest_service("/api/learn", routes);
+    }
+    if let Some(routes) = tracker_routes {
+        app = app.nest_service("/api/tracker", routes);
     }
     let app = app.layer(axum::middleware::map_response(cross_origin_isolation));
     match (

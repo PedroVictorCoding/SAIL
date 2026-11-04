@@ -2498,6 +2498,7 @@ dependencies = [
  "sail-protocol",
  "sail-pulse",
  "sail-runner",
+ "sail-tracker",
  "serde",
  "serde_json",
  "tokio",
@@ -2646,6 +2647,25 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+]
+
+[[package]]
+name = "sail-tracker"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "futures-util",
+ "reqwest",
+ "roxmltree",
+ "rusqlite",
+ "sail-common",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
