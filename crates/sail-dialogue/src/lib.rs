@@ -1,7 +1,9 @@
 pub mod approval_http;
-pub mod conversation_controller;
 pub mod connection_controller;
 pub mod control;
+pub mod conversation_controller;
+#[cfg(test)]
+mod conversation_controller_tests;
 mod execution;
 pub mod learn_http;
 pub mod live_context;

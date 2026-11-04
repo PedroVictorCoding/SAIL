@@ -112,6 +112,8 @@ mod tests {
         let event = rx.recv().await.unwrap();
         assert_eq!(event["reason"], "new_input");
 
+        // A stop with no active response sends nothing, so start another turn first.
+        let (_turn, _gen, _) = controller.start_turn().await;
         controller.stop(StopReason::ModelFailure).await;
         let event = rx.recv().await.unwrap();
         assert_eq!(event["reason"], "model_failure");

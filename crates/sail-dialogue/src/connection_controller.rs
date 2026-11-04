@@ -1,13 +1,10 @@
 //! Connection-level integration wrapper for the ConversationController.
-//! 
+//!
 //! Wraps the existing connection state, providing turn and generation
 //! tracking, unified stop handling, and stale event rejection.
 
-use crate::conversation_controller::{
-    ConversationController, Generation, StopReason, TurnId,
-};
+use crate::conversation_controller::{ConversationController, Generation, StopReason};
 use serde_json::Value;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -23,7 +20,10 @@ impl ConnectionController {
     pub async fn new(outbound_tx: mpsc::Sender<Value>) -> Self {
         let controller = ConversationController::new();
         controller.set_outbound_channel(outbound_tx.clone()).await;
-        Self { controller, outbound_tx }
+        Self {
+            controller,
+            outbound_tx,
+        }
     }
 
     /// Start a new conversation turn, invalidating all previous responses.
@@ -64,13 +64,16 @@ impl ConnectionController {
     pub async fn handle_reconnect(&self) {
         self.controller.set_session_reconnecting().await;
         let metadata = self.controller.recovery_metadata().await;
-        let _ = self.outbound_tx.send(serde_json::json!({
-            "type": "session_reconnected",
-            "channel": "dialogue:controller",
-            "latest_turn": metadata.latest_turn.0,
-            "latest_generation": metadata.latest_generation.0,
-            "active_tools": metadata.active_tools,
-        })).await;
+        let _ = self
+            .outbound_tx
+            .send(serde_json::json!({
+                "type": "session_reconnected",
+                "channel": "dialogue:controller",
+                "latest_turn": metadata.latest_turn.0,
+                "latest_generation": metadata.latest_generation.0,
+                "active_tools": metadata.active_tools,
+            }))
+            .await;
         self.controller.set_session_connected().await;
     }
 

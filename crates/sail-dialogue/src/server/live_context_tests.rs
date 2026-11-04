@@ -39,6 +39,7 @@ async fn live_local_audio_smoke() {
         inference: sail_mind::MindService::from_env().unwrap(),
         live_context_authority: None,
         plans: None,
+        pulse: None,
     });
     let context = Arc::new(std::sync::Mutex::new(
         crate::live_context::LiveContext::default(),
@@ -134,6 +135,7 @@ for line in sys.stdin:
         arena: arena.clone(),
         inference: sail_mind::MindService::from_env().unwrap(),
         plans: None,
+        pulse: None,
         live_context_authority: None,
     });
     let context = Arc::new(std::sync::Mutex::new(
@@ -243,6 +245,7 @@ for line in sys.stdin:
         arena: arena.clone(),
         inference,
         plans: None,
+        pulse: None,
         live_context_authority: Some(
             sail_guardian::authority::ApprovalAuthority::new(token).unwrap(),
         ),
