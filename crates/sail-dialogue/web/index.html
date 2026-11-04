@@ -329,8 +329,8 @@
             <div class="card-heading-actions">
               <span class="card-live-badge" id="terminalLiveBadge" title="Terminal WebSocket status"><i class="live-dot"></i>Connecting…</span>
               <button class="card-action" id="terminalRestartBtn" type="button" aria-label="Restart terminal" title="Restart shell">↺</button>
-              <button class="card-action" id="terminalClearBtn" type="button" aria-label="Clear screen" title="Clear terminal (Ctrl+L)">⌫</button>
-              <button class="card-action" id="terminalMaximizeBtn" type="button" aria-label="Expand terminal" title="Toggle Fullscreen (Esc to exit)">⤢</button>
+              <button class="card-action" id="terminalClearBtn" type="button" aria-label="Clear screen" title="Clear scrollback">⌫</button>
+              <button class="card-action" id="terminalMaximizeBtn" type="button" aria-label="Expand terminal" title="Toggle fullscreen">⤢</button>
             </div>
           </header>
           <div class="card-tab-panel active" id="terminalPanel">
@@ -341,13 +341,7 @@
               <button type="button" class="quick-cmd-btn" data-cmd="cargo test">cargo test</button>
               <button type="button" class="quick-cmd-btn" data-cmd="clear">clear</button>
             </div>
-            <div class="terminal-container" id="terminalContainer" tabindex="0" role="region" aria-label="Interactive Terminal Output">
-              <div class="terminal-output" id="terminalOutput" aria-live="polite"></div>
-              <div class="terminal-input-row">
-                <span class="terminal-prompt-symbol" id="terminalPromptSymbol">sail$</span>
-                <input type="text" class="terminal-input" id="terminalInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Terminal command input" placeholder="Type a shell command…">
-              </div>
-            </div>
+            <div class="terminal-container" id="terminalContainer" role="region" aria-label="Interactive terminal"></div>
             <p class="card-footnote">Interactive PTY shell running in host workspace. Supports Tab completion, ANSI colors, and Ctrl+C.</p>
           </div>
         </article>
@@ -832,6 +826,9 @@
 <script src="/subsystem-pages.js" defer></script>
 <script src="/memory.js" defer></script>
 <script src="/ui.js" defer></script>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<script src="/vendor/xterm.js" defer></script>
+<script src="/vendor/addon-fit.js" defer></script>
 <script src="/terminal.js" defer></script>
 </body>
 </html>

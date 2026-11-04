@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI32, Ordering},
     },
 };
 use tokio::sync::mpsc;
@@ -31,8 +31,9 @@ pub enum TerminalServerMessage {
 #[derive(Clone)]
 pub struct TerminalSession {
     #[cfg(unix)]
-    master_fd: i32,
+    master_fd: Option<Arc<std::os::fd::OwnedFd>>,
     child_id: u32,
+    exit_code: Arc<AtomicI32>,
     stdin_tx: mpsc::Sender<Vec<u8>>,
     alive: Arc<AtomicBool>,
     shell_name: String,
@@ -94,7 +95,15 @@ impl TerminalSession {
             return Self::spawn_piped(shell, cwd, cwd_str);
         }
 
+        let master = unsafe { std::os::fd::OwnedFd::from_raw_fd(master) };
         let slave_file = unsafe { std::fs::File::from_raw_fd(slave) };
+        // openpty does not set close-on-exec; the shell must not inherit the master.
+        use std::os::fd::AsRawFd;
+        if unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } == -1 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let master_writer = std::fs::File::from(master.try_clone().map_err(|e| e.to_string())?);
+        let master_reader = std::fs::File::from(master.try_clone().map_err(|e| e.to_string())?);
         let slave_in = slave_file.try_clone().map_err(|e| e.to_string())?;
         let slave_out = slave_file.try_clone().map_err(|e| e.to_string())?;
         let slave_err = slave_file;
@@ -105,13 +114,13 @@ impl TerminalSession {
             .stdout(slave_out)
             .stderr(slave_err)
             .env("TERM", "xterm-256color")
-            .env("COLORTERM", "truecolor")
-            .env("LANG", "en_US.UTF-8");
+            .env("COLORTERM", "truecolor");
 
         unsafe {
             cmd.pre_exec(|| {
-                libc::setsid();
-                libc::ioctl(0, libc::TIOCSCTTY as _, 1);
+                if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 Ok(())
             });
         }
@@ -124,12 +133,12 @@ impl TerminalSession {
         let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(128);
         let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(128);
         let alive = Arc::new(AtomicBool::new(true));
+        let exit_code = Arc::new(AtomicI32::new(i32::MIN));
 
         // Background writer thread
-        let master_writer_fd = unsafe { libc::dup(master) };
         let alive_writer = alive.clone();
         std::thread::spawn(move || {
-            let mut writer = unsafe { std::fs::File::from_raw_fd(master_writer_fd) };
+            let mut writer = master_writer;
             while let Some(data) = stdin_rx.blocking_recv() {
                 if !alive_writer.load(Ordering::SeqCst) {
                     break;
@@ -142,15 +151,10 @@ impl TerminalSession {
         });
 
         // Background reader thread
-        let master_reader_fd = unsafe { libc::dup(master) };
-        let alive_reader = alive.clone();
         std::thread::spawn(move || {
-            let mut reader = unsafe { std::fs::File::from_raw_fd(master_reader_fd) };
+            let mut reader = master_reader;
             let mut buf = [0u8; 4096];
             loop {
-                if !alive_reader.load(Ordering::SeqCst) {
-                    break;
-                }
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -162,21 +166,24 @@ impl TerminalSession {
                     Err(_) => break,
                 }
             }
-            alive_reader.store(false, Ordering::SeqCst);
         });
 
         // Monitor child exit
         let alive_monitor = alive.clone();
+        let status_monitor = exit_code.clone();
         std::thread::spawn(move || {
             let mut child = child;
-            let _ = child.wait();
+            if let Ok(status) = child.wait() {
+                status_monitor.store(status.code().unwrap_or(-1), Ordering::SeqCst);
+            }
             alive_monitor.store(false, Ordering::SeqCst);
         });
 
         Ok((
             Self {
-                master_fd: master,
+                master_fd: Some(Arc::new(master)),
                 child_id,
+                exit_code,
                 stdin_tx,
                 alive,
                 shell_name: shell.to_string(),
@@ -200,8 +207,7 @@ impl TerminalSession {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("TERM", "xterm-256color")
-            .env("COLORTERM", "truecolor")
-            .env("LANG", "en_US.UTF-8");
+            .env("COLORTERM", "truecolor");
 
         let mut child = cmd
             .spawn()
@@ -214,6 +220,7 @@ impl TerminalSession {
         let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(128);
         let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(128);
         let alive = Arc::new(AtomicBool::new(true));
+        let exit_code = Arc::new(AtomicI32::new(i32::MIN));
 
         let alive_writer = alive.clone();
         std::thread::spawn(move || {
@@ -229,13 +236,9 @@ impl TerminalSession {
         });
 
         let output_tx_err = output_tx.clone();
-        let alive_stdout = alive.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
-                if !alive_stdout.load(Ordering::SeqCst) {
-                    break;
-                }
                 match stdout.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -247,16 +250,11 @@ impl TerminalSession {
                     Err(_) => break,
                 }
             }
-            alive_stdout.store(false, Ordering::SeqCst);
         });
 
-        let alive_stderr = alive.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
-                if !alive_stderr.load(Ordering::SeqCst) {
-                    break;
-                }
                 match stderr.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -271,16 +269,20 @@ impl TerminalSession {
         });
 
         let alive_monitor = alive.clone();
+        let status_monitor = exit_code.clone();
         std::thread::spawn(move || {
-            let _ = child.wait();
+            if let Ok(status) = child.wait() {
+                status_monitor.store(status.code().unwrap_or(-1), Ordering::SeqCst);
+            }
             alive_monitor.store(false, Ordering::SeqCst);
         });
 
         Ok((
             Self {
                 #[cfg(unix)]
-                master_fd: -1,
+                master_fd: None,
                 child_id,
+                exit_code,
                 stdin_tx,
                 alive,
                 shell_name: shell.to_string(),
@@ -292,7 +294,14 @@ impl TerminalSession {
 
     pub fn resize(&self, cols: u16, rows: u16) {
         #[cfg(unix)]
-        if self.master_fd >= 0 {
+        {
+            use std::os::fd::AsRawFd;
+            let Some(master) = &self.master_fd else {
+                return;
+            };
+            if cols == 0 || rows == 0 {
+                return;
+            }
             let ws = libc::winsize {
                 ws_row: rows,
                 ws_col: cols,
@@ -300,7 +309,7 @@ impl TerminalSession {
                 ws_ypixel: 0,
             };
             unsafe {
-                libc::ioctl(self.master_fd, libc::TIOCSWINSZ as _, &ws);
+                libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ as _, &ws);
             }
         }
     }
@@ -317,9 +326,20 @@ impl TerminalSession {
     }
 
     pub fn kill(&self) {
-        self.alive.store(false, Ordering::SeqCst);
+        if !self.alive.swap(false, Ordering::SeqCst) {
+            return;
+        }
         #[cfg(unix)]
         unsafe {
+            // Hang up the terminal session and its foreground application.
+            if let Some(master) = &self.master_fd {
+                use std::os::fd::AsRawFd;
+                let foreground = libc::tcgetpgrp(master.as_raw_fd());
+                if foreground > 0 {
+                    libc::kill(-foreground, libc::SIGHUP);
+                }
+                libc::kill(-(self.child_id as libc::pid_t), libc::SIGHUP);
+            }
             libc::kill(self.child_id as libc::pid_t, libc::SIGTERM);
         }
     }
@@ -346,6 +366,7 @@ pub async fn handle_terminal_socket(socket: WebSocket, initial_cwd: Option<PathB
     })
     .unwrap_or_default();
     if ws_sender.send(Message::Text(connected)).await.is_err() {
+        session.kill();
         return;
     }
 
@@ -355,97 +376,69 @@ pub async fn handle_terminal_socket(socket: WebSocket, initial_cwd: Option<PathB
         "In-browser terminal connected"
     );
 
-    let (out_tx, mut out_rx) = mpsc::channel::<Message>(128);
-
-    let writer_task = tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
-            if ws_sender.send(msg).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    let out_tx_clone = out_tx.clone();
-    let mut forwarder_task = tokio::spawn(async move {
-        while let Some(bytes) = output_rx.recv().await {
-            let data = String::from_utf8_lossy(&bytes).to_string();
-            let msg =
-                serde_json::to_string(&TerminalServerMessage::Output { data }).unwrap_or_default();
-            if out_tx_clone.send(Message::Text(msg)).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    while let Some(result) = ws_receiver.next().await {
-        let msg = match result {
-            Ok(m) => m,
-            Err(_) => break,
-        };
-
-        match msg {
-            Message::Text(text) => {
-                if let Ok(client_msg) = serde_json::from_str::<TerminalClientMessage>(&text) {
-                    match client_msg {
-                        TerminalClientMessage::Input { data } => {
-                            let _ = session.write(data.as_bytes()).await;
-                        }
-                        TerminalClientMessage::Resize { cols, rows } => {
-                            session.resize(cols, rows);
-                        }
-                        TerminalClientMessage::Restart => {
-                            session.kill();
-                            forwarder_task.abort();
-                            if let Ok((new_session, mut new_output_rx)) =
-                                TerminalSession::spawn(initial_cwd.clone())
-                            {
-                                session = new_session;
-                                let reconnected =
-                                    serde_json::to_string(&TerminalServerMessage::Connected {
-                                        shell: session.shell_name.clone(),
-                                        cwd: session.cwd.clone(),
-                                    })
-                                    .unwrap_or_default();
-                                let _ = out_tx.send(Message::Text(reconnected)).await;
-
-                                let out_tx_restart = out_tx.clone();
-                                forwarder_task = tokio::spawn(async move {
-                                    while let Some(bytes) = new_output_rx.recv().await {
-                                        let data = String::from_utf8_lossy(&bytes).to_string();
-                                        let msg =
-                                            serde_json::to_string(&TerminalServerMessage::Output {
-                                                data,
-                                            })
-                                            .unwrap_or_default();
-                                        if out_tx_restart.send(Message::Text(msg)).await.is_err() {
-                                            break;
-                                        }
-                                    }
-                                });
-                            }
-                        }
+    loop {
+        tokio::select! {
+            output = output_rx.recv() => {
+                match output {
+                    Some(bytes) => {
+                        // Preserve bytes across arbitrary PTY read boundaries. xterm owns UTF-8 decoding.
+                        if ws_sender.send(Message::Binary(bytes)).await.is_err() { break; }
                     }
-                } else {
-                    let _ = session.write(text.as_bytes()).await;
+                    None => {
+                        // The output channel closes after every reader has drained.
+                        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                            while session.exit_code.load(Ordering::SeqCst) == i32::MIN && session.is_alive() {
+                                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                            }
+                        }).await;
+                        let code = session.exit_code.load(Ordering::SeqCst);
+                        let message = TerminalServerMessage::Exit {
+                            code: (code != i32::MIN).then_some(code),
+                        };
+                        let _ = ws_sender.send(Message::Text(serde_json::to_string(&message).unwrap())).await;
+                        break;
+                    }
                 }
             }
-            Message::Binary(bytes) => {
-                let _ = session.write(&bytes).await;
+            incoming = ws_receiver.next() => {
+                let Some(Ok(message)) = incoming else { break; };
+                match message {
+                    Message::Text(text) => {
+                        match serde_json::from_str::<TerminalClientMessage>(&text) {
+                            Ok(TerminalClientMessage::Input { data }) => {
+                                if session.write(data.as_bytes()).await.is_err() { break; }
+                            }
+                            Ok(TerminalClientMessage::Resize { cols, rows }) => session.resize(cols, rows),
+                            Ok(TerminalClientMessage::Restart) => {
+                                session.kill();
+                                match TerminalSession::spawn(initial_cwd.clone()) {
+                                    Ok((new_session, new_output)) => {
+                                        session = new_session;
+                                        output_rx = new_output;
+                                        let message = TerminalServerMessage::Connected {
+                                            shell: session.shell_name.clone(), cwd: session.cwd.clone(),
+                                        };
+                                        if ws_sender.send(Message::Text(serde_json::to_string(&message).unwrap())).await.is_err() { break; }
+                                    }
+                                    Err(message) => {
+                                        let error = TerminalServerMessage::Error { message };
+                                        let _ = ws_sender.send(Message::Text(serde_json::to_string(&error).unwrap())).await;
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(_) => {} // Malformed protocol messages are never shell commands.
+                        }
+                    }
+                    Message::Binary(bytes) => {
+                        if session.write(&bytes).await.is_err() { break; }
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
             }
-            Message::Close(_) => break,
-            _ => {}
-        }
-
-        if !session.is_alive() {
-            let exit_msg = serde_json::to_string(&TerminalServerMessage::Exit { code: None })
-                .unwrap_or_default();
-            let _ = out_tx.send(Message::Text(exit_msg)).await;
-            break;
         }
     }
-
-    forwarder_task.abort();
-    writer_task.abort();
     session.kill();
     info!("In-browser terminal disconnected");
 }
