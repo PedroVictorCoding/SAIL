@@ -48,6 +48,26 @@ pub struct ServerState {
     inference: sail_mind::MindService,
     plans: Option<Arc<crate::plans::Plans>>,
 }
+/// Arena Learn's owner API over the resident model. Learning is unavailable (and logged)
+/// if its store cannot be opened; the rest of Dialogue still starts.
+fn learn_routes(
+    inference: &sail_mind::MindService,
+    authority: Option<sail_guardian::authority::ApprovalAuthority>,
+) -> Option<Router> {
+    use sail_arena_learn::{Engine, SqliteEventStore, agent::MindModel};
+    let path = SqliteEventStore::default_path();
+    match SqliteEventStore::open(&path) {
+        Ok(store) => {
+            let engine = Engine::new(Arc::new(store), Arc::new(MindModel::new(inference.clone())));
+            Some(crate::learn_http::router(Arc::new(engine), authority))
+        }
+        Err(error) => {
+            warn!(%error, path=%path.display(), "Arena Learn store unavailable; learning disabled");
+            None
+        }
+    }
+}
+
 pub async fn run_dialogue_server(
     addr: SocketAddr,
     bus: EventBus,
@@ -87,6 +107,7 @@ pub async fn run_dialogue_server_with_plans(
             .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok())
     };
     let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
+    let learn_routes = learn_routes(&inference, authority());
     let plan_routes = plans
         .clone()
         .map(|plans| crate::plans::router(plans, authority()));
@@ -157,6 +178,15 @@ pub async fn run_dialogue_server_with_plans(
                 (
                     [("content-type", "text/css; charset=utf-8")],
                     include_str!("../web/tokens.css"),
+                )
+            }),
+        )
+        .route(
+            "/learn.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/learn.js"),
                 )
             }),
         )
@@ -290,6 +320,9 @@ pub async fn run_dialogue_server_with_plans(
         }));
     if let Some(routes) = plan_routes {
         app = app.nest_service("/api/plans", routes);
+    }
+    if let Some(routes) = learn_routes {
+        app = app.nest_service("/api/learn", routes);
     }
     let app = app.layer(axum::middleware::map_response(cross_origin_isolation));
     match (
