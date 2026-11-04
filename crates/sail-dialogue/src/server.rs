@@ -228,6 +228,33 @@ pub async fn run_dialogue_server_with_services(
                 )
             }),
         )
+        .route(
+            "/vendor/xterm.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/vendor/xterm/xterm.js"),
+                )
+            }),
+        )
+        .route(
+            "/vendor/addon-fit.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/vendor/xterm/addon-fit.js"),
+                )
+            }),
+        )
+        .route(
+            "/vendor/xterm.css",
+            get(|| async {
+                (
+                    [("content-type", "text/css; charset=utf-8")],
+                    include_str!("../web/vendor/xterm/xterm.css"),
+                )
+            }),
+        )
         .route("/api/health", get(health))
         .route("/api/mind/status", get(mind_status))
         .route("/ws/voice", get(ws_handler))

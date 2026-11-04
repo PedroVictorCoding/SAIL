@@ -104,3 +104,23 @@ One complete local voice turn with measured STT/first-audio latency, barge-in, n
 - [Roadmap and subsystem taxonomy](https://github.com/PedroVictorCoding/SAIL/issues/15)
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
+
+## In-browser terminal implementation
+
+The existing terminal card uses locally served MIT-licensed xterm.js 5.5.0 and
+FitAddon 0.10.0. The shell owns prompts, echo, editing, history, completion and
+interrupt handling; the browser forwards keystrokes instead of keeping a second
+command buffer. xterm handles cursor positioning, alternate screens, ANSI colors,
+selection, paste and incremental UTF-8 decoding. Clear clears local scrollback
+without injecting a command into a running application.
+
+`/ws/terminal` carries JSON control messages and raw binary PTY output (a change
+from JSON `output` messages; clients must consume binary frames). Exit follows
+drained output and includes the shell's exit code. An intentional exit stays
+closed until Restart; transport reconnection starts a **new** shell and does not
+resume processes. Unix uses a PTY; the existing pipe fallback does not provide
+TTY job control or full interactive-program compatibility. Session restart and
+disconnection hang up the shell and foreground process group.
+
+This improves the existing owner terminal; it does not grant agents shell access
+or implement the broader Guardian-scoped tool execution contract above.
