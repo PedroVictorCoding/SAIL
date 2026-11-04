@@ -141,6 +141,23 @@ For measured image statistics, select an image and ask SAIL to inspect the frame
 
 Type in the message field and click **Send**. This uses the same session, local Gemma inference, speech output and Canvas. Microphone permission is not required. Sending a new message cancels the previous assistant turn.
 
+### Give SAIL a multi-step goal
+
+Start a message or spoken request with **Plan:**, for example:
+
+> Plan: read today's date and write it to notes/today.txt
+
+SAIL drafts the steps with its tools and shows them as a plan card on Canvas instead of
+answering at once. A plan that only reads things starts right away. A plan that changes
+something waits until you choose **Approve plan**; **Edit** lets you change the remaining
+steps first. Guardian may still ask about a step when it runs; approve it on the card.
+Each step's result is checked, a failed step leads to a revised plan (at most three
+times), and **Cancel** stops the plan.
+
+Plans continue after a restart. If SAIL stopped while a step that changes something was
+running, the card says it needs your attention: check whether the change happened, then
+choose **It did not happen: retry** or **Cancel plan**.
+
 ## Hear the reply before all the text is finished
 
 SAIL starts synthesizing the first complete sentence while Gemma generates the rest. Longer sentences can be committed at a natural clause boundary. Punctuation, questions, quoted endings, common abbreviations and decimal numbers are kept together so speech is not cut at arbitrary model-token boundaries. Kokoro keeps the selected voice and speed, and short pauses preserve the cadence between sentences and clauses.

@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         guardian.sandbox(),
     )
     .with_self_reviewer(Arc::new(LocalModelReviewer::new()))
-    .with_continuity(continuity);
+    .with_continuity(continuity.clone());
     if let Some(memory) = sail_forge::failure_memory::FailureMemory::from_env() {
         forge = forge.with_failure_memory(Arc::new(memory));
     }
@@ -138,6 +138,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         flow = flow.with_memory(maintenance);
     }
+    // Agent task plans share the Continuity store and run Dialogue's tools through Guardian.
+    let plans = match sail_dialogue::plans::Plans::with_mind(continuity, model_service.clone()) {
+        Ok(plans) => {
+            dialogue = dialogue.with_plans(plans.clone());
+            Some(plans)
+        }
+        Err(error) => {
+            error!(%error, "Agent task planning unavailable");
+            None
+        }
+    };
     let mut forge = ForgeSubsystem::new(orchestrator.clone());
     let nightly_config = NightlyConfig::from_env();
     if nightly_config.enabled {
@@ -179,6 +190,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     agents.start().await?;
     guardian.start().await?;
     forge.start().await?;
+    // After Forge's start, whose recovery pass marks the previous boot's tasks interrupted.
+    if let Some(plans) = &plans {
+        match plans.resume() {
+            Ok(0) => {}
+            Ok(count) => info!(count, "Resumed agent task plans"),
+            Err(error) => error!(%error, "Could not resume agent task plans"),
+        }
+    }
 
     // Wrap in Arc for event dispatchers
     let mind_arc = Arc::new(mind);

@@ -11,8 +11,8 @@ use crate::tools::{ToolContext, ToolRegistry, ToolScheduler};
 use async_trait::async_trait;
 use sail_common::types::SubsystemId;
 use sail_continuity::{
-    Continuity, ContinuityError, EffectGate, Lease, Outcome, ResumePolicy, TaskFilter, TaskSpec,
-    TaskState,
+    Continuity, ContinuityError, EffectGate, Lease, Outcome, Resolution, ResumePolicy, TaskFilter,
+    TaskSpec, TaskState,
 };
 use sail_protocol::execution::{ToolDescriptor, ToolEffect, ToolObservation};
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,9 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 pub const MAX_STEPS: usize = 32;
+/// How often a background re-plan waits for live voice to go quiet before giving up.
+const MAX_VOICE_WAITS: u32 = 20;
+const VOICE_QUIET: std::time::Duration = std::time::Duration::from_secs(5);
 pub const MAX_REPLANS: u32 = 3;
 pub const OWNER: &str = "sail-agents";
 pub const KIND: &str = "agents.plan";
@@ -47,7 +50,13 @@ impl StepCheck {
         if !observation.success {
             return false;
         }
-        let at = |pointer: &str| observation.data.pointer(pointer).filter(|v| !v.is_null());
+        // Tools whose output schema is a string may return JSON text; check inside it.
+        let parsed = observation
+            .data
+            .as_str()
+            .and_then(|text| serde_json::from_str::<Value>(text).ok());
+        let data = parsed.as_ref().unwrap_or(&observation.data);
+        let at = |pointer: &str| data.pointer(pointer).filter(|v| !v.is_null());
         match self {
             Self::ToolSucceeded => true,
             Self::Exists { pointer } => at(pointer).is_some(),
@@ -186,11 +195,33 @@ impl Plan {
 }
 
 /// A plan and the durable task's own state (which may say it needs the owner's attention).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PlanView {
     pub plan: Plan,
     pub task_state: TaskState,
     pub task_reason: Option<String>,
+}
+
+impl PlanView {
+    /// A plan ended by the store rather than by its runner (cancelled by the owner while
+    /// the daemon was down, or while it needed attention) shows the store's final state.
+    fn new(mut plan: Plan, task: &sail_continuity::Task) -> Self {
+        if !matches!(
+            plan.state,
+            PlanState::Succeeded | PlanState::Failed | PlanState::Cancelled
+        ) {
+            match task.state {
+                TaskState::Cancelled => plan.state = PlanState::Cancelled,
+                TaskState::Failed => plan.state = PlanState::Failed,
+                _ => {}
+            }
+        }
+        Self {
+            plan,
+            task_state: task.state,
+            task_reason: task.reason.clone(),
+        }
+    }
 }
 
 /// Check a draft against the registry. `done` are steps already completed (on a re-plan);
@@ -356,6 +387,9 @@ pub struct PlanRequest {
     pub completed: Vec<Step>,
     pub failure: Option<String>,
     pub validation_errors: Vec<String>,
+    /// The owner is waiting for this draft (a new goal). Re-plans while a plan runs are
+    /// background work.
+    pub interactive: bool,
 }
 impl PlanRequest {
     /// The prompt a language-model planner receives.
@@ -416,7 +450,9 @@ pub trait Planner: Send + Sync {
     async fn plan(&self, request: &PlanRequest) -> Result<String, String>;
 }
 
-/// Plans with the resident local model through Mind, as background work (voice preempts it).
+/// Plans with the resident local model through Mind. A new goal is drafted at interactive
+/// priority, since the owner is waiting; a re-plan is background work that waits while
+/// live voice has priority, so a conversation pauses a plan instead of failing it.
 pub struct MindPlanner {
     mind: sail_mind::MindService,
 }
@@ -431,6 +467,7 @@ impl Planner for MindPlanner {
         "local model".into()
     }
     async fn plan(&self, request: &PlanRequest) -> Result<String, String> {
+        use sail_protocol::resources::WorkPriority;
         use sail_protocol::{Generation, InferenceRequest, Message, Role};
         let mut inference = InferenceRequest::text(request.prompt());
         inference.messages.insert(
@@ -441,14 +478,35 @@ impl Planner for MindPlanner {
             ),
         );
         inference.generation = Generation {
-            max_tokens: 1536,
+            // Mind's output limit; larger requests are rejected outright.
+            max_tokens: sail_protocol::ResourceLimits::default().max_output_tokens,
             temperature: 0.1,
         };
-        let response = self
-            .mind
-            .infer(inference, CancellationToken::new(), None)
-            .await
-            .map_err(|e| e.to_string())?;
+        let priority = if request.interactive {
+            WorkPriority::Interactive
+        } else {
+            WorkPriority::Background
+        };
+        let mut voice_waits = 0;
+        let response = loop {
+            match self
+                .mind
+                .infer_with_priority(inference.clone(), CancellationToken::new(), None, priority)
+                .await
+            {
+                Err(error)
+                    if priority == WorkPriority::Background
+                        && error.message.contains("live voice")
+                        && voice_waits < MAX_VOICE_WAITS =>
+                {
+                    voice_waits += 1;
+                    sail_common::resources::global()
+                        .voice_idle(VOICE_QUIET)
+                        .await;
+                }
+                result => break result.map_err(|e| e.to_string())?,
+            }
+        };
         response
             .message
             .content
@@ -538,6 +596,7 @@ impl PlanRunner {
             goal: goal.into(),
             tools: self.tools(),
             completed: done.to_vec(),
+            interactive: done.is_empty() && failure.is_none(),
             failure,
             validation_errors: Vec::new(),
         };
@@ -614,13 +673,28 @@ impl PlanRunner {
 
     pub fn get(&self, id: &str) -> Result<PlanView, PlanError> {
         let task = self.continuity.get(id)?;
-        let plan = serde_json::from_value(task.checkpoint)
+        let plan = serde_json::from_value(task.checkpoint.clone())
             .map_err(|e| PlanError::Corrupt(e.to_string()))?;
-        Ok(PlanView {
-            plan,
-            task_state: task.state,
-            task_reason: task.reason,
-        })
+        Ok(PlanView::new(plan, &task))
+    }
+
+    /// Recent plans, newest first, finished ones included. Unreadable records are skipped.
+    pub fn list(&self, limit: usize) -> Result<Vec<PlanView>, PlanError> {
+        let tasks = self.continuity.list(&TaskFilter {
+            owner: Some(OWNER.into()),
+            include_terminal: true,
+            limit: Some(limit),
+        })?;
+        Ok(tasks
+            .into_iter()
+            .filter(|task| task.kind == KIND)
+            .filter_map(|task| {
+                Some(PlanView::new(
+                    serde_json::from_value(task.checkpoint.clone()).ok()?,
+                    &task,
+                ))
+            })
+            .collect())
     }
 
     fn lease(&self, id: &str) -> Result<Lease, PlanError> {
@@ -646,11 +720,11 @@ impl PlanRunner {
     /// The owner approves the plan's effectful steps as they stand. Guardian still checks
     /// each step when it runs.
     pub fn approve(&self, id: &str) -> Result<Plan, PlanError> {
-        let lease = self.lease(id)?;
         let mut plan = self.get(id)?.plan;
         if plan.state != PlanState::AwaitingApproval {
             return Err(PlanError::NotAwaitingApproval(id.into()));
         }
+        let lease = self.lease(id)?;
         let approved: Vec<String> = plan
             .steps
             .iter()
@@ -669,11 +743,11 @@ impl PlanRunner {
 
     /// The owner replaces the plan's steps before approving. Validated like a draft.
     pub fn edit(&self, id: &str, draft: &PlanDraft) -> Result<Plan, PlanError> {
-        let lease = self.lease(id)?;
         let mut plan = self.get(id)?.plan;
         if plan.state != PlanState::AwaitingApproval {
             return Err(PlanError::NotAwaitingApproval(id.into()));
         }
+        let lease = self.lease(id)?;
         let done: Vec<Step> = plan
             .steps
             .iter()
@@ -697,6 +771,21 @@ impl PlanRunner {
             token.cancel();
         }
         Ok(())
+    }
+
+    /// The owner's answer for a plan whose step may or may not have happened: `retry` after
+    /// checking that it did not happen (the plan is queued to run again; call [`Self::run`]),
+    /// or cancel the plan.
+    pub fn resolve(&self, id: &str, retry: bool) -> Result<PlanView, PlanError> {
+        let resolution = if retry {
+            Resolution::Retry
+        } else {
+            Resolution::Cancel
+        };
+        self.continuity.resolve(id, resolution)?;
+        // Any lease from before the interruption is no longer valid.
+        self.leases.lock().unwrap().remove(id);
+        self.get(id)
     }
 
     /// Run the plan until it succeeds, fails, is cancelled, or needs the owner (approval of

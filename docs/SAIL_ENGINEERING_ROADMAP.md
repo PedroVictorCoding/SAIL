@@ -21,7 +21,7 @@ What works end to end today (merged and tested), as opposed to specified:
 | Forge | Local solver, sandboxed builds, gates, mutation gate, failure memory, nightly runner, draft PRs, pauses for voice | Issue decomposition (#118), escalation to external models (P1) |
 | Continuity | Durable task records, leases, recovery (Forge only) | General consumers: agent plans, scheduled jobs |
 | Bridge | Chromium CDP worker with site grants | Web research tool (#40) on top of it |
-| **Agents** | **Nothing beyond one-round tool calls in Dialogue** | **Goal → plan → execute → verify → re-plan (A1)** |
+| Agents | Goal → plan → approve → execute → verify → re-plan, durable across restarts; "Plan: …" by voice or text and a plan card ([design](SAIL_AGENT_PLANNING.md)) | Long-lived approvals, planner quality on the local model, chat and scheduled plans |
 | Pulse, Relay, Flow, Skills | Specs; Flow runs one scheduled safety review | Scheduler (P3), gateway (P2), skills (P4) |
 | Studio, Campus, Life, Health, Entertainment, Sense, Mesh, Lab | Specs | Later waves |
 
@@ -51,7 +51,7 @@ flowchart LR
 
 | Item | Why now | Done when |
 | --- | --- | --- |
-| **Review PR #200 (browser host shell) before merging** | It opens an interactive `$SHELL` on the host over `/ws/terminal`, protected by an Origin check. SAIL listens on the LAN. That bypasses Guardian and contradicts the vision's "no unrestricted shell" rule. | Owner authentication on the socket, a Guardian grant, an audit record per session, off by default, loopback-only unless approved; or route through the sandboxed runner |
+| **Owner authentication for the web boundary** | `GET /api/guardian/token` hands the owner token to any client that can reach the web server, so "owner-only" routes (approvals, memory, plans) only stop clients that cannot reach it, and SAIL can listen on the LAN. `/ws/terminal` (the host shell from #200) is gated by an Origin check alone. This contradicts the vision's Guardian-enforced boundary. | The token is never self-service over the network (env-provided or loopback-only bootstrap), `/ws/terminal` requires the owner token plus a Guardian grant and writes an audit record per session; off by default, loopback-only unless approved |
 | Close or narrow stale issues | The backlog should show real work | #42, #95, #96, #117, #185, #186 checked against their acceptance and closed or narrowed; #57 and #61 narrowed to what remains; #52 superseded by the memory design (vision decision 1) |
 | Finish #43's verification on the host | Autonomy grows next; its boundary must be proven | The dedicated runner service is provisioned and passes the threat matrix in [the audit](SECURITY_EXECUTION_AUDIT.md) |
 | Merge or rebase open PRs | #198 and #205 touch `server.rs` and `resources.rs`, which the next waves touch too | No open PR older than this wave |

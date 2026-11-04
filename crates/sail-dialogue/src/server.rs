@@ -46,6 +46,7 @@ pub struct ServerState {
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
     inference: sail_mind::MindService,
+    plans: Option<Arc<crate::plans::Plans>>,
 }
 pub async fn run_dialogue_server(
     addr: SocketAddr,
@@ -65,24 +66,36 @@ pub async fn run_dialogue_server_with_services(
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    run_dialogue_server_with_plans(addr, bus, services, arena, None).await
+}
+pub async fn run_dialogue_server_with_plans(
+    addr: SocketAddr,
+    bus: EventBus,
+    services: VoiceModelServices,
+    arena: Arc<sail_arena::ArenaSubsystem>,
+    plans: Option<Arc<crate::plans::Plans>>,
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inference = match services.inference() {
         Some(service) => service,
         None => sail_mind::MindService::from_env()?,
     };
     let services = services.with_inference(inference.clone());
     let (owner_authority, active_token) = resolve_or_generate_owner_token();
-    let memory_routes = crate::memory_http::router_with_arena(
-        arena.clone(),
+    let authority = || {
         active_token
             .as_deref()
-            .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok()),
-    );
+            .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok())
+    };
+    let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
+    let plan_routes = plans
+        .clone()
+        .map(|plans| crate::plans::router(plans, authority()));
     let approval_routes = crate::approval_http::router_with_token(
         owner_authority,
         sail_guardian::global_broker().ok(),
         active_token,
     );
-    let app = Router::new()
+    let mut app = Router::new()
         .nest_service("/api/guardian", approval_routes)
         .nest_service("/api/memory", memory_routes)
         .nest_service(
@@ -220,6 +233,15 @@ pub async fn run_dialogue_server_with_services(
             }),
         )
         .route(
+            "/plans.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../web/plans.js"),
+                )
+            }),
+        )
+        .route(
             "/terminal.js",
             get(|| async {
                 (
@@ -264,8 +286,12 @@ pub async fn run_dialogue_server_with_services(
             services,
             arena,
             inference,
-        }))
-        .layer(axum::middleware::map_response(cross_origin_isolation));
+            plans,
+        }));
+    if let Some(routes) = plan_routes {
+        app = app.nest_service("/api/plans", routes);
+    }
+    let app = app.layer(axum::middleware::map_response(cross_origin_isolation));
     match (
         std::env::var("SAIL_TLS_CERT"),
         std::env::var("SAIL_TLS_KEY"),
@@ -1315,22 +1341,27 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
         }
         debug!(fragments,"Speech output queue drained");
     }.instrument(speech_span)));
-    let (reply, _assistant, stats) = reason_turn(
-        &vlm,
-        &mut messages,
-        &prompt,
-        visual_frame.as_ref(),
-        &tx,
-        current,
-        &speech_tx,
-        Some(tool_correlation(&session, current)),
-        Some(MemoryScope {
-            arena: &state.arena,
-            session: &session,
-            learning_epoch,
-        }),
-    )
-    .await?;
+    let (reply, _assistant, stats) = match crate::plans::requested_goal(&prompt) {
+        Some(goal) => plan_turn(state.plans.as_ref(), goal, &tx, current, &speech_tx).await,
+        None => {
+            reason_turn(
+                &vlm,
+                &mut messages,
+                &prompt,
+                visual_frame.as_ref(),
+                &tx,
+                current,
+                &speech_tx,
+                Some(tool_correlation(&session, current)),
+                Some(MemoryScope {
+                    arena: &state.arena,
+                    session: &session,
+                    learning_epoch,
+                }),
+            )
+            .await?
+        }
+    };
     emit(
         &tx,
         current,
@@ -1405,6 +1436,37 @@ The authorized filesystem root is {root}; fs paths should be relative to it, wit
     )
     .await;
     Ok(())
+}
+/// A "Plan: …" turn: draft the plan, show it as a plan card, and say briefly what happens
+/// next. The plan itself runs in the background, not in this turn.
+async fn plan_turn(
+    plans: Option<&Arc<crate::plans::Plans>>,
+    goal: &str,
+    tx: &mpsc::Sender<Outbound>,
+    current: u64,
+    speech_tx: &mpsc::Sender<String>,
+) -> (String, Value, GenerationStats) {
+    let start = Instant::now();
+    let reply = match plans {
+        None => "Planning is not available in this session.".to_owned(),
+        Some(plans) => match plans.create(goal).await {
+            Ok(view) => {
+                info!(plan_id=%view.plan.id,steps=view.plan.steps.len(),state=?view.plan.state,"Planned a goal from conversation");
+                emit(tx, current, json!({"type":"plan","plan":view})).await;
+                crate::plans::spoken_summary(&view)
+            }
+            Err(error) => {
+                warn!(%error, "Planning a goal failed");
+                format!("I could not plan that: {error}")
+            }
+        },
+    };
+    let _ = speech_tx.send(reply.clone()).await;
+    let stats = GenerationStats {
+        generation_ms: start.elapsed().as_millis() as u64,
+        ..GenerationStats::default()
+    };
+    (reply, Value::Null, stats)
 }
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GenerationStats {
