@@ -144,7 +144,7 @@ const SailClientSpeech = (() => {
       engine.loading = null;
       const limit = maxRealTimeFactor();
       const stt = measured.sttRtf <= limit, tts = measured.ttsRtf <= limit;
-      const where = speech.device === 'webgpu' ? 'WebGPU' : 'CPU, WebAssembly';
+      const where = speech.device === 'webgpu' ? 'WebGPU listening, CPU voice' : 'CPU, WebAssembly';
       const speed = `measured ${measured.sttRtf.toFixed(2)}× real time to transcribe, ${measured.ttsRtf.toFixed(2)}× to speak`;
       if (!stt && !tts) {
         stop(`This device is too slow for speech (${where}, ${speed}); the SAIL host handles it.`);

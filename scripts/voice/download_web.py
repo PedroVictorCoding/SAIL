@@ -56,8 +56,9 @@ MODELS = [
     hf(WHISPER, 'onnx/decoder_model_merged_q4.onnx', '09f83b71ceedc97dab1d90b914715dc532a646a147abda11d83c64867b7c319c'),
     hf(WHISPER, 'onnx/encoder_model_quantized.onnx', '5862993336bf33acd23736071aae2b32261d3b1b2f37780194460d4ef974dd46'),
     hf(WHISPER, 'onnx/decoder_model_merged_quantized.onnx', 'fa3ef9902734ce5ae6f9ef2bdb2ba9a6c4b5785b09f4f420ce036573dc9d090b'),
-    # Kokoro 82M v1.0: fp32 on WebGPU, q8 on WASM. kokoro-js 1.2.1 speaks English only, so
-    # only the host's English voices; Portuguese and Spanish stay on the host worker.
+    # Kokoro 82M v1.0: q8 on WASM (WebGPU has a vocoder ConvTranspose distortion bug).
+    # kokoro-js 1.2.1 speaks English only, so only the host's English voices;
+    # Portuguese and Spanish stay on the host worker.
     hf(KOKORO, 'config.json', 'df34b4f930b23447cd4dc410fabfb42eb3f24e803e6c3f97d618fb359380a36f'),
     hf(KOKORO, 'tokenizer.json', '77a02c8e164413299b4b4c403b14f8e0e1c1b727db4d46a09d6327b861060a34'),
     hf(KOKORO, 'tokenizer_config.json', 'be1cb066d6ef6b074b3f15e6a6dd21ac88ff3cdaedf325f0aaed686c70f75d20'),
