@@ -43,19 +43,41 @@ Desired capabilities and rollout order:
 
 ### 3.1 Studio Audio — Music Making Strategist & Production Workbench
 
-Studio Audio provides iterative music production analysis and co-producer strategic feedback grounded in empirical audio measurements rather than LLM guesswork (vision §0.2 #2).
+Studio Audio provides iterative music production analysis and co-producer feedback grounded in
+empirical audio measurements rather than LLM guesswork (vision §0.2 #2).
 
-- **Storage & Layout:** Song projects reside under `/srv/sail-data/studio/projects/<song_id>/` (vision decision 10), tracking `project.json` manifests, export revisions (`revisions/v1_rough.wav`, `revisions/v2_master.wav`), and reference tracks (`references/target_track.wav`).
-- **Tool Contract (`studio:audio_analyze`):**
-  - Read-only Bridge tool (`ResourceClass: cpu`, low risk) parsing RIFF/WAVE PCM audio natively without requiring external heavy runtimes.
-  - Generates an objective `AudioReceipt`: duration, sample rate, bit depth, channels, Integrated LUFS (ITU-R BS.1770), True Peak approximation, Loudness Range (LRA), RMS, 6-band frequency energy (sub-bass, bass, low-mids, midrange, high-mids, brilliance), arrangement section segmentation, and tempo/BPM estimation.
-  - Digital clipping detection flags inter-sample ceiling violations (> 0.0 dBTP).
-- **Music Strategist Review:**
-  - Evaluates track against streaming standards (e.g. -14.0 LUFS) or genre targets (e.g. EDM -8.0 LUFS, Hip-Hop -9.0 LUFS).
-  - Inspects arrangement tension: flags low dynamic lift between verses and drops/choruses (< 2.0 dB).
-  - Tonal balance findings: highlights sub-bass mud, 300-400 Hz boxiness, or recessed air bands.
-  - Strategic recommendations: prioritizes 3 concrete, actionable mixing/mastering steps with specific decibel and frequency values.
-- **Canvas Visual Receipt:** Produces Mermaid `xychart-beta` section energy charts embedded in Studio cards for visual arrangement inspection.
+**Delivered (v1, `studio:audio_analyze`)**
+
+- Read-only Bridge tool, registered in the tool registry and reachable from conversation as
+  `studio_audio_analyze`. Guardian authorizes it as a low-risk invocation, and the dialogue
+  executor confines the path to `SAIL_TOOL_ROOT` before reading it.
+- Parses RIFF/WAVE PCM natively (16/24/32-bit integer, 32-bit float); no external runtime.
+- `AudioReceipt` measurements:
+  - Integrated loudness per ITU-R BS.1770-4: both K-weighting stages re-derived for the file's
+    sample rate, 400 ms blocks with 75% overlap, -70 LUFS absolute gate and -10 LU relative gate.
+    A -23.0 dBFS stereo 1 kHz sine measures -23.0 LUFS ±0.1 (EBU Tech 3341 case 1).
+  - Loudness range per EBU Tech 3342 (3 s short-term windows, -20 LU relative gate). `0.0`
+    means the file cannot produce two gated windows; the review says so instead of inventing a
+    range.
+  - True peak is a 4x cubic inter-sample estimate labelled as such, not a standards-compliant
+    oversampled meter. Samples at or above full scale are flagged as clipping.
+  - RMS, six-band frequency energy (sub-bass, bass, low-mids, midrange, high-mids, brilliance),
+    fixed-count arrangement sections with per-section RMS and K-weighted loudness, and a tempo
+    estimate.
+- Music Strategist review: compares the measurement with a streaming (-14 LUFS) or genre target,
+  flags headroom and section-contrast problems, reports tonal-balance findings, and returns
+  prioritized recommendations that cite the measured values behind each one.
+- Canvas: the tool returns a Mermaid `xychart-beta` section-energy chart; the assistant displays
+  it through the existing Canvas artifact path.
+
+**Planned, not implemented**
+
+- Song project layout under `/srv/sail-data/studio/projects/<song_id>/` with `project.json`,
+  export revisions and reference-track comparison. Today the tool analyzes the path it is given;
+  `reference_file_path` is accepted by the contract but not yet used.
+- A Studio workspace surface with revision history and undo; only the tool contract and the
+  conversational route exist.
+- A standards-compliant oversampled true-peak meter and decoding for non-WAV sources.
 
 For every candidate, maintain a compatibility record: source URL, pinned version/commit, license (and redistribution terms), browser build status, supported import/export formats, command API maturity, autosave behavior, platform requirements, performance, and accessibility. **No editor is considered integrated merely because its webpage loads in an iframe.**
 

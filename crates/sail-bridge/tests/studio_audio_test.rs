@@ -2,8 +2,8 @@
 
 use sail_agents::tools::{ToolContext, ToolRegistry, ToolScheduler};
 use sail_bridge::studio_audio::{
-    analyze_audio_file, generate_strategist_review, parse_wav_file, register_studio_audio_tool,
-    TOOL_ID,
+    TOOL_ID, analyze_audio_file, generate_strategist_review, parse_wav_file,
+    register_studio_audio_tool,
 };
 use serde_json::json;
 use std::fs::{self, File};
@@ -104,6 +104,50 @@ fn create_synthetic_wav(
     }
 }
 
+/// Writes a 1 kHz stereo/mono sine whose segments use the given peak levels in dBFS, which
+/// is what EBU Tech 3341 test signals are defined in.
+fn create_tone_wav(path: &Path, sample_rate: u32, channels: u16, segments: &[(f64, f64)]) {
+    let frames: usize = segments
+        .iter()
+        .map(|(seconds, _)| (sample_rate as f64 * seconds) as usize)
+        .sum();
+    let bytes_per_sample = 2u16;
+    let block_align = channels * bytes_per_sample;
+    let data_chunk_size = (frames * block_align as usize) as u32;
+
+    let mut file = File::create(path).expect("failed to create tone file");
+    file.write_all(b"RIFF").unwrap();
+    file.write_all(&(36 + data_chunk_size).to_le_bytes())
+        .unwrap();
+    file.write_all(b"WAVE").unwrap();
+    file.write_all(b"fmt ").unwrap();
+    file.write_all(&16u32.to_le_bytes()).unwrap();
+    file.write_all(&1u16.to_le_bytes()).unwrap();
+    file.write_all(&channels.to_le_bytes()).unwrap();
+    file.write_all(&sample_rate.to_le_bytes()).unwrap();
+    file.write_all(&(sample_rate * block_align as u32).to_le_bytes())
+        .unwrap();
+    file.write_all(&block_align.to_le_bytes()).unwrap();
+    file.write_all(&16u16.to_le_bytes()).unwrap();
+    file.write_all(b"data").unwrap();
+    file.write_all(&data_chunk_size.to_le_bytes()).unwrap();
+
+    let mut frame = 0usize;
+    for (seconds, dbfs) in segments {
+        let amplitude = 10f64.powf(dbfs / 20.0);
+        let count = (sample_rate as f64 * seconds) as usize;
+        for _ in 0..count {
+            let t = frame as f64 / sample_rate as f64;
+            let sample = (amplitude * (2.0 * std::f64::consts::PI * 1000.0 * t).sin()) as f32;
+            let sample_i16 = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+            for _ in 0..channels {
+                file.write_all(&sample_i16.to_le_bytes()).unwrap();
+            }
+            frame += 1;
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_wav_parsing_and_analysis() {
     let temp_dir = TempTestDir::new("sail-audio-test");
@@ -160,7 +204,8 @@ async fn test_clipping_detection_and_headroom_alert() {
 
     let review = generate_strategist_review(&receipt, Some("pop"), None);
     assert!(
-        review.headroom_verdict.contains("CRITICAL") || review.headroom_verdict.contains("clipping"),
+        review.headroom_verdict.contains("CRITICAL")
+            || review.headroom_verdict.contains("clipping"),
         "Must flag critical clipping in review: {}",
         review.headroom_verdict
     );
@@ -199,7 +244,11 @@ async fn test_studio_audio_tool_scheduler_execution() {
     });
 
     let observation = scheduler.execute(context, TOOL_ID, input, None, true).await;
-    assert!(observation.success, "Tool execution must succeed: {:?}", observation.error);
+    assert!(
+        observation.success,
+        "Tool execution must succeed: {:?}",
+        observation.error
+    );
 
     // Verify observation data contains formatted fields and raw receipts
     let data = &observation.data;
@@ -207,7 +256,12 @@ async fn test_studio_audio_tool_scheduler_execution() {
     assert!(data.get("integrated_lufs").is_some());
     assert!(data.get("true_peak_db").is_some());
     assert!(data.get("verdict").is_some());
-    assert!(data["mermaid"].as_str().unwrap().starts_with("xychart-beta"));
+    assert!(
+        data["mermaid"]
+            .as_str()
+            .unwrap()
+            .starts_with("xychart-beta")
+    );
 
     let review_str = data["review_json"].as_str().unwrap();
     let review: serde_json::Value = serde_json::from_str(review_str).unwrap();
@@ -232,7 +286,9 @@ async fn test_negative_cases() {
     let input1 = json!({
         "file_path": "/tmp/definitely_not_a_real_song_12345.wav"
     });
-    let obs1 = scheduler.execute(make_context(), TOOL_ID, input1, None, true).await;
+    let obs1 = scheduler
+        .execute(make_context(), TOOL_ID, input1, None, true)
+        .await;
     assert!(!obs1.success);
     assert!(obs1.error.unwrap().contains("Audio file does not exist"));
 
@@ -244,7 +300,9 @@ async fn test_negative_cases() {
     let input2 = json!({
         "file_path": corrupt_path.to_string_lossy()
     });
-    let obs2 = scheduler.execute(make_context(), TOOL_ID, input2, None, true).await;
+    let obs2 = scheduler
+        .execute(make_context(), TOOL_ID, input2, None, true)
+        .await;
     assert!(!obs2.success);
     assert!(obs2.error.unwrap().contains("Not a valid RIFF/WAVE"));
 
@@ -252,6 +310,60 @@ async fn test_negative_cases() {
     let input3 = json!({
         "genre_hint": "pop"
     });
-    let obs3 = scheduler.execute(make_context(), TOOL_ID, input3, None, true).await;
+    let obs3 = scheduler
+        .execute(make_context(), TOOL_ID, input3, None, true)
+        .await;
     assert!(!obs3.success);
+}
+
+// EBU Tech 3341 case 1: a stereo 1 kHz sine at -23.0 dBFS reads -23.0 LUFS. This fails if
+// the K-weighting stages or the absolute/relative gates are wrong, which a range assertion
+// on synthetic music would not catch.
+#[tokio::test]
+async fn ebu_tech_3341_calibration_sine_reads_its_own_level() {
+    let dir = TempTestDir::new("sail-ebu3341");
+    let path = dir.path().join("minus23.wav");
+    create_tone_wav(&path, 48_000, 2, &[(10.0, -23.0)]);
+
+    let receipt = analyze_audio_file(&path, None).expect("analysis must succeed");
+    assert!(
+        (receipt.integrated_lufs + 23.0).abs() <= 0.1,
+        "-23.0 dBFS stereo 1 kHz sine must read -23.0 LUFS, got {:.2}",
+        receipt.integrated_lufs
+    );
+}
+
+// The relative gate must discard material far below the programme level instead of letting a
+// quiet intro drag the integrated value down.
+#[tokio::test]
+async fn relative_gate_excludes_a_quiet_passage() {
+    let dir = TempTestDir::new("sail-ebu3341-gate");
+    let path = dir.path().join("gated.wav");
+    create_tone_wav(&path, 48_000, 2, &[(5.0, -45.0), (15.0, -23.0)]);
+
+    let receipt = analyze_audio_file(&path, None).expect("analysis must succeed");
+    assert!(
+        (receipt.integrated_lufs + 23.0).abs() <= 0.3,
+        "the gated value must stay at the -23.0 dBFS level, got {:.2}",
+        receipt.integrated_lufs
+    );
+}
+
+// A range needs gated short-term windows; a short clip must report 0.0 and the review must
+// say so instead of inventing a typical dynamic range.
+#[tokio::test]
+async fn a_clip_too_short_for_three_second_windows_reports_no_loudness_range() {
+    let dir = TempTestDir::new("sail-lra-short");
+    let path = dir.path().join("short.wav");
+    create_tone_wav(&path, 48_000, 2, &[(2.0, -20.0)]);
+
+    let receipt = analyze_audio_file(&path, None).expect("analysis must succeed");
+    assert_eq!(receipt.loudness_range_lra, 0.0);
+
+    let review = generate_strategist_review(&receipt, None, None);
+    assert!(
+        review.dynamic_contrast_verdict.contains("not measurable"),
+        "review must not claim a loudness range it could not measure: {}",
+        review.dynamic_contrast_verdict
+    );
 }

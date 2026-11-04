@@ -57,8 +57,14 @@ pub struct AudioReceipt {
     pub sample_rate: u32,
     pub channels: u16,
     pub bits_per_sample: u16,
+    /// Integrated loudness in LUFS: ITU-R BS.1770-4 K-weighting, 400 ms blocks with 75%
+    /// overlap, absolute -70 LUFS gate and relative -10 LU gate.
     pub integrated_lufs: f64,
+    /// Loudness range in LU (EBU Tech 3342). `0.0` means the file has too little gated
+    /// 3 s material to measure it; it is not a default or an estimate.
     pub loudness_range_lra: f64,
+    /// Highest inter-sample peak found by 4x cubic interpolation, in dBTP. An estimate, not
+    /// a standards-compliant oversampled true-peak meter.
     pub true_peak_db: f64,
     pub rms_db: f64,
     pub clipping_detected: bool,
