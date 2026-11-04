@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>SAIL Tracker</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/tracker.css">
+</head>
+<body>
+<a class="tk-skip" href="#tkGrid">Skip to board</a>
+<header class="tk-bar">
+  <a class="tk-button tk-back" href="/" aria-label="Back to SAIL home">← SAIL</a>
+  <h1 class="tk-title"><span class="tk-prompt" aria-hidden="true">&gt;_</span> TRACKER <span class="tk-sub">situation room</span></h1>
+  <p class="tk-barclock" id="tkBarClock" aria-label="Current time"></p>
+  <ul class="tk-health" id="tkHealth" aria-label="Source health"></ul>
+  <p class="tk-live" id="tkLive" role="status" data-state="connecting"><span class="tk-dot" aria-hidden="true"></span><span id="tkLiveText">CONNECTING</span></p>
+  <div class="tk-actions">
+    <button class="tk-button" id="tkRefresh" type="button">Refresh</button>
+    <button class="tk-button" id="tkEdit" type="button" aria-pressed="false">Edit layout</button>
+    <button class="tk-button" id="tkSettingsOpen" type="button">Watchlists</button>
+  </div>
+</header>
+<p class="tk-banner" id="tkBanner" role="alert" hidden></p>
+<div class="tk-tray" id="tkTray" hidden>
+  <span class="tk-tray-label">Hidden panels:</span>
+  <span id="tkTrayItems"></span>
+  <button class="tk-button" id="tkResetLayout" type="button">Reset layout</button>
+  <button class="tk-button tk-primary" id="tkEditDone" type="button">Done</button>
+</div>
+<main class="tk-grid" id="tkGrid" tabindex="-1" aria-label="Tracker board"></main>
+<footer class="tk-foot">
+  <span>Local-first: watchlists and history stay on this SAIL host. Public sources are fetched by SAIL only while a board is open.</span>
+  <span>Unofficial, delayed data. Not advice.</span>
+</footer>
+
+<dialog class="tk-dialog" id="tkSettings" aria-labelledby="tkSettingsTitle">
+  <form method="dialog" class="tk-settings" id="tkSettingsForm" novalidate>
+    <header class="tk-dialog-head">
+      <h2 id="tkSettingsTitle">Watchlists</h2>
+      <p>What the board follows. Changes apply when you save.</p>
+    </header>
+    <div class="tk-settings-body">
+      <section aria-labelledby="tkPlacesH">
+        <h3 id="tkPlacesH">Places</h3>
+        <p class="tk-hint">Weather, clocks, the map and nearby earthquakes use every place. Air traffic covers the first four.</p>
+        <ul class="tk-list" id="tkPlacesList"></ul>
+        <div class="tk-row">
+          <label class="tk-field"><span>Find a place</span><input id="tkPlaceQuery" maxlength="80" autocomplete="off" placeholder="City, town or airport"></label>
+          <button class="tk-button" type="button" id="tkPlaceSearch">Search</button>
+        </div>
+        <ul class="tk-results" id="tkPlaceResults" aria-live="polite"></ul>
+      </section>
+      <section aria-labelledby="tkRoutesH">
+        <h3 id="tkRoutesH">Routes</h3>
+        <p class="tk-hint">Road corridors between two places. Shows free-flow driving time and conditions at both ends.</p>
+        <ul class="tk-list" id="tkRoutesList"></ul>
+        <div class="tk-row">
+          <label class="tk-field"><span>From</span><select id="tkRouteFrom"></select></label>
+          <label class="tk-field"><span>To</span><select id="tkRouteTo"></select></label>
+          <button class="tk-button" type="button" id="tkRouteAdd">Add route</button>
+        </div>
+      </section>
+      <section aria-labelledby="tkTickersH">
+        <h3 id="tkTickersH">Tickers</h3>
+        <p class="tk-hint">Yahoo Finance symbols, for example <code>AAPL</code>, <code>^GSPC</code>, <code>BTC-USD</code>, <code>EURUSD=X</code>, <code>CL=F</code>.</p>
+        <ul class="tk-list" id="tkTickersList"></ul>
+        <div class="tk-row">
+          <label class="tk-field"><span>Symbol</span><input id="tkTickerSymbol" maxlength="20" autocomplete="off" spellcheck="false"></label>
+          <label class="tk-field"><span>Label (optional)</span><input id="tkTickerLabel" maxlength="40"></label>
+          <button class="tk-button" type="button" id="tkTickerAdd">Add</button>
+        </div>
+      </section>
+      <section aria-labelledby="tkNewsH">
+        <h3 id="tkNewsH">News</h3>
+        <p class="tk-hint">Topics are searched across outlets and tracked for unusual coverage. Feeds are any RSS or Atom URL.</p>
+        <ul class="tk-list" id="tkTopicsList"></ul>
+        <div class="tk-row">
+          <label class="tk-field"><span>Topic</span><input id="tkTopicInput" maxlength="80" autocomplete="off"></label>
+          <button class="tk-button" type="button" id="tkTopicAdd">Add topic</button>
+        </div>
+        <ul class="tk-list" id="tkFeedsList"></ul>
+        <div class="tk-row">
+          <label class="tk-field"><span>Feed name</span><input id="tkFeedName" maxlength="60"></label>
+          <label class="tk-field tk-wide"><span>Feed URL</span><input id="tkFeedUrl" type="url" maxlength="500" spellcheck="false"></label>
+          <button class="tk-button" type="button" id="tkFeedAdd">Add feed</button>
+        </div>
+      </section>
+      <section aria-labelledby="tkOddsH">
+        <h3 id="tkOddsH">Prediction markets</h3>
+        <p class="tk-hint">Polymarket market slugs (the last part of a market's address). Leave empty to follow the busiest longer-running markets.</p>
+        <ul class="tk-list" id="tkMarketsList"></ul>
+        <div class="tk-row">
+          <label class="tk-field tk-wide"><span>Market slug</span><input id="tkMarketInput" maxlength="160" autocomplete="off" spellcheck="false"></label>
+          <button class="tk-button" type="button" id="tkMarketAdd">Add</button>
+        </div>
+      </section>
+      <section aria-labelledby="tkFxH">
+        <h3 id="tkFxH">Currencies</h3>
+        <div class="tk-row">
+          <label class="tk-field"><span>Base currency</span><input id="tkBaseCurrency" maxlength="3" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <ul class="tk-list" id="tkCurrenciesList"></ul>
+        <div class="tk-row">
+          <label class="tk-field"><span>Currency code</span><input id="tkCurrencyInput" maxlength="3" autocomplete="off" spellcheck="false"></label>
+          <button class="tk-button" type="button" id="tkCurrencyAdd">Add</button>
+        </div>
+      </section>
+      <section aria-labelledby="tkCountdownH">
+        <h3 id="tkCountdownH">Countdowns</h3>
+        <p class="tk-hint">Deadlines, curfews, windows and scheduled events, shown in the Clock panel.</p>
+        <ul class="tk-list" id="tkCountdownsList"></ul>
+        <div class="tk-row">
+          <label class="tk-field"><span>Label</span><input id="tkCountdownLabel" maxlength="60"></label>
+          <label class="tk-field"><span>When (your local time)</span><input id="tkCountdownAt" type="datetime-local"></label>
+          <button class="tk-button" type="button" id="tkCountdownAdd">Add</button>
+        </div>
+      </section>
+    </div>
+    <footer class="tk-dialog-foot">
+      <p class="tk-error" id="tkSettingsError" role="alert"></p>
+      <button class="tk-button" type="button" id="tkSettingsCancel">Cancel</button>
+      <button class="tk-button tk-primary" type="button" id="tkSettingsSave">Save</button>
+    </footer>
+  </form>
+</dialog>
+<script src="/tracker.js" defer></script>
+</body>
+</html>
