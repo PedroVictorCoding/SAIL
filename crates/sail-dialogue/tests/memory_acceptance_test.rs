@@ -156,6 +156,78 @@ fn conversation_becomes_scoped_correctable_knowledge_that_stays_deleted() {
     assert!(owner_knowledge_context(&arena, "When is my thesis deadline?").is_none());
 }
 
+/// Retrieval stays small: only relevant facts, in compact lines, a few at a time, with
+/// the rest reachable through `memory_search`; acknowledgements retrieve nothing and short
+/// follow-ups borrow the previous turn's words.
+#[test]
+fn retrieval_is_relevant_compact_and_bounded() {
+    let dir = TempDb(std::env::temp_dir().join(format!("sail-mem-lean-{}", uuid::Uuid::new_v4())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let (store, arena) = open(&dir.0.join("arena.db"));
+    let mut statements = vec![
+        "Remember: Thesis deadline is June 30".to_string(),
+        "Remember: Garden budget is 200 euros".to_string(),
+        "Remember: Alex birthday is May 2".to_string(),
+    ];
+    for (i, name) in [
+        "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
+    ]
+    .iter()
+    .enumerate()
+    {
+        statements.push(format!("Remember: Project {name} codename is C{i}"));
+    }
+    for (turn, statement) in statements.iter().enumerate() {
+        arena.ensure_test_learning("s");
+        arena.record_turn("s", turn as u64 + 1, statement, "Noted.");
+    }
+    assert_eq!(consolidate(&store, "voice").claims.len(), statements.len());
+
+    // Only the relevant fact, as one compact line without ids or scores.
+    let ctx = owner_knowledge_context(&arena, "When is my thesis deadline?").unwrap();
+    assert!(ctx.contains("| June 30 ["), "{ctx}");
+    for unrelated in ["200 euros", "May 2", "codename", "claim_id", "evidence_ids"] {
+        assert!(!ctx.contains(unrelated), "{unrelated} leaked into: {ctx}");
+    }
+    assert!(!ctx.contains(sail_dialogue::vlm::KNOWLEDGE_MORE_NOTE));
+    // Common words alone match nothing.
+    assert!(owner_knowledge_context(&arena, "What is the time?").is_none());
+
+    // Many matches: a few are shown, and the model is told it can search for the rest.
+    let ctx = owner_knowledge_context(&arena, "project codename").unwrap();
+    assert_eq!(ctx.matches("codename |").count(), 5, "{ctx}");
+    assert!(ctx.contains(sail_dialogue::vlm::KNOWLEDGE_MORE_NOTE));
+    let (ok, found) = sail_dialogue::server::owner_knowledge_search(
+        &arena,
+        &serde_json::json!({"query":"project codename","limit":20}),
+    );
+    assert!(ok, "{found}");
+    assert_eq!(found["facts"].as_array().unwrap().len(), 8, "{found}");
+    let (ok, none) = sail_dialogue::server::owner_knowledge_search(
+        &arena,
+        &serde_json::json!({"query":"submarine"}),
+    );
+    assert!(ok && none["facts"].as_array().unwrap().is_empty(), "{none}");
+    assert!(!sail_dialogue::server::owner_knowledge_search(&arena, &serde_json::json!({})).0);
+
+    // Acknowledgements retrieve nothing; short follow-ups use the previous turn's words.
+    arena.ensure_test_learning("chat");
+    arena.record_turn(
+        "chat",
+        1,
+        "Tell me about the Garden budget",
+        "It is 200 euros.",
+    );
+    assert_eq!(arena.conversation_context("chat", "ok thanks!").query, None);
+    let query = arena
+        .conversation_context("chat", "and is it enough?")
+        .query
+        .expect("follow-up is searched");
+    assert!(query.contains("Garden budget"), "{query}");
+    let ctx = owner_knowledge_context(&arena, &query).unwrap();
+    assert!(ctx.contains("200 euros"), "{ctx}");
+}
+
 trait TestLearning {
     fn ensure_test_learning(&self, session: &str);
 }
