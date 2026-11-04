@@ -109,6 +109,22 @@ const subsystemPages = [
     ]
   },
   {
+    "id": "pulse",
+    "name": "Pulse",
+    "icon": "pulse",
+    "subtitle": "Reminders and timing",
+    "description": "Local durable reminders and notification timing that survive browser closure and daemon restart.",
+    "card": "pulseCard",
+    "panel": "pulsePanelMain",
+    "settings": null,
+    "details": [
+      "Create and manage reminders",
+      "Quiet hours configuration",
+      "Snooze and acknowledge actions",
+      "Persistent across restarts"
+    ]
+  },
+  {
     "id": "mind",
     "name": "Mind",
     "icon": "mind",
@@ -166,6 +182,21 @@ const subsystemPages = [
       "Coding queue and progress",
       "Isolated workspaces and verification",
       "Patch and review results"
+    ]
+  },
+  {
+    "id": "pulse",
+    "name": "Pulse",
+    "icon": "pulse",
+    "subtitle": "Reminders and timing",
+    "description": "Create local reminders, snooze or cancel them, and choose quiet hours and notification preferences.",
+    "card": "pulseCard",
+    "panel": null,
+    "settings": null,
+    "details": [
+      "One-time local reminders that survive restarts",
+      "Snooze, cancel and one-time delivery",
+      "Quiet hours and opt-in spoken reminders"
     ]
   }
 ];

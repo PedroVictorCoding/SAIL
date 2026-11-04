@@ -88,6 +88,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     // Durable record of accepted background work; recovered when Forge starts.
     let continuity = Arc::new(sail_continuity::Continuity::open_default());
+    // Pulse reminders are server-owned: the scheduler runs even when no browser is connected.
+    let pulse = Arc::new(sail_pulse::Pulse::open_default());
+    let _ = sail_pulse::install_global(pulse.clone());
+    let _pulse_scheduler = pulse.start_scheduler();
+    dialogue = dialogue.with_pulse(pulse.clone());
     let checkpoint_store = Arc::new(TaskCheckpointStore::default_store());
     let mut forge = ForgeOrchestrator::new(
         OrchestratorConfig::default(),

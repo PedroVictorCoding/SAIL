@@ -5,6 +5,7 @@ pub mod memory_http;
 pub mod orb;
 pub mod pipeline;
 pub mod plans;
+pub mod pulse_http;
 pub mod server;
 mod speech;
 pub mod staged_ack;
@@ -53,6 +54,7 @@ pub struct DialogueSubsystem {
     services: sail_mind::VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
     plans: Option<Arc<plans::Plans>>,
+    pulse: Option<Arc<sail_pulse::Pulse>>,
 }
 
 impl DialogueSubsystem {
@@ -68,6 +70,7 @@ impl DialogueSubsystem {
             services: sail_mind::VoiceModelServices::new(),
             arena: Arc::new(sail_arena::ArenaSubsystem::new()),
             plans: None,
+            pulse: None,
         }
     }
 
@@ -82,6 +85,11 @@ impl DialogueSubsystem {
     /// Agent task plans: "Plan: …" turns and the plan card.
     pub fn with_plans(mut self, plans: Arc<plans::Plans>) -> Self {
         self.plans = Some(plans);
+        self
+    }
+    /// Local reminders and the server-owned scheduler (`docs/SAIL_PULSE.md`).
+    pub fn with_pulse(mut self, pulse: Arc<sail_pulse::Pulse>) -> Self {
+        self.pulse = Some(pulse);
         self
     }
     pub fn with_addr(mut self, addr: SocketAddr) -> Self {
@@ -126,9 +134,10 @@ impl Subsystem for DialogueSubsystem {
                 let services = self.services.clone();
                 let arena = self.arena.clone();
                 let plans = self.plans.clone();
+                let pulse = self.pulse.clone();
                 tokio::spawn(async move {
                     if let Err(err) = server::run_dialogue_server_with_plans(
-                        addr, bus_clone, services, arena, plans,
+                        addr, bus_clone, services, arena, plans, pulse,
                     )
                     .await
                     {
