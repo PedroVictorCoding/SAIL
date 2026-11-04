@@ -2647,6 +2647,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-ui"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "sail-common",
+ "sail-protocol",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

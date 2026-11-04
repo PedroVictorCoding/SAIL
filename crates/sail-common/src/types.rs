@@ -16,6 +16,7 @@ pub enum SubsystemId {
     Bridge,
     Guardian,
     Forge,
+    Ui,
 }
 
 impl std::fmt::Display for SubsystemId {
@@ -35,6 +36,7 @@ impl std::fmt::Display for SubsystemId {
                 SubsystemId::Bridge => "sail-bridge",
                 SubsystemId::Guardian => "sail-guardian",
                 SubsystemId::Forge => "sail-forge",
+                SubsystemId::Ui => "sail-ui",
             }
         )
     }
@@ -244,5 +246,10 @@ pub enum EventPayload {
         findings_count: usize,
         high_or_critical_count: usize,
         summary: String,
+    },
+
+    // Adaptive Ambient UI Events
+    UiAmbientModeChanged {
+        mode: String,
     },
 }

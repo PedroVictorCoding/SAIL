@@ -17,6 +17,7 @@ members = [
     "crates/sail-pulse",
     "crates/sail-forge",
     "crates/sail-core",
+    "crates/sail-ui",
 ]
 resolver = "2"
 
