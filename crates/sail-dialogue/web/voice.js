@@ -158,7 +158,7 @@ function connectWs() {
       case 'response_delta':
         responseText += data.text;
         if (!responseNode) responseNode = appendConversation('SAIL', '');
-        responseNode.lastChild.textContent = responseText;
+        setMessageText(responseNode, responseText);
         if (!turnTokenCount) updateState('generating');
         if (data.token_count !== undefined) {
           turnTokenCount = data.token_count;
@@ -178,7 +178,7 @@ function connectWs() {
         liveContextReplyPending = false;
         setCaptureHeld(false);
         turnInProgress = false;
-        document.getElementById('assistantAnnounce').textContent = responseText;
+        document.getElementById('assistantAnnounce').textContent = responseNode?.lastChild?.innerText || responseText;
         turnFinished = true;
         if (!pendingAudio && !playingSources.size) finishPlayback();
         if (data.latency_ms) setConnection(`Connected · local turn ${(data.latency_ms / 1000).toFixed(1)}s`, true);
@@ -209,7 +209,7 @@ function connectWs() {
         if (!responseNode) responseNode = appendConversation('SAIL', '');
         if (data.text) {
           responseText += data.text + ' ';
-          responseNode.lastChild.textContent = responseText;
+          setMessageText(responseNode, responseText);
         }
         updateState('speaking');
         break;
@@ -288,8 +288,16 @@ function setTurnDetection() {
 function appendConversation(role, text) {
   const node = document.createElement('article'); node.className = `message message-${role.toLowerCase()}`;
   const label = document.createElement('span'); label.className = 'message-label'; label.textContent = role;
-  const content = document.createElement('span'); content.textContent = text;
-  node.append(label, content); document.getElementById('conversation').append(node); node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return node;
+  const content = document.createElement('div'); content.className = 'message-body';
+  node.append(label, content); setMessageText(node, text);
+  document.getElementById('conversation').append(node); node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return node;
+}
+// Assistant replies are Markdown; user turns (mostly speech transcripts) stay plain text.
+function setMessageText(node, text) {
+  const content = node.lastChild;
+  if (node.classList.contains('message-sail') && window.SailMarkdown) {
+    content.classList.add('markdown'); window.SailMarkdown.renderInto(content, text);
+  } else content.textContent = text;
 }
 function renderToolResult(result) {
   const approval = result?.output?.approval_session;
