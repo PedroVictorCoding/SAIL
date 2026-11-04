@@ -171,12 +171,14 @@ impl LocalGemmaBackend {
             context_tokens: context,
         };
         let hw = Some(crate::hardware::HardwareProbe::diagnose(&self.config.server_binary).await);
+        let mut profile = self.config.to_profile();
+        profile.context_tokens = caps.context_tokens;
         self.update(|s| {
             s.state = ModelState::Ready;
             s.capabilities = Some(caps);
             s.last_error = None;
             s.hardware = hw;
-            s.active_profile = Some(self.config.to_profile());
+            s.active_profile = Some(profile);
         });
         Ok(self.snapshot())
     }
@@ -290,24 +292,53 @@ impl LocalGemmaBackend {
                     .append(true)
                     .open(".local/llama-server.log")
                     .map_err(|e| unavailable(e.to_string()))?;
-                let args = self.config.launch_args(self.parallel)?;
-                // GGUF bytes plus a conservative context/working allowance. This is an
-                // estimate; ready process memory is subsequently reflected by the OS.
-                let weights = std::fs::metadata(&self.config.model_path)
+                let mut launch_config = self.config.clone();
+                let weights = std::fs::metadata(&launch_config.model_path)
                     .map_err(|e| unavailable(e.to_string()))?
                     .len();
-                let projector = self
-                    .config
+                let projector = launch_config
                     .projector
                     .as_ref()
                     .map(|p| std::fs::metadata(p).map(|m| m.len()))
                     .transpose()
                     .map_err(|e| unavailable(e.to_string()))?
                     .unwrap_or(0);
-                let ram_bytes = weights
-                    .saturating_add(projector)
-                    .saturating_add(512 * MIB)
-                    .saturating_add((self.config.context_tokens as u64).saturating_mul(256 * 1024));
+                let base_ram = weights.saturating_add(projector).saturating_add(512 * MIB);
+
+                let kv_bytes_per_token = launch_config.kv_cache_bytes_per_token();
+                let parallel_factor = self.parallel.max(1) as u64;
+
+                // If observed host memory is constrained, adapt context window to available headroom
+                // rather than rejecting admission outright.
+                let status = self.scheduler.status();
+                if let Some(sample) = status.observed {
+                    let total_budget = sample
+                        .available_ram_bytes
+                        .saturating_sub(status.pending_ram_bytes)
+                        .saturating_sub(status.ram_headroom_bytes);
+                    if total_budget > base_ram {
+                        let kv_budget = total_budget - base_ram;
+                        let max_tokens = (kv_budget
+                            / (kv_bytes_per_token.saturating_mul(parallel_factor)).max(1))
+                            as usize;
+                        if max_tokens >= 512 && max_tokens < launch_config.context_tokens {
+                            let adjusted = ((max_tokens / 1024) * 1024).max(512);
+                            tracing::warn!(
+                                requested = launch_config.context_tokens,
+                                adjusted,
+                                available_mb = sample.available_ram_bytes / (1024 * 1024),
+                                "Host available RAM tight; scaled context window down to fit available memory"
+                            );
+                            launch_config.context_tokens = adjusted;
+                        }
+                    }
+                }
+
+                let args = launch_config.launch_args(self.parallel)?;
+                let kv_bytes = (launch_config.context_tokens as u64)
+                    .saturating_mul(parallel_factor)
+                    .saturating_mul(kv_bytes_per_token);
+                let ram_bytes = base_ram.saturating_add(kv_bytes);
                 let lease = self
                     .scheduler
                     .try_admit(
@@ -321,8 +352,8 @@ impl LocalGemmaBackend {
                         CancellationToken::new(),
                     )
                     .map_err(|e| InferenceError::new(ErrorCode::ResourceLimit, e.to_string()))?;
-                tracing::info!(model=%self.config.name,backend=?self.config.compute,threads=self.config.threads,args=?args,"Starting Rust-supervised local model");
-                let mut child = Command::new(&self.config.server_binary)
+                tracing::info!(model=%launch_config.name,backend=?launch_config.compute,threads=launch_config.threads,args=?args,"Starting Rust-supervised local model");
+                let mut child = Command::new(&launch_config.server_binary)
                     .args(args)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
