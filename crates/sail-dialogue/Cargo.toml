@@ -24,6 +24,7 @@ bytes.workspace = true
 sail-mind.workspace = true
 sail-arena.workspace = true
 sail-agents.workspace = true
+sail-continuity.workspace = true
 sail-flow.workspace = true
 sail-canvas.workspace = true
 sail-guardian.workspace = true

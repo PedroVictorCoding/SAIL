@@ -119,98 +119,231 @@ impl Tool for Canvas {
         Ok(Value::String(input.to_string()))
     }
 }
-pub fn scheduler(broker: Arc<sail_guardian::GuardianExecutionBroker>) -> Arc<ToolScheduler> {
+/// Dialogue's tools as the model sees them, in the order the voice tool list offers them
+/// (ties in tool selection keep this order). `vision_frame` and `memory_recall` are not
+/// here: they act on the current turn's image and archive, not through the scheduler.
+pub(crate) const MODEL_TOOL_ORDER: [&str; 15] = [
+    "os:status",
+    "proc:list",
+    "fs:query",
+    "canvas:publish",
+    "local:time",
+    "command:execute",
+    "fs:read",
+    "fs:write",
+    "github:issues",
+    "web:read",
+    "forge:enqueue",
+    "forge:status",
+    "forge:list",
+    "forge:cancel",
+    "forge:clear",
+];
+
+/// Id, description, input properties, required inputs, effect, concurrency limit.
+type KernelTool = (
+    &'static str,
+    &'static str,
+    Value,
+    &'static [&'static str],
+    ToolEffect,
+    usize,
+);
+
+fn string(max: u64, description: &str) -> Value {
+    json!({"type":"string","maxLength":max,"description":description})
+}
+
+/// Every Dialogue tool: one registry is the source of descriptions, schemas, effects and
+/// limits for voice turns, tool plans and agent task plans alike.
+pub fn registry() -> Arc<ToolRegistry> {
     let registry = Arc::new(ToolRegistry::default());
     sail_agents::tools::register_builtin_time(&registry).expect("time descriptor");
-    for (id, properties) in [
-        ("os:status", json!({})),
+    let path = || {
+        string(
+            4096,
+            "Path relative to the workspace root; dot (.) is the root",
+        )
+    };
+    let job = || {
+        string(
+            128,
+            "The job id or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)",
+        )
+    };
+    let kernel: [KernelTool; 13] = [
+        (
+            "os:status",
+            "Read local OS memory, uptime and load",
+            json!({}),
+            &[],
+            ToolEffect::ReadOnly,
+            4,
+        ),
         (
             "proc:list",
+            "List local processes",
             json!({"limit":{"type":"integer","minimum":1,"maximum":100}}),
+            &[],
+            ToolEffect::ReadOnly,
+            4,
         ),
         (
             "fs:query",
-            json!({"path":{"type":"string","maxLength":4096}}),
-        ),
-    ] {
-        registry.register(ToolDescriptor {
-            id:id.into(),version:1,description:format!("Local {id}"),
-            input_schema:json!({"type":"object","properties":properties,"additionalProperties":false}),
-            output_schema:json!({"type":"string","maxLength":1048576}),
-            security_effect:ToolEffect::ReadOnly,required_capabilities:vec![id.into()],
-            timeout_ms:120000,resource_class:"io".into(),concurrency_limit:4,
-        },Arc::new(NamedKernel(id))).expect("kernel descriptor");
-    }
-    for (id, properties, effect) in [
-        (
-            "fs:write",
-            json!({"path":{"type":"string","maxLength":4096},"content":{"type":"string","maxLength":32700}}),
-            ToolEffect::Mutating,
+            "Inspect a file or directory inside the authorized workspace. Use relative paths; dot (.) means the workspace root. Never probe outside paths or retry a denied query.",
+            json!({"path":path()}),
+            &[],
+            ToolEffect::ReadOnly,
+            4,
         ),
         (
             "fs:read",
-            json!({"path":{"type":"string","maxLength":4096}}),
+            "Read text contents of a file inside the authorized workspace.",
+            json!({"path":path()}),
+            &["path"],
             ToolEffect::ReadOnly,
+            2,
         ),
         (
-            "forge:enqueue",
-            json!({"issue_number":{"type":"integer","minimum":1},"repo":{"type":"string","maxLength":512},"task":{"type":"string","maxLength":12000},"body":{"type":"string","maxLength":12000}}),
+            "fs:write",
+            "Create or write a file inside the authorized workspace. Requires explicit user approval.",
+            json!({"path":path(),"content":string(32700, "File content to write")}),
+            &["path", "content"],
             ToolEffect::Mutating,
+            2,
         ),
-        (
-            "forge:cancel",
-            json!({"job_id":{"type":"string","maxLength":128},"reason":{"type":"string","maxLength":2048}}),
-            ToolEffect::Mutating,
-        ),
-        (
-            "forge:clear",
-            json!({"job_id":{"type":"string","maxLength":128}}),
-            ToolEffect::Mutating,
-        ),
-        (
-            "forge:status",
-            json!({"job_id":{"type":"string","maxLength":128}}),
-            ToolEffect::ReadOnly,
-        ),
-        ("forge:list", json!({}), ToolEffect::ReadOnly),
         (
             "github:issues",
+            "Retrieve open GitHub issues ordered by priority, or fetch full details of a specific issue by number or URL",
             json!({
-                "issue_number": {"type": "integer"},
-                "url": {"type": "string", "maxLength": 1024},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
-                "priority": {"type": "string", "maxLength": 2, "enum": ["P0", "P1", "P2", "P3", "P4", "p0", "p1", "p2", "p3", "p4"]}
+                "issue_number":{"type":"integer","description":"Specific GitHub issue number to fetch full title, body, state and labels for"},
+                "url":string(1024, "Specific GitHub issue URL (e.g. https://github.com/owner/repo/issues/125)"),
+                "limit":{"type":"integer","minimum":1,"maximum":50},
+                "priority":{"type":"string","maxLength":2,"enum":["P0","P1","P2","P3","P4","p0","p1","p2","p3","p4"]}
             }),
+            &[],
             ToolEffect::ReadOnly,
+            2,
         ),
         (
             "web:read",
-            json!({
-                "url": {"type": "string", "maxLength": 2048}
-            }),
+            "Fetch and read the text contents of any public web page, URL, documentation, or online issue without write permissions",
+            json!({"url":string(2048, "The HTTP or HTTPS URL to fetch and read")}),
+            &["url"],
             ToolEffect::ReadOnly,
+            2,
         ),
-    ] {
-        registry.register(ToolDescriptor {
-            id:id.into(),version:1,description:format!("Local {id}"),
-            input_schema:json!({"type":"object","properties":properties,"additionalProperties":false}),
-            output_schema:json!({"type":"string","maxLength":1048576}),security_effect:effect,
-            required_capabilities:vec![id.into()],timeout_ms:120000,resource_class:"io".into(),concurrency_limit:2,
-        },Arc::new(NamedKernel(id))).expect("Forge and file descriptor");
+        (
+            "forge:enqueue",
+            "Enqueue an autonomous coding task or GitHub issue for Forge to solve in an isolated sandbox with automated testing, review, and PR drafting.",
+            json!({
+                "issue_number":{"type":"integer","minimum":1,"description":"GitHub issue number to solve"},
+                "repo":string(512, "Repository name, defaults to PedroVictorCoding/SAIL"),
+                "task":string(12000, "Optional description or instructions for the task"),
+                "body":string(12000, "Optional issue body or extra context")
+            }),
+            &[],
+            ToolEffect::Mutating,
+            2,
+        ),
+        (
+            "forge:status",
+            "Check the status, current step, test outcome, and diff of a Forge autonomous coding job. Accepts exact job IDs (e.g. job-5-61c992ad), prefix (e.g. job-5), or issue numbers (e.g. 5 or #5).",
+            json!({"job_id":job()}),
+            &["job_id"],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "forge:list",
+            "List all active, recent, and stored Forge autonomous coding jobs and tasks.",
+            json!({}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "forge:cancel",
+            "Cancel or stop a running or in-progress Forge autonomous coding task.",
+            json!({"job_id":job(),"reason":string(2048, "Optional cancellation reason")}),
+            &["job_id"],
+            ToolEffect::Mutating,
+            2,
+        ),
+        (
+            "forge:clear",
+            "Remove, clear, or archive blocked, cancelled, or completed Forge coding jobs from the active queue and delete their local checkpoints. Pass 'all' to clear all finished/blocked jobs, or specify a job_id.",
+            json!({"job_id":string(128, "Specific job ID to remove, or 'all' to clear all finished and blocked jobs (defaults to 'all')")}),
+            &[],
+            ToolEffect::Mutating,
+            2,
+        ),
+        (
+            "canvas:publish",
+            "Display a diagram or structured visual beside the conversation",
+            json!({
+                "artifact_type":{"type":"string","enum":["mermaid","json","svg"],"maxLength":16},
+                "content":{"type":"string","maxLength":32700}
+            }),
+            &["artifact_type", "content"],
+            ToolEffect::ReadOnly,
+            4,
+        ),
+    ];
+    for (id, description, properties, required, effect, concurrency_limit) in kernel {
+        let canvas = id == "canvas:publish";
+        let backend: Arc<dyn Tool> = if canvas {
+            Arc::new(Canvas)
+        } else {
+            Arc::new(NamedKernel(id))
+        };
+        registry
+            .register(
+                ToolDescriptor {
+                    id: id.into(),
+                    version: 1,
+                    description: description.into(),
+                    input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+                    output_schema: json!({"type":"string","maxLength":if canvas {65536} else {1048576}}),
+                    security_effect: effect,
+                    required_capabilities: vec![id.into()],
+                    timeout_ms: if canvas { 1000 } else { 120000 },
+                    resource_class: if canvas { "telemetry" } else { "io" }.into(),
+                    concurrency_limit,
+                },
+                backend,
+            )
+            .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
     }
     registry.register(ToolDescriptor {
-        id:"canvas:publish".into(),version:1,description:"Present a diagram or structured information beside the conversation".into(),
-        input_schema:json!({"type":"object","properties":{"artifact_type":{"type":"string","enum":["mermaid","json","svg"],"maxLength":16},"content":{"type":"string","maxLength":32700}},"required":["artifact_type","content"],"additionalProperties":false}),
-        output_schema:json!({"type":"string","maxLength":65536}),security_effect:ToolEffect::ReadOnly,
-        required_capabilities:vec!["canvas:publish".into()],timeout_ms:1000,resource_class:"telemetry".into(),concurrency_limit:4,
-    },Arc::new(Canvas)).expect("canvas descriptor");
-    registry.register(ToolDescriptor {
-        id:"command:execute".into(),version:1,description:"Execute argv in the isolated no-network command service; requires owner approval".into(),
+        id:"command:execute".into(),version:1,description:"Execute a command in the isolated no-network runner after exact owner approval. Never host shell execution. Runner may be unavailable.".into(),
         input_schema:json!({"type":"object","properties":{"executable":{"type":"string","maxLength":4096},"argv":{"type":"array","maxItems":128,"items":{"type":"string","maxLength":8192}}},"required":["executable","argv"],"additionalProperties":false}),
         output_schema:json!({"type":"string","maxLength":1048576}),security_effect:ToolEffect::Sandbox,
         required_capabilities:vec!["command:execute".into()],timeout_ms:120000,resource_class:"sandbox".into(),concurrency_limit:1,
     },Arc::new(Command)).expect("command descriptor");
-    Arc::new(ToolScheduler::new(registry, broker, 4))
+    registry
+}
+
+/// The registry's tools as OpenAI-style function definitions (`fs:read` becomes `fs_read`).
+pub(crate) fn model_tool_definitions() -> Vec<Value> {
+    static DEFINITIONS: std::sync::OnceLock<Vec<Value>> = std::sync::OnceLock::new();
+    DEFINITIONS
+        .get_or_init(|| {
+            let registry = registry();
+            MODEL_TOOL_ORDER
+                .iter()
+                .map(|id| {
+                    let tool = registry.descriptor(id).expect("ordered tool is registered");
+                    json!({"type":"function","function":{"name":id.replace(':', "_"),
+                        "description":tool.description,"parameters":tool.input_schema}})
+                })
+                .collect()
+        })
+        .clone()
+}
+
+pub fn scheduler(broker: Arc<sail_guardian::GuardianExecutionBroker>) -> Arc<ToolScheduler> {
+    Arc::new(ToolScheduler::new(registry(), broker, 4))
 }
 
 pub fn shared() -> Result<Arc<ToolScheduler>, sail_guardian::ExecutionDenied> {
@@ -323,6 +456,32 @@ mod tests {
                 .count(),
             1
         );
+    }
+    #[test]
+    fn the_voice_model_is_offered_exactly_the_registered_tools() {
+        let registered: std::collections::BTreeSet<String> =
+            registry().descriptors().into_iter().map(|d| d.id).collect();
+        let offered: std::collections::BTreeSet<String> =
+            MODEL_TOOL_ORDER.iter().map(|id| id.to_string()).collect();
+        assert_eq!(registered, offered);
+        for tool in model_tool_definitions() {
+            let name = tool["function"]["name"].as_str().unwrap();
+            let id = MODEL_TOOL_ORDER
+                .iter()
+                .find(|id| id.replace(':', "_") == name)
+                .unwrap();
+            assert_eq!(
+                tool["function"]["parameters"],
+                registry().descriptor(id).unwrap().input_schema,
+                "{id}: the model sees the schema the scheduler enforces"
+            );
+            assert!(
+                !tool["function"]["description"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Local ")
+            );
+        }
     }
     #[tokio::test]
     async fn actual_clock_and_canvas_use_registered_bounded_tools() {

@@ -174,9 +174,17 @@ fn schema_supported(schema: &Value, depth: usize) -> Result<(), String> {
         "minimum",
         "maximum",
         "enum",
+        "description",
     ];
     if object.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err("unsupported schema keyword".into());
+    }
+    // Guidance for the model only; validation ignores it.
+    if schema
+        .get("description")
+        .is_some_and(|d| d.as_str().is_none_or(|d| d.len() > 512))
+    {
+        return Err("description must be a string of at most 512 bytes".into());
     }
     if let Some(values) = schema.get("enum")
         && values
@@ -386,6 +394,10 @@ impl ToolScheduler {
             classes: Mutex::new(HashMap::new()),
             runs: Mutex::new(HashMap::new()),
         }
+    }
+    /// The registry this scheduler executes from.
+    pub fn registry(&self) -> Arc<ToolRegistry> {
+        self.registry.clone()
     }
     pub fn subscribe(&self) -> broadcast::Receiver<ToolEvent> {
         self.events.subscribe()

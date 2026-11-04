@@ -205,6 +205,7 @@ function connectWs() {
       case 'tool_completed': updateToolActivity(data.tool, false); break;
       case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); logToolActivity(data.result); break;
       case 'canvas': renderArtifact(data.artifact); break;
+      case 'plan': window.renderPlanCard?.(data.plan); break;
       case 'approval_required':
         renderApprovalCard(data);
         updateState('approval_required');

@@ -1,6 +1,6 @@
 # Agent task planning
 
-**Status:** design, first slice next · **Owner:** Agents ([#6](https://github.com/PedroVictorCoding/SAIL/issues/6), [#26](https://github.com/PedroVictorCoding/SAIL/issues/26)) ·
+**Status:** usable from the web UI and voice (slices 1–2, §8–§9) · **Owner:** Agents ([#6](https://github.com/PedroVictorCoding/SAIL/issues/6), [#26](https://github.com/PedroVictorCoding/SAIL/issues/26)) ·
 **Builds on:** tool registry and scheduler (`crates/sail-agents/src/tools.rs`, [#44](https://github.com/PedroVictorCoding/SAIL/issues/44)), [Continuity](SAIL_CONTINUITY.md), Guardian approvals ·
 **Roadmap:** [A1](SAIL_ENGINEERING_ROADMAP.md#wave-1-agency-the-critical-path) · **Vision:** §1.4, §19 ("carry forward a multi-step goal")
 
@@ -133,3 +133,38 @@ A two-step goal with one effectful step, end to end:
 Out of scope for the first slice: the chat interface (P2), scheduled plans (P3), saving
 plans as skills (P4), escalation to external models (P1), and moving all Dialogue tools
 onto the registry (done incrementally after the slice).
+
+## 9. Second slice: in the running app
+
+- **One registry.** Dialogue's tools are registry entries (`crates/sail-dialogue/src/execution.rs`)
+  with their real descriptions and schemas. The voice model's tool list is generated from
+  the registry, so the model, the planner and the scheduler see the same tools and the
+  same enforced schemas. `vision_frame` and `memory_recall` stay Dialogue-local: they act
+  on the current turn's image and archive.
+- **Started at boot.** `sail-core` builds the runner over the shared Continuity store,
+  Dialogue's scheduler and the resident model, and resumes running plans after Forge's
+  recovery pass. Plan steps run as the Agents actor, so Dialogue's "always allow" rules do
+  not apply to them.
+- **Voice and text.** "Plan: …" (also "Plan, …" as speech recognition writes it) drafts a
+  plan instead of a conversational answer. SAIL says briefly what happens next and shows
+  the plan card. "Plan a trip" without the separator stays conversation.
+- **Plan card** on Canvas: steps with state, tool, "changes something" and errors; the
+  history; approve, edit (the remaining steps as JSON, validated again) and cancel. A
+  running step waiting for Guardian shows its approval on the card. A plan whose step was
+  interrupted mid-effect shows "Needs your attention", with "It did not happen: retry"
+  and "Cancel plan". Open and attention-needing plans reappear after a reload or restart.
+- **Owner controls.** `/api/plans` (list, create, show, approve, edit, cancel, resolve)
+  requires the owner token, like Guardian approvals. The voice socket can start a plan;
+  only the owner token lets its effects run.
+- **Priorities.** A new goal is drafted at interactive priority, since the owner is
+  waiting; a re-plan during a run is background work that waits while live voice has
+  priority instead of failing the plan.
+
+Not yet done:
+- **Guardian approvals expire after 60 seconds.** A step that waits longer fails and is
+  re-planned, so an effectful plan still needs the owner nearby when its steps run.
+- An interrupted effectful step needs the owner even when the interruption happened while
+  it waited for Guardian, before anything ran.
+- Spoken progress, chat (P2), scheduled plans (P3), and pausing a plan.
+- The planner has not been measured on the resident model; tests and the live check used
+  a scripted model.

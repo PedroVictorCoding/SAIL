@@ -21,7 +21,7 @@ What works end to end today (merged and tested), as opposed to specified:
 | Forge | Local solver, sandboxed builds, gates, mutation gate, failure memory, nightly runner, draft PRs, pauses for voice | Issue decomposition (#118), escalation to external models (P1) |
 | Continuity | Durable task records, leases, recovery (Forge only) | General consumers: agent plans, scheduled jobs |
 | Bridge | Chromium CDP worker with site grants | Web research tool (#40) on top of it |
-| **Agents** | **Nothing beyond one-round tool calls in Dialogue** | **Goal → plan → execute → verify → re-plan (A1)** |
+| Agents | Goal → plan → approve → execute → verify → re-plan, durable across restarts; "Plan: …" by voice or text and a plan card ([design](SAIL_AGENT_PLANNING.md)) | Long-lived approvals, planner quality on the local model, chat and scheduled plans |
 | Pulse, Relay, Flow, Skills | Specs; Flow runs one scheduled safety review | Scheduler (P3), gateway (P2), skills (P4) |
 | Studio, Campus, Life, Health, Entertainment, Sense, Mesh, Lab | Specs | Later waves |
 
