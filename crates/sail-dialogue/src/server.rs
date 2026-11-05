@@ -133,6 +133,7 @@ pub async fn run_dialogue_server_with_plans(
     let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
     let learn_routes = learn_routes(&inference, authority());
     let tracker_routes = tracker_routes(authority());
+    let system_routes = crate::system_http::router(authority());
     let plan_routes = plans
         .clone()
         .map(|plans| crate::plans::router(plans, authority()));
@@ -156,6 +157,25 @@ pub async fn run_dialogue_server_with_plans(
             get(|| async { Html(include_str!("../web/index.html")) }),
         )
         .merge(crate::tracker_http::pages())
+        .route(
+            "/toolsmap.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/toolsmap.js"),
+                )
+            }),
+        )
+        .route(
+            "/toolsmap.css",
+            get(|| async {
+                (
+                    [("content-type", "text/css; charset=utf-8")],
+                    include_str!("../web/toolsmap.css"),
+                )
+            }),
+        )
+        .nest_service("/api/system", system_routes)
         .route(
             "/card-modal.js",
             get(|| async {

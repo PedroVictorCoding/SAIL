@@ -564,6 +564,17 @@
           <p class="vscode-category-desc">Manage runtime session state, hardware compute profile, and environment.</p>
         </div>
 
+        <div class="vscode-setting-item" data-search-terms="interface style ui view layout theme tools map isometric classic dashboard">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name" id="uiStyleLabel">Interface style</label>
+            <p class="vscode-setting-desc" id="uiStyleDesc">Classic is the card dashboard. Tools Map shows SAIL as a live map of its subsystems, with host metrics, tasks and recent activity. Saved on this browser.</p>
+          </div>
+          <div class="vscode-setting-control ui-style-switch" role="group" aria-labelledby="uiStyleLabel" aria-describedby="uiStyleDesc">
+            <button class="quiet-button" type="button" data-ui-style="classic" aria-pressed="true">Classic</button>
+            <button class="quiet-button" type="button" data-ui-style="tools-map" aria-pressed="false">Tools Map</button>
+          </div>
+        </div>
+
         <div class="vscode-setting-item" data-search-terms="compute profile hardware tier balanced performance speed hybrid gpu cpu">
           <div class="vscode-setting-info">
             <label class="vscode-setting-name">Compute Hardware Tier</label>
@@ -938,6 +949,8 @@
 <script src="/memory.js" defer></script>
 <script src="/learn.js" defer></script>
 <script src="/factory.js" defer></script>
+<link rel="stylesheet" href="/toolsmap.css">
+<script src="/toolsmap.js" defer></script>
 <script src="/ui.js" defer></script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js" defer></script>

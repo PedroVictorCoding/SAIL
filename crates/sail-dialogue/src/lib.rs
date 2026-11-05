@@ -16,6 +16,7 @@ pub mod server;
 mod speech;
 pub mod staged_ack;
 pub mod stt;
+pub mod system_http;
 pub mod terminal;
 mod tool_policy;
 pub mod tracker_http;
