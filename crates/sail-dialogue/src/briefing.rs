@@ -294,9 +294,6 @@ impl BriefingEngine {
                         keywords.iter().any(|&k| lower.contains(k))
                     }).unwrap_or(&playlists[0]);
 
-                    // Pre-confirm this choice with Spotify
-                    self.spotify.confirm(&chosen.uri);
-
                     return Some(StagedMusic {
                         uri: chosen.uri.clone(),
                         name: chosen.name.clone(),
@@ -468,8 +465,6 @@ impl BriefingEngine {
             if !self.spotify.configured() || !self.spotify.connected().await {
                 return Err("Spotify is not connected. Sign in on the Settings or Subsystem page.".to_string());
             }
-            // Explicitly confirm before playback per security policy
-            self.spotify.confirm(uri);
             self.spotify.play(uri).await.map_err(|e| e.message)
         } else {
             // Local ambient playback acknowledgment
