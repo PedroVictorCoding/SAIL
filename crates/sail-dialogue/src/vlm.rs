@@ -1486,6 +1486,22 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
             snapshot,
         );
     }
+    // spotify_play goes right after spotify_find. When no playlist name matches, the model
+    // has to pick one from the list and play it, and "put on something by X" shares no
+    // words with spotify_play.
+    let position = |ranked: &[(usize, usize, serde_json::Value)], name: &str| {
+        ranked
+            .iter()
+            .position(|(_, _, tool)| tool["function"]["name"] == name)
+    };
+    if let (Some(find), Some(play)) = (
+        position(&ranked, "spotify_find"),
+        position(&ranked, "spotify_play"),
+    ) && play > find + 1
+    {
+        let play = ranked.remove(play);
+        ranked.insert(find + 1, play);
+    }
     let mut bytes = 2;
     let mut selected = Vec::new();
     for (_, _, tool) in ranked {
@@ -1564,6 +1580,33 @@ pub fn raw_vision_frame(frame: &VisionFrameInput) -> Result<VisionFrameInput> {
 
 #[cfg(test)]
 mod schema_selection_tests {
+    #[test]
+    fn spotify_play_is_offered_whenever_spotify_find_is() {
+        for prompt in [
+            "Play my radiohead playlist",
+            "put on something by radiohead",
+            "play some jazz",
+        ] {
+            let tools = super::selected_tool_definitions(&[
+                serde_json::json!({"role":"user","content":prompt}),
+            ]);
+            let names: Vec<_> = tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["function"]["name"].as_str().unwrap().to_string())
+                .collect();
+            assert!(
+                names.iter().any(|n| n == "spotify_find"),
+                "{prompt}: {names:?}"
+            );
+            assert!(
+                names.iter().any(|n| n == "spotify_play"),
+                "{prompt}: {names:?}"
+            );
+        }
+    }
+
     #[test]
     fn selection_keeps_forge_tools_within_mind_limits() {
         let tools = super::selected_tool_definitions(&[
