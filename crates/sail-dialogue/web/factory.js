@@ -163,3 +163,115 @@ function drawFloor(ctx, width, height) {
   }
 }
 
+
+/** Pipe run with a dark jacket and a lighter core, plus junction nodes. */
+function drawPipes(ctx) {
+  const { palette } = FACTORY;
+  const detail = detailForZoom();
+  const scale = FACTORY.camera.zoom;
+  for (const pipe of FACTORY.pipes) {
+    const a = pipe.from, b = pipe.to;
+    // Route on the floor with one elbow, the way the plant does.
+    const elbow = Math.abs(a[0] - b[0]) > Math.abs(a[1] - b[1]) ? [b[0], a[1]] : [a[0], b[1]];
+    const points = [a, elbow, b].map(([x, y]) => isoPoint(x, y));
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    points.forEach((point, index) => (index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y)));
+    ctx.strokeStyle = '#14171A';
+    ctx.lineWidth = 8 * scale;
+    ctx.stroke();
+    ctx.strokeStyle = detail === 'silhouette' ? palette.structure : '#39404A';
+    ctx.lineWidth = 3 * scale;
+    ctx.stroke();
+    if (detail === 'silhouette') continue;
+    for (const [x, y] of [a, b]) {
+      const point = isoPoint(x, y);
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 5 * scale, 0, Math.PI * 2);
+      ctx.fillStyle = '#1B2026';
+      ctx.fill();
+      ctx.strokeStyle = palette.structure;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+}
+
+/** Soft contact shadow so an object sits on the plate instead of floating over it. */
+function drawContactShadow(ctx, record) {
+  const centre = isoPoint(record.x + (record.w || 1) / 2, record.y + (record.d || 1) / 2, 0);
+  const scale = FACTORY.unit * FACTORY.camera.zoom;
+  const span = ((record.w || 1) + (record.d || 1)) / 2;
+  const rx = span * scale * COS30 * 0.95;
+  const ry = span * scale * SIN30 * 0.95;
+  ctx.beginPath();
+  ctx.ellipse(centre.x, centre.y + 2, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(6,8,10,0.55)';
+  ctx.fill();
+}
+
+/** Isometric box: two visible side faces and a top face. */
+function drawBox(ctx, rect, options = {}) {
+  const { palette } = FACTORY;
+  const { x, y, w, d, h } = rect;
+  const lineWidth = options.accent ? 2 : 1;
+  const edge = options.accent ? palette.accent : palette.structure;
+
+  const top = [isoPoint(x, y, h), isoPoint(x + w, y, h), isoPoint(x + w, y + d, h), isoPoint(x, y + d, h)];
+  const rightFace = [isoPoint(x + w, y, h), isoPoint(x + w, y + d, h), isoPoint(x + w, y + d, 0), isoPoint(x + w, y, 0)];
+  const leftFace = [isoPoint(x, y + d, h), isoPoint(x + w, y + d, h), isoPoint(x + w, y + d, 0), isoPoint(x, y + d, 0)];
+
+  polygon(ctx, rightFace, options.side || palette.surfaceSide, edge, lineWidth);
+  polygon(ctx, leftFace, options.front || palette.surface, edge, lineWidth);
+  polygon(ctx, top, options.top || palette.surfaceTop, edge, lineWidth);
+  return { top, centre: isoPoint(x + w / 2, y + d / 2, h) };
+}
+
+/** Isometric cylinder, used for tanks and silos. */
+function drawTank(ctx, rect, options = {}) {
+  const { palette } = FACTORY;
+  const centre = isoPoint(rect.x + rect.w / 2, rect.y + rect.d / 2, 0);
+  const radius = Math.min(rect.w, rect.d) / 2;
+  const scale = FACTORY.unit * FACTORY.camera.zoom;
+  const rx = radius * scale * COS30 * 1.15;
+  const ry = radius * scale * SIN30 * 1.15;
+  const topY = centre.y - rect.h * scale;
+  const edge = options.accent ? palette.accent : palette.structure;
+  const lineWidth = options.accent ? 2 : 1;
+
+  const body = ctx.createLinearGradient(centre.x - rx, 0, centre.x + rx, 0);
+  body.addColorStop(0, '#232830');
+  body.addColorStop(0.45, '#3B424A');
+  body.addColorStop(1, '#1D2228');
+
+  ctx.beginPath();
+  ctx.ellipse(centre.x, centre.y, rx, ry, 0, 0, Math.PI);
+  ctx.lineTo(centre.x - rx, topY);
+  ctx.ellipse(centre.x, topY, rx, ry, 0, Math.PI, 0, true);
+  ctx.closePath();
+  ctx.fillStyle = body;
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = lineWidth;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.ellipse(centre.x, topY, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#454D57';
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = lineWidth;
+  ctx.stroke();
+
+  // One banded reading on the tank wall: state, never decoration.
+  if (options.band !== false && FACTORY.camera.zoom >= 0.8) {
+    ctx.beginPath();
+    ctx.ellipse(centre.x, topY + (centre.y - topY) * 0.45, rx, ry, 0, 0, Math.PI);
+    ctx.strokeStyle = palette.accent;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  return { anchor: { x: centre.x, y: topY } };
+}
+
