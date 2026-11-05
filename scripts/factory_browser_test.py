@@ -2,7 +2,7 @@
 
 Serves `crates/sail-dialogue/web` the way Dialogue does (index.html plus the static
 files the page requests) and checks that the map is the default workspace with
-Dialogue beside it, that systems open in the popup (history, direct links, focus,
+Dialogue beside it, that map boxes show compact status and sidebar systems open in the popup (history, direct links, focus,
 Settings and dialogs above it), the classic dashboard exit, and mobile layout.
 
 Run with: .venv-voice/bin/python scripts/factory_browser_test.py [screenshot.png]
@@ -74,8 +74,24 @@ with sync_playwright() as p:
     assert page.locator('#textInput').evaluate('(n) => n === document.activeElement')
     page.locator('#textInput').fill('')
 
-    # A station opens its system in the popup, with its real controls and status.
-    page.locator('.tm-label[data-station="mind"]').click()
+    # Every map box selects compact status without navigating or opening a modal.
+    for station in page.locator('.tm-label').all():
+        station.click()
+        assert station.get_attribute('aria-pressed') == 'true'
+        assert station.get_attribute('aria-haspopup') is None
+        assert page.is_visible('#tmDetail'), station.get_attribute('data-station')
+        assert page.is_hidden('#tmPop')
+        assert page.evaluate('location.hash') in ('', '#home')
+        assert not page.evaluate("document.getElementById('tmChat').inert")
+    page.locator('.tm-label[data-station="mind"]').focus()
+    page.keyboard.press('Enter')
+    assert page.locator('#tmDetail .tm-detail-title').inner_text().startswith('Mind')
+    page.keyboard.press('Space')
+    assert page.is_visible('#tmDetail') and page.is_hidden('#tmPop')
+    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-detail.png')))
+
+    # Sidebar systems open the large popup with real controls and status.
+    page.locator('.tm-nav-item[data-nav="mind"]').click()
     page.wait_for_function("location.hash === '#mind'")
     page.wait_for_selector('#tmPop')
     assert page.locator('#tmPop #subsystemTitle').inner_text() == 'Mind'
@@ -88,22 +104,14 @@ with sync_playwright() as p:
     page.keyboard.press('Escape')
     page.wait_for_function("location.hash === '#home'")
     page.wait_for_selector('#tmPop', state='hidden')
-    assert page.evaluate("document.activeElement.dataset.station") == 'mind'
+    assert page.evaluate("document.activeElement.dataset.nav") == 'mind'
     assert not page.evaluate("document.getElementById('tmChat').inert")
 
     # Stations sharing a page keep their own inspector; Close returns to the map.
-    page.locator('.tm-label[data-station="memory"]').click()
+    page.locator('.tm-nav-item[data-nav="memory"]').click()
     page.wait_for_function("location.hash === '#arena'")
     page.wait_for_function("document.querySelector('#tmInspector h2')?.textContent === 'Memory'")
     page.locator('#tmPopClose').click()
-    page.wait_for_selector('#tmPop', state='hidden')
-
-    # Systems without a page still open, without changing the route.
-    page.locator('.tm-label[data-station="entertainment"]').click()
-    assert page.is_visible('#tmPop') and page.is_visible('#tmPopTitle')
-    assert page.is_hidden('#subsystemPage')
-    assert page.evaluate('location.hash') == '#home'
-    page.keyboard.press('Escape')
     page.wait_for_selector('#tmPop', state='hidden')
 
     # Sidebar entries open systems; Tasks opens Forge on its task list.
@@ -162,6 +170,11 @@ with sync_playwright() as p:
     page.keyboard.press('ArrowRight')
     assert page.locator('#tmViewport').evaluate('(node) => node === document.activeElement')
     page.locator('.tm-label[data-station="guardian"]').click()
+    assert page.is_visible('#tmDetail') and page.is_hidden('#tmPop')
+    page.keyboard.press('Enter')
+    assert page.is_hidden('#tmPop')
+    # The sidebar is hidden at this width; direct routes still open mobile popups.
+    page.goto(base + '#guardian')
     page.wait_for_selector('#tmPopClose')
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-mobile-popup.png')))
