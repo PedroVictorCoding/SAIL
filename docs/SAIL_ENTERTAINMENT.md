@@ -49,19 +49,18 @@ Pause/resume one approved player, remember a book location and restore it on ano
 
 ## 7a. Implemented: Spotify playback by conversation (2026-11-05)
 
-SAIL plays the owner's own Spotify music after a spoken confirmation.
+SAIL plays the owner's own Spotify music as soon as it is asked for, and says what is playing.
 
 > **User:** Play my radiohead playlist.
-> **SAIL:** Should we proceed by playing the playlist with the name: 'Cabeça de Radio' created by 'Pedro Victor'?
-> **User:** Yes go ahead
+> **SAIL:** Playing the playlist 'Cabeça de Radio' by Pedro Victor on Pedro's phone.
 
 - **Adapter:** `crates/sail-bridge/src/spotify.rs` calls the Spotify Web API directly. It does search, the owner's playlists (created or followed, up to 200), play, pause/resume/next/previous and now-playing. Sign-in is OAuth authorization code with PKCE, so no client secret is stored. `config.json` and `token.json` live in `<data root>/spotify/` with mode 0600. The scopes are read playback and playlists and control playback; nothing edits the library. `spotify-tui` was evaluated and not used: it hard-codes a `http://localhost` redirect, which new Spotify apps no longer accept, and its last release was in 2021.
-- **Tools:** `spotify:find` returns the full name and creator of the best match (or the owner's whole playlist list when no name matches, so the model can map "radiohead" to "Cabeça de Radio") and the exact `confirmation_question`. `spotify:play` takes a confirmed URI. `spotify:control` handles pause/resume/next/previous/status.
-- **Confirmation is enforced in code** (`crates/sail-dialogue/src/media_confirm.rs` and the voice turn loop), not left to the model. `spotify:play` runs only when all of these hold:
-  - the item was offered to this session in an earlier turn;
-  - its exact name appears in SAIL's previous reply;
-  - the owner's reply agrees (English or Portuguese) or names the item.
-  The adapter then plays only a URI confirmed in the last two minutes, once, so other tool callers cannot skip the question.
+- **Tools:** `spotify:find` returns the full name and creator of the best match and up to four alternatives, or the owner's whole playlist list when no name matches, so the model can map "radiohead" to "Cabeça de Radio". `spotify:play` plays a URI. `spotify:control` handles pause/resume/next/previous/status.
+- **No confirmation step.** Earlier versions asked "Should we proceed by playing …?" and waited for a yes. That cost a second model round of minutes on this host, so it was removed (2026-11-05):
+  - fixed-shape requests ("play my X playlist", "pause", "next song") are answered in code by `crates/sail-dialogue/src/music_fastpath.rs`, which plays the best match at once;
+  - in a model turn, a successful `spotify:find` with a best match plays it in the same round (`reason_turn` in `server.rs`), and the model is told only to say what is playing;
+  - when no playlist name matches, the model picks one from the list and calls `spotify:play` directly.
+  The owner can stop or skip with "pause"/"next" or the Now Playing card.
 - **Interface:** a Now Playing card in the Tools Map sidebar has three states: Set up, Connect, and Now Playing/Paused with previous/play-pause/next. Its HTTP routes are under `/api/spotify` (`status` is readable; `setup`, `login`, `control` and `disconnect` need the owner token; `callback` is protected by the single-use PKCE state).
 - **Setup:** Set up Spotify → create an app at developer.spotify.com → add the Redirect URI shown (`https://<SAIL address>/api/spotify/callback`) → paste the Client ID → Save and connect. `SAIL_SPOTIFY_CLIENT_ID` and `SAIL_SPOTIFY_REDIRECT_URI` override the saved values.
 - **Limits:** playback control needs Spotify Premium and an available Spotify Connect device (phone, desktop app or speaker). SAIL uses the active device, otherwise one whose name contains "SAIL", otherwise the first available. The SAIL host has no sound card, so it cannot be a player itself yet.

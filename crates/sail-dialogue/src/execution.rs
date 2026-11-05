@@ -62,8 +62,8 @@ impl Tool for PulseTool {
     }
 }
 
-/// The owner's Spotify account (sail-bridge). `spotify:play` only plays a URI that the
-/// spoken-confirmation gate (`crate::media_confirm`) has just confirmed.
+/// The owner's Spotify account (sail-bridge). The voice turn plays `spotify:find`'s best
+/// match straight away; `spotify:play` plays a URI the model chose.
 struct SpotifyTool(&'static str);
 #[async_trait]
 impl Tool for SpotifyTool {
@@ -114,7 +114,7 @@ pub(crate) async fn execute_spotify_tool(
                     return Ok(json!({
                         "matched": false,
                         "playlists": all,
-                        "instruction": "No playlist name contains those words. Choose the one playlist that best fits the request (names can be puns or in another language) and ask exactly: Should we proceed by playing the playlist with the name: '<name>' created by '<by>'? Then stop and wait for the user's answer; do not play anything in this turn.",
+                        "instruction": "No playlist name contains those words. Choose the one playlist that best fits the request (names can be puns or in another language) and call spotify_play with its uri now.",
                     }));
                 }
                 ranked.into_iter().map(|(_, c)| c).collect::<Vec<_>>()
@@ -131,10 +131,8 @@ pub(crate) async fn execute_spotify_tool(
             let alternatives: Vec<_> = found.take(SPOTIFY_ALTERNATIVES).collect();
             Ok(json!({
                 "matched": true,
-                "confirmation_question": best.confirmation_question(),
                 "best": best,
                 "alternatives": alternatives,
-                "instruction": "Ask the user exactly the confirmation_question, then stop and wait for their answer; do not play anything in this turn. If they agree, call spotify_play with best.uri; if they name an alternative, use its uri.",
             }))
         }
         "spotify:play" => {
@@ -525,7 +523,7 @@ pub fn registry() -> Arc<ToolRegistry> {
     let spotify_tools: [KernelTool; 3] = [
         (
             "spotify:find",
-            "Find music to play on the user's Spotify: a playlist (set mine=true for the user's own or followed playlists, e.g. 'my radiohead playlist'), song, album or artist. Returns the full name and creator of the best match and a confirmation_question to ask before playing.",
+            "Find music to play on the user's Spotify: a playlist (set mine=true for the user's own or followed playlists, e.g. 'my radiohead playlist'), song, album or artist. The best match starts playing at once; returns its full name and creator.",
             json!({
                 "query": string(200, "What to look for, e.g. 'radiohead' or 'how to disappear completely'"),
                 "kind": {"type":"string","maxLength":16,"enum":["playlist","song","album","artist"],"description":"What the user asked to play"},
@@ -537,7 +535,7 @@ pub fn registry() -> Arc<ToolRegistry> {
         ),
         (
             "spotify:play",
-            "Play music on Spotify: the uri the user just confirmed from spotify_find. Only call after the user agreed to the confirmation question in their latest message.",
+            "Play music on Spotify now: a uri from spotify_find, e.g. the playlist you chose from the owner's list or an alternative the user named.",
             json!({"uri": string(128, "spotify:playlist:…, spotify:track:…, spotify:album:… or spotify:artist:… from spotify_find")}),
             &["uri"],
             ToolEffect::Mutating,
@@ -817,7 +815,7 @@ mod tests {
     }
     /// Spotify tools against a local stand-in for the Spotify Web API.
     #[tokio::test]
-    async fn spotify_find_offers_the_owner_playlists_and_play_needs_confirmation() {
+    async fn spotify_find_offers_the_owner_playlists_and_play_starts_at_once() {
         use axum::{Json, Router, routing::get};
         let played = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
         let sink = played.clone();
@@ -853,7 +851,7 @@ mod tests {
         assert_eq!(found["matched"], false);
         assert_eq!(found["playlists"][0]["name"], "Cabeça de Radio");
         assert_eq!(found["playlists"][0]["by"], "Pedro Victor");
-        // A word that is in a name gives a best match and the exact question.
+        // A word that is in a name gives a best match with its full name and creator.
         let found = execute_spotify_tool(
             &spotify,
             "spotify:find",
@@ -861,22 +859,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(
-            found["confirmation_question"],
-            "Should we proceed by playing the playlist with the name: 'Cabeça de Radio' created by 'Pedro Victor'?"
-        );
+        assert_eq!(found["best"]["name"], "Cabeça de Radio");
+        assert_eq!(found["best"]["by"], "Pedro Victor");
+        assert_eq!(found["best"]["uri"], "spotify:playlist:aaa");
 
-        // Unconfirmed: refused before anything is sent to Spotify.
-        let refused = execute_spotify_tool(
-            &spotify,
-            "spotify:play",
-            &json!({"uri":"spotify:playlist:aaa"}),
-        )
-        .await;
-        assert!(refused.unwrap_err().contains("not confirmed"));
+        // Nothing plays until spotify:play is called; then it plays on the available device.
         assert!(played.lock().unwrap().is_empty());
-        // Confirmed once: plays on the available device, then the confirmation is spent.
-        spotify.confirm("spotify:playlist:aaa");
         let ok = execute_spotify_tool(
             &spotify,
             "spotify:play",
@@ -889,15 +877,6 @@ mod tests {
         assert_eq!(
             played.lock().unwrap()[0]["body"]["context_uri"],
             "spotify:playlist:aaa"
-        );
-        assert!(
-            execute_spotify_tool(
-                &spotify,
-                "spotify:play",
-                &json!({"uri":"spotify:playlist:aaa"})
-            )
-            .await
-            .is_err()
         );
         let _ = std::fs::remove_dir_all(dir);
     }

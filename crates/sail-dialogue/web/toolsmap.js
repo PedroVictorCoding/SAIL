@@ -758,8 +758,8 @@
   }
 
   // ------------------------------------------------------------------ Now Playing (Spotify)
-  // The owner's Spotify player. SAIL plays music from the conversation after a spoken
-  // confirmation; this card shows what is playing and offers the basic controls.
+  // The owner's Spotify player. SAIL plays music as soon as it is asked for in the
+  // conversation; this card shows what is playing and offers the basic controls.
   function renderNowPlaying() {
     const box = $('#tmNowPlaying'); if (!box) return;
     const sp = state.spotify;
