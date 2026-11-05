@@ -5,6 +5,33 @@ use sail_mind::{
 use std::path::PathBuf;
 
 #[test]
+fn launch_explicitly_enforces_flash_attention_for_all_backends() {
+    for backend in [
+        ComputeBackend::Cpu,
+        ComputeBackend::Vulkan,
+        ComputeBackend::Hybrid,
+    ] {
+        for enabled in [false, true] {
+            let config = LocalModelConfig {
+                compute: backend,
+                flash_attn: enabled,
+                cache_type_k: "f16".into(),
+                cache_type_v: "f16".into(),
+                ..Default::default()
+            };
+            let args = config.launch_args(1).unwrap();
+            let flags: Vec<_> = args.windows(2).filter(|pair| pair[0] == "-fa").collect();
+            assert_eq!(
+                flags.len(),
+                1,
+                "missing or ambiguous Flash Attention setting"
+            );
+            assert_eq!(flags[0][1], if enabled { "on" } else { "off" });
+        }
+    }
+}
+
+#[test]
 fn cpu_tuned_profile_decouples_batch_threads_and_sets_optimal_defaults() {
     let profile = InferenceProfileManager::cpu_tuned("Qwen3.6-35B");
     assert_eq!(profile.backend, ComputeBackend::Cpu);
