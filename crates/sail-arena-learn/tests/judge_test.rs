@@ -289,7 +289,7 @@ async fn offline_judge_leaves_the_answer_unjudged_and_the_next_turn_retries() {
     assert_eq!(model.remaining(), 0);
     assert_eq!(
         model.requests.lock().unwrap().last().unwrap().tools.len(),
-        4,
+        6,
         "the last call was the tutor's"
     );
 }
@@ -360,7 +360,7 @@ async fn knowledge_questions_need_a_rubric_but_open_questions_do_not() {
     model.push(say("Great, we'll use home networks as examples."));
     engine.run_turn(&s).await.unwrap();
     let last = model.requests.lock().unwrap().last().unwrap().clone();
-    assert_eq!(last.tools.len(), 4, "tutor, not judge");
+    assert_eq!(last.tools.len(), 6, "tutor, not judge");
     assert!(
         tool_results(&model, 4)
             .iter()

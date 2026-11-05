@@ -58,3 +58,64 @@ pub trait Model: Send + Sync {
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<InferenceResponse, String>;
 }
+
+/// One proposition extracted from a session or an imported note.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct KnowledgeItem {
+    pub statement: String,
+    /// Verbatim text from the source. Ungrounded propositions are rejected.
+    pub quote: String,
+}
+
+/// A chain over indexes in the same extraction batch.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct KnowledgeChain {
+    pub conclusion: usize,
+    pub premises: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct KnowledgeHit {
+    pub id: i64,
+    pub statement: String,
+    pub topic: String,
+    pub quote: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct KnowledgeSource {
+    pub id: i64,
+    pub name: String,
+    pub topic: String,
+}
+
+/// Arena's learning graph, as the agent layer needs it. Implemented in `agent::knowledge`
+/// over `sail-arena`; tests use an in-memory double.
+pub trait KnowledgeGraph: Send + Sync {
+    /// Gated, bounded retrieval (#251). The caller labels results untrusted.
+    fn search(
+        &self,
+        topic: Option<&str>,
+        query: &str,
+        limit: usize,
+        budget_bytes: usize,
+    ) -> Result<Vec<KnowledgeHit>, String>;
+    /// Deterministic merge of one extraction batch. Returns how many propositions were
+    /// stored or merged. Chains refer to indexes in `items`.
+    fn store_extraction(
+        &self,
+        topic: &str,
+        session: Option<&str>,
+        source_id: Option<i64>,
+        items: &[KnowledgeItem],
+        chains: &[KnowledgeChain],
+    ) -> Result<usize, String>;
+    fn covered_through(&self, session: &str) -> Result<i64, String>;
+    fn set_covered_through(&self, session: &str, seq: i64) -> Result<(), String>;
+    fn add_source(&self, topic: &str, name: &str, content: &str)
+    -> Result<KnowledgeSource, String>;
+    fn delete_source(&self, id: i64) -> Result<(), String>;
+    fn sources(&self, topic: Option<&str>) -> Result<Vec<KnowledgeSource>, String>;
+    /// Number of active propositions, for honest import/extraction progress.
+    fn proposition_count(&self, topic: Option<&str>) -> Result<usize, String>;
+}

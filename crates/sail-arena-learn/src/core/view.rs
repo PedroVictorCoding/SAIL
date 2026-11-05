@@ -6,7 +6,7 @@ use super::events::{AgentRole, Envelope, LearningEvent, PresentKind, TurnOutcome
 use super::graph::GraphSummary;
 use super::judgment::Judgment;
 use super::plan::LessonPlan;
-use super::practice::PracticeSession;
+use super::practice::{PracticeView, ProblemSpec};
 use super::question::{Answer, Grade, QuestionKind, QuestionOption, QuestionSpec};
 use serde::Serialize;
 
@@ -15,6 +15,7 @@ use serde::Serialize;
 pub enum Mode {
     Assess,
     Teach,
+    Practice,
 }
 
 /// A question as the learner sees it. `correct` appears only after it is answered; a
@@ -38,11 +39,31 @@ pub struct LearnerQuestion {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Entry {
-    Learner { text: String },
-    Assistant { text: String },
-    Explain { node_id: String, text: String },
+    Learner {
+        text: String,
+    },
+    Assistant {
+        text: String,
+    },
+    Explain {
+        node_id: String,
+        text: String,
+    },
     Question(Box<LearnerQuestion>),
-    Notice { text: String },
+    Diagram {
+        call_id: String,
+        node_id: String,
+        mermaid: String,
+        caption: String,
+        error: Option<String>,
+    },
+    Problem {
+        problem_id: String,
+        statement: String,
+    },
+    Notice {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -91,8 +112,35 @@ pub struct SessionView {
     pub artifacts: Vec<Artifact>,
     /// Persistent learning graph summary.
     pub graph_summary: Option<GraphSummary>,
-    /// Active practice session if in practice phase.
-    pub practice_session: Option<PracticeSession>,
+    /// Practice state when this is a practice session (#244).
+    pub practice: Option<PracticeView>,
+    /// The latest opted-in review reminder (#257).
+    pub review: Option<ReviewScheduled>,
+    /// Approximate share of the model context budget in use (0..=1).
+    pub context_fraction: f32,
+    /// Prompt and completion tokens for this session.
+    pub context_budget_tokens: u64,
+    /// Approximate prompt-history tokens; updated incrementally with the event log.
+    #[serde(skip)]
+    pub(crate) context_tokens: u64,
+    /// Hidden problem specs, never serialized: solutions and hints until revealed.
+    #[serde(skip)]
+    pub(crate) problem_specs: Vec<(String, ProblemSpec)>,
+}
+
+/// Prompt budget used for the meter. The request window keeps the actual request smaller.
+pub const CONTEXT_BUDGET_TOKENS: u64 = 24_000;
+
+fn approx_tokens(text: &str) -> u64 {
+    (text.len() as u64).div_ceil(4)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewScheduled {
+    pub days: u8,
+    pub due_at_ms: i64,
+    pub reminder_id: String,
+    pub problem_id: Option<String>,
 }
 
 impl SessionView {
@@ -114,7 +162,12 @@ impl SessionView {
             last_seq: 0,
             artifacts: Vec::new(),
             graph_summary: None,
-            practice_session: None,
+            practice: None,
+            review: None,
+            context_fraction: 0.0,
+            context_budget_tokens: CONTEXT_BUDGET_TOKENS,
+            context_tokens: 0,
+            problem_specs: Vec::new(),
         }
     }
 
@@ -123,6 +176,7 @@ impl SessionView {
         match self.mode {
             Mode::Assess => AgentRole::Prober,
             Mode::Teach => AgentRole::Teacher,
+            Mode::Practice => AgentRole::Practitioner,
         }
     }
 
@@ -155,6 +209,11 @@ impl SessionView {
     pub fn apply(&mut self, envelope: &Envelope, specs: &mut Vec<(String, QuestionSpec)>) {
         self.last_seq = envelope.seq;
         let event = &envelope.event;
+        self.context_tokens = self.context_tokens.saturating_add(approx_tokens(
+            &serde_json::to_string(event).unwrap_or_default(),
+        ));
+        self.context_fraction =
+            (self.context_tokens as f32 / CONTEXT_BUDGET_TOKENS as f32).min(1.0);
         if event.is_input() {
             self.needs_turn = true;
         }
@@ -256,6 +315,113 @@ impl SessionView {
                     });
                 }
             }
+            LearningEvent::DiagramShown {
+                call_id,
+                node_id,
+                mermaid,
+                caption,
+            } => self.transcript.push(Entry::Diagram {
+                call_id: call_id.clone(),
+                node_id: node_id.clone(),
+                mermaid: mermaid.clone(),
+                caption: caption.clone(),
+                error: None,
+            }),
+            LearningEvent::DiagramRenderFailed { call_id, message } => {
+                if let Some(Entry::Diagram { error, .. }) = self
+                    .transcript
+                    .iter_mut()
+                    .rev()
+                    .find(|e| matches!(e, Entry::Diagram { call_id: id, .. } if id == call_id))
+                {
+                    *error = Some(message.clone());
+                }
+            }
+            LearningEvent::PracticeStarted { topic } => {
+                self.mode = Mode::Practice;
+                self.goal = topic.clone();
+                self.practice = Some(PracticeView::default());
+                self.transcript.push(Entry::Notice {
+                    text: format!("Practice session: {topic}"),
+                });
+            }
+            LearningEvent::ProblemAsked {
+                problem_id, spec, ..
+            } => {
+                let practice = self.practice.get_or_insert_with(PracticeView::default);
+                practice.active_problem = Some(problem_id.clone());
+                practice.problems.push(super::practice::ProblemView {
+                    id: problem_id.clone(),
+                    statement: spec.statement.clone(),
+                    hints: Vec::new(),
+                    hint_count: spec.hints.len(),
+                    solution: None,
+                    outcome: None,
+                    attempts: Vec::new(),
+                });
+                self.problem_specs.push((problem_id.clone(), spec.clone()));
+                self.transcript.push(Entry::Problem {
+                    problem_id: problem_id.clone(),
+                    statement: spec.statement.clone(),
+                });
+            }
+            LearningEvent::PracticeAttempted { problem_id, text } => {
+                if let Some(practice) = self.practice.as_mut()
+                    && let Some(problem) = practice.problem_mut(problem_id)
+                {
+                    problem.attempts.push(text.clone());
+                }
+            }
+            LearningEvent::HintRequested { problem_id, index } => {
+                let hint = self
+                    .problem_specs
+                    .iter()
+                    .find(|(id, _)| id == problem_id)
+                    .and_then(|(_, spec)| spec.hints.get(*index as usize))
+                    .cloned();
+                if let Some(hint) = hint
+                    && let Some(practice) = self.practice.as_mut()
+                    && let Some(problem) = practice.problem_mut(problem_id)
+                    && !problem.hints.contains(&hint)
+                {
+                    problem.hints.push(hint);
+                }
+            }
+            LearningEvent::PracticeConcluded {
+                problem_id,
+                outcome,
+            } => {
+                let solution = self
+                    .problem_specs
+                    .iter()
+                    .find(|(id, _)| id == problem_id)
+                    .map(|(_, spec)| spec.solution.clone());
+                if let Some(practice) = self.practice.as_mut() {
+                    if let Some(problem) = practice.problem_mut(problem_id) {
+                        problem.solution = solution;
+                        problem.outcome = Some(*outcome);
+                    }
+                    if practice.active_problem.as_deref() == Some(problem_id) {
+                        practice.active_problem = None;
+                    }
+                    practice.last_outcome = Some(*outcome);
+                }
+            }
+            LearningEvent::PracticeReviewScheduled {
+                problem_id,
+                days,
+                due_at_ms,
+                reminder_id,
+            } => {
+                self.review = Some(ReviewScheduled {
+                    days: *days,
+                    due_at_ms: *due_at_ms,
+                    reminder_id: reminder_id.clone(),
+                    problem_id: problem_id.clone(),
+                });
+            }
+            LearningEvent::PracticeReviewCancelled => self.review = None,
+            LearningEvent::ContextCompacted { .. } => {}
             LearningEvent::TurnSettled {
                 outcome,
                 input_tokens,
@@ -276,7 +442,14 @@ impl SessionView {
             LearningEvent::Paused => self.paused = true,
             LearningEvent::Resumed => self.paused = false,
         }
-        if self.paused || self.active_question.is_some() {
+        let practice_open = self
+            .practice
+            .as_ref()
+            .is_some_and(|p| p.active_problem.is_some());
+        // A waiting problem blocks autonomous turns, but a just-recorded attempt is input
+        // the practitioner must evaluate.
+        let attempt_arrived = matches!(event, LearningEvent::PracticeAttempted { .. });
+        if self.paused || self.active_question.is_some() || (practice_open && !attempt_arrived) {
             self.needs_turn = false;
         }
     }

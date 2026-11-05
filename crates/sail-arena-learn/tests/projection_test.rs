@@ -140,3 +140,77 @@ fn view_has_no_mastery_or_score_fields() {
         assert!(!json.contains(word), "view exposes `{word}`: {json}");
     }
 }
+
+#[test]
+fn compaction_cuts_on_an_input_boundary_and_keeps_tool_pairs() {
+    use sail_arena_learn::core::messages::{compact_digest, compaction_cut};
+    use sail_arena_learn::core::view::CONTEXT_BUDGET_TOKENS;
+
+    let mut events = vec![LearningEvent::SessionCreated { goal: "g".into() }];
+    for i in 0..200 {
+        events.push(LearningEvent::LearnerMessage {
+            text: format!("question {i} ").repeat(20),
+        });
+        let id = format!("c{i}");
+        events.push(LearningEvent::AssistantMessage {
+            role: AgentRole::Teacher,
+            text: String::new(),
+            tool_calls: vec![call(&id)],
+        });
+        events.push(LearningEvent::ToolResult {
+            call_id: id,
+            content: "x".repeat(400),
+            ok: true,
+        });
+    }
+    let mut log = log(events);
+    let cut = compaction_cut(&log, CONTEXT_BUDGET_TOKENS).expect("history is over budget");
+    // The cut sits immediately before an input event, so no call/result pair straddles it.
+    let after = log.iter().find(|e| e.seq == cut + 1).unwrap();
+    assert!(after.event.is_input(), "cut must precede a learner input");
+
+    let digest = compact_digest(&log, cut);
+    assert!(digest.contains("teaching order") || digest.contains("goal"));
+    log.push(Envelope {
+        session: "s".into(),
+        seq: log.len() as u64 + 1,
+        at_ms: 0,
+        key: "compact".into(),
+        version: SCHEMA_VERSION,
+        event: LearningEvent::ContextCompacted {
+            up_to_seq: cut,
+            digest: digest.clone(),
+        },
+    });
+    let messages = to_llm_messages("system", &log);
+    assert_eq!(messages[0].role, Role::System);
+    assert!(messages[1].content.text().unwrap().contains("digest"));
+    // Every tool result in the projection follows a matching assistant call.
+    let mut calls = std::collections::HashSet::new();
+    for message in &messages {
+        for call in &message.tool_calls {
+            calls.insert(call.id.clone());
+        }
+        if let Some(id) = &message.tool_call_id {
+            assert!(calls.contains(id), "orphan tool result {id}");
+        }
+    }
+    // A second cut does not re-cut the same history forever.
+    assert!(compaction_cut(&log, CONTEXT_BUDGET_TOKENS).is_none());
+}
+
+#[test]
+fn the_view_exposes_a_context_meter_without_a_cost_estimate() {
+    let events = log(vec![
+        LearningEvent::SessionCreated { goal: "g".into() },
+        LearningEvent::LearnerMessage {
+            text: "x".repeat(4_000),
+        },
+    ]);
+    let view = project_view("s", &events);
+    assert_eq!(view.context_budget_tokens, 24_000);
+    assert!(view.context_fraction > 0.0 && view.context_fraction <= 1.0);
+    let json = serde_json::to_string(&view).unwrap();
+    assert!(json.contains("context_fraction"));
+    assert!(!json.to_lowercase().contains("cost"));
+}

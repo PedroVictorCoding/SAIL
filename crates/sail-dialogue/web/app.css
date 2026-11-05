@@ -1923,3 +1923,14 @@ a.nav-item { text-decoration:none; color:var(--muted) }
   .side-rail .nav-item { min-height:36px }
 }
 .ui-style-switch .quiet-button[aria-pressed="true"] { background:var(--recessed); box-shadow:var(--depth-inset); border-color:var(--accent); color:var(--accent) }
+/* Arena Learn: context meter, practice and review (#254, #244, #257). */
+.learn-context { display:flex; align-items:center; gap:var(--space-2); margin:var(--space-2) 0 }
+.learn-context-label { font-size:11px; color:var(--text-muted); white-space:nowrap }
+.learn-context-track { flex:1; height:6px; border-radius:999px; background:var(--surface-inset); overflow:hidden; box-shadow:var(--shadow-inset) }
+.learn-context-bar { height:100%; width:0; background:var(--accent); transition:width .2s ease }
+.learn-review { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2); padding:var(--space-3); border-radius:12px; background:var(--surface-raised); box-shadow:var(--shadow-raised) }
+.learn-review p { margin:0; flex:1 1 100% }
+.learn-hints { margin:0; padding-left:18px; color:var(--text-muted) }
+.learn-caption { font-size:12px; color:var(--text-muted) }
+.learn-dictate { align-self:flex-start }
+@media (prefers-reduced-motion:reduce) { .learn-context-bar { transition:none } }

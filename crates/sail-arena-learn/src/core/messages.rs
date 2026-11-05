@@ -101,6 +101,7 @@ pub fn to_llm_messages(system_prompt: &str, events: &[Envelope]) -> Vec<Message>
     // Calls of the latest assistant message that have no result yet, in order.
     let mut pending: Vec<String> = Vec::new();
     let mut questions: Vec<(String, &QuestionSpec)> = Vec::new();
+    let mut problems: Vec<(String, String, &super::practice::ProblemSpec)> = Vec::new();
     // Judgments are stored after the answer; the tutor sees them with it.
     let judgments: Vec<(&str, &Judgment)> = events
         .iter()
@@ -159,6 +160,57 @@ pub fn to_llm_messages(system_prompt: &str, events: &[Envelope]) -> Vec<Message>
             LearningEvent::QuestionAsked { call_id, spec, .. } => {
                 questions.push((call_id.clone(), spec));
             }
+            LearningEvent::ProblemAsked {
+                call_id,
+                problem_id,
+                spec,
+            } => {
+                problems.push((call_id.clone(), problem_id.clone(), spec));
+            }
+            LearningEvent::PracticeAttempted { problem_id, text } => {
+                if let Some(i) = problems.iter().position(|(_, id, _)| id == problem_id)
+                    && pending.iter().any(|id| id == &problems[i].0)
+                {
+                    let call_id = problems[i].0.clone();
+                    pending.retain(|id| id != &call_id);
+                    out.push(tool_message(
+                        &call_id,
+                        json!({
+                            "learner_attempt": text,
+                            "note": "Practice evidence only. Evaluate it and call `conclude` with solved, solved_with_hints or not_solved; the solution is then revealed.",
+                        })
+                        .to_string(),
+                    ));
+                }
+            }
+            LearningEvent::HintRequested { .. }
+            | LearningEvent::PracticeConcluded { .. }
+            | LearningEvent::PracticeReviewScheduled { .. }
+            | LearningEvent::PracticeReviewCancelled
+            | LearningEvent::PracticeStarted { .. } => {}
+            LearningEvent::DiagramShown { .. } => {}
+            LearningEvent::DiagramRenderFailed { call_id, message } => {
+                out.push(Message::text(
+                    Role::User,
+                    format!(
+                        "Tool `show_diagram` failed in the browser for call {call_id}: {message}. \
+                         Use a simpler diagram or explain it in words."
+                    ),
+                ));
+            }
+            LearningEvent::ContextCompacted { up_to_seq, digest } => {
+                out.clear();
+                pending.clear();
+                questions.clear();
+                problems.clear();
+                out.push(Message::text(Role::System, system_prompt));
+                out.push(Message::text(
+                    Role::User,
+                    format!(
+                        "Earlier parts of this lesson (through event {up_to_seq}) are represented by this digest, not repeated:\n{digest}"
+                    ),
+                ));
+            }
             LearningEvent::Answered {
                 call_id,
                 answer,
@@ -187,12 +239,20 @@ pub fn to_llm_messages(system_prompt: &str, events: &[Envelope]) -> Vec<Message>
             | LearningEvent::Resumed => {}
         }
     }
-    // At the end, an unanswered question keeps its placeholder; anything else was cut off.
+    // At the end, an unanswered question or problem keeps its placeholder; anything else
+    // was cut off.
     for id in pending.drain(..) {
         let asked = questions.iter().any(|(q, _)| *q == id);
+        let practising = problems.iter().any(|(call, _, _)| *call == id);
         out.push(tool_message(
             &id,
-            if asked { AWAITING } else { INTERRUPTED }.to_string(),
+            if asked {
+                AWAITING.to_string()
+            } else if practising {
+                "Awaiting the learner's practice attempt.".to_string()
+            } else {
+                INTERRUPTED.to_string()
+            },
         ));
     }
     out
@@ -246,5 +306,134 @@ pub fn window(messages: Vec<Message>) -> Vec<Message> {
     let mut out: Vec<Message> = messages[..head].to_vec();
     out.push(note);
     out.extend_from_slice(&messages[cut..]);
+    out
+}
+
+/// Approximate prompt tokens for one stored event. Conservative (JSON length / 4).
+pub fn event_tokens(envelope: &Envelope) -> u64 {
+    (serde_json::to_string(&envelope.event)
+        .map(|s| s.len())
+        .unwrap_or(0) as u64)
+        .div_ceil(4)
+}
+
+/// Picks a compaction cut for a long session (#252). Returns the `up_to_seq` to replace.
+///
+/// The cut is always immediately before an input event (the learner's answer, message or
+/// practice attempt), so an assistant tool call is never separated from its result. Only
+/// events after the latest compaction are considered, so repeated turns do not keep cutting
+/// the same history. `None` when the log fits the budget.
+pub fn compaction_cut(events: &[Envelope], budget_tokens: u64) -> Option<u64> {
+    let start = events
+        .iter()
+        .rposition(|e| matches!(e.event, LearningEvent::ContextCompacted { .. }))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let recent = &events[start..];
+    let total: u64 = recent.iter().map(event_tokens).sum();
+    if total <= budget_tokens {
+        return None;
+    }
+    // Keep roughly the newest half; find the first input boundary at or after that point.
+    let target = budget_tokens / 2;
+    let mut acc = 0u64;
+    for i in (0..recent.len()).rev() {
+        acc = acc.saturating_add(event_tokens(&recent[i]));
+        if acc > target {
+            let boundary = (i..recent.len()).find(|&j| recent[j].event.is_input())?;
+            let up_to = if boundary == 0 {
+                0
+            } else {
+                recent[boundary - 1].seq
+            };
+            return Some(up_to);
+        }
+    }
+    None
+}
+
+/// A deterministic summary that replaces compacted history (#252): goal, plan, progress,
+/// the last answers and the last explanation. No model call, no clock.
+pub fn compact_digest(events: &[Envelope], up_to_seq: u64) -> String {
+    let kept: Vec<Envelope> = events
+        .iter()
+        .filter(|e| e.seq <= up_to_seq)
+        .cloned()
+        .collect();
+    let view = super::view::project_view("", &kept);
+    let mut out = String::from("Compacted lesson state:\n");
+    out.push_str(&format!("- goal: {}\n", view.goal));
+    if let Some(plan) = &view.plan {
+        let titles: Vec<String> = plan
+            .order
+            .iter()
+            .map(|id| {
+                let title = plan
+                    .nodes
+                    .iter()
+                    .find(|n| &n.id == id)
+                    .map(|n| n.title.as_str())
+                    .unwrap_or(id);
+                format!("{id} ({title})")
+            })
+            .collect();
+        out.push_str(&format!(
+            "- plan revision {}: teaching order {}\n",
+            plan.revision,
+            titles.join(" -> ")
+        ));
+        out.push_str(&format!(
+            "- visited: {}; current: {}; upcoming: {}\n",
+            view.progress.visited.join(", "),
+            view.progress.current.as_deref().unwrap_or("none"),
+            view.progress.upcoming.join(", ")
+        ));
+    }
+    if let Some(probe) = &view.probe {
+        out.push_str(&format!("- assessment: {}\n", probe.summary));
+    }
+    // Last few learner answers and the verdict the tutor already saw.
+    let mut answers = Vec::new();
+    for envelope in kept.iter().rev() {
+        if let LearningEvent::Answered {
+            call_id,
+            answer,
+            grade,
+        } = &envelope.event
+        {
+            let prompt = super::view::question_spec(&kept, call_id)
+                .map(|q| q.prompt.clone())
+                .unwrap_or_default();
+            let judgment = super::view::judgment_of(&kept, call_id)
+                .map(|j| format!("{:?}", j.verdict))
+                .unwrap_or_default();
+            let text = answer
+                .text
+                .clone()
+                .unwrap_or_else(|| answer.choices.join(", "));
+            answers.push(format!(
+                "  - Q: {prompt} | A: {text} | grade: {grade:?} {judgment}"
+            ));
+            if answers.len() == 3 {
+                break;
+            }
+        }
+    }
+    if !answers.is_empty() {
+        out.push_str("- last answers:\n");
+        out.push_str(&answers.join("\n"));
+        out.push('\n');
+    }
+    if let Some(last_explain) = kept.iter().rev().find_map(|e| match &e.event {
+        LearningEvent::ConceptPresented {
+            kind: super::events::PresentKind::Explain,
+            text,
+            ..
+        } => Some(text),
+        _ => None,
+    }) {
+        let short: String = last_explain.chars().take(400).collect();
+        out.push_str(&format!("- last explanation: {short}\n"));
+    }
     out
 }

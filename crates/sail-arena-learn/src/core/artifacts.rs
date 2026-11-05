@@ -4,9 +4,9 @@
 //! explanations, diagrams, problem sets, extracted notes, proof-of-concept code.
 //! Each artifact carries provenance, validity range, and usage statistics.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 /// Unique artifact identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

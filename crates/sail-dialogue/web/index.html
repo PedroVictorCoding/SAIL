@@ -416,9 +416,14 @@
           <header class="card-heading"><div class="card-title"><h2>Learn</h2></div><div class="card-heading-actions"><button class="quiet-button" id="learnNew" type="button" hidden>New goal</button></div></header>
           <section id="learnStart" aria-label="Start learning">
             <form id="learnStartForm" class="learn-start">
-              <label for="learnGoal">What do you want to understand?</label>
+              <label for="learnGoal">What do you want to understand or practise?</label>
               <input id="learnGoal" maxlength="300" required placeholder="For example: how TCP congestion control works">
-              <button class="quiet-button learn-primary" type="submit">Start learning</button>
+              <label for="learnStartMode">Start with</label>
+              <select id="learnStartMode">
+                <option value="learn">Learn a topic</option>
+                <option value="practice">Practise a topic</option>
+              </select>
+              <button class="quiet-button learn-primary" type="submit">Start</button>
             </form>
             <p class="learn-hint">SAIL first asks a few questions to find your starting point, then teaches one small step at a time. Everything runs on this host.</p>
             <div id="learnSessions" class="learn-sessions"></div>
@@ -427,6 +432,10 @@
             <div class="learn-goal-line">
               <div><h3 id="learnGoalTitle"></h3><span id="learnMode" class="learn-mode"></span></div>
               <div class="learn-controls"><button class="quiet-button" id="learnStop" type="button" hidden>Stop</button><button class="quiet-button" id="learnPause" type="button" aria-pressed="false">Pause</button></div>
+            </div>
+            <div class="learn-context" aria-label="Context use">
+              <span id="learnContextLabel" class="learn-context-label"></span>
+              <div class="learn-context-track" role="progressbar" aria-labelledby="learnContextLabel" aria-valuemin="0" aria-valuemax="100"><div id="learnContextBar" class="learn-context-bar"></div></div>
             </div>
             <div class="learn-status-line"><p id="learnStatus" role="status" aria-live="polite"></p><button class="quiet-button" id="learnRetry" type="button" hidden>Try again</button></div>
             <div class="learn-layout">
@@ -440,6 +449,8 @@
               <div class="learn-main">
                 <ol id="learnTranscript" class="learn-transcript" aria-label="Lesson so far"></ol>
                 <form id="learnDock" class="learn-dock" aria-label="Current question" hidden></form>
+                <section id="learnPractice" class="learn-dock" aria-label="Current practice problem" hidden></section>
+                <section id="learnReview" class="learn-review" aria-label="Practice reminder" hidden></section>
                 <form id="learnMessageForm" class="learn-message">
                   <label for="learnMessageInput" class="sr-only">Message the tutor</label>
                   <input id="learnMessageInput" maxlength="2000" placeholder="Ask, or say “explain differently”, “too easy”…">

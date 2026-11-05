@@ -64,3 +64,20 @@ test('free-recall judgments show the verdict and the missing relation, never a g
     assert.doesNotMatch(ui.learnGradeText(judged(verdict)), /master/i);
   }
 });
+
+test('context meter is bounded and never mentions cost', () => {
+  assert.deepEqual(ui.learnContextMeter({context_fraction: 0.42}), {percent: 42, label: 'Context 42% used', warn: ''});
+  assert.match(ui.learnContextMeter({context_fraction: 0.9}).warn, /nearly full/);
+  assert.equal(ui.learnContextMeter({context_fraction: 5}).percent, 100);
+  assert.equal(ui.learnContextMeter(null).percent, 0);
+  assert.doesNotMatch(ui.learnContextMeter({context_fraction: 0.5}).label, /cost|price/i);
+});
+
+test('practice outcomes are described without mastery or scores', () => {
+  assert.equal(ui.learnPracticeText('solved'), 'Solved.');
+  assert.equal(ui.learnPracticeText('solved_with_hints'), 'Solved with hints.');
+  assert.equal(ui.learnPracticeText('not_solved'), 'Not solved yet.');
+  for (const outcome of ['solved', 'solved_with_hints', 'not_solved']) {
+    assert.doesNotMatch(ui.learnPracticeText(outcome), /master|score|grade/i);
+  }
+});

@@ -6,10 +6,10 @@
 //! view and leaves the turn running; `POST …/abort` is the only way to stop it.
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use futures_util::stream::{self, Stream};
 use sail_arena_learn::core::question::Answer;
@@ -24,21 +24,47 @@ use tokio::sync::broadcast::error::RecvError;
 struct LearnState {
     engine: Arc<Engine>,
     authority: Option<ApprovalAuthority>,
+    pulse: Option<Arc<sail_pulse::Pulse>>,
 }
 
 type Reply = Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)>;
 
 pub fn router(engine: Arc<Engine>, authority: Option<ApprovalAuthority>) -> Router {
+    router_with_pulse(engine, authority, None)
+}
+
+pub fn router_with_pulse(
+    engine: Arc<Engine>,
+    authority: Option<ApprovalAuthority>,
+    pulse: Option<Arc<sail_pulse::Pulse>>,
+) -> Router {
     Router::new()
+        .route("/prompts", get(prompts))
+        .route(
+            "/sources",
+            get(list_sources)
+                .post(upload_source)
+                .layer(DefaultBodyLimit::max(5 * 1024 * 1024 + 64_000)),
+        )
+        .route("/sources/:id", delete(remove_source))
         .route("/sessions", get(list).post(create))
         .route("/sessions/:id", get(view).delete(remove))
         .route("/sessions/:id/turn", post(turn))
         .route("/sessions/:id/answer", post(answer))
+        .route("/sessions/:id/hint", post(hint))
+        .route("/sessions/:id/attempt", post(attempt))
+        .route("/sessions/:id/diagram-error", post(diagram_error))
+        .route(
+            "/sessions/:id/review",
+            post(schedule_review).delete(cancel_review),
+        )
         .route("/sessions/:id/message", post(message))
         .route("/sessions/:id/abort", post(abort))
         .route("/sessions/:id/pause", post(pause))
         .route("/sessions/:id/stream", get(stream_view))
-        .layer(axum::extract::DefaultBodyLimit::max(64_000))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            5 * 1024 * 1024 + 64_000,
+        ))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
                 response.headers_mut().insert(
@@ -48,7 +74,11 @@ pub fn router(engine: Arc<Engine>, authority: Option<ApprovalAuthority>) -> Rout
                 response
             },
         ))
-        .with_state(Arc::new(LearnState { engine, authority }))
+        .with_state(Arc::new(LearnState {
+            engine,
+            authority,
+            pulse,
+        }))
 }
 
 fn authorize(s: &LearnState, h: &HeaderMap) -> Result<(), (StatusCode, Json<Value>)> {
@@ -120,16 +150,118 @@ async fn list(State(s): State<Arc<LearnState>>, h: HeaderMap) -> Reply {
 #[serde(deny_unknown_fields)]
 struct Create {
     goal: String,
+    /// `learn` (default) or `practice` (#244).
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 async fn create(State(s): State<Arc<LearnState>>, h: HeaderMap, Json(c): Json<Create>) -> Reply {
     authorize(&s, &h)?;
-    let view = s.engine.create_session(&c.goal).map_err(error)?;
+    let view = match c.mode.as_deref() {
+        None | Some("learn") => s.engine.create_session(&c.goal),
+        Some("practice") => s.engine.create_practice_session(&c.goal),
+        Some(other) => Err(TurnError::Invalid(format!(
+            "mode must be `learn` or `practice`, not `{other}`"
+        ))),
+    }
+    .map_err(error)?;
     continue_session(&s.engine, &view.session);
     ok(
         StatusCode::CREATED,
         snapshot(&s.engine, &view.session).map_err(error)?,
     )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceQuery {
+    #[serde(default)]
+    topic: Option<String>,
+}
+
+async fn list_sources(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Query(q): Query<SourceQuery>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let sources = s.engine.sources(q.topic.as_deref()).map_err(error)?;
+    let propositions = s
+        .engine
+        .proposition_count(q.topic.as_deref())
+        .map_err(error)?;
+    ok(
+        StatusCode::OK,
+        json!({"sources":sources,"propositions":propositions}),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UploadSource {
+    topic: String,
+    name: String,
+    content: String,
+}
+
+/// Owner upload of a Markdown/text note (#250). The content is capped at 5 MiB.
+async fn upload_source(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Json(b): Json<UploadSource>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let name = b.name.trim();
+    if !(name.ends_with(".md") || name.ends_with(".txt")) {
+        return Err(error(TurnError::Invalid(
+            "only .md and .txt notes can be imported".into(),
+        )));
+    }
+    if b.content.len() > 5 * 1024 * 1024 {
+        return Err(error(TurnError::Invalid(
+            "a note may be at most 5 MiB".into(),
+        )));
+    }
+    let source = s
+        .engine
+        .import_notes(&b.topic, name, &b.content)
+        .map_err(error)?;
+    // Extraction runs in the background; the source is visible immediately.
+    let engine = s.engine.clone();
+    let topic = b.topic.clone();
+    let content = b.content.clone();
+    let source_name = source.name.clone();
+    let id = source.id;
+    tokio::spawn(async move {
+        if let Err(error) = engine
+            .extract_source(&topic, id, &source_name, &content)
+            .await
+        {
+            tracing::warn!(%error, source = id, "Arena Learn note extraction failed");
+        }
+    });
+    ok(StatusCode::ACCEPTED, json!({"source":source}))
+}
+
+async fn remove_source(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Path(id): Path<i64>,
+) -> Reply {
+    authorize(&s, &h)?;
+    s.engine.delete_source(id).map_err(error)?;
+    ok(StatusCode::OK, json!({"deleted":true}))
+}
+
+async fn prompts(State(s): State<Arc<LearnState>>, h: HeaderMap) -> Reply {
+    authorize(&s, &h)?;
+    let prompts: serde_json::Map<String, Value> = s
+        .engine
+        .effective_prompts()
+        .into_iter()
+        .map(|(name, text)| (name, Value::String(text)))
+        .collect();
+    ok(StatusCode::OK, json!({"prompts":prompts}))
 }
 
 async fn view(State(s): State<Arc<LearnState>>, h: HeaderMap, Path(id): Path<String>) -> Reply {
@@ -179,6 +311,136 @@ async fn answer(
         .map_err(error)?;
     continue_session(&s.engine, &id);
     ok(StatusCode::OK, json!(outcome))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HintBody {
+    problem_id: String,
+    index: u32,
+}
+
+async fn hint(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(b): Json<HintBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let view = s
+        .engine
+        .request_hint(&id, &b.problem_id, b.index)
+        .map_err(error)?;
+    ok(
+        StatusCode::OK,
+        serde_json::to_value(view).map_err(|e| error(TurnError::Invalid(e.to_string())))?,
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AttemptBody {
+    problem_id: String,
+    text: String,
+}
+
+async fn attempt(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(b): Json<AttemptBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    s.engine
+        .attempt(&id, &b.problem_id, &b.text)
+        .map_err(error)?;
+    continue_session(&s.engine, &id);
+    ok(StatusCode::ACCEPTED, json!({"accepted":true}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiagramErrorBody {
+    call_id: String,
+    message: String,
+}
+
+async fn diagram_error(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(b): Json<DiagramErrorBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    s.engine
+        .diagram_failed(&id, &b.call_id, &b.message)
+        .map_err(error)?;
+    ok(StatusCode::ACCEPTED, json!({"reported":true}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewBody {
+    days: u8,
+    #[serde(default)]
+    problem_id: Option<String>,
+    timezone: String,
+    utc_offset_minutes: i32,
+}
+
+/// Schedules one opt-in Pulse reminder after practice (#257). Off unless this is called.
+async fn schedule_review(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(b): Json<ReviewBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    if !matches!(b.days, 1 | 3 | 7) {
+        return Err(error(TurnError::Invalid("choose 1, 3 or 7 days".into())));
+    }
+    let pulse = s.pulse.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"reminders are unavailable"})),
+        )
+    })?;
+    let view = s.engine.view(&id).map_err(error)?;
+    let due = chrono::Utc::now() + chrono::Duration::days(i64::from(b.days));
+    let text = format!("Practise: {}", view.goal);
+    let reminder = pulse
+        .create(
+            sail_pulse::NewReminder::new(text, due, b.timezone, b.utc_offset_minutes)
+                .map_err(|e| error(TurnError::Invalid(e.to_string())))?,
+        )
+        .map_err(|e| error(TurnError::Invalid(e.to_string())))?;
+    let updated = s
+        .engine
+        .schedule_review(
+            &id,
+            b.problem_id,
+            b.days,
+            reminder.due_at.timestamp_millis(),
+            &reminder.id,
+        )
+        .map_err(error)?;
+    ok(
+        StatusCode::CREATED,
+        serde_json::to_value(updated).map_err(|e| error(TurnError::Invalid(e.to_string())))?,
+    )
+}
+
+async fn cancel_review(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let reminder = s.engine.cancel_review(&id).map_err(error)?;
+    if let (Some(pulse), Some(reminder)) = (s.pulse.as_ref(), reminder.as_deref()) {
+        let _ = pulse.cancel(reminder);
+    }
+    ok(StatusCode::OK, json!({"cancelled":reminder.is_some()}))
 }
 
 #[derive(Deserialize)]

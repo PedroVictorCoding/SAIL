@@ -19,6 +19,7 @@
 pub mod changeset;
 pub mod consolidation;
 pub mod jobs;
+pub mod learning;
 pub mod model;
 mod read;
 pub mod retrieval;

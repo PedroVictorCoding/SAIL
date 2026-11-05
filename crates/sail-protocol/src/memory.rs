@@ -59,6 +59,9 @@ pub enum MemoryPurpose {
     Forge { repo: String },
     /// Background consolidation and retention.
     Maintenance,
+    /// Arena Learn's `learning:*` propositions and reasoning chains. It sees no personal,
+    /// project or health scope, and other purposes do not see learning scopes.
+    Learn,
 }
 
 /// Highest sensitivity a grant may read. Ordered: `Normal < Private < Sensitive`.

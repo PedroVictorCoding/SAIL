@@ -82,7 +82,12 @@ async fn probe_handoff_plan_explain_quiz_and_answer_once() {
     );
     assert_eq!(
         tool_names(&model, 0),
-        ["probe", "ask_user_question", "probe_done"]
+        [
+            "probe",
+            "ask_user_question",
+            "probe_done",
+            "search_knowledge"
+        ]
     );
     let v = engine.view(&view.session).unwrap();
     let q = v.active_question.clone().unwrap();
@@ -117,7 +122,14 @@ async fn probe_handoff_plan_explain_quiz_and_answer_once() {
     );
     assert_eq!(
         tool_names(&model, 2),
-        ["plan_init", "explain", "quiz", "ask_user_question"]
+        [
+            "plan_init",
+            "explain",
+            "quiz",
+            "ask_user_question",
+            "show_diagram",
+            "search_knowledge"
+        ]
     );
     let v = engine.view(&view.session).unwrap();
     assert_eq!(v.mode, Mode::Teach);
@@ -337,4 +349,142 @@ async fn pause_blocks_turns_until_resumed() {
         engine.run_turn(&s).await.unwrap(),
         TurnOutcome::AwaitingLearner
     );
+}
+
+#[tokio::test]
+async fn role_model_slots_are_explicit_and_not_guessed() {
+    let model = Arc::new(Scripted::new(vec![call("probe", probe())]));
+    let store = Arc::new(SqliteEventStore::open_in_memory().unwrap());
+    let mut roles = sail_arena_learn::RoleModels::default();
+    roles.set("prober", "tiny-local");
+    let engine = Arc::new(Engine::new(store, model.clone()).with_models(roles));
+    let s = engine.create_session("goal").unwrap().session;
+    engine.run_turn(&s).await.unwrap();
+    assert_eq!(
+        model.requests.lock().unwrap()[0].model.as_deref(),
+        Some("tiny-local")
+    );
+}
+
+#[tokio::test]
+async fn diagrams_are_rendered_as_events_and_failures_reach_the_next_turn() {
+    let model = Arc::new(Scripted::new(vec![
+        calls(
+            "Here is a diagram.",
+            &[
+                ("plan_init", plan()),
+                (
+                    "show_diagram",
+                    json!({"node_id":"ack","mermaid":"flowchart TD\n  a-->b","caption":"A to B"}),
+                ),
+            ],
+        ),
+        say("What do you notice?"),
+        say("Let's try a simpler one."),
+    ]));
+    let (engine, store) = engine(model.clone());
+    let s = engine.create_session("goal").unwrap().session;
+    store
+        .append(
+            &s,
+            1,
+            5,
+            &[NewEvent::new(
+                "handoff",
+                LearningEvent::ProbeDone {
+                    summary: "ready".into(),
+                    known: vec![],
+                    gaps: vec![],
+                },
+            )],
+        )
+        .unwrap();
+    assert_eq!(engine.run_turn(&s).await.unwrap(), TurnOutcome::Completed);
+    let v = engine.view(&s).unwrap();
+    let Some(Entry::Diagram {
+        call_id,
+        mermaid,
+        error,
+        ..
+    }) = v
+        .transcript
+        .iter()
+        .find(|e| matches!(e, Entry::Diagram { .. }))
+    else {
+        panic!("no diagram entry")
+    };
+    assert_eq!(mermaid, "flowchart TD\n  a-->b");
+    assert!(error.is_none());
+    engine
+        .diagram_failed(&s, call_id, "strict Mermaid parse error")
+        .unwrap();
+    let v = engine.view(&s).unwrap();
+    assert!(matches!(
+        v.transcript.iter().find(|e| matches!(e, Entry::Diagram { .. })),
+        Some(Entry::Diagram { error: Some(e), .. }) if e.contains("parse error")
+    ));
+    // The next turn's prompt carries the browser failure as a tool error note.
+    engine.message(&s, "m1", "try again").unwrap();
+    engine.run_turn(&s).await.unwrap();
+    let last = model.requests.lock().unwrap().last().unwrap().clone();
+    assert!(last.messages.iter().any(|m| {
+        m.content
+            .text()
+            .is_some_and(|t| t.contains("show_diagram") && t.contains("parse error"))
+    }));
+}
+
+#[tokio::test]
+async fn diagram_arguments_cannot_smuggle_html() {
+    let model = Arc::new(Scripted::new(vec![
+        calls(
+            "",
+            &[
+                ("plan_init", plan()),
+                (
+                    "show_diagram",
+                    json!({"node_id":"ack","mermaid":"<script>alert(1)</script>","caption":"x"}),
+                ),
+            ],
+        ),
+        say("No HTML."),
+    ]));
+    let (engine, store) = engine(model);
+    let s = engine.create_session("goal").unwrap().session;
+    store
+        .append(
+            &s,
+            1,
+            5,
+            &[NewEvent::new(
+                "handoff2",
+                LearningEvent::ProbeDone {
+                    summary: "ready".into(),
+                    known: vec![],
+                    gaps: vec![],
+                },
+            )],
+        )
+        .unwrap();
+    engine.run_turn(&s).await.unwrap();
+    assert!(
+        engine
+            .view(&s)
+            .unwrap()
+            .transcript
+            .iter()
+            .all(|e| !matches!(e, Entry::Diagram { .. }))
+    );
+    let errors: Vec<String> = engine
+        .events(&s)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.event {
+            LearningEvent::ToolResult {
+                content, ok: false, ..
+            } => Some(content),
+            _ => None,
+        })
+        .collect();
+    assert!(errors.iter().any(|e| e.contains("must not contain HTML")));
 }

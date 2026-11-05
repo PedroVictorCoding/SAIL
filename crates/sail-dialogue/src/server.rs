@@ -56,14 +56,25 @@ pub struct ServerState {
 /// if its store cannot be opened; the rest of Dialogue still starts.
 fn learn_routes(
     inference: &sail_mind::MindService,
+    arena: &Arc<sail_arena::ArenaSubsystem>,
     authority: Option<sail_guardian::authority::ApprovalAuthority>,
+    pulse: Option<Arc<sail_pulse::Pulse>>,
 ) -> Option<Router> {
-    use sail_arena_learn::{Engine, SqliteEventStore, agent::MindModel};
+    use sail_arena_learn::{Engine, SqliteEventStore, agent::ArenaKnowledge, agent::MindModel};
     let path = SqliteEventStore::default_path();
     match SqliteEventStore::open(&path) {
         Ok(store) => {
-            let engine = Engine::new(Arc::new(store), Arc::new(MindModel::new(inference.clone())));
-            Some(crate::learn_http::router(Arc::new(engine), authority))
+            let mut engine =
+                Engine::new(Arc::new(store), Arc::new(MindModel::new(inference.clone())));
+            match ArenaKnowledge::new(arena.store().clone()) {
+                Ok(knowledge) => engine = engine.with_knowledge(Arc::new(knowledge)),
+                Err(error) => warn!(%error, "Arena Learn graph unavailable; knowledge is disabled"),
+            }
+            Some(crate::learn_http::router_with_pulse(
+                Arc::new(engine),
+                authority,
+                pulse,
+            ))
         }
         Err(error) => {
             warn!(%error, path=%path.display(), "Arena Learn store unavailable; learning disabled");
@@ -131,7 +142,7 @@ pub async fn run_dialogue_server_with_plans(
     };
     let live_context_authority = authority();
     let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
-    let learn_routes = learn_routes(&inference, authority());
+    let learn_routes = learn_routes(&inference, &arena, authority(), pulse.clone());
     let tracker_routes = tracker_routes(authority());
     let system_routes = crate::system_http::router(authority());
     let plan_routes = plans

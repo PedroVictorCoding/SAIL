@@ -4,9 +4,9 @@
 //! not just a single plan. It consists of propositions (atomic claims) connected
 //! by chains (reasoning steps) and attributed to evidence sources.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 /// Unique proposition identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -97,6 +97,12 @@ pub struct ChainId(pub Uuid);
 impl ChainId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+}
+
+impl Default for ChainId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
