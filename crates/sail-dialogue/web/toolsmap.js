@@ -4,7 +4,7 @@
 // state) in the right column. Home shows the map in the centre: selecting a box shows its
 // compact status window, and selecting it again (or its sidebar entry) opens the system.
 // Any route but Home replaces the map there with that system's real controls
-// (#subsystemPage, filled by the shared page router) beside a live status inspector, or
+// (#subsystemPage, filled by the shared page router), or
 // with the Tracker page. Visibility follows the router: every route but #classic shows it.
 
 (() => {
@@ -57,11 +57,13 @@
   const byId = Object.fromEntries(STATIONS.map((s) => [s.id, s]));
   // Router pages that are not a station's own page still get a matching status inspector.
   const PAGE_STATION = {bridge: 'core', agents: 'forge', flow: 'flow', pulse: 'flow'};
+  // Tabs of the right-hand Dialogue column: the conversation, then the open system's status.
+  const COLUMN_TABS = ['chat', 'overview', 'tasks', 'logs', 'config'];
   for (const s of STATIONS) if (s.page && !PAGE_STATION[s.page]) PAGE_STATION[s.page] = s.id;
   for (const s of STATIONS) { s.gx = (s.u + s.v) / 2; s.gy = (s.v - s.u) / 2; }
 
   const state = {
-    on: false, built: false, selected: null, popup: null, tracker: false, pending: null, trigger: null, tab: 'overview', mode: 'map',
+    on: false, built: false, selected: null, popup: null, tracker: false, pending: null, trigger: null, tab: 'chat', chatScroll: null, mode: 'map',
     live: true, paused: false, speed: 1, k: 1, tx: 0, ty: 0,
     metrics: null, mind: null, health: null, guardian: null, approvals: 0, plans: [], reminders: [],
     latency: {}, history: {cpu: [], gpu: [], ram: [], io: []},
@@ -233,17 +235,23 @@
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom out', onclick: () => zoom(1 / 1.2)}, '−'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoom(1.2)}, '+')));
 
-    // Right column: the live Dialogue panel. #homeView is moved in by showChat().
+    // Right column: the live Dialogue panel (#homeView, moved in by showChat()) and, behind
+    // the other tabs, the status of the open system (SAIL Core on the map).
+    inspector = el('div', {class: 'tm-inspector', id: 'tmInspector', role: 'tabpanel', hidden: true});
     const chat = el('aside', {class: 'tm-chat', id: 'tmChat', 'aria-labelledby': 'tmChatTitle'},
       el('header', {class: 'tm-chat-head'},
         el('span', {class: 'tm-insp-icon'}, logo()),
         el('h2', {id: 'tmChatTitle', text: 'SAIL'}),
         el('span', {class: 'tm-pill', id: 'tmChatPill'}, el('span', {class: 'tm-status idle'}), 'Connecting')),
-      chatSlot = el('div', {class: 'tm-chat-slot'}));
+      el('div', {class: 'tm-tabs', id: 'tmTabs', role: 'tablist', 'aria-label': 'Dialogue column'},
+        COLUMN_TABS.map((t) => el('button', {class: 'tm-tab', type: 'button', role: 'tab', id: `tmTab-${t}`,
+          'aria-controls': t === 'chat' ? 'tmChatPanel' : 'tmInspector', onclick: () => setTab(t), onkeydown: tabKey},
+          t[0].toUpperCase() + t.slice(1)))),
+      chatSlot = el('div', {class: 'tm-chat-slot', id: 'tmChatPanel', role: 'tabpanel', 'aria-labelledby': 'tmTab-chat'}),
+      inspector);
 
     // Centre pane: replaces the map for every route but Home. #subsystemPage (the router's
     // page for the route) is its main content; the Tracker page loads in a frame.
-    inspector = el('aside', {class: 'tm-inspector', id: 'tmInspector', 'aria-label': 'System status'});
     pane = el('section', {class: 'tm-pane', id: 'tmPane', hidden: true, 'aria-labelledby': 'subsystemTitle'},
       el('button', {class: 'tm-btn tm-pane-back', type: 'button', id: 'tmPaneBack', onclick: closePane},
         el('span', {'aria-hidden': 'true', text: '←'}), 'Map'),
@@ -251,7 +259,6 @@
         paneEmpty = el('section', {class: 'tm-pane-empty', hidden: true},
           el('h1', {id: 'tmPaneTitle', tabindex: '-1'}), el('p', {id: 'tmPaneAbout'}),
           el('p', {class: 'tm-empty', text: 'This system has no controls in SAIL yet.'}))),
-      inspector,
       trackerHost = el('div', {class: 'tm-pane-tracker', hidden: true}));
     const activity = el('section', {class: 'tm-activity', 'aria-label': 'Live activity'},
       el('div', {class: 'tm-activity-head'}, el('span', {class: 'tm-bolt', 'aria-hidden': 'true', text: '⚡'}),
@@ -262,6 +269,7 @@
     root.append(nav, top, stage, pane, chat, activity);
     // Inside #appShell so the moved Dialogue panel keeps its state-driven styles.
     (document.getElementById('appShell') || document.body).append(root);
+    syncTabs();
     const page = document.getElementById('subsystemPage');
     if (page) paneMain.prepend(page);
     buildWorld();
@@ -576,7 +584,7 @@
     bell.hidden = !state.approvals; bell.textContent = state.approvals || '';
     $('#tmBell').setAttribute('aria-label', state.approvals ? `${state.approvals} approvals waiting` : 'Approvals: none waiting');
     renderDetail();
-    if (state.popup) renderInspector();
+    renderInspector();
     renderActivity();
   }
 
@@ -645,27 +653,25 @@
     s.append(svg('polyline', {points: values.map((v, i) => `${(i / (values.length - 1) * 120).toFixed(1)},${(19 - Math.min(1, v / hi) * 18).toFixed(1)}`).join(' ')}));
     return s;
   }
+  // Status of the open system (SAIL Core on the map), shown behind the column's info tabs.
   function renderInspector() {
+    if (state.tab === 'chat') return;
     const s = byId[state.popup || 'core'];
     const st = stationStatus(s.id);
-    const tabs = ['overview', 'tasks', 'logs', 'config'];
     const insp = $('#tmInspector');
     const prevBody = insp.querySelector('.tm-insp-body');
     const scroll = prevBody?.scrollTop || 0;
-    const hadFocus = insp.contains(document.activeElement) ? document.activeElement.id : null;
+    const hadFocus = insp.contains(document.activeElement) ? document.activeElement : null;
+    const focusKey = hadFocus && (hadFocus.id || hadFocus.textContent);
     insp.replaceChildren(
       el('header', {class: 'tm-insp-head'},
         el('span', {class: 'tm-insp-icon'}, s.kind === 'core' ? logo() : icon(s.kind === 'forge' ? 'forge' : s.icon)),
-        el('h2', {text: s.name}),
+        el('h3', {text: s.name}),
         el('span', {class: `tm-pill ${st}`}, el('span', {class: `tm-status ${st}`}), stateWord(st).replace(/^./, (c) => c.toUpperCase()))),
-      el('div', {class: 'tm-tabs', role: 'tablist', 'aria-label': `${s.name} details`},
-        tabs.map((t) => el('button', {class: 'tm-tab', type: 'button', role: 'tab', id: `tmTab-${t}`, 'aria-selected': state.tab === t ? 'true' : 'false', 'aria-controls': 'tmTabPanel', tabindex: state.tab === t ? '0' : '-1',
-          onclick: () => setTab(t),
-          onkeydown: (e) => { const i = tabs.indexOf(t); const j = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : null; if (j !== null) { setTab(tabs[(j + tabs.length) % tabs.length]); $(`#tmTab-${state.tab}`)?.focus(); } }},
-          t[0].toUpperCase() + t.slice(1)))),
-      el('div', {class: 'tm-insp-body', id: 'tmTabPanel', role: 'tabpanel', 'aria-labelledby': `tmTab-${state.tab}`}, tabBody(s)));
-    const body = insp.querySelector('.tm-insp-body'); if (body) body.scrollTop = scroll;
-    if (hadFocus) document.getElementById(hadFocus)?.focus();
+      el('div', {class: 'tm-insp-body'}, tabBody(s)));
+    const body = insp.querySelector('.tm-insp-body'); body.scrollTop = scroll;
+    // Live refreshes rebuild the panel; keep keyboard focus on the same control.
+    if (focusKey) [...insp.querySelectorAll('button')].find((b) => (b.id || b.textContent) === focusKey)?.focus({preventScroll: true});
   }
   function tabBody(s) {
     const m = state.metrics, g = m?.gpus?.[0];
@@ -766,7 +772,38 @@
     svgRoot.querySelectorAll('.tm-station').forEach((g) => g.classList.toggle('selected', g.dataset.station === id));
     render();
   }
-  function setTab(t) { state.tab = t; renderInspector(); }
+  // Chat keeps the Dialogue panel mounted (voice and replies keep running); the info tabs
+  // cover it with the open system's status.
+  function setTab(t) {
+    if (!COLUMN_TABS.includes(t)) return;
+    const conv = document.getElementById('conversation');
+    if (state.tab === 'chat' && t !== 'chat' && conv) {
+      state.chatScroll = conv.scrollHeight - conv.scrollTop - conv.clientHeight < 24 ? 'end' : conv.scrollTop;
+    }
+    const wasChat = state.tab === 'chat';
+    state.tab = t;
+    syncTabs();
+    if (t === 'chat' && !wasChat && conv) conv.scrollTop = state.chatScroll === 'end' || state.chatScroll == null ? conv.scrollHeight : state.chatScroll;
+    if (t !== 'chat' && wasChat) $('#tmInspector').replaceChildren();
+    renderInspector();
+  }
+  function syncTabs() {
+    for (const t of COLUMN_TABS) {
+      const b = $(`#tmTab-${t}`), on = state.tab === t;
+      b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1;
+    }
+    chatSlot.hidden = state.tab !== 'chat';
+    inspector.hidden = state.tab === 'chat';
+    if (state.tab !== 'chat') inspector.setAttribute('aria-labelledby', `tmTab-${state.tab}`);
+  }
+  function tabKey(e) {
+    const i = COLUMN_TABS.indexOf(state.tab), n = COLUMN_TABS.length;
+    const j = {ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: n - 1}[e.key];
+    if (j === undefined) return;
+    e.preventDefault();
+    setTab(COLUMN_TABS[(j + n) % n]);
+    $(`#tmTab-${state.tab}`).focus();
+  }
   function setMode(m) {
     state.mode = m;
     root.dataset.mode = m;
@@ -784,10 +821,11 @@
   // ------------------------------------------------------------------ centre pane
   // Stations with a page go through the router (#mind, #forge…) so links, reloads and
   // Back work; the router fills #subsystemPage and announces the route on `sail:page`.
-  function openStation(id, trigger, tab = 'overview') {
+  // `tab` switches the Dialogue column to one of its info tabs; otherwise it stays put.
+  function openStation(id, trigger, tab) {
     const s = byId[id]; if (!s) return;
     state.trigger = trigger || document.activeElement;
-    state.tab = tab;
+    if (tab) setTab(tab);
     if (!s.page) {
       // No page and no route: show it in place without leaving Home's address.
       if (window.sailCurrentPage?.() !== 'home') window.sailNavigate?.('home');
@@ -799,7 +837,7 @@
   function showPane(mode) {
     const opening = pane.hidden;
     pane.dataset.mode = mode;
-    paneMain.hidden = inspector.hidden = mode === 'tracker';
+    paneMain.hidden = mode === 'tracker';
     trackerHost.hidden = mode !== 'tracker';
     pane.setAttribute('aria-labelledby', mode === 'tracker' ? 'tmTrackerLabel' : paneEmpty.hidden ? 'subsystemTitle' : 'tmPaneTitle');
     if (opening) {
@@ -871,6 +909,7 @@
     if (match) { input.value = ''; openStation(match.id, input); return; }
     const classic = document.getElementById('textInput'), form = document.getElementById('textForm');
     if (classic && form) {
+      setTab('chat');
       classic.value = text;
       form.requestSubmit();
       log('dialogue', `You asked: ${text.length > 80 ? `${text.slice(0, 80)}…` : text}`);
