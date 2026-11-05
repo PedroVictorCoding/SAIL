@@ -268,11 +268,11 @@ impl BriefingEngine {
 
     /// Dismiss the active briefing.
     pub fn dismiss(&self) {
-        if let Ok(mut lock) = self.cached_briefing.lock() {
-            if let Some(ref mut b) = *lock {
-                b.dismissed = true;
-                let _ = self.save_to_disk(b);
-            }
+        if let Ok(mut lock) = self.cached_briefing.lock()
+            && let Some(ref mut b) = *lock
+        {
+            b.dismissed = true;
+            let _ = self.save_to_disk(b);
         }
     }
 
@@ -283,16 +283,36 @@ impl BriefingEngine {
                 Ok(playlists) if !playlists.is_empty() => {
                     // Try to match circadian slot with playlist name keywords
                     let keywords: &[&str] = match slot_name {
-                        "Morning Focus" => &["focus", "morning", "piano", "classical", "acoustic", "coffee"],
-                        "Afternoon Flow" => &["work", "flow", "energy", "electronic", "rock", "upbeat", "drive"],
-                        "Evening Wind-Down" => &["chill", "evening", "relax", "calm", "lofi", "ambient", "night"],
+                        "Morning Focus" => &[
+                            "focus",
+                            "morning",
+                            "piano",
+                            "classical",
+                            "acoustic",
+                            "coffee",
+                        ],
+                        "Afternoon Flow" => &[
+                            "work",
+                            "flow",
+                            "energy",
+                            "electronic",
+                            "rock",
+                            "upbeat",
+                            "drive",
+                        ],
+                        "Evening Wind-Down" => &[
+                            "chill", "evening", "relax", "calm", "lofi", "ambient", "night",
+                        ],
                         _ => &["ambient", "deep", "sleep", "dark", "space"],
                     };
 
-                    let chosen = playlists.iter().find(|p| {
-                        let lower = p.name.to_lowercase();
-                        keywords.iter().any(|&k| lower.contains(k))
-                    }).unwrap_or(&playlists[0]);
+                    let chosen = playlists
+                        .iter()
+                        .find(|p| {
+                            let lower = p.name.to_lowercase();
+                            keywords.iter().any(|&k| lower.contains(k))
+                        })
+                        .unwrap_or(&playlists[0]);
 
                     return Some(StagedMusic {
                         uri: chosen.uri.clone(),
@@ -300,7 +320,10 @@ impl BriefingEngine {
                         by: chosen.by.clone(),
                         kind: "playlist".to_string(),
                         circadian_slot: slot_name.to_string(),
-                        rationale: format!("{slot_rationale} Selected '{}' from your Spotify library.", chosen.name),
+                        rationale: format!(
+                            "{slot_rationale} Selected '{}' from your Spotify library.",
+                            chosen.name
+                        ),
                         is_spotify: true,
                         confirmed: true,
                     });
@@ -324,19 +347,20 @@ impl BriefingEngine {
 
     /// Stage learning topic from Arena Learn or knowledge memory.
     async fn stage_learning(&self) -> Option<StagedLearning> {
-        if let Some(engine) = &self.learn_engine {
-            if let Ok(sessions) = engine.sessions_detailed(5) {
-                // Find most recent incomplete session
-                if let Some(session) = sessions.into_iter().next() {
-                    return Some(StagedLearning {
-                        session_id: Some(session.id),
-                        topic: session.goal,
-                        rationale: "Resume where you left off in your active Arena Learn curriculum.".to_string(),
-                        status: "in_progress".to_string(),
-                        estimated_minutes: 15,
-                        domain: "Arena Learn".to_string(),
-                    });
-                }
+        if let Some(engine) = &self.learn_engine
+            && let Ok(sessions) = engine.sessions_detailed(5)
+        {
+            // Find most recent incomplete session
+            if let Some(session) = sessions.into_iter().next() {
+                return Some(StagedLearning {
+                    session_id: Some(session.id),
+                    topic: session.goal,
+                    rationale: "Resume where you left off in your active Arena Learn curriculum."
+                        .to_string(),
+                    status: "in_progress".to_string(),
+                    estimated_minutes: 15,
+                    domain: "Arena Learn".to_string(),
+                });
             }
         }
 
@@ -344,7 +368,9 @@ impl BriefingEngine {
         Some(StagedLearning {
             session_id: None,
             topic: "Async Runtime Cancellation & Structured Concurrency in Rust".to_string(),
-            rationale: "Recommended micro-lesson matching your active development in async systems.".to_string(),
+            rationale:
+                "Recommended micro-lesson matching your active development in async systems."
+                    .to_string(),
             status: "recommended".to_string(),
             estimated_minutes: 12,
             domain: "Systems & Rust".to_string(),
@@ -355,39 +381,39 @@ impl BriefingEngine {
     fn stage_events(&self, now: &DateTime<Utc>) -> Vec<BriefingEvent> {
         let mut events = Vec::new();
 
-        if let Some(pulse) = &self.pulse {
-            if let Ok(reminders) = pulse.list_active(10) {
-                for r in reminders {
-                    let is_due_now = r.status == ReminderStatus::Due || r.due_at <= *now;
-                    let diff_secs = r.due_at.signed_duration_since(*now).num_seconds();
+        if let Some(pulse) = &self.pulse
+            && let Ok(reminders) = pulse.list_active(10)
+        {
+            for r in reminders {
+                let is_due_now = r.status == ReminderStatus::Due || r.due_at <= *now;
+                let diff_secs = r.due_at.signed_duration_since(*now).num_seconds();
 
-                    let (urgency, relative_str) = if is_due_now {
-                        let overdue_mins = (-diff_secs).max(0) / 60;
-                        if overdue_mins > 0 {
-                            ("critical", format!("Overdue by {overdue_mins}m"))
-                        } else {
-                            ("critical", "Due now".to_string())
-                        }
-                    } else if diff_secs <= 2 * 3600 {
-                        let mins = diff_secs / 60;
-                        ("high", format!("Due in {mins}m"))
-                    } else if diff_secs <= 24 * 3600 {
-                        let hours = diff_secs / 3600;
-                        ("normal", format!("Due in {hours}h"))
+                let (urgency, relative_str) = if is_due_now {
+                    let overdue_mins = (-diff_secs).max(0) / 60;
+                    if overdue_mins > 0 {
+                        ("critical", format!("Overdue by {overdue_mins}m"))
                     } else {
-                        ("normal", r.due_local().format("%a %H:%M").to_string())
-                    };
+                        ("critical", "Due now".to_string())
+                    }
+                } else if diff_secs <= 2 * 3600 {
+                    let mins = diff_secs / 60;
+                    ("high", format!("Due in {mins}m"))
+                } else if diff_secs <= 24 * 3600 {
+                    let hours = diff_secs / 3600;
+                    ("normal", format!("Due in {hours}h"))
+                } else {
+                    ("normal", r.due_local().format("%a %H:%M").to_string())
+                };
 
-                    events.push(BriefingEvent {
-                        id: r.id,
-                        title: r.text,
-                        due_at: r.due_at,
-                        due_relative: relative_str,
-                        urgency: urgency.to_string(),
-                        source: "Pulse".to_string(),
-                        action_type: "reminder".to_string(),
-                    });
-                }
+                events.push(BriefingEvent {
+                    id: r.id,
+                    title: r.text,
+                    due_at: r.due_at,
+                    due_relative: relative_str,
+                    urgency: urgency.to_string(),
+                    source: "Pulse".to_string(),
+                    action_type: "reminder".to_string(),
+                });
             }
         }
 
@@ -413,15 +439,20 @@ impl BriefingEngine {
                 id: "news-landlock-618".to_string(),
                 title: "Linux Landlock LSM: Scoped Network & IPC Policies Landed".to_string(),
                 source: "Kernel Security Advisory".to_string(),
-                summary: "Landlock extends nono-compatible sandbox protections to socket operations.".to_string(),
+                summary:
+                    "Landlock extends nono-compatible sandbox protections to socket operations."
+                        .to_string(),
                 url: Some("https://landlock.io".to_string()),
                 relevant_interest: "Kernel Security & Guardian".to_string(),
             },
             BriefingNewsItem {
                 id: "news-tokio-140".to_string(),
-                title: "Rust Async Concurrency: Cooperative Cancellation Best Practices".to_string(),
+                title: "Rust Async Concurrency: Cooperative Cancellation Best Practices"
+                    .to_string(),
                 source: "Rust Systems Digest".to_string(),
-                summary: "Patterns for deterministic cancellation tokens across tokio select! branches.".to_string(),
+                summary:
+                    "Patterns for deterministic cancellation tokens across tokio select! branches."
+                        .to_string(),
                 url: Some("https://tokio.rs".to_string()),
                 relevant_interest: "Rust & Asynchronous Systems".to_string(),
             },
@@ -429,7 +460,9 @@ impl BriefingEngine {
                 id: "news-vulkan-radv".to_string(),
                 title: "Mesa RADV Driver: Low Latency Prefill on RDNA 1 & 2".to_string(),
                 source: "Mesa Graphics Advisory".to_string(),
-                summary: "New compute shader pipelines optimize matrix multiplications on AMD RX 5500.".to_string(),
+                summary:
+                    "New compute shader pipelines optimize matrix multiplications on AMD RX 5500."
+                        .to_string(),
                 url: Some("https://mesa3d.org".to_string()),
                 relevant_interest: "Local AI & Vulkan Offloading".to_string(),
             },
@@ -463,7 +496,10 @@ impl BriefingEngine {
     pub async fn play_staged_music(&self, uri: &str) -> Result<Value, String> {
         if uri.starts_with("spotify:") {
             if !self.spotify.configured() || !self.spotify.connected().await {
-                return Err("Spotify is not connected. Sign in on the Settings or Subsystem page.".to_string());
+                return Err(
+                    "Spotify is not connected. Sign in on the Settings or Subsystem page."
+                        .to_string(),
+                );
             }
             self.spotify.play(uri).await.map_err(|e| e.message)
         } else {
@@ -506,7 +542,7 @@ fn get_disk_headroom() -> (String, String) {
             let ret = unsafe { libc::statvfs(cstr.as_ptr(), stat.as_mut_ptr()) };
             if ret == 0 {
                 let s = unsafe { stat.assume_init() };
-                let free_gb = (s.f_bavail as u64 * s.f_frsize as u64) as f64 / (1024.0 * 1024.0 * 1024.0);
+                let free_gb = (s.f_bavail * s.f_frsize) as f64 / (1024.0 * 1024.0 * 1024.0);
                 Some(format!("{free_gb:.1} GB free"))
             } else {
                 None
@@ -530,12 +566,12 @@ fn get_disk_headroom() -> (String, String) {
 fn get_memory_summary() -> String {
     #[cfg(unix)]
     {
-        if let Ok(content) = fs::read_to_string("/proc/meminfo") {
-            if let Some((total, avail, _, _)) = crate::system_http::parse_meminfo(&content) {
-                let used_gb = (total.saturating_sub(avail)) as f64 / (1024.0 * 1024.0 * 1024.0);
-                let total_gb = total as f64 / (1024.0 * 1024.0 * 1024.0);
-                return format!("{used_gb:.1} / {total_gb:.1} GB used");
-            }
+        if let Ok(content) = fs::read_to_string("/proc/meminfo")
+            && let Some((total, avail, _, _)) = crate::system_http::parse_meminfo(&content)
+        {
+            let used_gb = (total.saturating_sub(avail)) as f64 / (1024.0 * 1024.0 * 1024.0);
+            let total_gb = total as f64 / (1024.0 * 1024.0 * 1024.0);
+            return format!("{used_gb:.1} / {total_gb:.1} GB used");
         }
     }
     "Headroom normal".to_string()
