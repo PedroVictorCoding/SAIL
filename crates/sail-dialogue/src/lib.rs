@@ -24,6 +24,7 @@ mod tool_policy;
 pub mod tracker_http;
 pub mod tts;
 pub mod turn_coordinator;
+pub mod ui_assets;
 pub mod vad;
 pub mod visual_snapshot;
 pub mod vlm;
