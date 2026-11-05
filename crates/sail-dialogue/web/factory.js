@@ -614,3 +614,148 @@ function renderFrame(floor = document.getElementById('factoryFloor')) {
   positionSpecCard(floor);
 }
 
+
+// ------------------------------------------------------------------- chrome --
+
+const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+
+function clockText(now = new Date()) {
+  const pad = value => String(value).padStart(2, '0');
+  return `${now.getFullYear()}/${pad(now.getMonth() + 1)}/${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+function dayText(now = new Date()) {
+  return DAYS[now.getDay()];
+}
+
+function updateClock(floor = document.getElementById('factoryFloor')) {
+  if (!floor) return;
+  const now = new Date();
+  const clock = floor.querySelector('#factoryClock');
+  const day = floor.querySelector('#factoryDay');
+  if (clock) clock.textContent = clockText(now);
+  if (day) day.textContent = dayText(now);
+}
+
+/** Latency is a trust reading: only ever show a measured round trip. */
+async function refreshLatency(floor = document.getElementById('factoryFloor')) {
+  if (!floor) return;
+  const target = floor.querySelector('#factoryLatency');
+  if (!target) return;
+  const started = performance.now();
+  try {
+    const response = await fetch('/api/health', { cache: 'no-store' });
+    if (!response.ok) throw new Error('offline');
+    await response.json();
+    FACTORY.latency = Math.round(performance.now() - started);
+    target.textContent = `${FACTORY.latency}ms`;
+    target.dataset.state = 'live';
+  } catch (_) {
+    FACTORY.latency = null;
+    target.textContent = 'offline';
+    target.dataset.state = 'offline';
+  }
+}
+
+function buildScenes(floor) {
+  const list = floor.querySelector('#factorySceneList');
+  list.replaceChildren();
+  FACTORY.scenes.forEach((name, index) => {
+    const button = factoryElement('button', 'factory-scene', name);
+    button.type = 'button';
+    button.dataset.scene = String(index);
+    button.setAttribute('aria-pressed', String(index === FACTORY.sceneIndex));
+    button.addEventListener('click', () => setScene(index, floor));
+    list.append(button);
+  });
+  floor.querySelector('#factoryPrev').addEventListener('click', () => setScene(FACTORY.sceneIndex - 1, floor));
+  floor.querySelector('#factoryNext').addEventListener('click', () => setScene(FACTORY.sceneIndex + 1, floor));
+}
+
+function setScene(index, floor = document.getElementById('factoryFloor')) {
+  FACTORY.sceneIndex = (index + FACTORY.scenes.length) % FACTORY.scenes.length;
+  const crumb = floor?.querySelector('#factoryCrumb');
+  if (crumb && !FACTORY.selected) crumb.textContent = FACTORY.scenes[FACTORY.sceneIndex];
+  floor?.querySelectorAll('.factory-scene').forEach((button, position) => {
+    button.setAttribute('aria-pressed', String(position === FACTORY.sceneIndex));
+  });
+  renderFrame(floor);
+}
+
+function buildList(floor) {
+  const body = floor.querySelector('#factoryList tbody');
+  body.replaceChildren();
+  for (const station of FACTORY.registry) {
+    const row = factoryElement('tr');
+    row.tabIndex = 0;
+    row.dataset.station = station.id;
+    row.append(
+      factoryElement('th', null, station.name),
+      factoryElement('td', null, station.zone),
+      factoryElement('td', null, `${station.rows[0][0]}: ${station.rows[0][1]}`),
+    );
+    const select = () => selectStation(station, floor);
+    row.addEventListener('click', select);
+    row.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); }
+    });
+    body.append(row);
+  }
+}
+
+function drawMinimap(floor) {
+  const canvas = floor.querySelector('#factoryMinimap');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const tile = 8;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#17191D';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, canvas.width, canvas.height);
+  ctx.clip();
+  for (const station of FACTORY.registry) {
+    ctx.fillStyle = station.id === FACTORY.selected?.id ? FACTORY.palette.accent : '#4A5158';
+    ctx.fillRect(station.x * tile + 10, station.y * tile + 10,
+      Math.max(2, station.w * tile - 2), Math.max(2, station.d * tile - 2));
+  }
+  // Viewport outline, projected corner by corner so the minimap stays honest.
+  const rect = canvas.getBoundingClientRect();
+  const corners = [
+    screenToTile(0, 0), screenToTile(rect.width, 0),
+    screenToTile(rect.width, rect.height), screenToTile(0, rect.height),
+  ];
+  ctx.beginPath();
+  corners.forEach((corner, index) => {
+    const px = corner.x * tile + 10, py = corner.y * tile + 10;
+    if (index) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+  });
+  ctx.closePath();
+  ctx.strokeStyle = FACTORY.palette.accent;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** The anchored spec card: three rows, mono numerals, tied to its object. */
+function positionSpecCard(floor) {
+  const card = floor.querySelector('#factorySpec');
+  if (!card) return;
+  const station = FACTORY.hover || FACTORY.selected;
+  const anchor = station && FACTORY.anchors.get(station.id);
+  if (!station || !anchor || FACTORY.listMode) { card.hidden = true; return; }
+  card.replaceChildren();
+  card.append(factoryElement('strong', null, station.name));
+  for (const [label, value] of station.rows.slice(0, 3)) {
+    const row = factoryElement('div', 'factory-spec-row');
+    row.append(factoryElement('span', null, label), factoryElement('b', null, value));
+    card.append(row);
+  }
+  const bounds = floor.getBoundingClientRect();
+  const width = 200;
+  card.style.left = `${Math.min(Math.max(anchor.x + 14, 8), bounds.width - width - 8)}px`;
+  card.style.top = `${Math.max(anchor.y - 74, 8)}px`;
+  card.hidden = false;
+}
+
