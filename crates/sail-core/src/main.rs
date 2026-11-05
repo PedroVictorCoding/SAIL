@@ -267,10 +267,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let _ = bus.publish(shutdown_event);
 
-    model_service.shutdown().await?;
-    info!("SAIL Core shutdown complete.");
-    Ok(())
+    // A second Ctrl+C always quits, even if a step below is stuck.
+    tokio::spawn(async {
+        if signal::ctrl_c().await.is_ok() {
+            eprintln!("Second Ctrl+C: exiting without waiting for shutdown to finish.");
+            std::process::exit(130);
+        }
+    });
+    info!("Stopping models (press Ctrl+C again to force quit)...");
+    // A model process wedged in the GPU driver can stop responding to signals; never let
+    // it hold the terminal.
+    match tokio::time::timeout(SHUTDOWN_GRACE, model_service.shutdown()).await {
+        Ok(Ok(())) => info!("SAIL Core shutdown complete."),
+        Ok(Err(error)) => error!(%error, "Model shutdown failed"),
+        Err(_) => error!(
+            "Model shutdown did not finish within {}s; exiting anyway. If the model server is stuck, run ./run.sh --stop",
+            SHUTDOWN_GRACE.as_secs()
+        ),
+    }
+    // Returning would drop the runtime, which waits for every running blocking task
+    // (tool commands, memory consolidation); exit instead. Logging writes synchronously.
+    std::process::exit(0)
 }
+
+/// How long Ctrl+C waits for the models to stop before SAIL exits anyway.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn spawn_subsystem_worker(
     subsystem_id: SubsystemId,

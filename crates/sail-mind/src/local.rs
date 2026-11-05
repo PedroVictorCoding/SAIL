@@ -41,6 +41,22 @@ impl std::ops::DerefMut for OwnedModel {
         &mut self.child
     }
 }
+/// How long to wait for a killed llama-server to exit. A process stuck in the GPU driver
+/// (for example after a failed GPU reset) cannot exit until the driver lets go of it, so
+/// never wait for it without a limit.
+const KILL_WAIT: Duration = Duration::from_secs(5);
+async fn kill_bounded(child: &mut Child) -> std::io::Result<()> {
+    child.start_kill()?;
+    if tokio::time::timeout(KILL_WAIT, child.wait()).await.is_err() {
+        tracing::warn!(
+            pid = child.id(),
+            "llama-server did not exit after SIGKILL; it may be stuck in the GPU driver"
+        );
+    }
+    Ok(())
+}
+/// How long shutdown waits for a model start in progress before stopping without it.
+const SHUTDOWN_STARTUP_WAIT: Duration = Duration::from_secs(5);
 pub struct LocalGemmaBackend {
     config: LocalModelConfig,
     client: reqwest::Client,
@@ -512,7 +528,7 @@ impl LocalGemmaBackend {
             if Instant::now() >= deadline {
                 // Only kill processes owned by this adapter, never an external service.
                 if let Some(mut child) = self.process.lock().await.take() {
-                    let _ = child.kill().await;
+                    let _ = kill_bounded(&mut child).await;
                     self.forget_persisted();
                 }
                 self.update(|s| {
@@ -896,7 +912,14 @@ impl InferenceBackend for LocalGemmaBackend {
         }=>result}
     }
     async fn shutdown(&self) -> Result<()> {
-        let _start = self.startup.lock().await;
+        // A start in progress holds this lock for up to the startup timeout, or longer while
+        // it waits on a wedged process; do not let it block shutdown.
+        let _start = tokio::time::timeout(SHUTDOWN_STARTUP_WAIT, self.startup.lock())
+            .await
+            .inspect_err(|_| {
+                tracing::warn!("A model start is still in progress; stopping without waiting for it")
+            })
+            .ok();
         if let Some(mut child) = self.process.lock().await.take()
             && child
                 .try_wait()
@@ -912,7 +935,9 @@ impl InferenceBackend for LocalGemmaBackend {
                 );
                 drop(child);
             } else {
-                child.kill().await.map_err(|e| unavailable(e.to_string()))?;
+                kill_bounded(&mut child)
+                    .await
+                    .map_err(|e| unavailable(e.to_string()))?;
             }
         }
         self.update(|s| {

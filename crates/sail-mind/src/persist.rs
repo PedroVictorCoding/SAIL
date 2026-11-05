@@ -61,7 +61,8 @@ impl PersistedServer {
     pub fn same_launch(&self, binary: &Path, args: &[String]) -> bool {
         self.binary == binary && self.args == args
     }
-    /// SIGTERM, then SIGKILL after `grace`. Returns once the process has gone.
+    /// SIGTERM, then SIGKILL after `grace`. Returns once the process has gone, or a few
+    /// seconds after SIGKILL if it cannot exit (stuck in the GPU driver).
     pub async fn terminate(&self, grace: Duration) {
         let pid = self.pid as libc::pid_t;
         if pid <= 1 || !self.is_alive() {
@@ -75,8 +76,15 @@ impl PersistedServer {
         }
         if self.is_alive() {
             unsafe { libc::kill(pid, libc::SIGKILL) };
-            while self.is_alive() {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while self.is_alive() && Instant::now() < deadline {
                 tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            if self.is_alive() {
+                tracing::warn!(
+                    pid,
+                    "llama-server did not exit after SIGKILL; it may be stuck in the GPU driver"
+                );
             }
         }
     }
