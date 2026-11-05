@@ -2,9 +2,9 @@
 
 Serves `crates/sail-dialogue/web` the way Dialogue does (index.html plus the static
 files the page requests) and checks that the map is the default workspace with
-Dialogue beside it, that systems and the Tracker replace the map in the centre
-(history, direct links, focus, Settings and dialogs), the classic dashboard exit,
-and mobile layout.
+Dialogue beside it, that map boxes show compact status first, that systems and the
+Tracker replace the map in the centre (history, direct links, focus, Settings and
+dialogs), the classic dashboard exit, and mobile layout.
 
 Run with: .venv-voice/bin/python scripts/factory_browser_test.py [screenshot.png]
 """
@@ -79,9 +79,22 @@ with sync_playwright() as p:
 
     map_box = centre_box('.tm-stage')
 
-    # A station replaces the map in the centre with its real controls and status;
-    # the sidebar, header, Dialogue and activity stay put and usable.
-    page.locator('.tm-label[data-station="mind"]').click()
+    # Every map box first selects its compact status window, without navigating.
+    for station in page.locator('.tm-label').all():
+        station.click()
+        assert station.get_attribute('aria-pressed') == 'true'
+        assert page.is_visible('#tmDetail'), station.get_attribute('data-station')
+        assert page.is_hidden('#tmPane')
+        assert page.evaluate('location.hash') in ('', '#home')
+    page.locator('.tm-label[data-station="mind"]').focus()
+    page.keyboard.press('Enter')
+    assert page.locator('#tmDetail .tm-detail-title').inner_text().startswith('Mind')
+    assert page.is_hidden('#tmPane')
+    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-detail.png')))
+
+    # Selecting it again replaces the map in the centre with its real controls and
+    # status; the sidebar, header, Dialogue and activity stay put and usable.
+    page.keyboard.press('Space')
     page.wait_for_selector('#tmPane')
     page.wait_for_function("location.hash === '#mind'")
     assert page.is_hidden('.tm-stage')
@@ -109,6 +122,7 @@ with sync_playwright() as p:
 
     # Stations sharing a page keep their own inspector.
     page.locator('.tm-label[data-station="memory"]').click()
+    page.locator('.tm-label[data-station="memory"]').click()
     page.wait_for_function("document.querySelector('#tmInspector h2')?.textContent === 'Memory'")
     assert page.evaluate('location.hash') == '#arena'
     page.locator('.tm-nav-item[data-nav="home"]').click()
@@ -116,6 +130,7 @@ with sync_playwright() as p:
     assert page.evaluate("document.activeElement.dataset.station") == 'memory'
 
     # Systems without a page still show in the centre, without changing the route.
+    page.locator('.tm-label[data-station="entertainment"]').click()
     page.locator('.tm-label[data-station="entertainment"]').click()
     assert page.is_visible('#tmPane') and page.is_visible('#tmPaneTitle')
     assert page.is_hidden('#subsystemPage')
@@ -199,6 +214,8 @@ with sync_playwright() as p:
     page.locator('#tmViewport').focus()
     page.keyboard.press('ArrowRight')
     assert page.locator('#tmViewport').evaluate('(node) => node === document.activeElement')
+    page.locator('.tm-label[data-station="guardian"]').click()
+    assert page.is_visible('#tmDetail') and page.is_hidden('#tmPane')
     page.locator('.tm-label[data-station="guardian"]').click()
     page.wait_for_selector('#tmPaneBack')  # no sidebar on phones: the pane has its own way back
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')

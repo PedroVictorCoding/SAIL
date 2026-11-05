@@ -118,7 +118,8 @@ def check_pages(page, url, screenshots=None):
     expect(page.locator("#tmPane")).to_be_visible()
     page.locator('.tm-nav-item[data-nav="home"]').click()
     expect(page.locator("#tmPane")).to_be_hidden()
-    page.locator('.tm-label[data-station="guardian"]').click()
+    page.locator('.tm-label[data-station="guardian"]').click()  # status first
+    page.locator('.tm-label[data-station="guardian"]').click()  # then open
     expect(page.locator("#subsystemTitle")).to_have_text("Guardian")
     page.go_back()
     expect(page.locator("#tmPane")).to_be_hidden()

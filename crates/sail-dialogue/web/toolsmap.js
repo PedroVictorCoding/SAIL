@@ -1,10 +1,11 @@
 'use strict';
 // The Tools Map is SAIL's workspace: the isometric map of subsystems, with the live
 // Dialogue panel (the original #homeView, moved in so voice and the composer keep their
-// state) in the right column. Home shows the map in the centre; any other route replaces
-// it there with that system's real controls (#subsystemPage, filled by the shared page
-// router) beside a live status inspector, or with the Tracker page. Visibility follows
-// the router: every route but #classic shows the workspace.
+// state) in the right column. Home shows the map in the centre: selecting a box shows its
+// compact status window, and selecting it again (or its sidebar entry) opens the system.
+// Any route but Home replaces the map there with that system's real controls
+// (#subsystemPage, filled by the shared page router) beside a live status inspector, or
+// with the Tracker page. Visibility follows the router: every route but #classic shows it.
 
 (() => {
   const SVGNS = 'http://www.w3.org/2000/svg';
@@ -216,7 +217,7 @@
       el('span', {class: 'tm-avatar', 'aria-hidden': 'true'}));
 
     stage = el('section', {class: 'tm-stage', 'aria-label': 'Subsystem map'},
-      el('div', {class: 'tm-title'}, el('h2', {}, 'SAIL', el('br'), 'TOOLS MAP'), el('p', {text: 'Live systems, models and tools. Select one to open it.'})),
+      el('div', {class: 'tm-title'}, el('h2', {}, 'SAIL', el('br'), 'TOOLS MAP'), el('p', {text: 'Live systems, models and tools. Select one to see its status; select it again to open it.'})),
       el('div', {class: 'tm-viewport', id: 'tmViewport', tabindex: '0', 'aria-label': 'Map. Drag or use arrow keys to pan, plus and minus to zoom.'},
         world = el('div', {class: 'tm-world'})),
       el('div', {class: 'tm-ctl tm-ctl-left'},
@@ -340,7 +341,10 @@
     for (const s of STATIONS) {
       const [lx, ly] = P(s.gx, s.gy, s.kind === 'core' ? 2.7 : 2.9);
       labels.append(el('button', {class: `tm-label${s.kind === 'core' ? ' core' : ''}`, type: 'button', 'data-station': s.id, 'aria-pressed': 'false',
-        style: `left:${lx - minX}px;top:${ly - minY}px`, onclick: (e) => openStation(s.id, e.currentTarget)},
+        style: `left:${lx - minX}px;top:${ly - minY}px`, 'aria-controls': 'tmDetail',
+        // First selection shows the status window; selecting it again opens the system
+        // (the only way in on phones, where the sidebar is hidden).
+        onclick: (e) => { if (state.selected === s.id) openStation(s.id, e.currentTarget); else select(s.id); }},
         s.kind === 'core' ? el('span', {class: 'tm-status', 'data-status': s.id}) : el('span', {class: 'tm-label-icon'}, icon(s.kind === 'forge' ? 'forge' : s.icon)),
         el('span', {class: 'tm-label-text'},
           el('strong', {}, s.name, s.kind !== 'core' ? el('span', {class: 'tm-status small', 'data-status': s.id}) : null),
@@ -598,7 +602,7 @@
   function renderDetail() {
     const box = $('#tmDetail');
     const s = state.selected && byId[state.selected];
-    if (!s || s.kind === 'core') { box.hidden = true; return; }
+    if (!s) { box.hidden = true; return; }
     const [ax, ay] = P(s.gx, s.gy, 2.9);
     const x = ax - state.world.minX, y = ay - state.world.minY;
     const m = state.metrics, g = m?.gpus?.[0], st = stationStatus(s.id);
@@ -618,8 +622,7 @@
     const w = n.offsetWidth * ls, h = n.offsetHeight * ls, x = parseFloat(n.style.left), y = parseFloat(n.style.top);
     return {l: x - w / 2, t: y - h, r: x + w / 2, b: y};
   }
-  // Put the detail card next to its station without covering another label; hide it when
-  // there is no room (the inspector shows the same figures).
+  // Prefer a position clear of other labels; keep status available on crowded maps.
   function placeDetail(box, s, x, y) {
     const ls = labelScale();
     const own = root.querySelector(`.tm-label[data-station="${s.id}"]`);
@@ -628,9 +631,10 @@
     const w = box.offsetWidth * ls, h = box.offsetHeight * ls, gap = 8 * ls;
     const spots = [
       [x - w * 0.18, me.t - gap - h], [me.r + gap, me.b - h], [me.l - gap - w, me.b - h], [x - w / 2, me.b + gap],
+      [me.r + gap, me.t - gap - h], [me.l - gap - w, me.t - gap - h],
+      [me.r + gap, me.b + gap], [me.l - gap - w, me.b + gap],
     ];
-    const free = spots.find(([l, t]) => others.every((o) => l + w <= o.l || o.r <= l || t + h <= o.t || o.b <= t));
-    if (!free) { box.hidden = true; return; }
+    const free = spots.find(([l, t]) => others.every((o) => l + w <= o.l || o.r <= l || t + h <= o.t || o.b <= t)) || spots[0];
     box.style.left = `${free[0]}px`; box.style.top = `${free[1]}px`;
   }
 
