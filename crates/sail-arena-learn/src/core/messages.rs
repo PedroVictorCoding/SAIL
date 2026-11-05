@@ -285,8 +285,15 @@ fn size(message: &Message) -> usize {
 /// cut is always placed on a user message, so no tool call is separated from its result.
 /// Full history stays in the store; this only bounds one request. (#252 adds a digest.)
 pub fn window(messages: Vec<Message>) -> Vec<Message> {
+    window_within(messages, MAX_BYTES)
+}
+
+/// [`window`] with a smaller history budget, for a model whose context window is smaller
+/// than Mind's request bound (the turn halves it after a context-window refusal).
+pub fn window_within(messages: Vec<Message>, max_bytes: usize) -> Vec<Message> {
+    let max_bytes = max_bytes.min(MAX_BYTES);
     let total: usize = messages.iter().map(size).sum();
-    if messages.len() <= MAX_MESSAGES && total <= MAX_BYTES {
+    if messages.len() <= MAX_MESSAGES && total <= max_bytes {
         return messages;
     }
     let head = 2.min(messages.len());
@@ -301,7 +308,7 @@ pub fn window(messages: Vec<Message>) -> Vec<Message> {
     for i in (head..messages.len()).rev() {
         count += 1;
         bytes += size(&messages[i]);
-        if count > MAX_MESSAGES || bytes > MAX_BYTES {
+        if count > MAX_MESSAGES || bytes > max_bytes {
             break;
         }
         if messages[i].role == Role::User {
