@@ -224,3 +224,4 @@
     renderBriefing(briefing);
   });
 })();
+
