@@ -55,6 +55,9 @@ def check_pages(page, url, screenshots=None):
     assert page.locator("#subsystemNav a").count() == len(ids)
     ids = [subsystem for subsystem in ids if subsystem != "factory"]
     # Card tabs follow the WAI-ARIA tabs pattern; arrow keys replace the old cycle buttons.
+    # The card dashboard is the #classic route; the default workspace is the Tools Map.
+    page.goto(url + "/#classic")
+    expect(page.locator("#homePage")).to_be_visible()
     assert page.locator(".card-cycle-btn").count() == 0
     first = page.locator('#systemCard [role="tab"]').first
     first.focus()
@@ -71,13 +74,17 @@ def check_pages(page, url, screenshots=None):
       return !tabs || tabs.top >= title.bottom - 1;
     })""")
     page.evaluate("""window.originalCards = [...document.querySelectorAll('.workspace-grid > article')];""")
+    # Every subsystem opens in the workspace popup over the map, keeping the original cards.
     for subsystem in ids:
         link = page.locator(f'#subsystemNav a[href="#{subsystem}"]')
-        link.focus()
-        page.keyboard.press("Enter")
-        expect(page.locator("#subsystemPage")).to_be_visible()
-        expect(page.locator("#homePage")).to_be_hidden()
+        if page.locator("#homePage").is_visible():
+            link.focus()
+            page.keyboard.press("Enter")
+        else:
+            page.evaluate(f"sailNavigate('{subsystem}')")
         expect(page.locator("#subsystemTitle")).to_have_text(subsystem.title())
+        expect(page.locator("#tmPop #subsystemPage")).to_be_visible()
+        expect(page.locator("#homePage")).to_be_hidden()
         assert page.evaluate("document.activeElement.id") == "subsystemTitle"
         assert page.locator('#subsystemNav [aria-current="page"]').count() == 1
         assert page.evaluate("""originalCards.every(card =>
@@ -90,7 +97,10 @@ def check_pages(page, url, screenshots=None):
         else:
             expect(page.locator("#subsystemContent > article")).to_be_visible()
 
-    page.locator("#homeNav").click()
+    page.keyboard.press("Escape")
+    expect(page.locator("#tmPop")).to_be_hidden()
+    expect(page.locator("#toolsMap")).to_be_visible()
+    page.goto(url + "/#classic")
     expect(page.locator("#homePage")).to_be_visible()
     assert page.evaluate("originalCards.every(card => card.parentElement.matches('.workspace-grid'))")
     page.locator('#subsystemNav a[href="#forge"]').click()
@@ -104,20 +114,24 @@ def check_pages(page, url, screenshots=None):
     page.locator("#subsystemSettings").click()
     expect(page.locator('[data-category="models"]')).to_be_visible()
     page.keyboard.press("Escape")
-    page.locator("#spacesOpen").click()
-    page.locator('#spaceList [data-space="guardian"]').click()
+    expect(page.locator("#tmPop")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator("#tmPop")).to_be_hidden()
+    page.locator('.tm-label[data-station="guardian"]').click()
     expect(page.locator("#subsystemTitle")).to_have_text("Guardian")
+    page.go_back()
+    expect(page.locator("#tmPop")).to_be_hidden()
     page.go_back()
     expect(page.locator("#subsystemTitle")).to_have_text("Mind")
     page.go_forward()
+    page.go_forward()
     expect(page.locator("#subsystemTitle")).to_have_text("Guardian")
-    page.locator("#spacesOpen").click()
-    page.keyboard.press("Escape")
     assert page.evaluate("location.hash") == "#guardian"
 
     if screenshots:
-        expect(page.locator("#scrim")).to_be_hidden()
-        page.screenshot(path=str(screenshots / "guardian-desktop.png"), full_page=True)
+        page.screenshot(path=str(screenshots / "guardian-desktop.png"))
+    # Spaces (classic dashboard) still routes into the popup, including card panels.
+    page.goto(url + "/#classic")
     page.locator("#spacesOpen").click()
     page.locator('#spaceList [data-space="vision"]').click()
     expect(page.locator("#subsystemTitle")).to_have_text("Canvas")
@@ -126,27 +140,26 @@ def check_pages(page, url, screenshots=None):
     assert page.locator("#subsystemDirectory").count() == 0
     for width in (390, 820):
         page.set_viewport_size({"width": width, "height": 844})
-        for subsystem in [*ids, "home"]:
-            if subsystem == "home":
-                page.locator('.brand').click()
-            else:
-                page.locator("#spacesTop").click()
-                page.locator(f'#spaceList [data-space="{subsystem}"]').click()
-            if subsystem == "home":
+        for subsystem in [*ids, "home", "classic"]:
+            page.evaluate(f"sailNavigate('{subsystem}')")
+            if subsystem == "classic":
                 expect(page.locator("#homePage")).to_be_visible()
+            elif subsystem == "home":
+                expect(page.locator("#tmPop")).to_be_hidden()
+                expect(page.locator("#toolsMap")).to_be_visible()
             else:
                 expect(page.locator("#subsystemTitle")).to_have_text(subsystem.title())
+                expect(page.locator("#tmPopClose")).to_be_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), page.evaluate("""({route:location.hash, width:innerWidth, scroll:document.documentElement.scrollWidth, wide:[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+1).map(el=>[el.id,el.className,el.getBoundingClientRect().right]).slice(0,15)})""")
     if screenshots:
         page.set_viewport_size({"width": 390, "height": 844})
-        page.locator('.brand').click()
+        page.evaluate("sailNavigate('classic')")
         page.screenshot(path=str(screenshots / "home-mobile.png"), full_page=True)
-        page.locator("#spacesTop").click()
-        page.locator('#spaceList [data-space="guardian"]').click()
+        page.evaluate("sailNavigate('guardian')")
         expect(page.locator("#toolsPanelSafetyReview")).to_be_visible()
-        page.screenshot(path=str(screenshots / "guardian-mobile.png"), full_page=True)
+        page.screenshot(path=str(screenshots / "guardian-mobile.png"))
     page.goto(url + "/#unknown")
-    expect(page.locator("#homePage")).to_be_visible()
+    expect(page.locator("#toolsMap")).to_be_visible()
     assert page.evaluate("location.hash") == "#home"
     assert not errors, errors
 
@@ -172,7 +185,7 @@ def main():
     finally:
         server.shutdown()
         server.server_close()
-    print("Subsystem routes, keyboard navigation, history, settings, card identity, Forge dialog, and mobile layouts passed")
+    print("Subsystem popups, classic dashboard, keyboard navigation, history, settings, card identity, Forge dialog, and mobile layouts passed")
 
 
 if __name__ == "__main__":

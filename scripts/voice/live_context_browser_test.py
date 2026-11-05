@@ -28,7 +28,7 @@ try:
         page.goto(f'http://127.0.0.1:{server.server_port}')
         page.wait_for_function("typeof sendAction === 'function'")
         page.evaluate("getOrFetchOwnerToken=async()=> 'fixture-owner-token-not-a-secret'")
-        page.locator('#settingsRail').click()
+        page.locator('#toolsMap .tm-top button[aria-label="Settings"]').click()
         page.locator('[data-settings-tab="voice"]').click()
         button=page.locator('#liveContextBtn')
         expect(button).to_have_attribute('aria-pressed','false')

@@ -6,8 +6,8 @@ const subsystemPages = [
     "id": "factory",
     "name": "Factory",
     "icon": "factory",
-    "subtitle": "The room as the index",
-    "description": "One isometric room holding every station. Nothing hidden, nothing floating.",
+    "subtitle": "Live tools map",
+    "description": "Your workspace: every system on one live map, with Dialogue beside it.",
     "card": null,
     "panel": null,
     "settings": null,
@@ -229,20 +229,24 @@ function initializeSubsystemPages() {
   for (const item of subsystemPages) {
     document.getElementById('subsystemNav').append(pageLink(item, 'quiet-button nav-item'));
   }
+  // Routes: #home (also #factory) is the Tools Map workspace; a subsystem id opens that
+  // system in the workspace popup (toolsmap.js); #classic is the card dashboard.
   function renderRoute(focus = true) {
     const id = location.hash.slice(1) || 'home';
     if (id === 'spaces') return; // Spaces overlays the current workspace.
-    const item = subsystemPages.find(entry => entry.id === id);
-    const route = item?.id || 'home';
-    if (!item && id !== 'home') history.replaceState(null, '', '#home');
+    const found = subsystemPages.find(entry => entry.id === id);
+    const item = found?.id === 'factory' ? null : found;
+    const route = item?.id || (id === 'classic' ? 'classic' : 'home');
+    if (!found && id !== 'home' && id !== 'classic') history.replaceState(null, '', '#home');
     closeSheet();
     // Move original nodes so socket updates, form state, and listeners stay live.
     for (const [card, marker] of cardHomes) marker.after(card);
-    content.replaceChildren(); home.hidden = !!item; page.hidden = !item;
+    content.replaceChildren(); home.hidden = route !== 'classic'; page.hidden = !item;
     workspace.setAttribute('aria-label', `${item?.name || 'Home'} workspace`);
-    document.title = `SAIL — ${item?.name || 'Home'}`;
+    document.title = `SAIL — ${item?.name || (route === 'classic' ? 'Home' : 'Workspace')}`;
     document.querySelectorAll('[data-page]').forEach(link => {
-      const selected = link.dataset.page === route; link.classList.toggle('selected', selected);
+      const page = link.dataset.page === 'factory' ? 'home' : link.dataset.page;
+      const selected = page === (route === 'classic' ? 'home' : route); link.classList.toggle('selected', selected);
       if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     });
     if (item) {
@@ -260,7 +264,8 @@ function initializeSubsystemPages() {
     }
     currentPage = route; requestedPanel = null; workspace.scrollTop = 0;
     window.dispatchEvent(new CustomEvent('sail:page', {detail:route}));
-    if (focus) (item ? title : document.getElementById('welcomeGreeting')).focus({ preventScroll:true });
+    // The map restores focus to whatever opened a closed popup.
+    if (focus && route !== 'home') (item ? title : document.getElementById('welcomeGreeting')).focus({ preventScroll:true });
   }
   window.sailNavigate = (id, panel = null) => {
     requestedPanel = panel;
