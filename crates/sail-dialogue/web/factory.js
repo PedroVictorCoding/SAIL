@@ -457,3 +457,60 @@ function drawStation(ctx, record, options = {}) {
   }
 }
 
+
+// ------------------------------------------------------------------- render --
+
+/** Screen anchors of every station, for hit testing and anchored cards. */
+FACTORY.anchors = new Map();
+
+function drawScene(ctx, width, height) {
+  drawFloor(ctx, width, height);
+  drawPipes(ctx);
+
+  const current = FACTORY.selected || FACTORY.hover;
+  const objects = FACTORY.props.map(prop => ({ ...prop, prop: true }))
+    .concat(FACTORY.registry.map(station => ({ ...station, prop: false })));
+  objects.sort((a, b) => depth(a) - depth(b));
+
+  FACTORY.anchors.clear();
+  for (const object of objects) {
+    const active = !object.prop && object.id === current?.id;
+    drawContactShadow(ctx, object);
+    const drawn = drawStation(ctx, object, { accent: active });
+    if (object.prop) continue;
+    const anchor = drawn?.anchor || isoPoint(object.x + object.w / 2, object.y + object.d / 2, object.h);
+    FACTORY.anchors.set(object.id, {
+      ...anchor,
+      base: isoPoint(object.x + object.w / 2, object.y + object.d / 2, 0),
+      station: object,
+    });
+    drawGauges(ctx, { x: anchor.x - 18 * FACTORY.camera.zoom, y: anchor.y + 6 * FACTORY.camera.zoom });
+    drawLabel(ctx, object, anchor, active);
+  }
+
+  if (FACTORY.selected) drawSelection(ctx, FACTORY.selected);
+  if (FACTORY.hover && FACTORY.hover.id !== FACTORY.selected?.id) {
+    // Peek: a 1px accent outline on the hovered footprint. No layout shift.
+    polygon(ctx, [
+      isoPoint(FACTORY.hover.x, FACTORY.hover.y),
+      isoPoint(FACTORY.hover.x + FACTORY.hover.w, FACTORY.hover.y),
+      isoPoint(FACTORY.hover.x + FACTORY.hover.w, FACTORY.hover.y + FACTORY.hover.d),
+      isoPoint(FACTORY.hover.x, FACTORY.hover.y + FACTORY.hover.d),
+    ], null, FACTORY.palette.accent, 1);
+  }
+}
+
+/** Station under a screen point, using its projected footprint and body. */
+function hitTest(px, py) {
+  const tile = screenToTile(px, py);
+  for (const record of visibleStations().reverse()) {
+    const lift = (record.h || 1) * 0.6;
+    const insidePlate = tile.x >= record.x && tile.x <= record.x + record.w
+      && tile.y >= record.y && tile.y <= record.y + record.d;
+    const insideBody = tile.x >= record.x && tile.x <= record.x + record.w
+      && tile.y >= record.y - lift && tile.y <= record.y + record.d;
+    if (insidePlate || insideBody) return record;
+  }
+  return null;
+}
+
