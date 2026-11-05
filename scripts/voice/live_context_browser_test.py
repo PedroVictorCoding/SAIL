@@ -6,13 +6,7 @@ from http.server import ThreadingHTTPServer
 from playwright.sync_api import sync_playwright, expect
 from subsystem_pages_test import UIHandler
 
-class LiveContextHandler(UIHandler):
-    def do_GET(self):
-        if self.path.startswith('/vendor/'):
-            self.path = '/vendor/xterm/' + self.path.split('/')[-1]
-        super().do_GET()
-
-server = ThreadingHTTPServer(('127.0.0.1', 0), LiveContextHandler)
+server = ThreadingHTTPServer(('127.0.0.1', 0), UIHandler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 try:
     with sync_playwright() as p:
@@ -34,7 +28,7 @@ try:
         page.goto(f'http://127.0.0.1:{server.server_port}')
         page.wait_for_function("typeof sendAction === 'function'")
         page.evaluate("getOrFetchOwnerToken=async()=> 'fixture-owner-token-not-a-secret'")
-        page.locator('#settingsOpen').click()
+        page.locator('#settingsRail').click()
         page.locator('[data-settings-tab="voice"]').click()
         button=page.locator('#liveContextBtn')
         expect(button).to_have_attribute('aria-pressed','false')
