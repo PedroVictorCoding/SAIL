@@ -6,7 +6,7 @@
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, Uri},
     response::Html,
     routing::{get, post},
 };
@@ -82,8 +82,12 @@ fn failure(error: SpotifyError) -> (StatusCode, Json<Value>) {
 }
 
 /// The redirect Spotify sends the browser back to: this server, as the browser reached it.
-fn callback_uri(headers: &HeaderMap) -> Option<String> {
-    let host = headers.get("host")?.to_str().ok()?;
+/// HTTP/2 carries the address in the request's `:authority` (the URI), not a Host header.
+fn callback_uri(uri: &Uri, headers: &HeaderMap) -> Option<String> {
+    let host = match uri.authority() {
+        Some(authority) => authority.as_str(),
+        None => headers.get("host")?.to_str().ok()?,
+    };
     let valid = !host.is_empty()
         && host.len() <= 255
         && host
@@ -92,14 +96,14 @@ fn callback_uri(headers: &HeaderMap) -> Option<String> {
     valid.then(|| format!("https://{host}/api/spotify/callback"))
 }
 
-async fn status(State(state): State<Arc<HttpState>>, headers: HeaderMap) -> Json<Value> {
+async fn status(State(state): State<Arc<HttpState>>, uri: Uri, headers: HeaderMap) -> Json<Value> {
     let spotify = &state.spotify;
     let configured = spotify.configured();
     let connected = configured && spotify.connected().await;
     let mut body = json!({
         "configured": configured,
         "connected": connected,
-        "redirect_uri": if configured { spotify.redirect_uri() } else { callback_uri(&headers).unwrap_or_default() },
+        "redirect_uri": if configured { spotify.redirect_uri() } else { callback_uri(&uri, &headers).unwrap_or_default() },
         "now_playing": Value::Null,
     });
     if connected {
@@ -121,11 +125,12 @@ struct Setup {
 
 async fn setup(
     State(state): State<Arc<HttpState>>,
+    uri: Uri,
     headers: HeaderMap,
     Json(body): Json<Setup>,
 ) -> Reply {
     authorize(&state, &headers)?;
-    let redirect = callback_uri(&headers).ok_or((
+    let redirect = callback_uri(&uri, &headers).ok_or((
         StatusCode::BAD_REQUEST,
         Json(json!({"error":"Open SAIL by its address to set up Spotify."})),
     ))?;
@@ -285,6 +290,48 @@ mod tests {
         assert_eq!(
             body["redirect_uri"],
             "https://127.0.0.1:8088/api/spotify/callback"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Browsers on HTTP/2 (SAIL's TLS default) send the address as `:authority`, which
+    /// reaches the handler as the URI's authority, with no Host header.
+    #[tokio::test]
+    async fn http2_requests_without_a_host_header_can_set_up() {
+        let (routes, dir) = app();
+        // Mounted as in the server, so the nesting's URI rewrite is covered too.
+        let app = Router::new().nest_service("/api/spotify", routes);
+        let request = |method: &str, body: &str| {
+            Request::builder()
+                .method(method)
+                .uri(if method == "GET" {
+                    "https://192.168.1.101:8088/api/spotify/status"
+                } else {
+                    "https://192.168.1.101:8088/api/spotify/setup"
+                })
+                .version(axum::http::Version::HTTP_2)
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let (_, body) = send(&app, request("GET", "")).await;
+        assert_eq!(
+            body["redirect_uri"],
+            "https://192.168.1.101:8088/api/spotify/callback"
+        );
+        let (status, body) = send(
+            &app,
+            request(
+                "POST",
+                r#"{"client_id":"672012510a8c4af3979634a778f2f939"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["redirect_uri"],
+            "https://192.168.1.101:8088/api/spotify/callback"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
