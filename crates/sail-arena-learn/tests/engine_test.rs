@@ -225,6 +225,59 @@ async fn offline_model_records_failure_without_fabricating() {
     assert!(engine.view(&s).unwrap().last_failure.is_none());
 }
 
+const OVERFLOW: &str =
+    "Rendered prompt, image reservation and response headroom exceed the model context window";
+
+#[tokio::test]
+async fn context_overflow_retries_with_less_history() {
+    let model = Arc::new(Scripted::new(vec![
+        Step::Fail(OVERFLOW.into()),
+        call("probe", probe()),
+    ]));
+    let (engine, _) = engine(model.clone());
+    let s = engine.create_session("goal").unwrap().session;
+    assert_eq!(
+        engine.run_turn(&s).await.unwrap(),
+        TurnOutcome::AwaitingLearner
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 2);
+    assert!(engine.view(&s).unwrap().last_failure.is_none());
+}
+
+#[tokio::test]
+async fn persistent_context_overflow_fails_after_shrinking() {
+    let model = Arc::new(Scripted::new(
+        (0..10).map(|_| Step::Fail(OVERFLOW.into())).collect(),
+    ));
+    let (engine, _) = engine(model.clone());
+    let s = engine.create_session("goal").unwrap().session;
+    assert_eq!(
+        engine.run_turn(&s).await.unwrap(),
+        TurnOutcome::Failed {
+            message: OVERFLOW.into()
+        }
+    );
+    // 96 → 48 → 24 → 12 → 8 KiB, then the refusal is reported.
+    assert_eq!(model.requests.lock().unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn transient_memory_pressure_waits_then_continues() {
+    let model = Arc::new(Scripted::new(vec![
+        Step::Fail(
+            "resource admission denied: host memory pressure 33.0% exceeds admission limit".into(),
+        ),
+        call("probe", probe()),
+    ]));
+    let (engine, _) = engine(model.clone());
+    let s = engine.create_session("goal").unwrap().session;
+    assert_eq!(
+        engine.run_turn(&s).await.unwrap(),
+        TurnOutcome::AwaitingLearner
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 2);
+}
+
 #[tokio::test]
 async fn background_turn_is_busy_then_aborts_cleanly() {
     let model = Arc::new(Scripted::new(vec![Step::Hang]));

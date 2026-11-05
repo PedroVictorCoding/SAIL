@@ -19,7 +19,9 @@ use crate::core::graph::{
     GraphContextProp, GraphNodePosition, GraphProposition, GraphReasoningChain,
     GraphRenderSettings, GraphSnapshot, extract_from_notes,
 };
-use crate::core::messages::{compact_digest, compaction_cut, to_llm_messages, window};
+use crate::core::messages::{
+    MAX_BYTES, compact_digest, compaction_cut, to_llm_messages, window_within,
+};
 use crate::core::plan::LessonPlan;
 use crate::core::ports::{
     EventStore, KnowledgeGraph, KnowledgeSource, Model, SessionSummary, StoreError,
@@ -1077,34 +1079,61 @@ impl Engine {
                     break TurnOutcome::LoopLimit;
                 }
                 calls += 1;
-                let messages = window(to_llm_messages(
+                let messages = to_llm_messages(
                     &prompts::system(role, &view, self.prompts.as_deref()),
                     &events,
-                ));
-                let request = InferenceRequest {
-                    version: sail_protocol::VERSION,
-                    request_id: uuid::Uuid::new_v4(),
-                    model: self.models.request_model(match role {
-                        AgentRole::Prober => "prober",
-                        AgentRole::Teacher => "teacher",
-                        AgentRole::Practitioner => "practitioner",
-                    }),
-                    messages,
-                    tools: tools::definitions(role),
-                    tool_choice: ToolChoice::Auto,
-                    generation: Generation {
-                        max_tokens: sail_protocol::ResourceLimits::default().max_output_tokens,
-                        temperature: 0.3,
-                    },
-                };
-                let response = tokio::select! {
-                    _ = cancel.cancelled() => break TurnOutcome::Aborted,
-                    r = self.model.complete(request, cancel.clone()) => r,
+                );
+                let model = self.models.request_model(match role {
+                    AgentRole::Prober => "prober",
+                    AgentRole::Teacher => "teacher",
+                    AgentRole::Practitioner => "practitioner",
+                });
+                let (mut budget, mut waits) = (MAX_BYTES, 0u32);
+                let response = loop {
+                    let request = InferenceRequest {
+                        version: sail_protocol::VERSION,
+                        request_id: uuid::Uuid::new_v4(),
+                        model: model.clone(),
+                        messages: window_within(messages.clone(), budget),
+                        tools: tools::definitions(role),
+                        tool_choice: ToolChoice::Auto,
+                        generation: Generation {
+                            max_tokens: sail_protocol::ResourceLimits::default().max_output_tokens,
+                            temperature: 0.3,
+                        },
+                    };
+                    let result = tokio::select! {
+                        _ = cancel.cancelled() => break Err(None),
+                        r = self.model.complete(request, cancel.clone()) => r,
+                    };
+                    match result {
+                        Ok(r) => break Ok(r),
+                        Err(_) if cancel.is_cancelled() => break Err(None),
+                        // The model's own window is smaller than Mind's request bound: send
+                        // less history rather than failing the lesson.
+                        Err(message)
+                            if is_context_overflow(&message) && budget > MIN_WINDOW_BYTES =>
+                        {
+                            budget = (budget / 2).max(MIN_WINDOW_BYTES);
+                        }
+                        // A transient host memory spike (a build, a browser) clears in seconds;
+                        // the learner is waiting, so wait briefly instead of failing.
+                        Err(message)
+                            if is_transient_admission(&message) && waits < ADMISSION_WAITS =>
+                        {
+                            waits += 1;
+                            tokio::select! {
+                                _ = cancel.cancelled() => break Err(None),
+                                _ = tokio::time::sleep(ADMISSION_BACKOFF * waits) => {}
+                            }
+                        }
+                        Err(message) => break Err(Some(message)),
+                    }
                 };
                 let response = match response {
                     Ok(r) => r,
-                    Err(_) if cancel.is_cancelled() => break TurnOutcome::Aborted,
-                    Err(message) => break TurnOutcome::Failed { message },
+                    Err(None) => break TurnOutcome::Aborted,
+                    Err(Some(message)) => break TurnOutcome::Failed { message },
                 };
                 input_tokens += u64::from(response.usage.input_tokens.unwrap_or(0));
                 output_tokens += u64::from(response.usage.output_tokens.unwrap_or(0));
@@ -1228,6 +1257,24 @@ impl Engine {
         )?;
         Ok(outcome)
     }
+}
+/// Smallest history budget the turn shrinks to after context-window refusals.
+const MIN_WINDOW_BYTES: usize = 8 * 1024;
+/// Waits for a transient admission refusal before the turn fails, and the backoff step.
+const ADMISSION_WAITS: u32 = 3;
+const ADMISSION_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Mind's refusal when the rendered prompt does not fit the model's context window.
+fn is_context_overflow(message: &str) -> bool {
+    message.contains("exceed the model context window")
+}
+
+/// Mind's admission refusals that clear on their own once host memory recovers.
+fn is_transient_admission(message: &str) -> bool {
+    message.contains("resource admission denied")
+        && (message.contains("memory pressure")
+            || message.contains("swap pressure")
+            || message.contains("insufficient available RAM"))
 }
 
 /// The events that record a judgment. For an `unclear` answer to a question that was not
