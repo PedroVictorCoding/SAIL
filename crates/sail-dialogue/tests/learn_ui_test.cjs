@@ -81,3 +81,38 @@ test('practice outcomes are described without mastery or scores', () => {
     assert.doesNotMatch(ui.learnPracticeText(outcome), /master|score|grade/i);
   }
 });
+
+test('LearnHarness confidence stop snapping, session filtering, and Sugiyama DAG layout work cleanly', () => {
+  assert.equal(ui.learnSnapConfidence(0), 0);
+  assert.equal(ui.learnSnapConfidence(20), 25);
+  assert.equal(ui.learnSnapConfidence(52), 50);
+  assert.equal(ui.learnSnapConfidence(78), 75);
+  assert.equal(ui.learnSnapConfidence(99), 100);
+
+  const sessions = [
+    {id: '1', title: 'TCP Congestion', goal: 'TCP', kind: 'teaching'},
+    {id: '2', title: 'Drill: Rust lifetimes', goal: 'lifetimes', kind: 'practice'},
+  ];
+  assert.equal(ui.learnFilterSessions(sessions, 'teaching', '').length, 1);
+  assert.equal(ui.learnFilterSessions(sessions, 'practice', '').length, 1);
+  assert.equal(ui.learnFilterSessions(sessions, 'all', 'rust').length, 1);
+
+  const dag = ui.learnLayoutPlanDag({
+    nodes: [{id: 'a', title: 'Node A'}, {id: 'b', title: 'Node B'}],
+    edges: [['a', 'b']],
+    order: ['a', 'b'],
+  }, {current: 'b', visited: ['a', 'b']});
+  assert.equal(dag.nodes.length, 2);
+  assert.equal(dag.edges.length, 1);
+  assert.ok(dag.nodes[1].y > dag.nodes[0].y);
+
+  assert.deepEqual(
+    ui.learnBuildAnswer('single', {choices: [], dontKnow: true}).answer,
+    {choices: [], dont_know: true}
+  );
+  assert.deepEqual(
+    ui.learnBuildAnswer('single', {choices: ['a'], confidencePct: 75}).answer,
+    {choices: ['a'], confidence: 4, confidence_pct: 75}
+  );
+});
+

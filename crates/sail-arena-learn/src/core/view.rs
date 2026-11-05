@@ -3,7 +3,9 @@
 //! and the view has no mastery or score field.
 use super::artifacts::Artifact;
 use super::events::{AgentRole, Envelope, LearningEvent, PresentKind, TurnOutcome};
-use super::graph::GraphSummary;
+use super::graph::{
+    GraphContextProp, GraphProposition, GraphProvenance, GraphReasoningChain, GraphSummary,
+};
 use super::judgment::Judgment;
 use super::plan::LessonPlan;
 use super::practice::{PracticeView, ProblemSpec};
@@ -34,6 +36,20 @@ pub struct LearnerQuestion {
     pub judgment: Option<Judgment>,
     /// Set when this question is the follow-up to an unclear answer to that question.
     pub follow_up_of: Option<String>,
+    /// Originating tool (`probe`, `recall`, `quiz`, `explain`, `ask_user_question`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// Subtype for quizzes (`predict` vs `check`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question_type: Option<String>,
+    /// Supporting context or code snippet below the prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+    /// Explanation revealed after the question is answered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dismissed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -90,10 +106,22 @@ pub struct ProbeSummary {
     pub gaps: Vec<String>,
 }
 
+/// Per-turn token usage record for the session stats popover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TurnStat {
+    pub turn: u32,
+    pub role: AgentRole,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub at_ms: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SessionView {
     pub session: String,
+    pub title: String,
     pub goal: String,
+    pub kind: String,
     pub mode: Mode,
     pub paused: bool,
     pub transcript: Vec<Entry>,
@@ -108,10 +136,16 @@ pub struct SessionView {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub last_seq: u64,
+    pub created_ms: i64,
+    pub updated_ms: i64,
     /// Session learning artifacts generated during this session.
     pub artifacts: Vec<Artifact>,
     /// Persistent learning graph summary.
     pub graph_summary: Option<GraphSummary>,
+    /// Propositions passed as initial context when starting this session.
+    pub graph_context: Vec<GraphContextProp>,
+    /// Per-turn token usage breakdown.
+    pub turns: Vec<TurnStat>,
     /// Practice state when this is a practice session (#244).
     pub practice: Option<PracticeView>,
     /// The latest opted-in review reminder (#257).
@@ -147,7 +181,9 @@ impl SessionView {
     pub fn empty(session: &str) -> Self {
         Self {
             session: session.to_string(),
+            title: String::new(),
             goal: String::new(),
+            kind: "teach".to_string(),
             mode: Mode::Assess,
             paused: false,
             transcript: Vec::new(),
@@ -160,8 +196,12 @@ impl SessionView {
             input_tokens: 0,
             output_tokens: 0,
             last_seq: 0,
+            created_ms: 0,
+            updated_ms: 0,
             artifacts: Vec::new(),
             graph_summary: None,
+            graph_context: Vec::new(),
+            turns: Vec::new(),
             practice: None,
             review: None,
             context_fraction: 0.0,
@@ -182,6 +222,12 @@ impl SessionView {
 
     pub fn current_plan(&self) -> Option<&PlanView> {
         self.plan.as_ref()
+    }
+
+    pub fn active_problem(&self) -> Option<&str> {
+        self.practice
+            .as_ref()
+            .and_then(|p| p.active_problem.as_deref())
     }
 
     fn question_mut(&mut self, id: &str) -> Option<&mut LearnerQuestion> {
@@ -208,6 +254,12 @@ impl SessionView {
     /// Applies one event. `specs` keeps the hidden answer keys for grading display.
     pub fn apply(&mut self, envelope: &Envelope, specs: &mut Vec<(String, QuestionSpec)>) {
         self.last_seq = envelope.seq;
+        if self.created_ms == 0 && envelope.at_ms > 0 {
+            self.created_ms = envelope.at_ms;
+        }
+        if envelope.at_ms > 0 {
+            self.updated_ms = envelope.at_ms;
+        }
         let event = &envelope.event;
         self.context_tokens = self.context_tokens.saturating_add(approx_tokens(
             &serde_json::to_string(event).unwrap_or_default(),
@@ -218,7 +270,18 @@ impl SessionView {
             self.needs_turn = true;
         }
         match event {
-            LearningEvent::SessionCreated { goal } => self.goal = goal.clone(),
+            LearningEvent::SessionCreated { goal } => {
+                self.goal = goal.clone();
+                if self.title.is_empty() {
+                    self.title = goal.clone();
+                }
+            }
+            LearningEvent::SessionRenamed { title } => {
+                self.title = title.clone();
+            }
+            LearningEvent::GraphContextAttached { propositions } => {
+                self.graph_context = propositions.clone();
+            }
             LearningEvent::LearnerMessage { text } => {
                 self.transcript.push(Entry::Learner { text: text.clone() })
             }
@@ -248,6 +311,11 @@ impl SessionView {
                         correct: None,
                         judgment: None,
                         follow_up_of: follow_up_of.clone(),
+                        tool: spec.tool.clone(),
+                        question_type: spec.question_type.clone(),
+                        details: spec.details.clone(),
+                        explanation: None,
+                        dismissed: false,
                     })));
             }
             LearningEvent::Answered {
@@ -258,15 +326,24 @@ impl SessionView {
                 if self.active_question.as_deref() == Some(call_id) {
                     self.active_question = None;
                 }
-                let correct = specs
-                    .iter()
-                    .find(|(id, _)| id == call_id)
-                    .map(|(_, s)| s.correct.clone())
+                let matched_spec = specs.iter().find(|(id, _)| id == call_id).map(|(_, s)| s);
+                let correct = matched_spec
+                    .map(|s| s.correct.clone())
                     .filter(|c| !c.is_empty());
+                let explanation = matched_spec.and_then(|s| s.explanation.clone());
                 if let Some(q) = self.question_mut(call_id) {
                     q.answer = Some(answer.clone());
                     q.grade = Some(*grade);
                     q.correct = correct;
+                    q.explanation = explanation;
+                }
+            }
+            LearningEvent::QuestionDismissed { call_id } => {
+                if self.active_question.as_deref() == Some(call_id) {
+                    self.active_question = None;
+                }
+                if let Some(q) = self.question_mut(call_id) {
+                    q.dismissed = true;
                 }
             }
             LearningEvent::AnswerJudged { call_id, judgment } => {
@@ -339,7 +416,11 @@ impl SessionView {
             }
             LearningEvent::PracticeStarted { topic } => {
                 self.mode = Mode::Practice;
+                self.kind = "practice".to_string();
                 self.goal = topic.clone();
+                if self.title.is_empty() {
+                    self.title = topic.clone();
+                }
                 self.practice = Some(PracticeView::default());
                 self.transcript.push(Entry::Notice {
                     text: format!("Practice session: {topic}"),
@@ -358,6 +439,12 @@ impl SessionView {
                     solution: None,
                     outcome: None,
                     attempts: Vec::new(),
+                    mode: spec.mode.clone(),
+                    target: spec.target.clone(),
+                    verdict: None,
+                    rung: None,
+                    miss_class: None,
+                    retest: None,
                 });
                 self.problem_specs.push((problem_id.clone(), spec.clone()));
                 self.transcript.push(Entry::Problem {
@@ -390,6 +477,10 @@ impl SessionView {
             LearningEvent::PracticeConcluded {
                 problem_id,
                 outcome,
+                verdict,
+                rung,
+                miss_class,
+                retest,
             } => {
                 let solution = self
                     .problem_specs
@@ -400,6 +491,10 @@ impl SessionView {
                     if let Some(problem) = practice.problem_mut(problem_id) {
                         problem.solution = solution;
                         problem.outcome = Some(*outcome);
+                        problem.verdict = verdict.clone();
+                        problem.rung = *rung;
+                        problem.miss_class = miss_class.clone();
+                        problem.retest = retest.clone();
                     }
                     if practice.active_problem.as_deref() == Some(problem_id) {
                         practice.active_problem = None;
@@ -423,14 +518,22 @@ impl SessionView {
             LearningEvent::PracticeReviewCancelled => self.review = None,
             LearningEvent::ContextCompacted { .. } => {}
             LearningEvent::TurnSettled {
+                role,
                 outcome,
                 input_tokens,
                 output_tokens,
-                ..
             } => {
                 self.needs_turn = false;
                 self.input_tokens += input_tokens;
                 self.output_tokens += output_tokens;
+                let turn_num = self.turns.len() as u32 + 1;
+                self.turns.push(TurnStat {
+                    turn: turn_num,
+                    role: *role,
+                    input_tokens: *input_tokens,
+                    output_tokens: *output_tokens,
+                    at_ms: envelope.at_ms,
+                });
                 self.last_failure = match outcome {
                     TurnOutcome::Failed { message } => Some(message.clone()),
                     TurnOutcome::LoopLimit => {
@@ -446,8 +549,6 @@ impl SessionView {
             .practice
             .as_ref()
             .is_some_and(|p| p.active_problem.is_some());
-        // A waiting problem blocks autonomous turns, but a just-recorded attempt is input
-        // the practitioner must evaluate.
         let attempt_arrived = matches!(event, LearningEvent::PracticeAttempted { .. });
         if self.paused || self.active_question.is_some() || (practice_open && !attempt_arrived) {
             self.needs_turn = false;
@@ -471,6 +572,188 @@ impl SessionView {
             mermaid: plan.to_mermaid(),
         });
         self.recompute_upcoming();
+    }
+
+    /// Exports the session transcript, plan, questions, and practice problems to Markdown.
+    pub fn to_markdown(&self) -> String {
+        let mut md = String::new();
+        let heading = if self.title.trim().is_empty() {
+            &self.goal
+        } else {
+            &self.title
+        };
+        md.push_str(&format!("# {heading}\n\n"));
+        md.push_str(&format!("- **Goal**: {}\n", self.goal));
+        md.push_str(&format!("- **Kind**: {}\n", self.kind));
+        md.push_str(&format!("- **Phase**: {:?}\n\n", self.mode));
+
+        if let Some(plan) = &self.plan {
+            md.push_str("## Lesson Plan\n\n");
+            for id in &plan.order {
+                if let Some(node) = plan.nodes.iter().find(|n| &n.id == id) {
+                    let mark = if self.progress.visited.contains(id) {
+                        "x"
+                    } else {
+                        " "
+                    };
+                    md.push_str(&format!("- [{mark}] **{}** (`{}`)\n", node.title, node.id));
+                }
+            }
+            md.push('\n');
+        }
+
+        md.push_str("## Transcript\n\n");
+        for entry in &self.transcript {
+            match entry {
+                Entry::Learner { text } => {
+                    md.push_str(&format!("### Learner\n\n{text}\n\n"));
+                }
+                Entry::Assistant { text } => {
+                    md.push_str(&format!("### Tutor\n\n{text}\n\n"));
+                }
+                Entry::Explain { node_id, text } => {
+                    md.push_str(&format!("### Explanation (`{node_id}`)\n\n{text}\n\n"));
+                }
+                Entry::Diagram {
+                    node_id,
+                    mermaid,
+                    caption,
+                    ..
+                } => {
+                    md.push_str(&format!(
+                        "### Diagram: {caption} (`{node_id}`)\n\n```mermaid\n{mermaid}\n```\n\n"
+                    ));
+                }
+                Entry::Question(q) => {
+                    let label = q.tool.as_deref().unwrap_or("question").to_uppercase();
+                    md.push_str(&format!("### {label}: {}\n\n", q.prompt));
+                    for opt in &q.options {
+                        let chosen = q
+                            .answer
+                            .as_ref()
+                            .is_some_and(|a| a.choices.contains(&opt.id));
+                        let bullet = if chosen { "- [x]" } else { "- [ ]" };
+                        md.push_str(&format!("{bullet} {}\n", opt.text));
+                    }
+                    if let Some(ans) = &q.answer {
+                        if let Some(t) = &ans.text {
+                            md.push_str(&format!("\n**Answer**: {t}\n"));
+                        }
+                        if let Some(th) = &ans.thinking {
+                            md.push_str(&format!("\n> {th}\n"));
+                        }
+                    }
+                    md.push('\n');
+                }
+                Entry::Problem {
+                    problem_id,
+                    statement,
+                } => {
+                    md.push_str(&format!("### Problem (`{problem_id}`)\n\n{statement}\n\n"));
+                    if let Some(practice) = &self.practice
+                        && let Some(prob) = practice.problems.iter().find(|p| p.id == *problem_id)
+                    {
+                        for attempt in &prob.attempts {
+                            md.push_str(&format!("**Thinking**:\n> {attempt}\n\n"));
+                        }
+                        if let Some(outcome) = &prob.outcome {
+                            md.push_str(&format!("**Outcome**: `{outcome:?}`\n\n"));
+                        }
+                        if let Some(sol) = &prob.solution {
+                            md.push_str(&format!("**Model solution**:\n{sol}\n\n"));
+                        }
+                    }
+                }
+                Entry::Notice { text } => {
+                    md.push_str(&format!("*{text}*\n\n"));
+                }
+            }
+        }
+        md
+    }
+
+    /// Extracts propositions and reasoning chains from this session's plan and explanations.
+    pub fn extract_graph_items(
+        &self,
+        at_ms: i64,
+    ) -> (Vec<GraphProposition>, Vec<GraphReasoningChain>) {
+        let mut props = Vec::new();
+        let mut chains = Vec::new();
+        let label = if self.title.trim().is_empty() {
+            self.goal.clone()
+        } else {
+            self.title.clone()
+        };
+        let prov = GraphProvenance {
+            kind: "teaching".into(),
+            session_id: Some(self.session.clone()),
+            file_name: None,
+            label: Some(label.clone()),
+            created_at: at_ms,
+        };
+
+        if let Some(plan) = &self.plan {
+            let mut node_name_by_id = std::collections::BTreeMap::new();
+            for node in &plan.nodes {
+                let name = node.title.trim().to_lowercase();
+                node_name_by_id.insert(node.id.clone(), name.clone());
+                let explained = self.transcript.iter().rev().find_map(|e| match e {
+                    Entry::Explain { node_id, text } if node_id == &node.id => Some(text.clone()),
+                    _ => None,
+                });
+                let statement =
+                    explained.unwrap_or_else(|| format!("{} (part of {})", node.title, self.goal));
+                props.push(GraphProposition {
+                    id: format!("prop-{}-{}", self.session, node.id),
+                    name,
+                    statement,
+                    aliases: vec![node.id.clone()],
+                    created_at: at_ms,
+                    provenance: vec![prov.clone()],
+                });
+            }
+            for [from, to] in &plan.edges {
+                if let (Some(p_name), Some(c_name)) =
+                    (node_name_by_id.get(from), node_name_by_id.get(to))
+                {
+                    chains.push(GraphReasoningChain {
+                        id: format!("chain-{}-{}-{}", self.session, from, to),
+                        premises: vec![p_name.clone()],
+                        conclusion: c_name.clone(),
+                        created_at: at_ms,
+                        source_id: self.session.clone(),
+                        source_kind: "teaching".into(),
+                        source_label: label.clone(),
+                    });
+                }
+            }
+        } else {
+            for (idx, entry) in self.transcript.iter().enumerate() {
+                if let Entry::Explain { node_id, text } = entry {
+                    let name = node_id.replace('_', " ").to_lowercase();
+                    props.push(GraphProposition {
+                        id: format!("prop-{}-{}", self.session, idx),
+                        name,
+                        statement: text.clone(),
+                        aliases: Vec::new(),
+                        created_at: at_ms,
+                        provenance: vec![prov.clone()],
+                    });
+                }
+            }
+            for pair in props.windows(2) {
+                chains.push(GraphReasoningChain {
+                    id: format!("chain-{}-{}", self.session, uuid::Uuid::new_v4()),
+                    premises: vec![pair[0].name.clone()],
+                    conclusion: pair[1].name.clone(),
+                    created_at: at_ms,
+                    source_id: self.session.clone(),
+                    source_kind: "teaching".into(),
+                    source_label: label.clone(),
+                });
+            }
+        }
+        (props, chains)
     }
 }
 

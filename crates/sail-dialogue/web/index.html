@@ -412,53 +412,321 @@
             </div>
           </div>
         </header>
-        <div class="card-tab-panel active" id="learnPanelMain" role="tabpanel" aria-labelledby="learnTab">
-          <header class="card-heading"><div class="card-title"><h2>Learn</h2></div><div class="card-heading-actions"><button class="quiet-button" id="learnNew" type="button" hidden>New goal</button></div></header>
-          <section id="learnStart" aria-label="Start learning">
-            <form id="learnStartForm" class="learn-start">
-              <label for="learnGoal">What do you want to understand or practise?</label>
-              <input id="learnGoal" maxlength="300" required placeholder="For example: how TCP congestion control works">
-              <label for="learnStartMode">Start with</label>
-              <select id="learnStartMode">
-                <option value="learn">Learn a topic</option>
-                <option value="practice">Practise a topic</option>
-              </select>
-              <button class="quiet-button learn-primary" type="submit">Start</button>
-            </form>
-            <p class="learn-hint">SAIL first asks a few questions to find your starting point, then teaches one small step at a time. Everything runs on this host.</p>
-            <div id="learnSessions" class="learn-sessions"></div>
-          </section>
-          <section id="learnSession" class="learn-session" aria-labelledby="learnGoalTitle" hidden>
-            <div class="learn-goal-line">
-              <div><h3 id="learnGoalTitle"></h3><span id="learnMode" class="learn-mode"></span></div>
-              <div class="learn-controls"><button class="quiet-button" id="learnStop" type="button" hidden>Stop</button><button class="quiet-button" id="learnPause" type="button" aria-pressed="false">Pause</button></div>
-            </div>
-            <div class="learn-context" aria-label="Context use">
-              <span id="learnContextLabel" class="learn-context-label"></span>
-              <div class="learn-context-track" role="progressbar" aria-labelledby="learnContextLabel" aria-valuemin="0" aria-valuemax="100"><div id="learnContextBar" class="learn-context-bar"></div></div>
-            </div>
-            <div class="learn-status-line"><p id="learnStatus" role="status" aria-live="polite"></p><button class="quiet-button" id="learnRetry" type="button" hidden>Try again</button></div>
-            <div class="learn-layout">
-              <nav class="learn-map" aria-label="Learning map">
-                <h4>Learning map</h4>
-                <p id="learnMapEmpty" class="learn-hint">The map appears once your starting point is clear.</p>
-                <ol id="learnSteps"></ol>
-                <p class="learn-hint">Covered means explained, not mastered.</p>
-                <details id="learnMapDetails" hidden><summary>Show as diagram</summary><div id="learnDiagram" class="learn-diagram"></div></details>
-              </nav>
-              <div class="learn-main">
-                <ol id="learnTranscript" class="learn-transcript" aria-label="Lesson so far"></ol>
-                <form id="learnDock" class="learn-dock" aria-label="Current question" hidden></form>
-                <section id="learnPractice" class="learn-dock" aria-label="Current practice problem" hidden></section>
-                <section id="learnReview" class="learn-review" aria-label="Practice reminder" hidden></section>
-                <form id="learnMessageForm" class="learn-message">
-                  <label for="learnMessageInput" class="sr-only">Message the tutor</label>
-                  <input id="learnMessageInput" maxlength="2000" placeholder="Ask, or say “explain differently”, “too easy”…">
-                  <button class="quiet-button" id="learnMessageSend" type="submit">Send</button>
-                </form>
+        <div class="card-tab-panel active lh-root" id="learnPanelMain" role="tabpanel" aria-labelledby="learnTab">
+          <div class="lh-shell" id="learnAppShell">
+            <!-- Left Collapsible Sidebar (sidebar.tsx) -->
+            <aside class="lh-sidebar" id="learnSidebar" aria-label="Learning sessions sidebar">
+              <div class="lh-sidebar-header">
+                <button type="button" class="lh-brand-btn" id="learnNew" title="Knowledge Graph Home">
+                  <span class="lh-brand-mark">LH</span>
+                  <span class="lh-brand-sub">Arena Learn</span>
+                </button>
+                <button type="button" class="lh-icon-btn" id="learnSidebarCloseBtn" aria-label="Collapse sidebar" title="Collapse sidebar">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M14 9l-3 3 3 3"/></svg>
+                </button>
               </div>
+
+              <div class="lh-sidebar-create">
+                <button type="button" class="lh-create-btn" id="learnNewTeachBtn">
+                  <span class="lh-create-icon">＋</span>
+                  <span>TEACHING</span>
+                </button>
+                <button type="button" class="lh-create-btn" id="learnNewPracticeBtn">
+                  <span class="lh-create-icon">🏋</span>
+                  <span>PRACTICE</span>
+                </button>
+              </div>
+
+              <div class="lh-sidebar-section-head">
+                <span>SESSIONS</span>
+                <span class="lh-count-pill" id="learnSessionCount">0</span>
+              </div>
+
+              <div class="lh-sidebar-search-wrap">
+                <span class="lh-search-icon" aria-hidden="true">⌕</span>
+                <input type="search" class="lh-sidebar-search" id="learnSessionSearch" placeholder="Search…" aria-label="Search sessions" autocomplete="off">
+              </div>
+
+              <div class="lh-filter-tabs" role="tablist" aria-label="Filter sessions by kind">
+                <button type="button" class="lh-filter-tab" data-learn-filter="teach" role="tab" aria-selected="false">Teaching</button>
+                <button type="button" class="lh-filter-tab" data-learn-filter="practice" role="tab" aria-selected="false">Practice</button>
+                <button type="button" class="lh-filter-tab active" data-learn-filter="all" role="tab" aria-selected="true">All</button>
+              </div>
+
+              <div id="learnSessions" class="lh-session-list learn-sessions" role="list" aria-label="Learning sessions"></div>
+
+              <div class="lh-activity-section" id="learnActivitySection" hidden>
+                <div class="lh-sidebar-section-head">
+                  <span>BACKGROUND AGENTS</span>
+                </div>
+                <div id="learnActivityList" class="lh-activity-list"></div>
+              </div>
+
+              <div class="lh-sidebar-footer">
+                <button type="button" class="lh-footer-btn" id="learnSidebarImportBtn" title="Import Markdown or text notes into the Knowledge Graph">
+                  <span>↑ Import Notes</span>
+                </button>
+                <button type="button" class="lh-footer-btn" id="learnSidebarChainsBtn" title="Open Knowledge Chains Table">
+                  <span>⛓ Chains</span>
+                </button>
+              </div>
+            </aside>
+
+            <!-- Main Column -->
+            <div class="lh-main-col" id="learnMainColumn">
+              <!-- VIEW 1: Home / Knowledge Graph Surface (home.tsx + graph-view.tsx) -->
+              <section id="learnStart" class="lh-home-view" aria-label="Knowledge graph and new session">
+                <!-- Top-left sidebar open button when collapsed -->
+                <div class="lh-floating-top-left">
+                  <button type="button" class="lh-icon-btn lh-sidebar-open-btn" id="learnHomeSidebarOpenBtn" aria-label="Open sidebar" title="Open sidebar" hidden>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M13 9l3 3-3 3"/></svg>
+                  </button>
+                </div>
+
+                <!-- Top-right floating graph chrome -->
+                <div class="lh-graph-chrome">
+                  <button type="button" class="lh-chrome-btn" id="learnImportNotesBtn" title="Import Markdown or text notes">
+                    <span>↑ Import Notes</span>
+                  </button>
+                  <button type="button" class="lh-chrome-btn" id="learnChainsBtn" title="Inspect reasoning chains and propositions">
+                    <span>☰ Chains</span>
+                  </button>
+                  <div class="lh-chrome-search">
+                    <span aria-hidden="true">⌕</span>
+                    <input type="search" id="learnGraphSearch" placeholder="Search nodes…" aria-label="Search knowledge graph nodes" autocomplete="off">
+                  </div>
+                  <span class="lh-chrome-pill" id="learnGraphStatsPill">0 props · 0 chains</span>
+                  <div class="lh-settings-wrap">
+                    <button type="button" class="lh-icon-btn lh-chrome-icon-btn" id="learnGraphSettingsBtn" aria-label="Graph rendering settings" title="Graph rendering settings">⚙</button>
+                    <div class="lh-popover lh-graph-settings-popover" id="learnGraphSettingsPopover" hidden>
+                      <div class="lh-popover-title">Graph Render Settings</div>
+                      <label class="lh-slider-row"><span>Node size</span><input type="range" id="learnSetNodeSize" min="0.5" max="2.5" step="0.1" value="1"></label>
+                      <label class="lh-slider-row"><span>Edge width</span><input type="range" id="learnSetEdgeWidth" min="0.5" max="2.5" step="0.1" value="1"></label>
+                      <label class="lh-slider-row"><span>Arrow size</span><input type="range" id="learnSetArrowSize" min="0.5" max="2.5" step="0.1" value="1"></label>
+                      <label class="lh-slider-row"><span>Label size</span><input type="range" id="learnSetLabelSize" min="0.6" max="2.0" step="0.1" value="1"></label>
+                      <label class="lh-check-row"><input type="checkbox" id="learnSetClusterLabels" checked><span>Show cluster labels</span></label>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Full-bleed 2D Knowledge Graph Canvas -->
+                <div class="lh-graph-stage" id="learnGraphStage">
+                  <canvas id="learnGraphCanvas" class="lh-graph-canvas" aria-label="Knowledge Graph"></canvas>
+                  <div class="lh-graph-empty" id="learnGraphEmpty">
+                    <p class="lh-graph-empty-title">Knowledge Graph</p>
+                    <p class="lh-graph-empty-sub">Propositions and reasoning chains (`A ∧ B ⟹ C`) extracted from your teaching sessions and imported notes appear here.</p>
+                  </div>
+
+                  <!-- Node Detail Popover Card -->
+                  <div class="lh-node-card" id="learnNodeDetailCard" hidden>
+                    <div class="lh-node-card-head">
+                      <span class="lh-eyebrow">PROPOSITION</span>
+                      <button type="button" class="lh-icon-btn" id="learnNodeCardClose" aria-label="Close node details">×</button>
+                    </div>
+                    <h4 class="lh-node-card-title" id="learnNodeCardName"></h4>
+                    <p class="lh-node-card-statement" id="learnNodeCardStatement"></p>
+                    <div class="lh-node-card-meta" id="learnNodeCardMeta"></div>
+                    <div class="lh-node-card-actions">
+                      <button type="button" class="lh-btn-secondary" id="learnNodePracticeBtn">🏋 Practice this</button>
+                      <button type="button" class="lh-btn-danger" id="learnNodeDeleteBtn">Delete node</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Chain Table Overlay (chain-table.tsx) -->
+                <div class="lh-chain-overlay" id="learnChainTableOverlay" hidden>
+                  <header class="lh-topbar">
+                    <div class="lh-topbar-left">
+                      <span class="lh-chain-summary" id="learnChainCountLabel">0 chains · 0 nodes</span>
+                    </div>
+                    <div class="lh-topbar-right">
+                      <div class="lh-chrome-search">
+                        <span aria-hidden="true">⌕</span>
+                        <input type="search" id="learnChainSearchInput" placeholder="Search nodes or chains…" aria-label="Search chains">
+                      </div>
+                      <button type="button" class="lh-icon-btn" id="learnChainCloseBtn" aria-label="Close chains table">×</button>
+                    </div>
+                  </header>
+                  <div class="lh-chain-table-head">
+                    <button type="button" class="lh-sort-col" data-chain-sort="name">NAME</button>
+                    <button type="button" class="lh-sort-col" data-chain-sort="props">PROPS</button>
+                    <button type="button" class="lh-sort-col" data-chain-sort="created">CREATED</button>
+                  </div>
+                  <div class="lh-chain-table-body" id="learnChainTableBody"></div>
+                  <div class="lh-chain-selection-bar" id="learnChainSelectionBar" hidden>
+                    <span id="learnChainSelectedCount">0 selected</span>
+                    <div class="lh-chain-selection-actions">
+                      <button type="button" class="lh-btn-ghost" id="learnChainClearSelBtn">Clear</button>
+                      <button type="button" class="lh-btn-primary" id="learnChainPracticeSelBtn">🏋 Practice these</button>
+                      <button type="button" class="lh-btn-danger" id="learnChainDeleteSelBtn">Delete</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Import Notes Modal -->
+                <div class="lh-modal-backdrop" id="learnImportModal" hidden>
+                  <div class="lh-modal-card" role="dialog" aria-modal="true" aria-labelledby="learnImportModalTitle">
+                    <div class="lh-modal-head">
+                      <h3 id="learnImportModalTitle">Import Notes into Knowledge Graph</h3>
+                      <button type="button" class="lh-icon-btn" id="learnImportModalClose" aria-label="Close import modal">×</button>
+                    </div>
+                    <form id="learnImportForm" class="lh-import-form">
+                      <label class="lh-field-label" for="learnImportFileName">Note title or filename (`.md` / `.txt`)</label>
+                      <input type="text" id="learnImportFileName" class="lh-input" placeholder="e.g. tcp-congestion-notes.md" required>
+                      <label class="lh-field-label" for="learnImportContent">Markdown or plain text notes</label>
+                      <textarea id="learnImportContent" class="lh-textarea" rows="7" placeholder="# Topic&#10;- congestion window: Controls the number of bytes in flight before an ACK arrives.&#10;- packet loss: Occurs when router buffers fill up and drop incoming packets." required></textarea>
+                      <div class="lh-modal-actions">
+                        <input type="file" id="learnImportFilePicker" accept=".md,.txt,text/markdown,text/plain" hidden>
+                        <button type="button" class="lh-btn-secondary" id="learnImportPickFileBtn">Choose local file…</button>
+                        <button type="submit" class="lh-btn-primary">Extract &amp; Import</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+
+                <!-- Floating Bottom New-Session Composer Dock (home.tsx + new-session.tsx + stats-bar.tsx) -->
+                <div class="lh-home-dock-wrap">
+                  <div class="lh-home-dock">
+                    <div class="lh-node-picker-bar" id="learnPickedNodesBar">
+                      <button type="button" class="lh-pick-nodes-pill" id="learnPickNodesBtn">
+                        <span>◈</span>
+                        <span id="learnPickedNodesText">Pick nodes from graph</span>
+                      </button>
+                      <button type="button" class="lh-pick-nodes-clear" id="learnClearPickedNodesBtn" hidden title="Clear picked nodes">×</button>
+                    </div>
+
+                    <form id="learnStartForm" class="lh-composer-card learn-start">
+                      <label for="learnGoal" class="sr-only">What do you want to understand or practice?</label>
+                      <input id="learnGoal" class="lh-composer-input" maxlength="300" required placeholder="What do you want to learn?" autocomplete="off">
+                      <div class="lh-composer-actions">
+                        <button type="button" class="lh-icon-btn" id="learnAttachNotesBtn" title="Import notes to graph">📎</button>
+                        <button class="lh-submit-square learn-primary" id="learnStartSubmitBtn" type="submit" title="Start session (Enter)">↵</button>
+                      </div>
+                    </form>
+
+                    <div class="lh-stats-bar">
+                      <div class="lh-mode-segmented" role="group" aria-label="Session mode">
+                        <button type="button" class="lh-mode-seg active" id="learnModeSwitchTeach" data-home-mode="teach">TEACH</button>
+                        <button type="button" class="lh-mode-seg" id="learnModeSwitchPractice" data-home-mode="practice">🏋 PRACTICE</button>
+                      </div>
+                      <div class="lh-stats-center">
+                        <span class="lh-stats-hint">Local-first Socratic loop · Probe → Plan → Teach / Practice</span>
+                      </div>
+                      <div class="lh-stats-right">
+                        <span class="lh-model-pill">SAIL Mind · Local</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- VIEW 2: Active Teaching or Practice Session (chat.tsx + top-bar.tsx + docks) -->
+              <section id="learnSession" class="lh-session-view learn-session" aria-labelledby="learnGoalTitle" hidden>
+                <!-- TopBar (60px height, top-bar.tsx) -->
+                <header class="lh-topbar">
+                  <div class="lh-topbar-left">
+                    <button type="button" class="lh-icon-btn lh-sidebar-open-btn" id="learnSessionSidebarOpenBtn" aria-label="Open sidebar" title="Open sidebar" hidden>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M13 9l3 3-3 3"/></svg>
+                    </button>
+                    <div class="lh-title-group">
+                      <h3 id="learnGoalTitle" class="lh-session-title" title="Click to rename session"></h3>
+                      <input type="text" id="learnRenameInput" class="lh-rename-input" maxlength="300" hidden aria-label="Rename session">
+                      <span id="learnMode" class="lh-phase-chip learn-mode"></span>
+                    </div>
+                  </div>
+                  <div class="lh-topbar-right learn-controls">
+                    <span class="lh-coverage-pill" id="learnCoverageBadge" hidden>0/0 steps</span>
+                    <button type="button" class="lh-top-action-btn" id="learnPlanPopupBtn" hidden title="Open interactive Lesson Plan DAG">🗺 Plan</button>
+                    <button type="button" class="lh-top-action-btn" id="learnExportMdBtn" title="Export session as Markdown">⬇ .md</button>
+                    <button class="lh-top-action-btn" id="learnStop" type="button" hidden>■ Stop</button>
+                    <button class="lh-top-action-btn" id="learnPause" type="button" aria-pressed="false">Pause</button>
+                    <button type="button" class="lh-top-action-btn lh-danger-text" id="learnDeleteSessionBtn" title="Delete session">🗑</button>
+                  </div>
+                </header>
+
+                <!-- Status & Retry Banner -->
+                <div class="lh-status-banner learn-status-line">
+                  <p id="learnStatus" role="status" aria-live="polite"></p>
+                  <button class="lh-btn-secondary" id="learnRetry" type="button" hidden>Try again</button>
+                </div>
+
+                <!-- Scrollable Conversation Transcript + Hidden/Drawer Map for compatibility -->
+                <div class="lh-session-body learn-layout">
+                  <nav class="lh-map-drawer learn-map" id="learnMapAside" aria-label="Learning map" hidden>
+                    <h4>Learning map</h4>
+                    <p id="learnMapEmpty" class="learn-hint">The map appears once your starting point is clear.</p>
+                    <ol id="learnSteps"></ol>
+                    <p class="learn-hint">Covered means explained, not mastered.</p>
+                    <details id="learnMapDetails" hidden><summary>Show as diagram</summary><div id="learnDiagram" class="learn-diagram"></div></details>
+                  </nav>
+
+                  <div class="lh-chat-column learn-main">
+                    <div class="lh-transcript-scroll" id="learnTranscriptScroll">
+                      <ol id="learnTranscript" class="lh-transcript learn-transcript" aria-label="Lesson so far"></ol>
+                    </div>
+
+                    <!-- Persistent Bottom Dock Area (QuestionDock / PracticeDock / Composer + PlanMarginalia) -->
+                    <div class="lh-bottom-dock-area">
+                      <div class="lh-dock-center">
+                        <form id="learnDock" class="lh-dock-card learn-dock" aria-label="Current question or practice problem" hidden></form>
+
+                        <form id="learnMessageForm" class="lh-composer-card learn-message">
+                          <label for="learnMessageInput" class="sr-only">Message the tutor</label>
+                          <input id="learnMessageInput" class="lh-composer-input" maxlength="2000" placeholder="Ask a question, or say “explain differently”, “give an example”…" autocomplete="off">
+                          <div class="lh-composer-actions">
+                            <button class="lh-submit-square" id="learnMessageSend" type="submit" title="Send message">↵</button>
+                          </div>
+                        </form>
+
+                        <!-- Session StatsBar (stats-bar.tsx) -->
+                        <div class="lh-stats-bar lh-session-stats-bar">
+                          <div class="lh-stats-left">
+                            <button type="button" class="lh-stats-trigger" id="learnStatsBtn" title="View session context and token breakdown">
+                              <span id="learnContextText">0 / 24k tokens · 0 turns</span>
+                            </button>
+                            <div class="lh-popover lh-stats-popover" id="learnStatsPopover" hidden>
+                              <div class="lh-popover-title">Session Stats</div>
+                              <div class="lh-context-meter-bar"><div class="lh-context-meter-fill" id="learnContextMeterFill"></div></div>
+                              <div class="lh-stats-summary-grid" id="learnStatsSummaryGrid"></div>
+                              <div class="lh-stats-turns-list" id="learnStatsTurnsList"></div>
+                            </div>
+                          </div>
+                          <div class="lh-stats-center">
+                            <span class="lh-stats-hint" id="learnDockHintText">↵ submits · ⇧↵ newline</span>
+                          </div>
+                          <div class="lh-stats-right">
+                            <span class="lh-model-pill" id="learnRoleModelBadge">Prober · SAIL Mind</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- Right-flank Plan Marginalia mini-DAG on wide screens -->
+                      <aside class="lh-plan-marginalia" id="learnPlanMarginalia" aria-label="Plan progress" hidden></aside>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Full-Screen Interactive Plan DAG Popup Modal (plan-block.tsx) -->
+                <div class="lh-modal-backdrop" id="learnPlanModal" hidden>
+                  <div class="lh-modal-card lh-plan-modal-card" role="dialog" aria-modal="true" aria-labelledby="learnPlanModalTitle">
+                    <div class="lh-modal-head">
+                      <div>
+                        <span class="lh-eyebrow">LESSON PLAN DAG</span>
+                        <h3 id="learnPlanModalTitle">Teaching Order &amp; Dependencies</h3>
+                      </div>
+                      <button type="button" class="lh-icon-btn" id="learnPlanModalClose" aria-label="Close plan diagram">×</button>
+                    </div>
+                    <div class="lh-plan-modal-stage" id="learnPlanModalStage"></div>
+                    <div class="lh-plan-legend">
+                      <span><i class="lh-legend-dot visited"></i> Covered</span>
+                      <span><i class="lh-legend-dot current"></i> Current step</span>
+                      <span><i class="lh-legend-dot upcoming"></i> Upcoming</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
             </div>
-          </section>
+          </div>
         </div>
         <div class="card-tab-panel" id="memoryPanelMain" role="tabpanel" aria-labelledby="memoryTab" hidden>
           <header class="card-heading"><div class="card-title"><h2>Remembered knowledge</h2></div><div class="card-heading-actions"><button class="quiet-button" id="memoryRefresh" type="button">Refresh</button><button class="quiet-button" id="memoryExport" type="button">Export</button></div></header>
