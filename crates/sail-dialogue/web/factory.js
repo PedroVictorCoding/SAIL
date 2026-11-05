@@ -1,156 +1,66 @@
-// SAIL Factory Floor - Isometric Room-as-Index Interface
 'use strict';
+// SAIL Factory Floor — the room is the index.
+//
+// Every subsystem is a fixed physical object on one isometric floor. Nothing is
+// hidden behind tabs and nothing floats detached: a station is where it is, and the
+// camera only moves because the person moved it. Expansion is an overlay on the same
+// room, never a route change.
+//
+// Mounted by `subsystem-pages.js` through the `sail:page` event (route `factory`).
 
 const FACTORY = {
-  gridSize: 24, floorColor: '#17191D', gridDotColor: '#2A2D33', lineColor: '#3A3E45',
-  accent: '#F26B21', okColor: '#5FD3A6', alertColor: '#FF4438', textColor: '#C9CDD4',
-  selectedMachine: null, sceneIndex: 0, scenes: ['Overview', 'Ops', 'Body', 'Comms']
+  // One palette, one hue per state. Accent belongs to selection and alarm only.
+  palette: {
+    floor: '#17191D', floorDot: '#2A2D33', structure: '#3A3E45',
+    surface: '#333B43', surfaceTop: '#4A525B', surfaceSide: '#272E35',
+    body: '#C9CDD4', muted: '#8A919B',
+    accent: '#F26B21', ok: '#5FD3A6', alert: '#FF4438',
+  },
+  unit: 34,                                  // pixels per floor tile at zoom 1
+  camera: { panX: 340, panY: 150, zoom: 1 },
+  hover: null, selected: null, listMode: false,
+  sceneIndex: 0, scenes: ['Overview', 'Ops', 'Body', 'Comms'],
+  latency: null, mounted: false,
 };
 
-// Station registry - all subsystems fixed on factory floor
-FACTORY.machineRegistry = [
-  {id:'arena',name:'ARENA',type:'tank',x:4,y:4,w:2,h:2,metric:'Knowledge'},
-  {id:'mind',name:'MIND',type:'tank',x:8,y:3,w:2,h:3,metric:'Model'},
-  {id:'dialogue',name:'DIALOGUE',type:'ticker',x:2,y:2,w:4,h:1,metric:'Chat'},
-  {id:'guardian',name:'GUARDIAN',type:'canister',x:12,y:5,w:1,h:1,metric:'Security'},
-  {id:'forge',name:'FORGE',type:'junction',x:6,y:7,w:2,h:2,metric:'Coding'},
-  {id:'pulse',name:'PULSE',type:'conveyor',x:10,y:8,w:4,h:1,metric:'Timeline'},
-  {id:'canvas',name:'CANVAS',type:'monitor',x:3,y:8,w:2,h:2,metric:'View'},
-  {id:'bridge',name:'BRIDGE',type:'pipe',x:14,y:2,w:3,h:1,metric:'External'},
-  {id:'flow',name:'FLOW',type:'valve',x:5,y:5,w:1,h:1,metric:'Queue'},
-  {id:'discovery',name:'DISCOVERY',type:'radar',x:1,y:6,w:1,h:1,metric:'Search'},
-  {id:'capacity',name:'CAPACITY',type:'gastank',x:11,y:2,w:2,h:2,metric:'Storage'},
-  {id:'anomaly',name:'ANOMALY',type:'pylons',x:0,y:9,w:1,h:1,metric:'Alerts'}
+// Station registry: anchor tile, footprint in tiles, height in tiles.
+// `zone` groups stations for the room directory; `rows` feeds the anchored card.
+FACTORY.registry = [
+  { id: 'arena', name: 'ARENA', zone: 'KNOWLEDGE', kind: 'tank', x: 2, y: 2, w: 2, d: 2, h: 1.6, rows: [['Propositions', '1 284'], ['Chains', '312'], ['Recall', 'ok']] },
+  { id: 'mind', name: 'MIND', zone: 'COMPUTE', kind: 'tank', x: 6, y: 1, w: 2, d: 2, h: 2.1, rows: [['Model', 'qwen3-8b'], ['Context', '62%'], ['Tokens/s', '41']] },
+  { id: 'dialogue', name: 'DIALOGUE', zone: 'COMPUTE', kind: 'bank', x: 0, y: 5, w: 3, d: 1, h: 1.1, rows: [['Turns', '318'], ['Voice', 'ready'], ['Latency', '310ms']] },
+  { id: 'guardian', name: 'GUARDIAN', zone: 'CONTROL', kind: 'canisters', x: 9, y: 4, w: 1, d: 1, h: 1.2, rows: [['Approvals', '2 open'], ['Vault', 'locked'], ['Policy', 'strict']] },
+  { id: 'flow', name: 'FLOW', zone: 'CONTROL', kind: 'valve', x: 5, y: 4, w: 1, d: 1, h: 0.9, rows: [['Queue', '3'], ['Admission', 'ok'], ['Retries', '0']] },
+  { id: 'forge', name: 'FORGE', zone: 'BUILD', kind: 'press', x: 4, y: 6, w: 2, d: 2, h: 1.5, rows: [['Jobs', '1 running'], ['Worktrees', '2'], ['Review', 'idle']] },
+  { id: 'pulse', name: 'PULSE', zone: 'SCHEDULE', kind: 'conveyor', x: 7, y: 7, w: 4, d: 1, h: 0.8, rows: [['Next', '18:40'], ['Routines', '4'], ['Quiet', 'off']] },
+  { id: 'canvas', name: 'CANVAS', zone: 'VISUAL', kind: 'bank', x: 2, y: 7, w: 2, d: 1, h: 1.3, rows: [['Artefacts', '7'], ['Camera', 'idle'], ['Feeds', '2']] },
+  { id: 'bridge', name: 'BRIDGE', zone: 'EXTERNAL', kind: 'pipe-run', x: 10, y: 2, w: 3, d: 1, h: 0.7, rows: [['Escalations', '0'], ['Providers', '2'], ['Quota', 'ok']] },
+  { id: 'discovery', name: 'DISCOVERY', zone: 'KNOWLEDGE', kind: 'radar', x: 0, y: 9, w: 1, d: 1, h: 1.0, rows: [['Gaps', '5'], ['Sources', '12'], ['Cursor', 'ok']] },
+  { id: 'capacity', name: 'CAPACITY', zone: 'COMPUTE', kind: 'silo', x: 8, y: 0, w: 1, d: 1, h: 2.4, rows: [['Disk', '68%'], ['RAM', '54%'], ['VRAM', '41%']] },
+  { id: 'anomaly', name: 'ANOMALY', zone: 'CONTROL', kind: 'pylons', x: 0, y: 11, w: 2, d: 1, h: 0.6, rows: [['Signals', '12'], ['Deviating', '0'], ['Window', '15m']] },
 ];
 
-FACTORY.pipeRegistry = [
-  {from:{x:5,y:5},to:{x:4,y:4}}, {from:{x:5,y:5},to:{x:8,y:3}},
-  {from:{x:4,y:4},to:{x:2,y:2}}, {from:{x:8,y:3},to:{x:11,y:2}},
-  {from:{x:11,y:2},to:{x:14,y:2}}, {from:{x:8,y:3},to:{x:12,y:5}},
-  {from:{x:4,y:4},to:{x:6,y:7}}, {from:{x:6,y:7},to:{x:3,y:8}},
-  {from:{x:6,y:7},to:{x:10,y:8}}, {from:{x:4,y:4},to:{x:3,y:8}},
-  {from:{x:3,y:8},to:{x:1,y:6}}, {from:{x:3,y:8},to:{x:0,y:9}}
+// Pipe network: tile-space runs between stations.
+FACTORY.pipes = [
+  { from: [5, 4], to: [3, 3] },
+  { from: [5, 4], to: [6, 2] },
+  { from: [6, 2], to: [9, 1] },
+  { from: [6, 2], to: [9, 4] },
+  { from: [6, 2], to: [10, 2] },
+  { from: [3, 3], to: [1, 5] },
+  { from: [3, 3], to: [4, 7] },
+  { from: [5, 4], to: [4, 7] },
+  { from: [4, 7], to: [2, 8] },
+  { from: [4, 7], to: [7, 7] },
+  { from: [2, 8], to: [0, 9] },
+  { from: [2, 8], to: [1, 11] },
 ];
 
-
-function initFactory() {
-  const shell = document.getElementById('appShell');
-  shell.classList.add('factory-mode'); shell.dataset.state = 'factory';
-  if (document.getElementById('factoryFloor')) return;
-  const floor = document.createElement('div'); floor.id = 'factoryFloor'; floor.className = 'factory-floor';
-  floor.innerHTML = `<canvas id="factoryCanvas" class="factory-canvas"></canvas>
-    <div class="factory-top-bar"><span class="factory-time">${new Date().toLocaleString()}</span>
-    <span class="factory-live"><i></i> LIVE <span id="latencyReadout">0ms</span></span></div>
-    <div class="factory-bottom-bar"><button class="scene-nav" id="scenePrev">◀</button>
-    <span class="scene-label" id="sceneLabel">Overview</span><button class="scene-nav" id="sceneNext">▶</button>
-    <div class="scene-list">${FACTORY.scenes.map((s,i)=>`<button class="scene-btn ${i===0?'active':''}" data-scene="${i}">${s}</button>`).join('')}</div></div>
-    <div class="factory-inspector" id="factoryInspector" hidden><h3 id="inspectorTitle"></h3><div id="inspectorMetrics"></div></div>`;
-  shell.appendChild(floor);
-  document.getElementById('scenePrev').onclick = () => setScene(FACTORY.sceneIndex-1);
-  document.getElementById('sceneNext').onclick = () => setScene(FACTORY.sceneIndex+1);
-  document.querySelectorAll('.scene-btn').forEach(b=>b.onclick=()=>setScene(Number(b.dataset.scene)));
-  injectFactoryStyles(); renderFactory();
-}
-
-function setScene(i) {
-  FACTORY.sceneIndex = Math.max(0, Math.min(FACTORY.scenes.length-1, i));
-  document.getElementById('sceneLabel').textContent = FACTORY.scenes[FACTORY.sceneIndex];
-  document.querySelectorAll('.scene-btn').forEach((b,n)=>b.classList.toggle('active',n===FACTORY.sceneIndex));
-}
-
-function injectFactoryStyles() {
-  const s = document.createElement('style'); s.textContent = `
-  .factory-mode .workspace, .factory-mode aside, .factory-mode nav {display:none !important;}
-  .factory-floor {position:absolute;inset:96px 0 0 138px;background:#17191D;overflow:hidden;}
-  .factory-canvas {width:100%;height:100%;display:block;}
-  .factory-top-bar {position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:24px;color:#C9CDD4;font:11px monospace;}
-  .factory-bottom-bar {position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;color:#C9CDD4;font:11px monospace;}
-  .scene-nav, .scene-btn {background:#22262A;border:1px solid #3A3E45;color:#C9CDD4;border-radius:6px;padding:4px 10px;cursor:pointer;}
-  .scene-btn.active {border-color:#F26B21;color:#F26B21;}
-  .factory-inspector {position:absolute;right:12px;top:12px;width:320px;background:#22262A;border:1px solid #3A3E45;border-radius:12px;padding:14px;color:#C9CDD4;}
-  `;
-  document.head.appendChild(s);
-}
-
-function renderFactory() {
-  const canvas = document.getElementById('factoryCanvas'); if (!canvas) return;
-  const ctx = canvas.getContext('2d'); canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight;
-  const grid = FACTORY.gridSize * 2; ctx.fillStyle = FACTORY.floorColor; ctx.fillRect(0,0,canvas.width,canvas.height);
-  // Draw dotted grid
-  ctx.fillStyle = FACTORY.gridDotColor; for(let x=0;x<canvas.width;x+=FACTORY.gridSize)for(let y=0;y<canvas.height;y+=FACTORY.gridSize)ctx.fillRect(x,y,1,1);
-  // Draw pipe network
-  ctx.strokeStyle = FACTORY.lineColor; ctx.lineWidth=3; ctx.lineCap='round';
-  FACTORY.pipeRegistry.forEach(p=>{ctx.beginPath();ctx.moveTo(p.from.x*grid,p.from.y*grid);ctx.lineTo(p.to.x*grid,p.to.y*grid);ctx.stroke();});
-  // Draw 3D isometric machines
-  FACTORY.machineRegistry.forEach(m=>{
-    const x=m.x*grid, y=m.y*grid, w=m.w*grid, h=m.h*grid;
-    const selected = m === FACTORY.selectedMachine;
-    // Machine base
-    ctx.fillStyle='#22262A'; ctx.fillRect(x,y,w,h);
-    // Selected orange outline
-    ctx.strokeStyle = selected ? FACTORY.accent : FACTORY.lineColor;
-    ctx.lineWidth = selected ? 2 : 1; ctx.strokeRect(x,y,w,h);
-    // Vertical status indicator bars
-    for(let i=0;i<4;i++){
-      ctx.fillStyle = i<3 ? FACTORY.accent : '#333';
-      ctx.fillRect(x + 6, y + 10 + i*9, 10, 7);
-    }
-    // Machine label uppercase condensed
-    ctx.fillStyle = FACTORY.textColor; ctx.font = '11px "Consolas", monospace'; ctx.textAlign='left';
-    ctx.fillText(m.name, x + 22, y + h - 10);
-    // Floating anchored spec card when selected
-    if (selected) {
-      ctx.fillStyle = 'rgba(45, 48, 52, 0.95)';
-      ctx.fillRect(x + w + 12, y, 220, 80);
-      ctx.strokeStyle = FACTORY.accent; ctx.lineWidth = 1;
-      ctx.strokeRect(x + w + 12, y, 220, 80);
-      ctx.fillStyle = FACTORY.accent; ctx.font = 'bold 12px monospace';
-      ctx.fillText(`MACHINE #${FACTORY.machineRegistry.indexOf(m)+1}`, x + w + 20, y + 22);
-      ctx.fillStyle = FACTORY.textColor; ctx.font = '11px monospace';
-      ctx.fillText(`${m.metric}: 84%`, x + w + 20, y + 45);
-      ctx.fillText(`Temp: ${42 + Math.floor(Math.random()*80)}°C`, x + w + 20, y + 62);
-    }
-  });
-}
-
-// Canvas click/hover handler
-function initCanvasEvents() {
-  const canvas = document.getElementById('factoryCanvas'); if (!canvas) return;
-  const grid = FACTORY.gridSize * 2;
-  canvas.onclick = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left, y = e.clientY - rect.top;
-    FACTORY.selectedMachine = null;
-    for (const m of FACTORY.machineRegistry) {
-      const mx = m.x*grid, my = m.y*grid, mw = m.w*grid, mh = m.h*grid;
-      if (x >= mx && x <= mx+mw && y >= my && y <= my+mh) {
-        FACTORY.selectedMachine = m; break;
-      }
-    }
-    renderFactory();
-  };
-  // Re-render every 500ms for live status
-  setInterval(renderFactory, 500);
-}
-
-// Add canvas event init to initFactory
-const origInit = initFactory; initFactory = () => { origInit(); setTimeout(initCanvasEvents, 100); };
-
-// Wire factory to global navigation
-window.sailShowFactory = () => {
-  closeSheet?.();
-  initFactory();
-  location.hash = '#factory';
-};
-
-// Add factory to spaces list
-if (typeof spaces !== 'undefined') {
-  spaces.unshift({
-    id:'factory', name:'FACTORY FLOOR', subtitle:'Isometric room-as-index view', available:true,
-    action:() => window.sailShowFactory()
-  });
-  // Re-render spaces if already initialized
-  if (typeof renderSpaces === 'function') renderSpaces();
-}
-
-if (typeof module !== 'undefined') module.exports = {initFactory, FACTORY};
+// Decorative plant furniture: fixed, non-interactive, keeps the floor populated.
+FACTORY.props = [
+  { kind: 'silo', x: 4, y: 0, w: 1, d: 1, h: 1.4 },
+  { kind: 'canisters', x: 2, y: 0, w: 1, d: 1, h: 0.8 },
+  { kind: 'valve', x: 8, y: 5, w: 1, d: 1, h: 0.7 },
+  { kind: 'silo', x: 9, y: 9, w: 1, d: 1, h: 1.2 },
+  { kind: 'canisters', x: 6, y: 9, w: 1, d: 1, h: 0.7 },
+];
