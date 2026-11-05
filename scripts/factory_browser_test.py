@@ -101,7 +101,22 @@ with sync_playwright() as p:
     assert page.locator('#tmPane #subsystemTitle').inner_text() == 'Mind'
     assert page.evaluate('document.activeElement.id') == 'subsystemTitle'
     assert page.locator('#tmPane #modelsCard').is_visible()
-    assert page.locator('#tmInspector h2').inner_text() == 'Mind'
+    # The Dialogue column stays on Chat; its info tabs show the open system's status.
+    assert page.locator('#tmTab-chat').get_attribute('aria-selected') == 'true'
+    assert page.is_hidden('#tmInspector') and page.is_visible('#tmChat #homeView')
+    page.locator('#tmTab-overview').click()
+    assert page.locator('#tmInspector .tm-insp-head h3').inner_text() == 'Mind'
+    assert page.is_hidden('#tmChat #homeView')
+    assert page.locator('#tmInspector').get_attribute('aria-labelledby') == 'tmTab-overview'
+    page.keyboard.press('ArrowRight')
+    assert page.evaluate('document.activeElement.id') == 'tmTab-tasks'
+    assert page.locator('#tmInspector .tm-card h3').first.inner_text() == 'Task Queue'
+    page.keyboard.press('Home')
+    assert page.evaluate('document.activeElement.id') == 'tmTab-chat'
+    assert page.is_visible('#tmChat #homeView') and page.is_hidden('#tmInspector')
+    tabs_right = page.locator('#tmTabs').bounding_box()
+    chat_box = page.locator('#tmChat').bounding_box()
+    assert tabs_right['x'] + tabs_right['width'] <= chat_box['x'] + chat_box['width'], (tabs_right, chat_box)
     assert centre_box('#tmPane') == map_box, (centre_box('#tmPane'), map_box)
     assert page.locator('.tm-nav-item[data-nav="mind"]').get_attribute('aria-current') == 'page'
     assert page.locator('#tmCrumb').inner_text() == 'Mind'
@@ -111,10 +126,11 @@ with sync_playwright() as p:
     page.locator('#textInput').fill('')
     page.keyboard.press('Escape')
     assert page.is_visible('#tmPane'), 'Escape no longer leaves a system'
+    page.locator('#tmTab-overview').click()
 
     # Sidebar entries switch the centre directly; Home brings the map back.
     page.locator('.tm-nav-item[data-nav="guardian"]').click()
-    page.wait_for_function("document.querySelector('#tmInspector h2')?.textContent === 'Guardian'")
+    page.wait_for_function("document.querySelector('#tmInspector .tm-insp-head h3')?.textContent === 'Guardian'")
     assert page.evaluate('location.hash') == '#guardian'
     page.locator('.tm-nav-item[data-nav="home"]').click()
     page.wait_for_selector('#tmPane', state='hidden')
@@ -123,7 +139,7 @@ with sync_playwright() as p:
     # Stations sharing a page keep their own inspector.
     page.locator('.tm-label[data-station="memory"]').click()
     page.locator('.tm-label[data-station="memory"]').click()
-    page.wait_for_function("document.querySelector('#tmInspector h2')?.textContent === 'Memory'")
+    page.wait_for_function("document.querySelector('#tmInspector .tm-insp-head h3')?.textContent === 'Memory'")
     assert page.evaluate('location.hash') == '#arena'
     page.locator('.tm-nav-item[data-nav="home"]').click()
     page.wait_for_selector('#tmPane', state='hidden')
@@ -143,7 +159,8 @@ with sync_playwright() as p:
     page.wait_for_function("location.hash === '#tracker'")
     page.wait_for_selector('#tmTracker')
     assert page.title() == 'SAIL — Tracker'
-    assert page.is_hidden('#tmInspector') and page.is_hidden('.tm-pane-main')
+    assert page.is_hidden('.tm-pane-main')
+    assert page.locator('#tmInspector .tm-insp-head h3').inner_text() == 'SAIL Core'
     assert page.locator('.tm-nav-item[data-nav="tracker"]').get_attribute('aria-current') == 'page'
     frame = page.frame_locator('#tmTracker')
     frame.locator('#tkRefresh, .tk-head, body').first.wait_for()
@@ -156,6 +173,7 @@ with sync_playwright() as p:
     # Tasks opens Forge on its task list; dialogs from a system work in place.
     page.locator('.tm-nav-item', has_text='Tasks').click()
     page.wait_for_function("document.getElementById('tmTab-tasks')?.getAttribute('aria-selected') === 'true'")
+    page.wait_for_function("document.querySelector('#tmInspector .tm-insp-head h3')?.textContent === 'Forge'")
     assert page.evaluate('location.hash') == '#forge'
     assert page.is_hidden('.tm-pane-tracker')
     page.locator('#forgeQuickEnqueueBtn').click()
@@ -186,6 +204,12 @@ with sync_playwright() as p:
     assert page.is_hidden('#contextSheet') and page.is_visible('#tmPane')
     page.locator('.tm-nav-item[data-nav="home"]').click()
     page.wait_for_selector('#tmPane', state='hidden')
+    page.locator('#tmTab-overview').click()
+    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-column-overview.png')))
+    # Asking from the header search returns the column to the conversation.
+    page.locator('#tmAskInput').fill('hello')
+    page.locator('#tmAskInput').press('Enter')
+    assert page.locator('#tmTab-chat').get_attribute('aria-selected') == 'true'
     page.screenshot(path=str(SHOT))
 
     # The classic dashboard stays available and gets its Dialogue panel back.
