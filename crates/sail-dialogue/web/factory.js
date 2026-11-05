@@ -334,3 +334,126 @@ function drawSelection(ctx, record) {
     null, palette.accent, 2);
 }
 
+
+/** Draws one station according to its physical kind, returns its anchor point. */
+function drawStation(ctx, record, options = {}) {
+  const accent = options.accent || false;
+  const zoom = FACTORY.camera.zoom;
+  switch (record.kind) {
+    case 'tank':
+      return drawTank(ctx, record, { accent });
+    case 'silo': {
+      const drawn = drawTank(ctx, record, { accent, band: false });
+      drawGauges(ctx, { x: drawn.anchor.x + 26 * zoom, y: drawn.anchor.y + 14 * zoom }, [0.7, 0.52, 0.34]);
+      return drawn;
+    }
+    case 'canisters': {
+      const columns = Math.max(2, Math.round(record.w * 2));
+      let last = null;
+      for (let index = 0; index < columns; index += 1) {
+        last = drawTank(ctx, {
+          x: record.x + (index % columns) * (record.w / columns), y: record.y,
+          w: (record.w / columns) * 0.8, d: record.d * 0.8,
+          h: record.h * (0.7 + 0.1 * (index % 3)),
+        }, { accent, band: false });
+      }
+      return last;
+    }
+    case 'valve': {
+      const box = drawBox(ctx, { ...record, h: record.h * 0.6 }, { accent });
+      const wheel = isoPoint(record.x + record.w / 2, record.y + record.d / 2, record.h);
+      ctx.beginPath();
+      ctx.ellipse(wheel.x, wheel.y, 9 * zoom, 4.5 * zoom, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = accent ? FACTORY.palette.accent : FACTORY.palette.structure;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      return { anchor: box.centre };
+    }
+    case 'press': {
+      const base = drawBox(ctx, { ...record, h: record.h * 0.3 }, { accent });
+      drawBox(ctx, {
+        x: record.x + 0.25, y: record.y + 0.25,
+        w: record.w - 0.5, d: record.d - 0.5, h: record.h,
+      }, { accent });
+      return base;
+    }
+    case 'conveyor': {
+      // The belt already reads as a timeline: packets on it are the trip's position.
+      const base = drawBox(ctx, record, { accent, top: '#3D444D', front: '#2B323A', side: '#242A31' });
+      if (zoom >= 0.8) {
+        const steps = Math.round(record.w * 4);
+        for (let index = 0; index < steps; index += 1) {
+          const point = isoPoint(record.x + record.w * (index / steps), record.y + record.d / 2, record.h);
+          ctx.fillStyle = FACTORY.palette.structure;
+          ctx.fillRect(point.x - 1, point.y - 2, 2, 4);
+        }
+        const packet = isoPoint(record.x + record.w * 0.62, record.y + record.d / 2, record.h + 0.05);
+        ctx.fillStyle = FACTORY.palette.accent;
+        ctx.fillRect(packet.x - 3, packet.y - 5, 6, 8);
+      }
+      return base;
+    }
+    case 'pipe-run': {
+      const base = drawBox(ctx, record, { accent, top: '#39404A' });
+      if (zoom >= 0.8) {
+        const point = isoPoint(record.x + record.w * 0.5, record.y + record.d * 0.5, record.h);
+        for (let index = 0; index < 3; index += 1) {
+          ctx.beginPath();
+          ctx.moveTo(point.x - (12 + index * 6), point.y + index * 3);
+          ctx.lineTo(point.x + (12 + index * 6), point.y + index * 3);
+          ctx.strokeStyle = index === 0 ? FACTORY.palette.accent : FACTORY.palette.structure;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
+      return base;
+    }
+    case 'radar': {
+      const base = drawBox(ctx, record, { accent });
+      const dish = isoPoint(record.x + record.w / 2, record.y + record.d / 2, record.h);
+      ctx.beginPath();
+      ctx.ellipse(dish.x, dish.y, 14 * zoom, 7 * zoom, 0, Math.PI, Math.PI * 2);
+      ctx.strokeStyle = accent ? FACTORY.palette.accent : FACTORY.palette.structure;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      return base;
+    }
+    case 'pylons': {
+      const anchor = isoPoint(record.x + record.w / 2, record.y + record.d / 2, record.h);
+      for (let index = 0; index < 6; index += 1) {
+        const px = anchor.x - 30 * zoom + index * 12 * zoom;
+        ctx.beginPath();
+        ctx.moveTo(px, anchor.y + 8 * zoom);
+        ctx.lineTo(px, anchor.y - 2 * zoom);
+        ctx.strokeStyle = accent ? FACTORY.palette.accent : FACTORY.palette.structure;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(px, anchor.y - 4 * zoom, 2 * zoom, 0, Math.PI * 2);
+        ctx.fillStyle = index === 0 ? FACTORY.palette.ok : FACTORY.palette.surfaceTop;
+        ctx.fill();
+      }
+      return { anchor };
+    }
+    case 'bank':
+    default: {
+      const base = drawBox(ctx, record, { accent });
+      if (zoom >= 0.8) {
+        // Monitor bank: a 3 x 2 grid of screens on the +y face.
+        for (let row = 0; row < 2; row += 1) {
+          for (let column = 0; column < 3; column += 1) {
+            const screen = isoPoint(
+              record.x + record.w * ((column + 0.5) / 3),
+              record.y + record.d,
+              record.h * (0.45 + row * 0.28),
+            );
+            ctx.fillStyle = accent ? FACTORY.palette.accent : '#4B545E';
+            ctx.fillRect(screen.x - 4, screen.y - 3, 8, 5);
+          }
+        }
+      }
+      return base;
+    }
+  }
+}
+
