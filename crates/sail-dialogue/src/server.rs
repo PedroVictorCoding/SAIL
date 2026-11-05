@@ -15,7 +15,7 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse},
+    response::IntoResponse,
     routing::get,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -164,229 +164,9 @@ pub async fn run_dialogue_server_with_plans(
             "/voice-assets",
             crate::web_assets::router(crate::web_assets::assets_dir()),
         )
-        .route(
-            "/",
-            get(|| async { Html(include_str!("../web/index.html")) }),
-        )
-        .merge(crate::tracker_http::pages())
-        .route(
-            "/toolsmap.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript; charset=utf-8")],
-                    include_str!("../web/toolsmap.js"),
-                )
-            }),
-        )
-        .route(
-            "/toolsmap.css",
-            get(|| async {
-                (
-                    [("content-type", "text/css; charset=utf-8")],
-                    include_str!("../web/toolsmap.css"),
-                )
-            }),
-        )
+        .merge(crate::ui_assets::router())
         .nest_service("/api/system", system_routes)
         .nest_service("/api/spotify", spotify_routes)
-        .route(
-            "/card-modal.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/card-modal.js"),
-                )
-            }),
-        )
-        .route(
-            "/markdown.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/markdown.js"),
-                )
-            }),
-        )
-        .route(
-            "/voice.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/voice.js"),
-                )
-            }),
-        )
-        .route(
-            "/forge.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/forge.js"),
-                )
-            }),
-        )
-        .route(
-            "/approvals.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/approvals.js"),
-                )
-            }),
-        )
-        .route(
-            "/app.css",
-            get(|| async {
-                (
-                    [("content-type", "text/css; charset=utf-8")],
-                    include_str!("../web/app.css"),
-                )
-            }),
-        )
-        .route(
-            "/tokens.css",
-            get(|| async {
-                (
-                    [("content-type", "text/css; charset=utf-8")],
-                    include_str!("../web/tokens.css"),
-                )
-            }),
-        )
-        .route(
-            "/learn.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/learn.js"),
-                )
-            }),
-        )
-        .route(
-            "/memory.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/memory.js"),
-                )
-            }),
-        )
-        .route(
-            "/subsystem-pages.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/subsystem-pages.js"),
-                )
-            }),
-        )
-        .route(
-            "/ui.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript; charset=utf-8")],
-                    include_str!("../web/ui.js"),
-                )
-            }),
-        )
-        .route(
-            "/icons.svg",
-            get(|| async {
-                (
-                    [("content-type", "image/svg+xml; charset=utf-8")],
-                    include_str!("../../../assets/source/icons/sail-icons.svg"),
-                )
-            }),
-        )
-        .route(
-            "/client-speech.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/client-speech.js"),
-                )
-            }),
-        )
-        .route(
-            "/client-speech-worker.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/client-speech-worker.js"),
-                )
-            }),
-        )
-        .route(
-            "/capture.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/capture.js"),
-                )
-            }),
-        )
-        .route(
-            "/mermaid.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/mermaid.js"),
-                )
-            }),
-        )
-        .route(
-            "/plans.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/plans.js"),
-                )
-            }),
-        )
-        .route(
-            "/reminders.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript")],
-                    include_str!("../web/reminders.js"),
-                )
-            }),
-        )
-        .route(
-            "/terminal.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript; charset=utf-8")],
-                    include_str!("../web/terminal.js"),
-                )
-            }),
-        )
-        .route(
-            "/vendor/xterm.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript; charset=utf-8")],
-                    include_str!("../web/vendor/xterm/xterm.js"),
-                )
-            }),
-        )
-        .route(
-            "/vendor/addon-fit.js",
-            get(|| async {
-                (
-                    [("content-type", "text/javascript; charset=utf-8")],
-                    include_str!("../web/vendor/xterm/addon-fit.js"),
-                )
-            }),
-        )
-        .route(
-            "/vendor/xterm.css",
-            get(|| async {
-                (
-                    [("content-type", "text/css; charset=utf-8")],
-                    include_str!("../web/vendor/xterm/xterm.css"),
-                )
-            }),
-        )
         .route("/api/health", get(health))
         .route("/api/mind/status", get(mind_status))
         .route("/ws/voice", get(ws_handler))
@@ -2098,7 +1878,8 @@ async fn reason_turn(
         let has_tool_calls = assistant["tool_calls"]
             .as_array()
             .is_some_and(|calls| !calls.is_empty());
-        let will_continue = !has_tool_calls && assistant["finish_reason"].as_str() == Some("length");
+        let will_continue =
+            !has_tool_calls && assistant["finish_reason"].as_str() == Some("length");
         if will_continue {
             // Preserve the incomplete trailing sentence across the token-limit continuation
             // so TTS does not synthesize two broken halves of a single sentence.
@@ -3315,7 +3096,9 @@ mod tests {
         }
         assert_eq!(
             spoken_segments,
-            vec!["When a model response hits the token limit right in the middle of a sentence, the continuation completes the sentence before synthesis."]
+            vec![
+                "When a model response hits the token limit right in the middle of a sentence, the continuation completes the sentence before synthesis."
+            ]
         );
         assert_eq!(reply, spoken_segments[0]);
         drop(server);

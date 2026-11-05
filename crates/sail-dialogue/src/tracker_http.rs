@@ -41,33 +41,6 @@ pub fn router(tracker: Arc<Tracker>, authority: Option<ApprovalAuthority>) -> Ro
         .with_state(Arc::new(TrackerState { tracker, authority }))
 }
 
-/// The tracker page and its assets, mounted at the site root.
-pub fn pages<S: Clone + Send + Sync + 'static>() -> Router<S> {
-    Router::new()
-        .route(
-            "/tracker",
-            get(|| async { axum::response::Html(include_str!("../web/tracker.html")) }),
-        )
-        .route(
-            "/tracker.js",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-                    include_str!("../web/tracker.js"),
-                )
-            }),
-        )
-        .route(
-            "/tracker.css",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-                    include_str!("../web/tracker.css"),
-                )
-            }),
-        )
-}
-
 fn authorize(s: &TrackerState, h: &HeaderMap) -> Result<(), Failure> {
     let deny = |code| (code, Json(json!({"error":"Owner authentication required"})));
     let a = s
