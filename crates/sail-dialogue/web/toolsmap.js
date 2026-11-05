@@ -29,13 +29,13 @@
       about: 'Visual answers, diagrams and structured results from conversations.'},
     {id: 'arena', name: 'Arena', sub: 'Learn · Eval', u: -0.4, v: 21.6, icon: 'arena', page: 'arena',
       about: 'Arena Learn teaches step by step; Arena keeps what SAIL remembers.'},
-    {id: 'forge', name: 'Forge', sub: 'Build · Agents · Tools', u: 4.2, v: 18.6, kind: 'forge', page: 'agents', endpoint: '/api/plans/',
+    {id: 'forge', name: 'Forge', sub: 'Build · Agents · Tools', u: 4.2, v: 18.6, kind: 'forge', page: 'forge', endpoint: '/api/plans/',
       about: 'Development, build and tool orchestration: plans, agents, skills and system tools.'},
     {id: 'guardian', name: 'Guardian', sub: 'Safety · Policy', u: 10.6, v: 15.4, icon: 'guardian', page: 'guardian', endpoint: '/api/guardian/status',
       about: 'Approves or denies every effectful action and keeps a tamper-evident audit trail.'},
     {id: 'discover', name: 'Discover', sub: 'Proactive · Tracker', u: 10.6, v: 19.6, icon: 'discovery', page: 'discovery', endpoint: '/api/tracker/config',
       about: 'Curiosity and the Tracker board: what is changing in the world you follow.'},
-    {id: 'entertainment', name: 'Entertainment', sub: 'Music · Video · Books', u: 5.2, v: 22.6, icon: 'entertainment', page: 'home',
+    {id: 'entertainment', name: 'Entertainment', sub: 'Music · Video · Books', u: 5.2, v: 22.6, icon: 'entertainment', page: null,
       about: 'Media spaces: music, video and books.'},
   ];
   const LINKS = [
@@ -50,10 +50,13 @@
     {label: 'Data', u: 9.8, v: 23.6, w: 2.2, d: 6.4, h: 1.4},
   ];
   const byId = Object.fromEntries(STATIONS.map((s) => [s.id, s]));
+  // Router pages that are not a station's own page still get a matching status inspector.
+  const PAGE_STATION = {bridge: 'core', agents: 'forge', flow: 'flow', pulse: 'flow'};
+  for (const s of STATIONS) if (s.page && !PAGE_STATION[s.page]) PAGE_STATION[s.page] = s.id;
   for (const s of STATIONS) { s.gx = (s.u + s.v) / 2; s.gy = (s.v - s.u) / 2; }
 
   const state = {
-    on: false, built: false, selected: 'forge', tab: 'overview', mode: 'map',
+    on: false, built: false, selected: null, popup: null, pending: null, trigger: null, tab: 'overview', mode: 'map',
     live: true, paused: false, speed: 1, k: 1, tx: 0, ty: 0,
     metrics: null, mind: null, health: null, guardian: null, approvals: 0, plans: [], reminders: [],
     latency: {}, history: {cpu: [], gpu: [], ram: [], io: []},
@@ -169,7 +172,7 @@
   function linkPath(a, b) { return [[a.gx, a.gy], [b.gx, a.gy], [b.gx, b.gy]]; }
 
   // ------------------------------------------------------------------ build DOM
-  let root, world, svgRoot, packets = [];
+  let root, world, svgRoot, pop, popMain, popEmpty, chatSlot, chatMarker, packets = [];
   function build() {
     if (state.built) return;
     state.built = true;
@@ -191,7 +194,25 @@
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom out', onclick: () => zoom(1 / 1.2)}, '−'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoom(1.2)}, '+'))));
 
-    const inspector = el('aside', {class: 'tm-inspector', id: 'tmInspector', 'aria-label': 'Selected subsystem'});
+    // Right column: the live Dialogue panel. #homeView is moved in by showChat().
+    const chat = el('aside', {class: 'tm-chat', id: 'tmChat', 'aria-labelledby': 'tmChatTitle'},
+      el('header', {class: 'tm-chat-head'},
+        el('span', {class: 'tm-insp-icon'}, logo()),
+        el('h2', {id: 'tmChatTitle', text: 'SAIL'}),
+        el('span', {class: 'tm-pill', id: 'tmChatPill'}, el('span', {class: 'tm-status idle'}), 'Connecting')),
+      chatSlot = el('div', {class: 'tm-chat-slot'}));
+
+    // System popup. #subsystemPage (the router's page for the route) is its main content.
+    const inspector = el('aside', {class: 'tm-inspector', id: 'tmInspector', 'aria-label': 'System status'});
+    pop = el('div', {class: 'tm-pop', id: 'tmPop', hidden: true, onclick: (e) => { if (e.target === pop) closePopup(); }},
+      el('div', {class: 'tm-pop-frame', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'subsystemTitle'},
+        el('button', {class: 'tm-btn tm-pop-close', type: 'button', id: 'tmPopClose', 'aria-label': 'Close and return to the map', onclick: closePopup},
+          el('span', {'aria-hidden': 'true', text: '×'}), 'Close'),
+        popMain = el('div', {class: 'tm-pop-main'},
+          popEmpty = el('section', {class: 'tm-pop-empty', hidden: true},
+            el('h1', {id: 'tmPopTitle', tabindex: '-1'}), el('p', {id: 'tmPopAbout'}),
+            el('p', {class: 'tm-empty', text: 'This system has no controls in SAIL yet.'}))),
+        inspector));
     const activity = el('section', {class: 'tm-activity', 'aria-label': 'Live activity'},
       el('div', {class: 'tm-activity-head'}, el('span', {class: 'tm-bolt', 'aria-hidden': 'true', text: '⚡'}),
         el('div', {}, el('h2', {text: 'Live Activity'}), el('p', {text: 'Real-time events across SAIL'}))),
@@ -270,7 +291,7 @@
     for (const s of STATIONS) {
       const [lx, ly] = P(s.gx, s.gy, s.kind === 'core' ? 2.7 : 2.9);
       labels.append(el('button', {class: `tm-label${s.kind === 'core' ? ' core' : ''}`, type: 'button', 'data-station': s.id, 'aria-pressed': 'false',
-        style: `left:${lx - minX}px;top:${ly - minY}px`, onclick: () => select(s.id)},
+        style: `left:${lx - minX}px;top:${ly - minY}px`, 'aria-haspopup': 'dialog', onclick: (e) => openStation(s.id, e.currentTarget)},
         s.kind === 'core' ? el('span', {class: 'tm-status', 'data-status': s.id}) : el('span', {class: 'tm-label-icon'}, icon(s.kind === 'forge' ? 'forge' : s.icon)),
         el('span', {class: 'tm-label-text'},
           el('strong', {}, s.name, s.kind !== 'core' ? el('span', {class: 'tm-status small', 'data-status': s.id}) : null),
@@ -498,7 +519,7 @@
     }
     for (const p of packets) p.dot.style.display = stationStatus(p.a) === 'off' ? 'none' : '';
     renderDetail();
-    renderInspector();
+    if (state.popup) renderInspector();
     renderActivity();
   }
 
@@ -550,7 +571,7 @@
     return s;
   }
   function renderInspector() {
-    const s = byId[state.selected || 'core'];
+    const s = byId[state.popup || 'core'];
     const st = stationStatus(s.id);
     const tabs = ['overview', 'tasks', 'logs', 'config'];
     const insp = $('#tmInspector');
@@ -588,7 +609,7 @@
           el('ul', {class: 'tm-conns'}, conns.map((c) => {
             const cst = stationStatus(c.id);
             return el('li', {}, el('span', {class: `tm-status ${cst}`}),
-              el('button', {class: 'tm-link-btn', type: 'button', onclick: () => select(c.id), text: c.name}),
+              el('button', {class: 'tm-link-btn', type: 'button', onclick: (e) => openStation(c.id, e.currentTarget), text: c.name}),
               el('span', {class: 'tm-conn-sub', text: ` — ${c.sub.split(' · ')[0]}`}),
               el('span', {class: 'tm-ms', text: state.latency[c.id] != null ? `${state.latency[c.id]} ms` : cst === 'off' ? 'offline' : 'local'}));
           }))),
@@ -650,7 +671,7 @@
     $('#tmActivity').replaceChildren(...state.activity.slice(0, 30).map((a) => el('li', {},
       el('span', {class: `tm-status ${stationStatus(a.station)}`}),
       el('time', {text: hhmmss(a.at)}),
-      el('button', {class: 'tm-link-btn tm-act-station', type: 'button', onclick: () => select(a.station), text: byId[a.station]?.name || a.station}),
+      el('button', {class: 'tm-link-btn tm-act-station', type: 'button', onclick: (e) => openStation(a.station, e.currentTarget), text: byId[a.station]?.name || a.station}),
       el('span', {class: 'tm-act-text', text: a.text}))));
     const now = Date.now(), bins = new Array(40).fill(0);
     for (const a of state.activity) { const i = 39 - Math.floor((now - a.at) / 60000); if (i >= 0 && i < 40) bins[i]++; }
@@ -713,7 +734,7 @@
   window.sailFactory = {show, hide};
   window.addEventListener('sail:page', (event) => apply(event.detail === 'factory' || event.detail === 'dialogue'));
   document.getElementById('openFactorySettings')?.addEventListener('click', show);
-  // Retire the browser-wide style preference; Factory now owns this workspace.
+  // Retire the browser-wide style preference; the map is now the workspace.
   try { localStorage.removeItem('sail_ui_style'); } catch (_) {}
   apply(!window.sailCurrentPage || ['factory', 'dialogue'].includes(window.sailCurrentPage()));
 })();

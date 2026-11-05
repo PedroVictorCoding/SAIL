@@ -1,4 +1,4 @@
-"""Verifies the Factory tools map in a real headless browser.
+"""Verifies the Tools Map workspace in a real headless browser.
 
 Serves `crates/sail-dialogue/web` the way Dialogue does (index.html plus the static
 files the page requests), verifies Factory and Settings share the Tools Map,
@@ -196,6 +196,9 @@ with sync_playwright() as p:
     page.click('#openFactorySettings')
     check_embedded()
     assert page.is_hidden('#contextSheet')
+    page.goto(base + '#unknown')
+    page.wait_for_function("location.hash === '#home'")
+    assert page.is_visible('#toolsMap')
 
     # Every system opens its original live card inside the workspace popup.
     page.evaluate("window.sailNavigate('guardian')")

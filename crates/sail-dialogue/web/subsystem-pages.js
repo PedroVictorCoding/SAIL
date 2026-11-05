@@ -237,6 +237,8 @@ function initializeSubsystemPages() {
   for (const item of subsystemPages) {
     document.getElementById('subsystemNav').append(pageLink(item, 'quiet-button nav-item'));
   }
+  // Routes: #home (also #factory) is the Tools Map workspace; a subsystem id opens that
+  // system in the workspace popup (toolsmap.js); #classic is the card dashboard.
   function renderRoute(focus = true) {
     const id = location.hash.slice(1) || 'factory';
     if (id === 'spaces') return; // Spaces overlays the current workspace.
@@ -254,7 +256,8 @@ function initializeSubsystemPages() {
     workspace.setAttribute('aria-label', 'Factory workspace');
     document.title = `SAIL — ${popup ? item.name : route === 'dialogue' ? 'Dialogue' : 'Factory'}`;
     document.querySelectorAll('[data-page]').forEach(link => {
-      const selected = link.dataset.page === route; link.classList.toggle('selected', selected);
+      const page = link.dataset.page === 'factory' ? 'home' : link.dataset.page;
+      const selected = page === (route === 'classic' ? 'home' : route); link.classList.toggle('selected', selected);
       if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     });
     if (popup) {
