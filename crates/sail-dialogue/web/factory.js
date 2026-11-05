@@ -275,3 +275,62 @@ function drawTank(ctx, rect, options = {}) {
   return { anchor: { x: centre.x, y: topY } };
 }
 
+
+/** Stacked reading bars beside a station, as in the reference plant. */
+function drawGauges(ctx, anchor, values = [0.82, 0.6, 0.38]) {
+  if (detailForZoom() === 'silhouette') return;
+  const { palette } = FACTORY;
+  const scale = FACTORY.camera.zoom;
+  const width = 5 * scale;
+  const height = 26 * scale;
+  values.forEach((value, index) => {
+    const x = anchor.x + index * (width + 3 * scale);
+    const y = anchor.y - height;
+    ctx.fillStyle = '#14171A';
+    ctx.fillRect(x, y, width, height);
+    ctx.fillStyle = palette.accent;
+    ctx.fillRect(x, y + height * (1 - value), width, height * value);
+    ctx.strokeStyle = palette.structure;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, width, height);
+  });
+}
+
+/** Monospace station label, uppercase, next to its object. */
+function drawLabel(ctx, record, anchor, active) {
+  if (detailForZoom() === 'silhouette') {
+    // Silhouette mode keeps a status light instead of text.
+    const point = isoPoint(record.x + record.w / 2, record.y + record.d / 2, 0);
+    ctx.fillStyle = FACTORY.palette.ok;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  const { palette } = FACTORY;
+  const size = Math.min(FACTORY.camera.zoom, 1.15);
+  ctx.font = `${(active ? 11 : 10) * size}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = active ? palette.accent : palette.body;
+  ctx.fillText(record.name, anchor.x - 8 * FACTORY.camera.zoom, anchor.y + 18 * FACTORY.camera.zoom);
+}
+
+/** Orange wireframe around the selected station: footprint, uprights, roof. */
+function drawSelection(ctx, record) {
+  const { palette } = FACTORY;
+  const { x, y, w, d, h } = record;
+  polygon(ctx, [isoPoint(x, y), isoPoint(x + w, y), isoPoint(x + w, y + d), isoPoint(x, y + d)],
+    null, palette.accent, 2);
+  for (const [px, py] of [[x, y], [x + w, y], [x + w, y + d], [x, y + d]]) {
+    const base = isoPoint(px, py, 0), top = isoPoint(px, py, h);
+    ctx.beginPath();
+    ctx.moveTo(base.x, base.y);
+    ctx.lineTo(top.x, top.y);
+    ctx.strokeStyle = palette.accent;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  polygon(ctx, [isoPoint(x, y, h), isoPoint(x + w, y, h), isoPoint(x + w, y + d, h), isoPoint(x, y + d, h)],
+    null, palette.accent, 2);
+}
+
