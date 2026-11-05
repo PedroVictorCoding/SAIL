@@ -514,3 +514,103 @@ function hitTest(px, py) {
   return null;
 }
 
+
+// --------------------------------------------------------------------- DOM --
+
+function factoryElement(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function mountFactory(workspace) {
+  if (FACTORY.mounted) return;
+  FACTORY.mounted = true;
+
+  const floor = factoryElement('div', 'factory-floor');
+  floor.id = 'factoryFloor';
+  floor.innerHTML = `
+    <canvas id="factoryCanvas" class="factory-canvas" role="img" tabindex="0"
+      aria-label="Isometric SAIL room. Every subsystem is a fixed station on the floor."></canvas>
+    <div class="factory-chrome">
+      <div class="factory-breadcrumb"><span>ROOM</span><i>/</i><strong id="factoryCrumb">Overview</strong></div>
+      <div class="factory-status">
+        <span id="factoryClock">--</span><span id="factoryDay"></span>
+        <span class="factory-live"><i></i>LIVE<span id="factoryLatency">--</span></span>
+      </div>
+      <aside class="factory-inspector" id="factoryInspector" hidden>
+        <header><h2 id="factoryInspectorTitle">STATION</h2><button type="button" class="factory-inspector-close" id="factoryInspectorClose" aria-label="Close station detail">&#10005;</button></header>
+        <p class="factory-inspector-zone" id="factoryInspectorZone"></p>
+        <dl class="factory-readout" id="factoryReadout"></dl>
+        <h3>STRUCTURE OVERVIEW</h3>
+        <canvas id="factorySpark" width="280" height="72" aria-hidden="true"></canvas>
+        <h3>WORK FLOW TIME</h3>
+        <ul class="factory-log" id="factoryLog"></ul>
+      </aside>
+      <div class="factory-scenes">
+        <button type="button" class="factory-arrow" id="factoryPrev" aria-label="Previous room">&#9664;</button>
+        <div class="factory-scene-list" id="factorySceneList"></div>
+        <button type="button" class="factory-arrow" id="factoryNext" aria-label="Next room">&#9654;</button>
+      </div>
+      <div class="factory-spec" id="factorySpec" hidden></div>
+      <div class="factory-minimap"><canvas id="factoryMinimap" width="140" height="140" aria-hidden="true"></canvas></div>
+      <table class="factory-list" id="factoryList" hidden>
+        <caption>Room directory. Same stations, same targets, keyboard first.</caption>
+        <thead><tr><th scope="col">Station</th><th scope="col">Zone</th><th scope="col">Reading</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="factory-hint">Drag to pan, scroll to zoom, click a station. \\ list mode, Esc closes.</p>
+    </div>`;
+  workspace.append(floor);
+
+  const crumb = floor.querySelector('#factoryCrumb');
+  if (crumb) crumb.textContent = FACTORY.scenes[FACTORY.sceneIndex];
+  const bounds = floor.getBoundingClientRect();
+  if (bounds.width && bounds.height) fitCamera(bounds.width, bounds.height);
+
+  bindFactoryEvents(floor);
+  buildScenes(floor);
+  buildList(floor);
+  updateClock(floor);
+  refreshLatency(floor);
+  FACTORY.timers = {
+    clock: setInterval(() => updateClock(floor), 1000),
+    latency: setInterval(() => refreshLatency(floor), 15000),
+    repaint: setInterval(() => renderFrame(floor), 5000),
+  };
+  renderFrame(floor);
+  requestAnimationFrame(() => renderFrame(floor));
+}
+
+function unmountFactory() {
+  if (!FACTORY.mounted) return;
+  const floor = document.getElementById('factoryFloor');
+  if (floor) floor.remove();
+  if (FACTORY.timers) Object.values(FACTORY.timers).forEach(clearInterval);
+  FACTORY.timers = null;
+  FACTORY.mounted = false;
+  FACTORY.hover = null;
+  FACTORY.anchors.clear();
+}
+
+function renderFrame(floor = document.getElementById('factoryFloor')) {
+  if (!floor) return;
+  const canvas = floor.querySelector('#factoryCanvas');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.round(rect.width);
+  const height = Math.round(rect.height);
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawScene(ctx, width, height);
+  drawMinimap(floor);
+  positionSpecCard(floor);
+}
+
