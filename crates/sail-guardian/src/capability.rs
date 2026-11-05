@@ -113,6 +113,9 @@ impl Capability {
                         || tool == "pulse:list"
                         || tool == "pulse:cancel"
                         || tool == "pulse:snooze"
+                        || tool == "spotify:find"
+                        || tool == "spotify:play"
+                        || tool == "spotify:control"
                         || tool == "studio:audio_analyze" =>
                 {
                     RiskLevel::Low

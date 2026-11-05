@@ -145,6 +145,7 @@ pub async fn run_dialogue_server_with_plans(
     let learn_routes = learn_routes(&inference, &arena, authority(), pulse.clone());
     let tracker_routes = tracker_routes(authority());
     let system_routes = crate::system_http::router(authority());
+    let spotify_routes = crate::spotify_http::router(authority());
     let plan_routes = plans
         .clone()
         .map(|plans| crate::plans::router(plans, authority()));
@@ -187,6 +188,7 @@ pub async fn run_dialogue_server_with_plans(
             }),
         )
         .nest_service("/api/system", system_routes)
+        .nest_service("/api/spotify", spotify_routes)
         .route(
             "/card-modal.js",
             get(|| async {
@@ -1934,6 +1936,8 @@ async fn reason_turn(
     let mut reply = String::new();
     let mut final_assistant = None;
     let mut guard = ToolLoopGuard::new(prompt);
+    // What SAIL asked last turn: music plays only if this named the confirmed item.
+    let previous_reply = crate::vlm::previous_assistant_reply(messages);
     let gen_start = Instant::now();
     let mut first_token_instant: Option<Instant> = None;
     let mut total_token_count = 0usize;
@@ -2183,6 +2187,50 @@ async fn reason_turn(
                             snapshot_image = image;
                             guard.record(name, &params, result.clone());
                             result
+                        } else if name == "spotify_play" || name == "spotify:play" {
+                            // Spoken confirmation is enforced here, not trusted to the model.
+                            let uri = params["uri"].as_str().unwrap_or_default();
+                            let verdict = match &memory {
+                                Some(scope) => crate::media_confirm::authorize(
+                                    scope.session,
+                                    current,
+                                    uri,
+                                    prompt,
+                                    &previous_reply,
+                                ),
+                                None => Err("Not played: music can only be started from a conversation with the owner.".into()),
+                            };
+                            let result = match verdict {
+                                Ok(item) => {
+                                    info!(kind = ?item.kind, "Owner confirmed Spotify playback");
+                                    sail_bridge::spotify::global().confirm(&item.uri);
+                                    emit(
+                                        tx,
+                                        current,
+                                        json!({"type":"tool_started","channel":"voice:vlm","tool":name}),
+                                    )
+                                    .await;
+                                    execute_scheduled_tool(
+                                        name.to_string(),
+                                        params.clone(),
+                                        None,
+                                        correlation,
+                                        tx,
+                                        current,
+                                    )
+                                    .await
+                                }
+                                Err(reason) => {
+                                    info!("Spotify playback refused: not confirmed by the owner");
+                                    crate::KernelToolResult {
+                                        tool: name.into(),
+                                        success: false,
+                                        output: json!({"error":reason,"not_confirmed":true}),
+                                    }
+                                }
+                            };
+                            guard.record(name, &params, result.clone());
+                            result
                         } else if name == crate::vlm::MEMORY_SEARCH_TOOL {
                             emit(
                                 tx,
@@ -2286,6 +2334,12 @@ async fn reason_turn(
                         }
                     }
                 };
+                if result.success && (name == "spotify_find" || name == "spotify:find") {
+                    if let Some(scope) = &memory {
+                        crate::media_confirm::record(scope.session, current, &result.output);
+                    }
+                    guard.stop("Ask the user the confirmation question for the Spotify result (its full name and creator) and wait for their answer. Do not call more tools in this turn.");
+                }
                 if publish {
                     if let Some(true) = result
                         .output
