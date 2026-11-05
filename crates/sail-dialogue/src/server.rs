@@ -1435,9 +1435,20 @@ async fn run_turn(
         }
         debug!(fragments,"Speech output queue drained");
     }.instrument(speech_span)));
-    let (reply, _assistant, stats) = match crate::plans::requested_goal(&prompt) {
-        Some(goal) => plan_turn(state.plans.as_ref(), goal, &tx, current, &speech_tx).await,
-        None => {
+    // Music requests with a fixed shape ("play my X playlist", "pause", the "yes" that
+    // confirms a choice) are answered in code in about a second; the rest go to the model.
+    let music = crate::music_fastpath::try_handle(
+        &sail_bridge::spotify::global(),
+        &session,
+        current,
+        &prompt,
+        &crate::vlm::previous_assistant_reply(&messages),
+    )
+    .await;
+    let (reply, _assistant, stats) = match (music, crate::plans::requested_goal(&prompt)) {
+        (Some(text), _) => instant_turn(&text, &tx, current, &speech_tx).await,
+        (None, Some(goal)) => plan_turn(state.plans.as_ref(), goal, &tx, current, &speech_tx).await,
+        (None, None) => {
             reason_turn(
                 &vlm,
                 &mut messages,
@@ -1537,6 +1548,33 @@ async fn run_turn(
 }
 /// A "Plan: …" turn: draft the plan, show it as a plan card, and say briefly what happens
 /// next. The plan itself runs in the background, not in this turn.
+/// A reply decided in code: shown and spoken like a model reply, without inference.
+async fn instant_turn(
+    text: &str,
+    tx: &mpsc::Sender<Outbound>,
+    current: u64,
+    speech_tx: &mpsc::Sender<String>,
+) -> (String, Value, GenerationStats) {
+    let start = Instant::now();
+    let mut reply = String::new();
+    let mut chunker = SpeechChunker::default();
+    publish_spoken_text(
+        text,
+        &mut reply,
+        &mut chunker,
+        tx,
+        current,
+        speech_tx,
+        "music",
+    )
+    .await;
+    queue_speech(chunker.finish(), speech_tx).await;
+    let stats = GenerationStats {
+        generation_ms: start.elapsed().as_millis() as u64,
+        ..GenerationStats::default()
+    };
+    (reply, Value::Null, stats)
+}
 async fn plan_turn(
     plans: Option<&Arc<crate::plans::Plans>>,
     goal: &str,

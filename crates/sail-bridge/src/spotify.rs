@@ -26,6 +26,12 @@ const LOGIN_TTL: Duration = Duration::from_secs(600);
 /// A confirmation lets exactly one play of that URI happen shortly after the owner said yes.
 const CONFIRM_TTL: Duration = Duration::from_secs(120);
 const MAX_OWN_PLAYLISTS: usize = 200;
+/// The playlist index is rebuilt in the background when older than this.
+const INDEX_TTL_SECS: u64 = 6 * 3600;
+/// Tracks read per playlist for its artist profile.
+const INDEX_TRACKS_PER_PLAYLIST: usize = 300;
+/// An artist this share of a playlist's tracks makes it "their" playlist.
+const ARTIST_SHARE_MATCH: f32 = 0.25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -297,6 +303,8 @@ pub struct Spotify {
     token: tokio::sync::Mutex<Option<Token>>,
     logins: Mutex<HashMap<String, (String, String, Instant)>>,
     confirmed: Mutex<HashMap<String, Instant>>,
+    index: Mutex<Option<PlaylistIndex>>,
+    indexing: std::sync::atomic::AtomicBool,
     api: String,
     accounts: String,
 }
@@ -325,6 +333,9 @@ impl Spotify {
         let token = std::fs::read(dir.join("token.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let index = std::fs::read(dir.join("playlist_index.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
         Self {
             dir,
             http: reqwest::Client::builder()
@@ -335,6 +346,8 @@ impl Spotify {
             token: tokio::sync::Mutex::new(token),
             logins: Mutex::new(HashMap::new()),
             confirmed: Mutex::new(HashMap::new()),
+            index: Mutex::new(index),
+            indexing: std::sync::atomic::AtomicBool::new(false),
             api: api.trim_end_matches('/').into(),
             accounts: accounts.trim_end_matches('/').into(),
         }
@@ -468,6 +481,8 @@ impl Spotify {
 
     pub async fn disconnect(&self) -> Result<()> {
         *self.token.lock().await = None;
+        *self.index.lock().expect("spotify index") = None;
+        let _ = std::fs::remove_file(self.dir.join("playlist_index.json"));
         match std::fs::remove_file(self.dir.join("token.json")) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -795,6 +810,229 @@ impl Spotify {
         let state = self.get("/me/player").await?;
         Ok(player_summary(&state))
     }
+
+    /// Search every kind at once and pick what a plain "play X" most likely means: an exact
+    /// artist, song, album or playlist name, in that order, else Spotify's top song.
+    pub async fn search_any(&self, query: &str) -> Result<Vec<Candidate>> {
+        let mut url = url::Url::parse("http://x/search").expect("search URL");
+        url.query_pairs_mut()
+            .append_pair("q", query)
+            .append_pair("type", "artist,track,album,playlist")
+            .append_pair("limit", "3");
+        let body = self
+            .get(&format!("/search?{}", url.query().unwrap_or_default()))
+            .await?;
+        let mut all: Vec<Candidate> = Vec::new();
+        for kind in [Kind::Artist, Kind::Track, Kind::Album, Kind::Playlist] {
+            all.extend(
+                body[format!("{}s", kind.api())]["items"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|i| candidate(kind, i)),
+            );
+        }
+        let exact = |c: &Candidate| score(query, &c.name) >= 1000;
+        if let Some(pos) = all.iter().position(exact) {
+            let best = all.remove(pos);
+            all.insert(0, best);
+        } else if let Some(pos) = all.iter().position(|c| c.kind == Kind::Track) {
+            let best = all.remove(pos);
+            all.insert(0, best);
+        }
+        all.truncate(5);
+        Ok(all)
+    }
+
+    /// The artists in one playlist, counted over its first tracks.
+    async fn playlist_artists(&self, uri: &str) -> Result<(u32, Vec<(String, u32)>)> {
+        let id = uri.rsplit(':').next().unwrap_or_default();
+        let mut counts: HashMap<String, u32> = HashMap::new();
+        let mut tracks = 0u32;
+        let mut offset = 0;
+        while (tracks as usize) < INDEX_TRACKS_PER_PLAYLIST {
+            let path = format!(
+                "/playlists/{id}/tracks?limit=100&offset={offset}&fields=items(track(artists(name)),item(artists(name))),next"
+            );
+            let page = self.get(&path).await?;
+            let items = page["items"].as_array().cloned().unwrap_or_default();
+            for item in &items {
+                let entry = if item["track"].is_object() {
+                    &item["track"]
+                } else {
+                    &item["item"]
+                };
+                let names: Vec<String> = entry["artists"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|a| text(&a["name"]))
+                    .filter(|n| !n.is_empty())
+                    .collect();
+                if names.is_empty() {
+                    continue;
+                }
+                tracks += 1;
+                for name in names {
+                    *counts.entry(name).or_default() += 1;
+                }
+            }
+            if items.len() < 100 || page["next"].is_null() {
+                break;
+            }
+            offset += 100;
+        }
+        let mut artists: Vec<(String, u32)> = counts.into_iter().collect();
+        artists.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        artists.truncate(25);
+        Ok((tracks, artists))
+    }
+
+    /// Build the owner's playlist index (names plus the artists in each), and save it.
+    pub async fn build_index(&self) -> Result<PlaylistIndex> {
+        use futures_util::StreamExt;
+        let playlists = self.my_playlists().await?;
+        let profiles: Vec<IndexedPlaylist> = futures_util::stream::iter(playlists)
+            .map(|playlist| async move {
+                // Some playlists (for example Spotify's own mixes) cannot be read; their
+                // names still count.
+                let (tracks, artists) = self
+                    .playlist_artists(&playlist.uri)
+                    .await
+                    .unwrap_or_default();
+                IndexedPlaylist {
+                    playlist,
+                    tracks,
+                    artists,
+                }
+            })
+            .buffered(3)
+            .collect()
+            .await;
+        let index = PlaylistIndex {
+            built_at: now(),
+            playlists: profiles,
+        };
+        let _ = write_private(&self.dir.join("playlist_index.json"), &index);
+        *self.index.lock().expect("spotify index") = Some(index.clone());
+        Ok(index)
+    }
+
+    /// The saved playlist index, if any; starts a background rebuild when missing or stale.
+    pub fn playlist_index(self: &Arc<Self>) -> Option<PlaylistIndex> {
+        let current = self.index.lock().expect("spotify index").clone();
+        let stale = current
+            .as_ref()
+            .is_none_or(|i| now().saturating_sub(i.built_at) > INDEX_TTL_SECS);
+        if stale
+            && !self
+                .indexing
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let this = self.clone();
+            tokio::spawn(async move {
+                match this.build_index().await {
+                    Ok(index) => tracing::info!(
+                        playlists = index.playlists.len(),
+                        "Spotify playlist index built"
+                    ),
+                    Err(error) => {
+                        tracing::warn!(%error, "Spotify playlist index could not be built")
+                    }
+                }
+                this.indexing
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+        current
+    }
+}
+
+/// The owner's playlists with the artists that fill them, so "my radiohead playlist" can
+/// find a playlist whose name never says so.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlaylistIndex {
+    /// Unix seconds.
+    pub built_at: u64,
+    pub playlists: Vec<IndexedPlaylist>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexedPlaylist {
+    pub playlist: Candidate,
+    /// Tracks read for the profile.
+    pub tracks: u32,
+    /// Most frequent artists first, with how many of those tracks they are on.
+    pub artists: Vec<(String, u32)>,
+}
+
+/// One playlist's fit for a query.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaylistMatch {
+    pub playlist: Candidate,
+    /// How well the name (or description) matches; 0 when it does not.
+    pub name_score: usize,
+    /// Share of the playlist's tracks by artists matching the query (0.0-1.0).
+    pub artist_share: f32,
+}
+
+impl PlaylistMatch {
+    /// Sure enough to ask about it without the reasoning model.
+    pub fn confident(&self) -> bool {
+        self.name_score > 0 || self.artist_share >= ARTIST_SHARE_MATCH
+    }
+}
+
+/// Does the artist name contain every word of the query?
+fn artist_matches(query: &str, artist: &str) -> bool {
+    let q = words(query);
+    let a = words(artist);
+    !q.is_empty() && q.iter().all(|w| a.contains(w))
+}
+
+/// Rank the owner's playlists for a query: name first, then how much of it is that artist,
+/// then the description. Only playlists with some match are returned.
+pub fn rank_playlists(query: &str, index: &PlaylistIndex) -> Vec<PlaylistMatch> {
+    let mut ranked: Vec<(usize, PlaylistMatch)> = index
+        .playlists
+        .iter()
+        .map(|p| {
+            let name_score = score(query, &p.playlist.name);
+            let by_artist: u32 = p
+                .artists
+                .iter()
+                .filter(|(name, _)| artist_matches(query, name))
+                .map(|(_, n)| *n)
+                .sum();
+            let artist_share = if p.tracks == 0 {
+                0.0
+            } else {
+                (by_artist as f32 / p.tracks as f32).min(1.0)
+            };
+            let description = p
+                .playlist
+                .detail
+                .as_deref()
+                .map(|d| score(query, d))
+                .unwrap_or(0);
+            (
+                description,
+                PlaylistMatch {
+                    playlist: p.playlist.clone(),
+                    name_score,
+                    artist_share,
+                },
+            )
+        })
+        .filter(|(d, m)| m.name_score > 0 || m.artist_share > 0.0 || *d > 0)
+        .collect();
+    ranked.sort_by(|(da, a), (db, b)| {
+        b.name_score
+            .cmp(&a.name_score)
+            .then(b.artist_share.total_cmp(&a.artist_share))
+            .then(db.cmp(da))
+    });
+    ranked.into_iter().map(|(_, m)| m).collect()
 }
 
 /// The parts of `/me/player` the UI and the model need.
@@ -837,6 +1075,62 @@ pub fn global() -> Arc<Spotify> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn indexed(name: &str, uri: &str, tracks: u32, artists: &[(&str, u32)]) -> IndexedPlaylist {
+        IndexedPlaylist {
+            playlist: Candidate {
+                kind: Kind::Playlist,
+                name: name.into(),
+                by: "Pedro Victor".into(),
+                uri: uri.into(),
+                detail: None,
+            },
+            tracks,
+            artists: artists.iter().map(|(a, n)| (a.to_string(), *n)).collect(),
+        }
+    }
+
+    #[test]
+    fn a_playlist_full_of_an_artist_is_found_without_its_name() {
+        let index = PlaylistIndex {
+            built_at: 0,
+            playlists: vec![
+                indexed(
+                    "Road trip",
+                    "spotify:playlist:a",
+                    50,
+                    &[("Radiohead", 3), ("Blur", 20)],
+                ),
+                indexed(
+                    "Cabeça de Radio",
+                    "spotify:playlist:b",
+                    40,
+                    &[("Radiohead", 34), ("Thom Yorke", 6)],
+                ),
+                indexed("Lo-fi beats", "spotify:playlist:c", 90, &[("Nujabes", 12)]),
+            ],
+        };
+        let ranked = rank_playlists("radiohead", &index);
+        assert_eq!(ranked[0].playlist.name, "Cabeça de Radio");
+        assert!(ranked[0].confident());
+        assert!(
+            !ranked[1].confident(),
+            "3 of 50 tracks is not a Radiohead playlist"
+        );
+        assert!(rank_playlists("metallica", &index).is_empty());
+        // A matching name still comes first.
+        let named = PlaylistIndex {
+            built_at: 0,
+            playlists: vec![
+                index.playlists[1].clone(),
+                indexed("Radiohead live", "spotify:playlist:d", 10, &[]),
+            ],
+        };
+        assert_eq!(
+            rank_playlists("radiohead", &named)[0].playlist.name,
+            "Radiohead live"
+        );
+    }
 
     #[test]
     fn playlist_question_names_the_playlist_and_its_creator() {

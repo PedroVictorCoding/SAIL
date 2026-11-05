@@ -150,6 +150,56 @@ pub fn is_affirmative(reply: &str) -> bool {
     YES.iter().any(|w| text.contains(w))
 }
 
+/// Does the owner's reply refuse? (Used to drop an offer without the model.)
+pub fn is_refusal(reply: &str) -> bool {
+    let text = format!(" {} ", normalized(reply));
+    [
+        " no ",
+        " nope ",
+        " don't ",
+        " dont ",
+        " cancel ",
+        " never mind ",
+        " não ",
+        " nao ",
+        " deixa ",
+    ]
+    .iter()
+    .any(|w| text.contains(w))
+}
+
+/// The offered item a reply refers to: one it names, else the one SAIL asked about. `None`
+/// when nothing was offered to this session in an earlier turn.
+pub fn pending_choice(
+    session: &str,
+    turn: u64,
+    reply: &str,
+    previous_reply: &str,
+) -> Option<Candidate> {
+    let offers = offers().lock().expect("media offers");
+    let offer = offers
+        .get(session)
+        .filter(|o| o.at.elapsed() < OFFER_TTL && o.turn < turn)?;
+    let answer = normalized(reply);
+    let asked = normalized(previous_reply);
+    offer
+        .items
+        .iter()
+        .find(|c| answer.contains(&normalized(&c.name)))
+        .or_else(|| {
+            offer
+                .items
+                .iter()
+                .find(|c| asked.contains(&normalized(&c.name)))
+        })
+        .cloned()
+}
+
+/// Forget this session's offer (the owner declined it).
+pub fn clear(session: &str) {
+    offers().lock().expect("media offers").remove(session);
+}
+
 /// Decide whether `uri` may play now. Returns the confirmed candidate, or the reason it may
 /// not, worded as an instruction for the model.
 pub fn authorize(
@@ -272,6 +322,28 @@ mod tests {
     fn other_sessions_cannot_use_an_offer() {
         offer("s-owner", 1);
         assert!(authorize("s-other", 2, "spotify:playlist:aaa", "yes", ASKED).is_err());
+    }
+
+    #[test]
+    fn the_pending_choice_is_the_named_item_or_the_one_asked_about() {
+        offer("s-pending", 1);
+        assert!(
+            pending_choice("s-pending", 1, "yes", ASKED).is_none(),
+            "same turn"
+        );
+        assert_eq!(
+            pending_choice("s-pending", 2, "yes", ASKED).unwrap().uri,
+            "spotify:playlist:aaa"
+        );
+        assert_eq!(
+            pending_choice("s-pending", 2, "Radiohead Essentials instead", ASKED)
+                .unwrap()
+                .uri,
+            "spotify:playlist:bbb"
+        );
+        assert!(is_refusal("no thanks") && is_refusal("Não") && !is_refusal("yes go ahead"));
+        clear("s-pending");
+        assert!(pending_choice("s-pending", 2, "yes", ASKED).is_none());
     }
 
     #[test]

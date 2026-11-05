@@ -202,14 +202,18 @@ async fn callback(
         );
     };
     match state.spotify.finish_login(&login, &code).await {
-        Ok(()) => (
-            StatusCode::OK,
-            page(
-                "Spotify connected",
-                "SAIL can now play your music. You can close this tab.",
-                true,
-            ),
-        ),
+        Ok(()) => {
+            // Learn the owner's playlists now, so the first request is fast.
+            state.spotify.playlist_index();
+            (
+                StatusCode::OK,
+                page(
+                    "Spotify connected",
+                    "SAIL can now play your music. You can close this tab.",
+                    true,
+                ),
+            )
+        }
         Err(error) => (
             StatusCode::BAD_REQUEST,
             page("Spotify not connected", &error.message, false),

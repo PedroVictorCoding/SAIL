@@ -9,6 +9,7 @@ pub mod learn_http;
 pub mod live_context;
 mod media_confirm;
 pub mod memory_http;
+pub mod music_fastpath;
 pub mod orb;
 pub mod pipeline;
 pub mod prompt;
