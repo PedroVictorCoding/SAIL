@@ -1,6 +1,6 @@
 'use strict';
 // Factory uses the Tools Map workspace. Visibility follows the shared page router;
-// voice, approvals and the text composer continue running underneath.
+// the shared navigation, assistant and composer stay alongside the map.
 
 (() => {
   const SVGNS = 'http://www.w3.org/2000/svg';
@@ -100,7 +100,6 @@
   }
   function pct(v) { return v == null || !isFinite(v) ? '—' : `${Math.round(v)}%`; }
   function hhmmss(d) { return d.toLocaleTimeString([], {hour12: false}); }
-  function level(v) { return v == null ? '' : v >= 95 ? 'crit' : v >= 80 ? 'warn' : ''; }
   function modelState(md) { return typeof md.state === 'string' ? md.state : Object.keys(md.state || {})[0] || 'unknown'; }
 
   // ------------------------------------------------------------------ iso projection
@@ -175,43 +174,10 @@
     if (state.built) return;
     state.built = true;
     root = el('div', {class: 'tm-root', id: 'toolsMap', role: 'region', 'aria-label': 'SAIL Tools Map'});
-    const nav = el('nav', {class: 'tm-side', 'aria-label': 'Tools Map navigation'},
-      el('div', {class: 'tm-brand'}, logo(), el('div', {}, el('strong', {text: 'SAIL'}), el('span', {class: 'tm-version', id: 'tmVersion', text: 'local'}))),
-      el('ul', {class: 'tm-nav'},
-        navItem('home', 'Home', 'home'), navItem('dialogue', 'Dialogue', 'dialogue'), navItem('arena', 'Arena', 'arena'),
-        navItem('canvas', 'Canvas', 'canvas'), navItem('forge', 'Forge', 'forge'), navItem('flow', 'Flow', 'flow'),
-        navItem('system', 'System', 'sense'), navItem('mind', 'Mind', 'mind'), navItem('memory', 'Memory', 'mesh'),
-        navItem('workspace', 'Workspace', 'spaces'), navItem('discover', 'Discover', 'discovery'), navItem('guardian', 'Guardian', 'guardian')),
-      el('ul', {class: 'tm-nav tm-nav-2'},
-        el('li', {}, el('button', {class: 'tm-nav-item current', type: 'button', 'aria-current': 'page', onclick: () => { select(null); fit(); }}, el('span', {class: 'tm-dot-accent', 'aria-hidden': 'true'}), 'Tools Map')),
-        el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: () => { select('forge'); setTab('tasks'); }}, icon('lab'), 'Builds')),
-        el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: () => { select('forge'); setTab('tasks'); }}, icon('tasks'), 'Tasks'))),
-      el('div', {class: 'tm-sidecard'},
-        el('p', {class: 'tm-sidecard-title'}, el('span', {class: 'tm-status', id: 'tmCoreDot'}), el('span', {id: 'tmCoreState', text: 'Connecting…'})),
-        el('p', {class: 'tm-sidecard-sub', id: 'tmUptime', text: ''}),
-        el('div', {class: 'tm-sidecard-actions'},
-          el('button', {class: 'tm-btn', type: 'button', onclick: openSettings}, icon('settings'), 'Settings'),
-          el('button', {class: 'tm-btn', type: 'button', onclick: () => window.sailNavigate?.('home')}, 'Home'))));
-
-    const top = el('header', {class: 'tm-top'},
-      el('button', {class: 'tm-btn tm-home', type: 'button', onclick: hide}, icon('home'), 'Home'),
-      el('div', {class: 'tm-crumbs'},
-        el('h1', {}, el('span', {id: 'tmCrumb', text: 'Forge'}), el('span', {class: 'tm-crumb-sep', text: ' / '}), 'Tools Map'),
-        el('p', {text: 'Spatial orchestration of SAIL’s tools, models and agents'})),
-      el('form', {class: 'tm-ask', role: 'search', onsubmit: ask},
-        el('span', {class: 'tm-ask-icon', 'aria-hidden': 'true', text: '⌕'}),
-        el('label', {class: 'tm-sr', for: 'tmAskInput', text: 'Ask SAIL or run a command'}),
-        el('input', {id: 'tmAskInput', type: 'search', placeholder: 'Ask SAIL or run a command…', autocomplete: 'off', maxlength: '2000'}),
-        el('kbd', {text: 'Ctrl K'})),
-      el('ul', {class: 'tm-meters', id: 'tmMeters', 'aria-label': 'Host resources'}),
-      el('button', {class: 'tm-bell', type: 'button', id: 'tmBell', 'aria-label': 'Approvals', onclick: () => { window.sailNavigate?.('guardian'); }},
-        icon('guardian'), el('span', {class: 'tm-badge', id: 'tmBellCount', hidden: true})),
-      el('span', {class: 'tm-avatar', 'aria-hidden': 'true'}));
-
     const stage = el('section', {class: 'tm-stage', 'aria-label': 'Subsystem map'},
-      el('div', {class: 'tm-title'}, el('h2', {}, 'SAIL', el('br'), 'TOOLS MAP'), el('p', {text: 'Live systems, models and tools with real-time connections.'})),
       el('div', {class: 'tm-viewport', id: 'tmViewport', tabindex: '0', 'aria-label': 'Map. Drag or use arrow keys to pan, plus and minus to zoom.'},
         world = el('div', {class: 'tm-world'})),
+      el('div', {class: 'tm-toolbar'},
       el('div', {class: 'tm-ctl tm-ctl-left'},
         el('button', {class: 'tm-btn', type: 'button', id: 'tmLive', 'aria-pressed': 'true', onclick: toggleLive}, el('span', {class: 'tm-status on', 'aria-hidden': 'true'}), 'Live'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', id: 'tmPause', 'aria-pressed': 'false', 'aria-label': 'Pause animation', onclick: togglePause}, '❚❚'),
@@ -223,7 +189,7 @@
       el('div', {class: 'tm-ctl tm-ctl-right'},
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Fit map', onclick: fit}, '⛶'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom out', onclick: () => zoom(1 / 1.2)}, '−'),
-        el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoom(1.2)}, '+')));
+        el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoom(1.2)}, '+'))));
 
     const inspector = el('aside', {class: 'tm-inspector', id: 'tmInspector', 'aria-label': 'Selected subsystem'});
     const activity = el('section', {class: 'tm-activity', 'aria-label': 'Live activity'},
@@ -232,17 +198,10 @@
       el('ol', {class: 'tm-activity-list', id: 'tmActivity'}),
       el('div', {class: 'tm-histo', id: 'tmHisto', 'aria-hidden': 'true'}));
 
-    root.append(nav, top, stage, inspector, activity);
-    document.body.append(root);
+    root.append(stage, inspector, activity);
+    document.getElementById('factoryMapContent').append(root);
     buildWorld();
     bindViewport();
-    document.addEventListener('keydown', (e) => {
-      if (!state.on) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); $('#tmAskInput').focus(); }
-    });
-  }
-  function navItem(target, label, ic) {
-    return el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', 'data-nav': target, onclick: () => navTo(target)}, icon(ic), label));
   }
   function modeBtn(mode, label) {
     return el('button', {class: 'tm-seg', type: 'button', 'data-mode': mode, 'aria-pressed': state.mode === mode ? 'true' : 'false', onclick: () => setMode(mode)},
@@ -328,7 +287,7 @@
     // Labels keep a readable size as the map zooms out.
     world.style.setProperty('--ls', labelScale().toFixed(3));
   }
-  function labelScale() { return Math.max(state.k, innerWidth < 860 ? 0.62 : 0.95) / state.k; }
+  function labelScale() { return Math.max(state.k, $('#tmViewport').clientWidth < 600 ? 0.62 : 0.95) / state.k; }
   function fit() {
     const vp = $('#tmViewport'); if (!vp || !state.world) return;
     const xs = STATIONS.flatMap((s) => [P(s.gx - 3, s.gy + 3)[0], P(s.gx + 3, s.gy - 3)[0]]);
@@ -363,11 +322,11 @@
       if (m && e.target === vp) { e.preventDefault(); state.tx += m[0]; state.ty += m[1]; applyView(); }
       else if (e.key === '+' || e.key === '=') zoom(1.2); else if (e.key === '-') zoom(1 / 1.2);
     });
-    new ResizeObserver(() => { if (state.on) fit(); }).observe(vp);
+    resizeObserver = new ResizeObserver(() => { if (state.on) fit(); });
   }
 
   // ------------------------------------------------------------------ animation
-  let lastFrame = 0;
+  let lastFrame = 0, frameId = null, resizeObserver;
   function frame(ts) {
     if (!state.on) return;
     const dt = lastFrame ? Math.min(0.1, (ts - lastFrame) / 1000) : 0;
@@ -381,7 +340,7 @@
       p.dot.setAttribute('cx', (a[0] + (b[0] - a[0]) * f).toFixed(1));
       p.dot.setAttribute('cy', (a[1] + (b[1] - a[1]) * f).toFixed(1));
     }
-    requestAnimationFrame(frame);
+    frameId = requestAnimationFrame(frame);
   }
 
   // ------------------------------------------------------------------ data
@@ -389,10 +348,11 @@
     if (typeof getOrFetchOwnerToken === 'function') return getOrFetchOwnerToken();
     try { return localStorage.getItem('sail_owner_token'); } catch (_) { return null; }
   }
-  async function get(path) {
+  async function get(path, signal) {
     const t = await token();
+    signal.throwIfAborted();
     const started = performance.now();
-    const r = await fetch(path, {cache: 'no-store', headers: t ? {Authorization: `Bearer ${t}`} : {}});
+    const r = await fetch(path, {signal, cache: 'no-store', headers: t ? {Authorization: `Bearer ${t}`} : {}});
     const ms = Math.round(performance.now() - started);
     for (const s of STATIONS) if (s.endpoint === path) state.latency[s.id] = r.ok ? ms : null;
     if (!r.ok) throw new Error(`${path} ${r.status}`);
@@ -417,14 +377,18 @@
   }
 
   async function poll() {
-    if (!state.on || !state.live) return;
+    if (!state.on || !state.live || pollController) return;
+    const controller = new AbortController();
+    pollController = controller;
     const jobs = {
       metrics: '/api/system/metrics', mind: '/api/mind/status', health: '/api/health',
       guardian: '/api/guardian/status', audit: '/api/guardian/audit', approvals: '/api/guardian/approvals',
       plans: '/api/plans/', reminders: '/api/pulse/reminders', tracker: '/api/tracker/config',
     };
     const res = {};
-    await Promise.all(Object.entries(jobs).map(([k, path]) => get(path).then((v) => { res[k] = v; }, () => { res[k] = null; })));
+    await Promise.all(Object.entries(jobs).map(([k, path]) => get(path, controller.signal).then((v) => { res[k] = v; }, () => { res[k] = null; })));
+    if (controller.signal.aborted) return;
+    pollController = null;
     const was = state.online;
     state.online = !!res.health || !!res.metrics;
     if (was !== null && was !== state.online) log('core', state.online ? 'Connection to SAIL restored' : 'Lost connection to SAIL');
@@ -474,9 +438,12 @@
     if (!state.activity.length) log('core', 'Tools Map connected');
     render();
   }
-  let pollTimer = null;
+  let pollTimer = null, pollController = null;
   function startPolling() { stopPolling(); poll(); pollTimer = setInterval(poll, 5000); }
-  function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
+  function stopPolling() {
+    clearInterval(pollTimer); pollTimer = null;
+    pollController?.abort(); pollController = null;
+  }
 
   // ------------------------------------------------------------------ station status
   function stationStatus(id) {
@@ -514,8 +481,6 @@
   // ------------------------------------------------------------------ render
   function render() {
     if (!state.on) return;
-    $('#tmVersion').textContent = state.version ? `v${state.version}` : 'local';
-    renderMeters();
     for (const s of STATIONS) {
       const st = stationStatus(s.id);
       for (const n of root.querySelectorAll(`[data-status="${s.id}"]`)) n.className = `tm-status ${n.classList.contains('small') ? 'small ' : ''}${st}`;
@@ -532,34 +497,9 @@
       l.classList.toggle('hot', !!state.selected && (l.dataset.a === state.selected || l.dataset.b === state.selected));
     }
     for (const p of packets) p.dot.style.display = stationStatus(p.a) === 'off' ? 'none' : '';
-    $('#tmCoreDot').className = `tm-status ${state.online ? 'on' : state.online === false ? 'off' : 'idle'}`;
-    $('#tmCoreState').textContent = state.online ? 'SAIL Core online' : state.online === false ? 'SAIL Core unreachable' : 'Connecting…';
-    const up = state.metrics?.uptime_secs;
-    $('#tmUptime').textContent = up ? `Host up ${Math.floor(up / 86400)}d ${Math.floor((up % 86400) / 3600)}h` : '';
-    const bell = $('#tmBellCount');
-    bell.hidden = !state.approvals; bell.textContent = state.approvals || '';
-    $('#tmBell').setAttribute('aria-label', state.approvals ? `${state.approvals} approvals waiting` : 'Approvals: none waiting');
     renderDetail();
     renderInspector();
     renderActivity();
-  }
-
-  function meter(label, value, sub, p) {
-    return el('li', {class: `tm-meter ${level(p)}`},
-      el('span', {class: 'tm-meter-label', text: label}),
-      el('span', {class: 'tm-meter-value'}, el('span', {class: 'tm-meter-bar', 'aria-hidden': 'true'}, el('span', {style: `width:${Math.max(0, Math.min(100, p ?? 0))}%`})), value),
-      sub ? el('span', {class: 'tm-meter-sub', text: sub}) : null);
-  }
-  function renderMeters() {
-    const m = state.metrics, g = m?.gpus?.[0];
-    const disk = (m?.disks || []).slice().sort((a, b) => b.used_bytes / b.total_bytes - a.used_bytes / a.total_bytes)[0];
-    const diskP = disk ? disk.used_bytes / disk.total_bytes * 100 : null;
-    const unit = disk && disk.total_bytes >= 1099511627776 ? 'TB' : 'GB';
-    $('#tmMeters').replaceChildren(
-      meter('CPU', pct(m?.cpu_percent), null, m?.cpu_percent),
-      meter('GPU', g ? pct(g.busy_percent) : 'n/a', null, g?.busy_percent),
-      meter('RAM', m ? `${bytes(m.ram_used_bytes)} / ${bytes(m.ram_total_bytes)} GB` : '—', null, m?.ram_total_bytes ? m.ram_used_bytes / m.ram_total_bytes * 100 : null),
-      meter('Disk', disk ? `${bytes(disk.used_bytes, unit)} / ${bytes(disk.total_bytes, unit)} ${unit}` : '—', disk ? `fullest: ${disk.path}` : null, diskP));
   }
 
   function row(k, v) { return el('div', {}, el('dt', {text: k}), el('dd', {text: v})); }
@@ -598,7 +538,7 @@
       [x - w * 0.18, me.t - gap - h], [me.r + gap, me.b - h], [me.l - gap - w, me.b - h], [x - w / 2, me.b + gap],
     ];
     const free = spots.find(([l, t]) => others.every((o) => l + w <= o.l || o.r <= l || t + h <= o.t || o.b <= t));
-    if (!free) { box.hidden = true; return; }
+    if (!free || free[1] * state.k + state.ty < 0) { box.hidden = true; return; }
     box.style.left = `${free[0]}px`; box.style.top = `${free[1]}px`;
   }
 
@@ -612,7 +552,6 @@
   function renderInspector() {
     const s = byId[state.selected || 'core'];
     const st = stationStatus(s.id);
-    $('#tmCrumb').textContent = s.name;
     const tabs = ['overview', 'tasks', 'logs', 'config'];
     const insp = $('#tmInspector');
     const prevBody = insp.querySelector('.tm-insp-body');
@@ -629,7 +568,7 @@
           onkeydown: (e) => { const i = tabs.indexOf(t); const j = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : null; if (j !== null) { setTab(tabs[(j + tabs.length) % tabs.length]); $(`#tmTab-${state.tab}`)?.focus(); } }},
           t[0].toUpperCase() + t.slice(1)))),
       el('div', {class: 'tm-insp-body', id: 'tmTabPanel', role: 'tabpanel', 'aria-labelledby': `tmTab-${state.tab}`}, tabBody(s)),
-      el('button', {class: 'tm-open', type: 'button', onclick: () => { window.sailNavigate?.(s.page); }}, 'Open in Workspace ', el('span', {'aria-hidden': 'true', text: '↗'})));
+      el('button', {class: 'tm-open', id: 'tmOpenSystem', type: 'button', onclick: () => { window.sailNavigate?.(s.page); }}, 'Open system ', el('span', {'aria-hidden': 'true', text: '↗'})));
     const body = insp.querySelector('.tm-insp-body'); if (body) body.scrollTop = scroll;
     if (hadFocus) document.getElementById(hadFocus)?.focus();
   }
@@ -723,7 +662,6 @@
   function select(id) {
     state.selected = id;
     for (const l of root.querySelectorAll('.tm-label')) l.setAttribute('aria-pressed', l.dataset.station === id ? 'true' : 'false');
-    for (const n of root.querySelectorAll('.tm-nav-item[data-nav]')) n.classList.toggle('selected', n.dataset.nav === id);
     svgRoot.querySelectorAll('.tm-station').forEach((g) => g.classList.toggle('selected', g.dataset.station === id));
     render();
   }
@@ -733,14 +671,6 @@
     root.dataset.mode = m;
     root.querySelectorAll('.tm-seg').forEach((b) => b.setAttribute('aria-pressed', b.dataset.mode === m ? 'true' : 'false'));
     render();
-  }
-  function navTo(target) {
-    if (target === 'home' || target === 'workspace') {
-      if (target === 'workspace') apply(false);
-      window.sailNavigate?.(target === 'home' ? 'home' : 'spaces');
-      return;
-    }
-    select(target);
   }
   function toggleLive() {
     state.live = !state.live;
@@ -755,53 +685,35 @@
     b.setAttribute('aria-label', state.paused ? 'Resume animation' : 'Pause animation');
     b.textContent = state.paused ? '▶' : '❚❚';
   }
-  function ask(e) {
-    e.preventDefault();
-    const input = $('#tmAskInput');
-    const text = input.value.trim();
-    if (!text) return;
-    const match = STATIONS.find((s) => s.name.toLowerCase() === text.toLowerCase().replace(/^(open|go to|show)\s+/, ''));
-    if (match) { select(match.id); input.value = ''; return; }
-    const classic = document.getElementById('textInput'), form = document.getElementById('textForm');
-    if (classic && form) {
-      classic.value = text;
-      form.requestSubmit();
-      log('dialogue', `You asked: ${text.length > 80 ? `${text.slice(0, 80)}…` : text}`);
-      input.value = '';
-      select('dialogue');
-    }
-  }
   function openSettings() { (document.getElementById('settingsOpen') || document.getElementById('settingsRail'))?.click(); }
 
   // ------------------------------------------------------------------ routing
   function apply(on) {
+    build();
     if (on === state.on) return;
     state.on = on;
     if (on) {
-      build();
       root.hidden = false;
-      document.documentElement.classList.add('tm-active');
       setMode(state.mode);
-      requestAnimationFrame(() => {
-        if (!state.on) return;
-        fit(); select(state.selected);
-        $('#tmViewport').focus({preventScroll: true});
-      });
-      lastFrame = 0; requestAnimationFrame(frame);
+      fit(); select(state.selected);
+      resizeObserver.observe($('#tmViewport'));
+      lastFrame = 0;
+      frameId = requestAnimationFrame(frame);
       if (state.live) startPolling();
     } else {
       stopPolling();
-      if (root) root.hidden = true;
-      document.documentElement.classList.remove('tm-active');
+      cancelAnimationFrame(frameId); frameId = null;
+      resizeObserver?.disconnect();
+      // Keep the map beneath the system popup, without background work.
     }
   }
   const show = () => window.sailNavigate?.('factory');
   const hide = () => window.sailNavigate?.('home');
   window.sailToolsMap = {show, hide};
   window.sailFactory = {show, hide};
-  window.addEventListener('sail:page', (event) => apply(event.detail === 'factory'));
+  window.addEventListener('sail:page', (event) => apply(event.detail === 'factory' || event.detail === 'dialogue'));
   document.getElementById('openFactorySettings')?.addEventListener('click', show);
   // Retire the browser-wide style preference; Factory now owns this workspace.
   try { localStorage.removeItem('sail_ui_style'); } catch (_) {}
-  apply(window.sailCurrentPage?.() === 'factory');
+  apply(!window.sailCurrentPage || ['factory', 'dialogue'].includes(window.sailCurrentPage()));
 })();
