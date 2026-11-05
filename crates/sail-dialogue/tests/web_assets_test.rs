@@ -1,7 +1,7 @@
 //! Guards the Dialogue static route table. `index.html` is served with every asset it
 //! references, so a page that references a file with no route silently 404s in the
-//! running program instead of failing a build. That happened with `/factory.js`: the
-//! room never mounted because the browser could not fetch it.
+//! running program instead of failing a build. Factory uses the shared Tools Map
+//! assets and must not request the retired room renderer.
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -45,9 +45,10 @@ fn include_path_for(asset: &str) -> Option<String> {
 fn every_referenced_asset_has_a_static_route() {
     let assets = referenced_assets(INDEX);
     assert!(
-        assets.contains("factory.js"),
-        "index.html should load the factory room: {assets:?}"
+        assets.contains("toolsmap.js") && assets.contains("toolsmap.css"),
+        "index.html should load the Factory tools map: {assets:?}"
     );
+    assert!(!assets.contains("factory.js"), "the old Factory renderer is retired");
     let missing: Vec<&String> = assets
         .iter()
         .filter(|asset| !SERVER.contains(&format!("\"/{asset}\"")))

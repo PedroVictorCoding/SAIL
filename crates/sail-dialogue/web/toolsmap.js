@@ -1,11 +1,8 @@
 'use strict';
-// SAIL Tools Map: an alternative full-window interface that shows SAIL as an isometric
-// map of its subsystems, with live host metrics, tasks and activity. Chosen in
-// Settings → General → Interface style; the classic dashboard keeps running underneath,
-// so voice, approvals and the text composer still work while the map is shown.
+// Factory uses the Tools Map workspace. Visibility follows the shared page router;
+// voice, approvals and the text composer continue running underneath.
 
 (() => {
-  const STORE_KEY = 'sail_ui_style';
   const SVGNS = 'http://www.w3.org/2000/svg';
   const S = 46;                       // world unit in px
   const C = Math.cos(Math.PI / 6), N = Math.sin(Math.PI / 6);
@@ -194,9 +191,10 @@
         el('p', {class: 'tm-sidecard-sub', id: 'tmUptime', text: ''}),
         el('div', {class: 'tm-sidecard-actions'},
           el('button', {class: 'tm-btn', type: 'button', onclick: openSettings}, icon('settings'), 'Settings'),
-          el('button', {class: 'tm-btn', type: 'button', onclick: () => setStyle('classic')}, 'Classic view'))));
+          el('button', {class: 'tm-btn', type: 'button', onclick: () => window.sailNavigate?.('home')}, 'Home'))));
 
     const top = el('header', {class: 'tm-top'},
+      el('button', {class: 'tm-btn tm-home', type: 'button', onclick: hide}, icon('home'), 'Home'),
       el('div', {class: 'tm-crumbs'},
         el('h1', {}, el('span', {id: 'tmCrumb', text: 'Forge'}), el('span', {class: 'tm-crumb-sep', text: ' / '}), 'Tools Map'),
         el('p', {text: 'Spatial orchestration of SAIL’s tools, models and agents'})),
@@ -206,7 +204,7 @@
         el('input', {id: 'tmAskInput', type: 'search', placeholder: 'Ask SAIL or run a command…', autocomplete: 'off', maxlength: '2000'}),
         el('kbd', {text: 'Ctrl K'})),
       el('ul', {class: 'tm-meters', id: 'tmMeters', 'aria-label': 'Host resources'}),
-      el('button', {class: 'tm-bell', type: 'button', id: 'tmBell', 'aria-label': 'Approvals', onclick: () => { setStyle('classic'); window.sailNavigate?.('guardian'); }},
+      el('button', {class: 'tm-bell', type: 'button', id: 'tmBell', 'aria-label': 'Approvals', onclick: () => { window.sailNavigate?.('guardian'); }},
         icon('guardian'), el('span', {class: 'tm-badge', id: 'tmBellCount', hidden: true})),
       el('span', {class: 'tm-avatar', 'aria-hidden': 'true'}));
 
@@ -631,7 +629,7 @@
           onkeydown: (e) => { const i = tabs.indexOf(t); const j = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : null; if (j !== null) { setTab(tabs[(j + tabs.length) % tabs.length]); $(`#tmTab-${state.tab}`)?.focus(); } }},
           t[0].toUpperCase() + t.slice(1)))),
       el('div', {class: 'tm-insp-body', id: 'tmTabPanel', role: 'tabpanel', 'aria-labelledby': `tmTab-${state.tab}`}, tabBody(s)),
-      el('button', {class: 'tm-open', type: 'button', onclick: () => { setStyle('classic'); window.sailNavigate?.(s.page); }}, 'Open in Workspace ', el('span', {'aria-hidden': 'true', text: '↗'})));
+      el('button', {class: 'tm-open', type: 'button', onclick: () => { window.sailNavigate?.(s.page); }}, 'Open in Workspace ', el('span', {'aria-hidden': 'true', text: '↗'})));
     const body = insp.querySelector('.tm-insp-body'); if (body) body.scrollTop = scroll;
     if (hadFocus) document.getElementById(hadFocus)?.focus();
   }
@@ -737,7 +735,11 @@
     render();
   }
   function navTo(target) {
-    if (target === 'home' || target === 'workspace') { setStyle('classic'); window.sailNavigate?.(target === 'home' ? 'home' : 'spaces'); return; }
+    if (target === 'home' || target === 'workspace') {
+      if (target === 'workspace') apply(false);
+      window.sailNavigate?.(target === 'home' ? 'home' : 'spaces');
+      return;
+    }
     select(target);
   }
   function toggleLive() {
@@ -771,14 +773,8 @@
   }
   function openSettings() { (document.getElementById('settingsOpen') || document.getElementById('settingsRail'))?.click(); }
 
-  // ------------------------------------------------------------------ switching
-  function setStyle(style) {
-    try { localStorage.setItem(STORE_KEY, style); } catch (_) {}
-    apply(style);
-  }
-  function apply(style) {
-    const on = style === 'tools-map';
-    document.querySelectorAll('[data-ui-style]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.uiStyle === style ? 'true' : 'false'));
+  // ------------------------------------------------------------------ routing
+  function apply(on) {
     if (on === state.on) return;
     state.on = on;
     if (on) {
@@ -786,7 +782,11 @@
       root.hidden = false;
       document.documentElement.classList.add('tm-active');
       setMode(state.mode);
-      requestAnimationFrame(() => { fit(); select(state.selected); });
+      requestAnimationFrame(() => {
+        if (!state.on) return;
+        fit(); select(state.selected);
+        $('#tmViewport').focus({preventScroll: true});
+      });
       lastFrame = 0; requestAnimationFrame(frame);
       if (state.live) startPolling();
     } else {
@@ -795,13 +795,13 @@
       document.documentElement.classList.remove('tm-active');
     }
   }
-  window.sailToolsMap = {show: () => setStyle('tools-map'), hide: () => setStyle('classic')};
-
-  document.querySelectorAll('[data-ui-style]').forEach((b) => b.addEventListener('click', () => {
-    setStyle(b.dataset.uiStyle);
-    if (b.dataset.uiStyle === 'tools-map') document.querySelector('#contextSheet .close-sheet')?.click();
-  }));
-  let saved = 'classic';
-  try { saved = localStorage.getItem(STORE_KEY) || 'classic'; } catch (_) {}
-  apply(saved);
+  const show = () => window.sailNavigate?.('factory');
+  const hide = () => window.sailNavigate?.('home');
+  window.sailToolsMap = {show, hide};
+  window.sailFactory = {show, hide};
+  window.addEventListener('sail:page', (event) => apply(event.detail === 'factory'));
+  document.getElementById('openFactorySettings')?.addEventListener('click', show);
+  // Retire the browser-wide style preference; Factory now owns this workspace.
+  try { localStorage.removeItem('sail_ui_style'); } catch (_) {}
+  apply(window.sailCurrentPage?.() === 'factory');
 })();

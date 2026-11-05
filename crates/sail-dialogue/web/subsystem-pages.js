@@ -12,9 +12,9 @@ const subsystemPages = [
     "panel": null,
     "settings": null,
     "details": [
-      "Every subsystem is a fixed station on one floor",
-      "Hover to peek, click for the station inspector",
-      "Drag to pan, scroll to zoom, backslash for the room directory"
+      "Subsystems and their connections on one map",
+      "Select a station to inspect its status and tasks",
+      "Pan and zoom the map, or switch to the list view"
     ]
   },
   {
