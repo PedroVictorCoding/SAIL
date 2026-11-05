@@ -1,4 +1,4 @@
-/* SAIL Tools Map — alternative interface (Settings → General → Interface style).
+/* SAIL Tools Map — Factory workspace (also accessible from Settings → General).
    Dark graphite industrial look with SAIL's orange accent; isometric scene drawn in SVG. */
 html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-root {
@@ -277,6 +277,9 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-histo { display: flex; align-items: flex-end; gap: 2px; height: 72px; }
 .tm-histo span { flex: 1; background: #3a2617; border-radius: 1px; }
 .tm-histo span.on { background: var(--tm-accent); }
+
+/* Keep the route exit available when the map sidebar is collapsed. */
+.tm-home { min-height: 44px; }
 
 /* ------------------------------------------------------------ responsive */
 @media (max-width: 1380px) {

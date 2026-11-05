@@ -1,9 +1,8 @@
-"""Verifies the factory room in a real headless browser.
+"""Verifies the Factory tools map in a real headless browser.
 
 Serves `crates/sail-dialogue/web` the way Dialogue does (index.html plus the static
-files the page requests), opens the Factory route, and checks the room actually
-renders: floor painted, every station hit-testable, inspector populated, and the
-route teardown clean.
+files the page requests), verifies Factory and Settings share the Tools Map,
+and checks station navigation, browser history, reloads and mobile exit controls.
 
 Run with: .venv-voice/bin/python scripts/factory_browser_test.py [screenshot.png]
 """
@@ -59,82 +58,56 @@ with sync_playwright() as p:
     page.goto(base, wait_until="load")
     page.wait_for_function("window.sailFactory !== undefined")
 
-    # Nothing mounts on Home: the room belongs to its own route.
-    assert page.evaluate("!!document.getElementById('factoryFloor')") is False
-    assert page.evaluate("Array.from(document.querySelectorAll('[data-page]')).some(l => l.dataset.page === 'factory')"), \
-        "the room needs an entry in the room directory"
+    # Factory uses the Settings map, without restoring a global style override.
+    assert page.locator('#factoryFloor').count() == 0
+    assert page.locator('[data-ui-style]').count() == 0
+    page.evaluate("localStorage.setItem('sail_ui_style', 'tools-map')")
+    page.reload(wait_until="load")
+    assert page.locator('#toolsMap').count() == 0
+    assert page.evaluate("localStorage.getItem('sail_ui_style')") is None
 
-    page.evaluate("window.sailFactory.show()")
-    page.wait_for_selector("#factoryFloor", timeout=5000)
-    page.wait_for_timeout(400)
+    page.click('[data-page="factory"]')
+    page.wait_for_selector('#toolsMap')
+    assert page.evaluate('location.hash') == '#factory'
+    assert page.locator('.tm-label').count() == 13
+    assert page.locator('#factoryCanvas').count() == 0
+    assert page.title() == 'SAIL — Factory'
+    page.locator('.tm-nav-item[data-nav="mind"]').click()
+    assert page.locator('.tm-label[data-station="mind"]').get_attribute('aria-pressed') == 'true'
+    page.locator('.tm-open').click()
+    page.wait_for_function("location.hash === '#mind'")
+    page.wait_for_selector('#toolsMap', state='hidden')
+    page.go_back()
+    page.wait_for_selector('#toolsMap')
+    assert page.locator('#toolsMap').count() == 1
 
-    room = page.evaluate(
-        """() => {
-            const canvas = document.getElementById('factoryCanvas');
-            const rect = canvas.getBoundingClientRect();
-            const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
-            const colours = new Set();
-            for (let i = 0; i < data.length; i += 4 * 97) colours.add(`${data[i]},${data[i+1]},${data[i+2]}`);
-            return {
-                width: Math.round(rect.width), height: Math.round(rect.height), colours: colours.size,
-                stations: window.sailFactory.state.registry.length,
-                anchors: window.sailFactory.state.anchors.size,
-            };
-        }"""
-    )
-    assert room["width"] > 600 and room["height"] > 400, room
-    assert room["stations"] >= 12, room
-    assert room["anchors"] == room["stations"], room
-    assert room["colours"] > 6, room
-    assert not [entry for entry in failed if "factory.js" in entry], failed
-
-    # Peek: hovering shows one anchored card, never a floating duplicate.
-    box = page.locator("#factoryCanvas").bounding_box()
-    target = page.evaluate(
-        """() => {
-            const anchor = window.sailFactory.state.anchors.get('forge');
-            return {x: anchor.x, y: anchor.base.y - 6};
-        }"""
-    )
-    page.mouse.move(box["x"] + target["x"], box["y"] + target["y"])
-    page.wait_for_timeout(250)
-    assert page.evaluate("window.sailFactory.state.hover?.id || ''") == "forge"
-    assert page.is_visible("#factorySpec")
-
-    # Bloom: the inspector becomes that station's detail column.
-    page.mouse.click(box["x"] + target["x"], box["y"] + target["y"])
-    page.wait_for_timeout(300)
-    assert page.evaluate("window.sailFactory.state.selected?.id || ''") == "forge"
-    assert page.is_visible("#factoryInspector")
-    assert page.inner_text("#factoryInspectorTitle") == "FORGE"
-    assert page.evaluate("document.querySelectorAll('#factoryReadout dt').length") >= 2
-
-    # Scenes and list mode are frame controls, not extra pages.
-    page.click(".factory-scene:nth-child(2)")
-    assert page.inner_text("#factoryCrumb") == "Ops"
-    page.keyboard.press("Escape")
-    assert page.is_hidden("#factoryInspector")
-    page.keyboard.press("Backslash")
-    page.wait_for_timeout(200)
-    assert page.is_visible("#factoryList")
-    page.keyboard.press("Backslash")
-    page.wait_for_timeout(200)
-
-    # Leaving the route restores the normal workspace instead of stacking rooms.
-    page.evaluate("window.sailNavigate('home')")
-    page.wait_for_timeout(300)
-    assert page.evaluate("!!document.getElementById('factoryFloor')") is False
-    page.evaluate("window.sailFactory.show()")
-    page.wait_for_selector("#factoryFloor")
-    page.wait_for_timeout(300)
-
+    page.reload(wait_until="load")
+    page.wait_for_selector('#toolsMap')
     page.screenshot(path=str(SHOT))
-    # Only the room is in scope; other scripts on the page have their own bugs.
-    room_errors = [error for error in errors if "factory" in error.lower()]
-    assert not room_errors, room_errors
-    unrelated = [error for error in errors if "factory" not in error.lower()]
+    page.locator('.tm-sidecard-actions button', has_text='Home').click()
+    page.wait_for_function("location.hash === '#home'")
+    page.wait_for_selector('#toolsMap', state='hidden')
+    page.evaluate("document.getElementById('settingsOpen').click()")
+    page.click('#openFactorySettings')
+    page.wait_for_selector('#toolsMap')
+    assert page.is_hidden('#contextSheet')
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.emulate_media(reduced_motion="reduce")
+    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-mobile.png')))
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.locator('#tmViewport').focus()
+    page.keyboard.press('ArrowRight')
+    assert page.locator('#tmViewport').evaluate('(node) => node === document.activeElement')
+    page.locator('.tm-home').click()
+    page.wait_for_selector('#toolsMap', state='hidden')
+    # Existing reminders.js startup error is outside the Factory implementation.
+    unrelated = [error for error in errors if error == 'createBtn is not defined']
+    assert not [error for error in errors if error not in unrelated], errors
     if unrelated:
-        print(f"unrelated page errors (pre-existing): {unrelated}")
+        print(f"Existing reminders.js startup error observed on {len(unrelated)} loads: {unrelated[0]}")
+    assert not [entry for entry in failed if 'factory.js' in entry], failed
     browser.close()
 
-print(f"factory room OK: {room}; screenshot {SHOT}")
+server.shutdown()
+print(f"Factory tools map routing, Settings, station navigation and mobile checks passed; screenshots: {SHOT}")

@@ -6,15 +6,15 @@ const subsystemPages = [
     "id": "factory",
     "name": "Factory",
     "icon": "spaces",
-    "subtitle": "The room as the index",
-    "description": "One isometric room holding every station. Nothing hidden, nothing floating.",
+    "subtitle": "Live tools map",
+    "description": "Explore SAIL’s subsystems with live host metrics, tasks and recent activity.",
     "card": null,
     "panel": null,
     "settings": null,
     "details": [
-      "Every subsystem is a fixed station on one floor",
-      "Hover to peek, click for the station inspector",
-      "Drag to pan, scroll to zoom, backslash for the room directory"
+      "Subsystems and their connections on one map",
+      "Select a station to inspect its status and tasks",
+      "Pan and zoom the map, or switch to the list view"
     ]
   },
   {
