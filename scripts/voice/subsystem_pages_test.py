@@ -74,7 +74,7 @@ def check_pages(page, url, screenshots=None):
       return !tabs || tabs.top >= title.bottom - 1;
     })""")
     page.evaluate("""window.originalCards = [...document.querySelectorAll('.workspace-grid > article')];""")
-    # Every subsystem opens in the workspace popup over the map, keeping the original cards.
+    # Every subsystem replaces the map in the workspace centre, keeping the original cards.
     for subsystem in ids:
         link = page.locator(f'#subsystemNav a[href="#{subsystem}"]')
         if page.locator("#homePage").is_visible():
@@ -83,7 +83,7 @@ def check_pages(page, url, screenshots=None):
         else:
             page.evaluate(f"sailNavigate('{subsystem}')")
         expect(page.locator("#subsystemTitle")).to_have_text(subsystem.title())
-        expect(page.locator("#tmPop #subsystemPage")).to_be_visible()
+        expect(page.locator("#tmPane #subsystemPage")).to_be_visible()
         expect(page.locator("#homePage")).to_be_hidden()
         assert page.evaluate("document.activeElement.id") == "subsystemTitle"
         assert page.locator('#subsystemNav [aria-current="page"]').count() == 1
@@ -97,9 +97,9 @@ def check_pages(page, url, screenshots=None):
         else:
             expect(page.locator("#subsystemContent > article")).to_be_visible()
 
-    page.keyboard.press("Escape")
-    expect(page.locator("#tmPop")).to_be_hidden()
-    expect(page.locator("#toolsMap")).to_be_visible()
+    page.locator('.tm-nav-item[data-nav="home"]').click()
+    expect(page.locator("#tmPane")).to_be_hidden()
+    expect(page.locator("#tmViewport")).to_be_visible()
     page.goto(url + "/#classic")
     expect(page.locator("#homePage")).to_be_visible()
     assert page.evaluate("originalCards.every(card => card.parentElement.matches('.workspace-grid'))")
@@ -114,13 +114,14 @@ def check_pages(page, url, screenshots=None):
     page.locator("#subsystemSettings").click()
     expect(page.locator('[data-category="models"]')).to_be_visible()
     page.keyboard.press("Escape")
-    expect(page.locator("#tmPop")).to_be_visible()
-    page.keyboard.press("Escape")
-    expect(page.locator("#tmPop")).to_be_hidden()
+    expect(page.locator("#contextSheet")).to_be_hidden()
+    expect(page.locator("#tmPane")).to_be_visible()
+    page.locator('.tm-nav-item[data-nav="home"]').click()
+    expect(page.locator("#tmPane")).to_be_hidden()
     page.locator('.tm-label[data-station="guardian"]').click()
     expect(page.locator("#subsystemTitle")).to_have_text("Guardian")
     page.go_back()
-    expect(page.locator("#tmPop")).to_be_hidden()
+    expect(page.locator("#tmPane")).to_be_hidden()
     page.go_back()
     expect(page.locator("#subsystemTitle")).to_have_text("Mind")
     page.go_forward()
@@ -130,7 +131,7 @@ def check_pages(page, url, screenshots=None):
 
     if screenshots:
         page.screenshot(path=str(screenshots / "guardian-desktop.png"))
-    # Spaces (classic dashboard) still routes into the popup, including card panels.
+    # Spaces (classic dashboard) still routes into the workspace centre, including card panels.
     page.goto(url + "/#classic")
     page.locator("#spacesOpen").click()
     page.locator('#spaceList [data-space="vision"]').click()
@@ -145,11 +146,11 @@ def check_pages(page, url, screenshots=None):
             if subsystem == "classic":
                 expect(page.locator("#homePage")).to_be_visible()
             elif subsystem == "home":
-                expect(page.locator("#tmPop")).to_be_hidden()
+                expect(page.locator("#tmPane")).to_be_hidden()
                 expect(page.locator("#toolsMap")).to_be_visible()
             else:
                 expect(page.locator("#subsystemTitle")).to_have_text(subsystem.title())
-                expect(page.locator("#tmPopClose")).to_be_visible()
+                expect(page.locator("#tmPaneBack")).to_be_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), page.evaluate("""({route:location.hash, width:innerWidth, scroll:document.documentElement.scrollWidth, wide:[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+1).map(el=>[el.id,el.className,el.getBoundingClientRect().right]).slice(0,15)})""")
     if screenshots:
         page.set_viewport_size({"width": 390, "height": 844})
@@ -185,7 +186,7 @@ def main():
     finally:
         server.shutdown()
         server.server_close()
-    print("Subsystem popups, classic dashboard, keyboard navigation, history, settings, card identity, Forge dialog, and mobile layouts passed")
+    print("Subsystem pages in the workspace centre, classic dashboard, keyboard navigation, history, settings, card identity, Forge dialog, and mobile layouts passed")
 
 
 if __name__ == "__main__":

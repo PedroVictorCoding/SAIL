@@ -1,9 +1,10 @@
 'use strict';
 // The Tools Map is SAIL's workspace: the isometric map of subsystems, with the live
 // Dialogue panel (the original #homeView, moved in so voice and the composer keep their
-// state) in the right column. Each system opens in a near-full-screen popup that holds
-// its real controls (#subsystemPage, filled by the shared page router) beside a live
-// status inspector. Visibility follows the router: every route but #classic shows it.
+// state) in the right column. Home shows the map in the centre; any other route replaces
+// it there with that system's real controls (#subsystemPage, filled by the shared page
+// router) beside a live status inspector, or with the Tracker page. Visibility follows
+// the router: every route but #classic shows the workspace.
 
 (() => {
   const SVGNS = 'http://www.w3.org/2000/svg';
@@ -59,7 +60,7 @@
   for (const s of STATIONS) { s.gx = (s.u + s.v) / 2; s.gy = (s.v - s.u) / 2; }
 
   const state = {
-    on: false, built: false, selected: null, popup: null, pending: null, trigger: null, tab: 'overview', mode: 'map',
+    on: false, built: false, selected: null, popup: null, tracker: false, pending: null, trigger: null, tab: 'overview', mode: 'map',
     live: true, paused: false, speed: 1, k: 1, tx: 0, ty: 0,
     metrics: null, mind: null, health: null, guardian: null, approvals: 0, plans: [], reminders: [],
     latency: {}, history: {cpu: [], gpu: [], ram: [], io: []},
@@ -176,7 +177,7 @@
   function linkPath(a, b) { return [[a.gx, a.gy], [b.gx, a.gy], [b.gx, b.gy]]; }
 
   // ------------------------------------------------------------------ build DOM
-  let root, world, svgRoot, pop, popMain, popEmpty, chatSlot, chatMarker, packets = [];
+  let root, world, svgRoot, stage, pane, paneMain, paneEmpty, inspector, trackerHost, chatSlot, chatMarker, packets = [];
   function build() {
     if (state.built) return;
     state.built = true;
@@ -191,7 +192,7 @@
       el('ul', {class: 'tm-nav tm-nav-2'},
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: (e) => openStation('forge', e.currentTarget, 'tasks')}, icon('tasks'), 'Tasks')),
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: () => document.getElementById('terminalRailBtn')?.click()}, icon('terminal'), 'Terminal')),
-        el('li', {}, el('a', {class: 'tm-nav-item', href: '/tracker'}, icon('sense'), 'Tracker'))),
+        navItem('tracker', 'Tracker', 'sense')),
       el('div', {class: 'tm-sidecard'},
         el('p', {class: 'tm-sidecard-title'}, el('span', {class: 'tm-status', id: 'tmCoreDot'}), el('span', {id: 'tmCoreState', text: 'Connecting…'})),
         el('p', {class: 'tm-sidecard-sub', id: 'tmUptime', text: ''}),
@@ -214,7 +215,7 @@
       el('button', {class: 'tm-bell', type: 'button', 'aria-label': 'Settings', onclick: openSettings}, icon('settings')),
       el('span', {class: 'tm-avatar', 'aria-hidden': 'true'}));
 
-    const stage = el('section', {class: 'tm-stage', 'aria-label': 'Subsystem map'},
+    stage = el('section', {class: 'tm-stage', 'aria-label': 'Subsystem map'},
       el('div', {class: 'tm-title'}, el('h2', {}, 'SAIL', el('br'), 'TOOLS MAP'), el('p', {text: 'Live systems, models and tools. Select one to open it.'})),
       el('div', {class: 'tm-viewport', id: 'tmViewport', tabindex: '0', 'aria-label': 'Map. Drag or use arrow keys to pan, plus and minus to zoom.'},
         world = el('div', {class: 'tm-world'})),
@@ -239,28 +240,29 @@
         el('span', {class: 'tm-pill', id: 'tmChatPill'}, el('span', {class: 'tm-status idle'}), 'Connecting')),
       chatSlot = el('div', {class: 'tm-chat-slot'}));
 
-    // System popup. #subsystemPage (the router's page for the route) is its main content.
-    const inspector = el('aside', {class: 'tm-inspector', id: 'tmInspector', 'aria-label': 'System status'});
-    pop = el('div', {class: 'tm-pop', id: 'tmPop', hidden: true, onclick: (e) => { if (e.target === pop) closePopup(); }},
-      el('div', {class: 'tm-pop-frame', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'subsystemTitle'},
-        el('button', {class: 'tm-btn tm-pop-close', type: 'button', id: 'tmPopClose', 'aria-label': 'Close and return to the map', onclick: closePopup},
-          el('span', {'aria-hidden': 'true', text: '×'}), 'Close'),
-        popMain = el('div', {class: 'tm-pop-main'},
-          popEmpty = el('section', {class: 'tm-pop-empty', hidden: true},
-            el('h1', {id: 'tmPopTitle', tabindex: '-1'}), el('p', {id: 'tmPopAbout'}),
-            el('p', {class: 'tm-empty', text: 'This system has no controls in SAIL yet.'}))),
-        inspector));
+    // Centre pane: replaces the map for every route but Home. #subsystemPage (the router's
+    // page for the route) is its main content; the Tracker page loads in a frame.
+    inspector = el('aside', {class: 'tm-inspector', id: 'tmInspector', 'aria-label': 'System status'});
+    pane = el('section', {class: 'tm-pane', id: 'tmPane', hidden: true, 'aria-labelledby': 'subsystemTitle'},
+      el('button', {class: 'tm-btn tm-pane-back', type: 'button', id: 'tmPaneBack', onclick: closePane},
+        el('span', {'aria-hidden': 'true', text: '←'}), 'Map'),
+      paneMain = el('div', {class: 'tm-pane-main'},
+        paneEmpty = el('section', {class: 'tm-pane-empty', hidden: true},
+          el('h1', {id: 'tmPaneTitle', tabindex: '-1'}), el('p', {id: 'tmPaneAbout'}),
+          el('p', {class: 'tm-empty', text: 'This system has no controls in SAIL yet.'}))),
+      inspector,
+      trackerHost = el('div', {class: 'tm-pane-tracker', hidden: true}));
     const activity = el('section', {class: 'tm-activity', 'aria-label': 'Live activity'},
       el('div', {class: 'tm-activity-head'}, el('span', {class: 'tm-bolt', 'aria-hidden': 'true', text: '⚡'}),
         el('div', {}, el('h2', {text: 'Live Activity'}), el('p', {text: 'Real-time events across SAIL'}))),
       el('ol', {class: 'tm-activity-list', id: 'tmActivity'}),
       el('div', {class: 'tm-histo', id: 'tmHisto', 'aria-hidden': 'true'}));
 
-    root.append(nav, top, stage, chat, activity, pop);
+    root.append(nav, top, stage, pane, chat, activity);
     // Inside #appShell so the moved Dialogue panel keeps its state-driven styles.
     (document.getElementById('appShell') || document.body).append(root);
     const page = document.getElementById('subsystemPage');
-    if (page) popMain.prepend(page);
+    if (page) paneMain.prepend(page);
     buildWorld();
     bindViewport();
     document.addEventListener('keydown', (e) => {
@@ -338,7 +340,7 @@
     for (const s of STATIONS) {
       const [lx, ly] = P(s.gx, s.gy, s.kind === 'core' ? 2.7 : 2.9);
       labels.append(el('button', {class: `tm-label${s.kind === 'core' ? ' core' : ''}`, type: 'button', 'data-station': s.id, 'aria-pressed': 'false',
-        style: `left:${lx - minX}px;top:${ly - minY}px`, 'aria-haspopup': 'dialog', onclick: (e) => openStation(s.id, e.currentTarget)},
+        style: `left:${lx - minX}px;top:${ly - minY}px`, onclick: (e) => openStation(s.id, e.currentTarget)},
         s.kind === 'core' ? el('span', {class: 'tm-status', 'data-status': s.id}) : el('span', {class: 'tm-label-icon'}, icon(s.kind === 'forge' ? 'forge' : s.icon)),
         el('span', {class: 'tm-label-text'},
           el('strong', {}, s.name, s.kind !== 'core' ? el('span', {class: 'tm-status small', 'data-status': s.id}) : null),
@@ -357,7 +359,7 @@
   }
   function labelScale() { return Math.max(state.k, innerWidth < 860 ? 0.62 : 0.95) / state.k; }
   function fit() {
-    const vp = $('#tmViewport'); if (!vp || !state.world) return;
+    const vp = $('#tmViewport'); if (!vp || !state.world || !vp.clientWidth) return;
     const xs = STATIONS.flatMap((s) => [P(s.gx - 3, s.gy + 3)[0], P(s.gx + 3, s.gy - 3)[0]]);
     const ys = STATIONS.flatMap((s) => [P(s.gx - 3, s.gy - 3, 3.2)[1], P(s.gx + 3, s.gy + 3)[1]]);
     const bx0 = Math.min(...xs) - state.world.minX, bx1 = Math.max(...xs) - state.world.minX;
@@ -752,11 +754,11 @@
     state.selected = id;
     for (const l of root.querySelectorAll('.tm-label')) l.setAttribute('aria-pressed', l.dataset.station === id ? 'true' : 'false');
     for (const n of root.querySelectorAll('.tm-nav-item[data-nav]')) {
-      const on = n.dataset.nav === (state.popup || 'home');
+      const on = n.dataset.nav === current();
       n.classList.toggle('selected', on);
       if (on) n.setAttribute('aria-current', 'page'); else n.removeAttribute('aria-current');
     }
-    $('#tmCrumb').textContent = state.popup ? byId[state.popup].name : 'SAIL';
+    $('#tmCrumb').textContent = state.tracker ? 'Tracker' : state.popup ? byId[state.popup].name : 'SAIL';
     svgRoot.querySelectorAll('.tm-station').forEach((g) => g.classList.toggle('selected', g.dataset.station === id));
     render();
   }
@@ -768,56 +770,74 @@
     render();
   }
   function navTo(target, trigger) {
-    if (target === 'home') { if (state.popup) closePopup(); else { select(null); fit(); } return; }
+    if (target === 'home') { if (!pane.hidden) closePane(); else { select(null); fit(); } return; }
+    if (target === 'tracker') { state.trigger = trigger || document.activeElement; window.sailNavigate?.('tracker'); return; }
     openStation(target, trigger);
   }
+  // The sidebar entry for what the centre shows.
+  function current() { return state.tracker ? 'tracker' : state.popup || 'home'; }
 
-  // ------------------------------------------------------------------ system popup
+  // ------------------------------------------------------------------ centre pane
   // Stations with a page go through the router (#mind, #forge…) so links, reloads and
   // Back work; the router fills #subsystemPage and announces the route on `sail:page`.
   function openStation(id, trigger, tab = 'overview') {
     const s = byId[id]; if (!s) return;
     state.trigger = trigger || document.activeElement;
     state.tab = tab;
-    if (!s.page) { openPopup(id, false); $('#tmPopTitle').focus({preventScroll: true}); return; }
+    if (!s.page) {
+      // No page and no route: show it in place without leaving Home's address.
+      if (window.sailCurrentPage?.() !== 'home') window.sailNavigate?.('home');
+      showStation(id, false); $('#tmPaneTitle').focus({preventScroll: true}); return;
+    }
     state.pending = id;
     window.sailNavigate?.(s.page);
   }
-  function openPopup(id, routed) {
-    popEmpty.hidden = routed;
+  function showPane(mode) {
+    const opening = pane.hidden;
+    pane.dataset.mode = mode;
+    paneMain.hidden = inspector.hidden = mode === 'tracker';
+    trackerHost.hidden = mode !== 'tracker';
+    pane.setAttribute('aria-labelledby', mode === 'tracker' ? 'tmTrackerLabel' : paneEmpty.hidden ? 'subsystemTitle' : 'tmPaneTitle');
+    if (opening) {
+      pane.hidden = false; stage.hidden = true;
+      document.documentElement.classList.add('tm-pane-open');
+    }
+  }
+  function showStation(id, routed) {
+    paneEmpty.hidden = routed;
     const page = document.getElementById('subsystemPage');
     if (page) page.hidden = !routed;
-    if (!routed) { $('#tmPopTitle').textContent = byId[id].name; $('#tmPopAbout').textContent = byId[id].about; }
-    pop.firstElementChild.setAttribute('aria-labelledby', routed ? 'subsystemTitle' : 'tmPopTitle');
-    if (state.popup !== id || pop.hidden) popMain.scrollTop = 0;
-    if (pop.hidden) {
-      pop.hidden = false;
-      for (const n of root.children) if (n !== pop) n.inert = true;
-      document.documentElement.classList.add('tm-pop-open');
-    }
+    if (!routed) { $('#tmPaneTitle').textContent = byId[id].name; $('#tmPaneAbout').textContent = byId[id].about; }
+    if (state.popup !== id || pane.hidden || state.tracker) paneMain.scrollTop = 0;
+    state.tracker = false;
+    showPane('station');
     state.popup = id;
     select(id);
   }
-  function hidePopup() {
-    if (pop.hidden) return;
-    pop.hidden = true; state.popup = null;
-    for (const n of root.children) n.inert = false;
-    document.documentElement.classList.remove('tm-pop-open');
+  function showTracker() {
+    if (!trackerHost.firstChild) {
+      trackerHost.append(
+        el('span', {class: 'tm-sr', id: 'tmTrackerLabel', text: 'Tracker'}),
+        el('iframe', {class: 'tm-tracker-frame', id: 'tmTracker', src: '/tracker', title: 'Tracker'}));
+    }
+    state.popup = null; state.tracker = true;
+    showPane('tracker');
+    select(null);
+  }
+  function hidePane() {
+    if (pane.hidden) return;
+    pane.hidden = true; stage.hidden = false;
+    state.popup = null; state.tracker = false;
+    document.documentElement.classList.remove('tm-pane-open');
     select(state.selected);
-    const back = state.trigger?.isConnected && !state.trigger.closest('.tm-pop') ? state.trigger : $('#tmViewport');
+    const back = state.trigger?.isConnected && stage.contains(state.trigger) ? state.trigger : $('#tmViewport');
     state.trigger = null;
     back?.focus({preventScroll: true});
   }
-  function closePopup() {
-    if (pop.hidden) return;
-    if (window.sailCurrentPage?.() !== 'home') window.sailNavigate?.('home'); else hidePopup();
+  function closePane() {
+    if (pane.hidden) return;
+    if (window.sailCurrentPage?.() !== 'home') window.sailNavigate?.('home'); else hidePane();
   }
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || !state.on || !pop || pop.hidden || e.defaultPrevented) return;
-    // Settings, Spaces and dialogs opened from a system close first.
-    if (document.querySelector('.sheet:not([hidden]), dialog[open]')) return;
-    e.preventDefault(); closePopup();
-  });
 
   // ------------------------------------------------------------------ Dialogue column
   function showChat(on) {
@@ -873,7 +893,7 @@
       if (state.live) startPolling();
     } else {
       stopPolling();
-      if (root) { hidePopup(); root.hidden = true; }
+      if (root) { hidePane(); root.hidden = true; }
       showChat(false);
       for (const n of document.querySelectorAll('.dashboard-header, .dashboard-layout')) n.inert = false;
       document.documentElement.classList.remove('tm-active');
@@ -882,12 +902,18 @@
   function route(page) {
     apply(page !== 'classic');
     if (!state.on) return;
-    if (page === 'home') { state.pending = null; hidePopup(); return; }
+    if (page === 'home') { state.pending = null; hidePane(); return; }
+    if (page === 'tracker') {
+      const requested = !!state.trigger;
+      state.pending = null; showTracker();
+      if (requested) $('#tmTracker').focus({preventScroll: true});
+      return;
+    }
     // Two stations can share a page (Memory and Arena); keep the one that was chosen.
     const pending = state.pending && byId[state.pending].page === page ? state.pending : null;
-    const current = !pop.hidden && state.popup && byId[state.popup].page === page ? state.popup : null;
+    const shown = !pane.hidden && state.popup && byId[state.popup].page === page ? state.popup : null;
     state.pending = null;
-    openPopup(pending || current || PAGE_STATION[page] || 'core', true);
+    showStation(pending || shown || PAGE_STATION[page] || 'core', true);
   }
   const show = () => window.sailNavigate?.('home');
   const hide = () => window.sailNavigate?.('classic');

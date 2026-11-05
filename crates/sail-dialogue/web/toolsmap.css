@@ -297,25 +297,28 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-chat .conversation { padding: 8px 0 10px; border-top: 1px solid var(--tm-line); }
 .tm-chat .composer { margin-top: 8px; }
 
-/* ------------------------------------------------------------ system popup */
-html.tm-pop-open .tm-root { overflow: hidden; }
-.tm-pop { position: fixed; inset: 0; z-index: 20; display: flex; padding: 18px; background: rgba(6, 7, 9, 0.72); }
-.tm-pop[hidden] { display: none; }
-.tm-pop-frame {
-  flex: 1; min-width: 0; min-height: 0; display: grid; gap: 12px 16px; padding: 20px 20px 18px 24px;
-  grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: auto minmax(0, 1fr);
-  grid-template-areas: "main close" "main insp";
-  background: var(--tm-bg); border: 1px solid #3a3e44; border-radius: 16px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+/* ------------------------------------------------------------ centre pane */
+/* Replaces the map in the centre for every route but Home. */
+.tm-stage[hidden], .tm-pane[hidden] { display: none; }
+.tm-pane {
+  grid-area: stage; min-width: 0; min-height: 0; display: grid; gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: minmax(0, 1fr); grid-template-areas: "main insp";
+  padding: 18px 16px 16px 22px; border: 1px solid var(--tm-line); border-radius: 12px;
+  background: radial-gradient(ellipse 70% 60% at 55% 40%, #1a1d21, var(--tm-stage) 70%);
 }
-.tm-pop-close { grid-area: close; justify-self: end; min-height: 40px; }
-.tm-pop-close span { font-size: 20px; line-height: 1; }
-.tm-pop-main { grid-area: main; min-height: 0; overflow-y: auto; padding-right: 6px; scrollbar-width: thin; scrollbar-color: #3b4148 transparent; }
-.tm-pop-main .subsystem-page { max-width: 1200px; }
-.tm-pop-empty h1 { margin: 0 0 8px; font-size: 28px; }
-.tm-pop-empty p { color: var(--tm-muted); }
-.tm-pop .tm-inspector { grid-area: insp; }
-/* The popup's Close button replaces the page's own way back. */
-.tm-pop .subsystem-back { display: none; }
+.tm-pane[data-mode="tracker"] { grid-template-columns: minmax(0, 1fr); grid-template-areas: "trk"; padding: 0; overflow: hidden; }
+.tm-pane-back { display: none; grid-area: back; justify-self: start; min-height: 44px; }
+.tm-pane-back span { font-size: 18px; line-height: 1; }
+.tm-pane-main { grid-area: main; min-height: 0; overflow-y: auto; padding-right: 6px; scrollbar-width: thin; scrollbar-color: #3b4148 transparent; }
+.tm-pane-main[hidden], .tm-pane .tm-inspector[hidden], .tm-pane-tracker[hidden] { display: none; }
+.tm-pane-main .subsystem-page { max-width: 1200px; }
+.tm-pane-empty h1 { margin: 0 0 8px; font-size: 28px; }
+.tm-pane-empty p { color: var(--tm-muted); }
+.tm-pane .tm-inspector { grid-area: insp; }
+/* Home in the sidebar replaces the page's own way back. */
+.tm-pane .subsystem-back { display: none; }
+.tm-pane-tracker { grid-area: trk; min-height: 0; display: flex; }
+.tm-tracker-frame { flex: 1; width: 100%; height: 100%; border: 0; border-radius: 12px; background: var(--tm-stage); }
 
 /* ------------------------------------------------------------ responsive */
 @media (max-width: 1380px) {
@@ -332,22 +335,21 @@ html.tm-pop-open .tm-root { overflow: hidden; }
   .tm-histo { display: none; }
 }
 @media (max-width: 1100px) {
-  .tm-pop-frame { grid-template-columns: minmax(0, 1fr) 300px; }
+  .tm-pane { grid-template-columns: minmax(0, 1fr) 280px; }
 }
 @media (max-width: 860px) {
   .tm-chat { height: 78svh; min-height: 520px; }
-  .tm-pop { padding: 0; }
-  .tm-pop-frame {
-    grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; grid-template-areas: "close" "main" "insp";
-    overflow-y: auto; padding: 12px 14px; border-radius: 0; border: 0;
-  }
-  .tm-pop-main { min-height: auto; overflow: visible; padding: 0; }
+  .tm-pane { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; grid-template-areas: "back" "main" "insp"; padding: 12px; min-height: auto; }
+  .tm-pane[data-mode="tracker"] { grid-template-rows: auto 80svh; grid-template-areas: "back" "trk"; padding: 8px; }
+  .tm-pane-back { display: inline-flex; }
+  .tm-pane-main { min-height: auto; overflow: visible; padding: 0; }
   .tm-root {
     grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 60vh auto auto;
     grid-template-areas: "top" "stage" "insp" "act"; padding: 0 8px 8px; overflow-y: auto; gap: 8px;
   }
   .tm-side { display: none; }
   .tm-avatar { display: none; }
+  html.tm-pane-open .tm-root { grid-template-rows: auto auto auto auto; }
   .tm-top { flex-wrap: wrap; gap: 8px; padding: 8px 0; }
   .tm-ask { order: 3; max-width: none; flex-basis: 100%; }
   .tm-title { display: none; }

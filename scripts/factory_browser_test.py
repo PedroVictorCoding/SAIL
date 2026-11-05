@@ -2,8 +2,9 @@
 
 Serves `crates/sail-dialogue/web` the way Dialogue does (index.html plus the static
 files the page requests) and checks that the map is the default workspace with
-Dialogue beside it, that systems open in the popup (history, direct links, focus,
-Settings and dialogs above it), the classic dashboard exit, and mobile layout.
+Dialogue beside it, that systems and the Tracker replace the map in the centre
+(history, direct links, focus, Settings and dialogs), the classic dashboard exit,
+and mobile layout.
 
 Run with: .venv-voice/bin/python scripts/factory_browser_test.py [screenshot.png]
 """
@@ -26,6 +27,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/vendor/") and "/xterm/" not in self.path:
             self.path = "/vendor/xterm/" + self.path.split("/")[-1]
+        if self.path == "/tracker":
+            self.path = "/tracker.html"
         if self.path == "/icons.svg":
             body = ICONS.read_bytes()
             self.send_response(200)
@@ -59,7 +62,7 @@ with sync_playwright() as p:
     page.goto(base, wait_until="load")
     page.wait_for_function("window.sailFactory !== undefined")
 
-    # The Tools Map is the default workspace, with the live Dialogue panel beside it.
+    # Home: the Tools Map in the centre, with the live Dialogue panel beside it.
     page.wait_for_selector('#toolsMap')
     assert page.evaluate('location.hash') in ('', '#home')
     assert page.title() == 'SAIL — Workspace'
@@ -68,75 +71,106 @@ with sync_playwright() as p:
     assert page.evaluate("localStorage.getItem('sail_ui_style')") is None
     assert page.locator('.tm-label').count() == 13
     assert page.locator('#tmChat #homeView #textForm').count() == 1
-    assert page.locator('#tmInspector').count() == 1
-    page.wait_for_selector('#tmPop', state='hidden')
-    page.locator('#textInput').fill('hello')
+    assert page.is_hidden('#tmPane') and page.is_visible('#tmViewport')
+    assert page.locator('.tm-nav-item[data-nav="home"]').get_attribute('aria-current') == 'page'
+
+    def centre_box(selector):
+        return page.locator(selector).bounding_box()
+
+    map_box = centre_box('.tm-stage')
+
+    # A station replaces the map in the centre with its real controls and status;
+    # the sidebar, header, Dialogue and activity stay put and usable.
+    page.locator('.tm-label[data-station="mind"]').click()
+    page.wait_for_selector('#tmPane')
+    page.wait_for_function("location.hash === '#mind'")
+    assert page.is_hidden('.tm-stage')
+    assert page.locator('#tmPane #subsystemTitle').inner_text() == 'Mind'
+    assert page.evaluate('document.activeElement.id') == 'subsystemTitle'
+    assert page.locator('#tmPane #modelsCard').is_visible()
+    assert page.locator('#tmInspector h2').inner_text() == 'Mind'
+    assert centre_box('#tmPane') == map_box, (centre_box('#tmPane'), map_box)
+    assert page.locator('.tm-nav-item[data-nav="mind"]').get_attribute('aria-current') == 'page'
+    assert page.locator('#tmCrumb').inner_text() == 'Mind'
+    assert page.locator('#tmPaneBack').is_hidden()  # Home in the sidebar leads back
+    page.locator('#textInput').fill('still usable beside a system')
     assert page.locator('#textInput').evaluate('(n) => n === document.activeElement')
     page.locator('#textInput').fill('')
-
-    # A station opens its system in the popup, with its real controls and status.
-    page.locator('.tm-label[data-station="mind"]').click()
-    page.wait_for_function("location.hash === '#mind'")
-    page.wait_for_selector('#tmPop')
-    assert page.locator('#tmPop #subsystemTitle').inner_text() == 'Mind'
-    assert page.evaluate('document.activeElement.id') == 'subsystemTitle'
-    assert page.locator('#tmPop #modelsCard').is_visible()
-    assert page.locator('#tmInspector h2').inner_text() == 'Mind'
-    assert page.evaluate("document.getElementById('tmChat').inert")
-    box = page.locator('.tm-pop-frame').bounding_box()
-    assert box['width'] > 1440 * 0.9 and box['height'] > 900 * 0.9, box
     page.keyboard.press('Escape')
-    page.wait_for_function("location.hash === '#home'")
-    page.wait_for_selector('#tmPop', state='hidden')
-    assert page.evaluate("document.activeElement.dataset.station") == 'mind'
-    assert not page.evaluate("document.getElementById('tmChat').inert")
+    assert page.is_visible('#tmPane'), 'Escape no longer leaves a system'
 
-    # Stations sharing a page keep their own inspector; Close returns to the map.
+    # Sidebar entries switch the centre directly; Home brings the map back.
+    page.locator('.tm-nav-item[data-nav="guardian"]').click()
+    page.wait_for_function("document.querySelector('#tmInspector h2')?.textContent === 'Guardian'")
+    assert page.evaluate('location.hash') == '#guardian'
+    page.locator('.tm-nav-item[data-nav="home"]').click()
+    page.wait_for_selector('#tmPane', state='hidden')
+    assert page.is_visible('#tmViewport') and page.evaluate('location.hash') == '#home'
+
+    # Stations sharing a page keep their own inspector.
     page.locator('.tm-label[data-station="memory"]').click()
-    page.wait_for_function("location.hash === '#arena'")
     page.wait_for_function("document.querySelector('#tmInspector h2')?.textContent === 'Memory'")
-    page.locator('#tmPopClose').click()
-    page.wait_for_selector('#tmPop', state='hidden')
+    assert page.evaluate('location.hash') == '#arena'
+    page.locator('.tm-nav-item[data-nav="home"]').click()
+    page.wait_for_selector('#tmPane', state='hidden')
+    assert page.evaluate("document.activeElement.dataset.station") == 'memory'
 
-    # Systems without a page still open, without changing the route.
+    # Systems without a page still show in the centre, without changing the route.
     page.locator('.tm-label[data-station="entertainment"]').click()
-    assert page.is_visible('#tmPop') and page.is_visible('#tmPopTitle')
+    assert page.is_visible('#tmPane') and page.is_visible('#tmPaneTitle')
     assert page.is_hidden('#subsystemPage')
     assert page.evaluate('location.hash') == '#home'
-    page.keyboard.press('Escape')
-    page.wait_for_selector('#tmPop', state='hidden')
+    page.locator('.tm-nav-item[data-nav="home"]').click()
+    page.wait_for_selector('#tmPane', state='hidden')
 
-    # Sidebar entries open systems; Tasks opens Forge on its task list.
+    # Tracker loads in the centre too, without its own way back to SAIL.
+    page.locator('.tm-nav-item[data-nav="tracker"]').click()
+    page.wait_for_function("location.hash === '#tracker'")
+    page.wait_for_selector('#tmTracker')
+    assert page.title() == 'SAIL — Tracker'
+    assert page.is_hidden('#tmInspector') and page.is_hidden('.tm-pane-main')
+    assert page.locator('.tm-nav-item[data-nav="tracker"]').get_attribute('aria-current') == 'page'
+    frame = page.frame_locator('#tmTracker')
+    frame.locator('#tkRefresh, .tk-head, body').first.wait_for()
+    page.wait_for_function("document.getElementById('tmTracker').contentDocument?.readyState === 'complete'")
+    assert page.evaluate("document.getElementById('tmTracker').contentDocument.querySelector('.tk-back') === null")
+    tracker_box = centre_box('#tmPane')
+    assert tracker_box == map_box, (tracker_box, map_box)
+    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-tracker.png')))
+
+    # Tasks opens Forge on its task list; dialogs from a system work in place.
     page.locator('.tm-nav-item', has_text='Tasks').click()
     page.wait_for_function("document.getElementById('tmTab-tasks')?.getAttribute('aria-selected') === 'true'")
     assert page.evaluate('location.hash') == '#forge'
+    assert page.is_hidden('.tm-pane-tracker')
     page.locator('#forgeQuickEnqueueBtn').click()
     assert page.is_visible('#forgeEnqueueDialog')
     page.keyboard.press('Escape')
-    assert page.is_hidden('#forgeEnqueueDialog') and page.is_visible('#tmPop')
+    assert page.is_hidden('#forgeEnqueueDialog') and page.is_visible('#tmPane')
 
     # Browser history and direct links.
     page.go_back()
-    page.wait_for_selector('#tmPop', state='hidden')
+    page.wait_for_function("location.hash === '#tracker'")
+    page.wait_for_selector('#tmTracker')
+    page.go_back()
+    page.wait_for_selector('#tmPane', state='hidden')
     page.go_forward()
-    page.wait_for_selector('#tmPop')
+    page.wait_for_selector('#tmTracker')
     page.goto(base + '#guardian')
     page.reload(wait_until="load")
-    page.wait_for_selector('#tmPop')
+    page.wait_for_selector('#tmPane')
     assert page.locator('#subsystemTitle').inner_text() == 'Guardian'
-    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-popup.png')))
+    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-system.png')))
 
-    # Settings opened from a system sits above the popup; Escape closes it first.
+    # Settings opened from a system opens above the workspace.
     page.goto(base + '#mind')
     page.wait_for_function("document.getElementById('subsystemTitle').textContent === 'Mind'")
     page.locator('#subsystemSettings').click()
     page.wait_for_selector('[data-category="models"]')
-    assert page.evaluate("""(() => { const r = document.getElementById('contextSheet').getBoundingClientRect();
-      return document.getElementById('contextSheet').contains(document.elementFromPoint(r.left + r.width / 2, r.top + 40)); })()""")
     page.keyboard.press('Escape')
-    assert page.is_hidden('#contextSheet') and page.is_visible('#tmPop')
-    page.keyboard.press('Escape')
-    page.wait_for_selector('#tmPop', state='hidden')
+    assert page.is_hidden('#contextSheet') and page.is_visible('#tmPane')
+    page.locator('.tm-nav-item[data-nav="home"]').click()
+    page.wait_for_selector('#tmPane', state='hidden')
     page.screenshot(path=str(SHOT))
 
     # The classic dashboard stays available and gets its Dialogue panel back.
@@ -145,6 +179,10 @@ with sync_playwright() as p:
     page.wait_for_selector('#toolsMap', state='hidden')
     assert page.is_visible('#homePage')
     assert page.evaluate("document.getElementById('homeView').parentElement.classList.contains('dashboard-layout')")
+    page.locator('#trackerNav').click()
+    page.wait_for_selector('#tmTracker')
+    page.goto(base + '#classic')
+    page.wait_for_selector('#homePage')
     page.evaluate("document.getElementById('settingsOpen').click()")
     page.click('[data-settings-tab="general"]')
     page.click('#openFactorySettings')
@@ -162,11 +200,15 @@ with sync_playwright() as p:
     page.keyboard.press('ArrowRight')
     assert page.locator('#tmViewport').evaluate('(node) => node === document.activeElement')
     page.locator('.tm-label[data-station="guardian"]').click()
-    page.wait_for_selector('#tmPopClose')
+    page.wait_for_selector('#tmPaneBack')  # no sidebar on phones: the pane has its own way back
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-mobile-popup.png')))
-    page.locator('#tmPopClose').click()
-    page.wait_for_selector('#tmPop', state='hidden')
+    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-mobile-system.png')))
+    page.locator('#tmPaneBack').click()
+    page.wait_for_selector('#tmPane', state='hidden')
+    page.goto(base + '#tracker')
+    page.wait_for_selector('#tmTracker')
+    assert page.locator('#tmTracker').bounding_box()['height'] > 500
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     # Existing reminders.js startup error is outside the Factory implementation.
     unrelated = [error for error in errors if error == 'createBtn is not defined']
     assert not [error for error in errors if error not in unrelated], errors
@@ -176,4 +218,4 @@ with sync_playwright() as p:
     browser.close()
 
 server.shutdown()
-print(f"Tools Map workspace, Dialogue column, system popups, history, Settings and mobile checks passed; screenshots: {SHOT}")
+print(f"Tools Map workspace, Dialogue column, centre systems and Tracker, history, Settings and mobile checks passed; screenshots: {SHOT}")
