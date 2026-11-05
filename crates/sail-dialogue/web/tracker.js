@@ -6,6 +6,9 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const PAGE_LOADED = Date.now() / 1000;
+  // Inside the SAIL workspace the sidebar already leads back; a second way home would
+  // load SAIL inside its own frame.
+  if (window.top !== window) document.querySelector('.tk-back')?.remove();
 
   // ------------------------------------------------------------------ state
   let config = null;
