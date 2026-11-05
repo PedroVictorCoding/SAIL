@@ -1004,6 +1004,17 @@ fn tool_correlation(session: &str, epoch: u64) -> uuid::Uuid {
             ^ epoch as u128,
     )
 }
+/// The `best.uri` of a `spotify_find` observation (an object or its JSON text).
+fn spotify_best_uri(output: &Value) -> Option<String> {
+    let parsed = match output.as_str() {
+        Some(text) => serde_json::from_str::<Value>(text).ok()?,
+        None => output.clone(),
+    };
+    parsed["best"]["uri"]
+        .as_str()
+        .filter(|uri| !uri.is_empty())
+        .map(str::to_string)
+}
 async fn execute_scheduled_tool(
     name: impl Into<String>,
     params: Value,
@@ -1452,16 +1463,9 @@ async fn run_turn(
         }
         debug!(fragments,"Speech output queue drained");
     }.instrument(speech_span)));
-    // Music requests with a fixed shape ("play my X playlist", "pause", the "yes" that
-    // confirms a choice) are answered in code in about a second; the rest go to the model.
-    let music = crate::music_fastpath::try_handle(
-        &sail_bridge::spotify::global(),
-        &session,
-        current,
-        &prompt,
-        &crate::vlm::previous_assistant_reply(&messages),
-    )
-    .await;
+    // Music requests with a fixed shape ("play my X playlist", "pause", "next song") are
+    // answered in code in about a second; the rest go to the model.
+    let music = crate::music_fastpath::try_handle(&sail_bridge::spotify::global(), &prompt).await;
     let (reply, _assistant, stats) = match (music, crate::plans::requested_goal(&prompt)) {
         (Some(text), _) => instant_turn(&text, &tx, current, &speech_tx).await,
         (None, Some(goal)) => plan_turn(state.plans.as_ref(), goal, &tx, current, &speech_tx).await,
@@ -1733,8 +1737,6 @@ async fn reason_turn(
     let mut reply = String::new();
     let mut final_assistant = None;
     let mut guard = ToolLoopGuard::new(prompt);
-    // What SAIL asked last turn: music plays only if this named the confirmed item.
-    let previous_reply = crate::vlm::previous_assistant_reply(messages);
     let gen_start = Instant::now();
     let mut first_token_instant: Option<Instant> = None;
     let mut total_token_count = 0usize;
@@ -1985,50 +1987,6 @@ async fn reason_turn(
                             snapshot_image = image;
                             guard.record(name, &params, result.clone());
                             result
-                        } else if name == "spotify_play" || name == "spotify:play" {
-                            // Spoken confirmation is enforced here, not trusted to the model.
-                            let uri = params["uri"].as_str().unwrap_or_default();
-                            let verdict = match &memory {
-                                Some(scope) => crate::media_confirm::authorize(
-                                    scope.session,
-                                    current,
-                                    uri,
-                                    prompt,
-                                    &previous_reply,
-                                ),
-                                None => Err("Not played: music can only be started from a conversation with the owner.".into()),
-                            };
-                            let result = match verdict {
-                                Ok(item) => {
-                                    info!(kind = ?item.kind, "Owner confirmed Spotify playback");
-                                    sail_bridge::spotify::global().confirm(&item.uri);
-                                    emit(
-                                        tx,
-                                        current,
-                                        json!({"type":"tool_started","channel":"voice:vlm","tool":name}),
-                                    )
-                                    .await;
-                                    execute_scheduled_tool(
-                                        name.to_string(),
-                                        params.clone(),
-                                        None,
-                                        correlation,
-                                        tx,
-                                        current,
-                                    )
-                                    .await
-                                }
-                                Err(reason) => {
-                                    info!("Spotify playback refused: not confirmed by the owner");
-                                    crate::KernelToolResult {
-                                        tool: name.into(),
-                                        success: false,
-                                        output: json!({"error":reason,"not_confirmed":true}),
-                                    }
-                                }
-                            };
-                            guard.record(name, &params, result.clone());
-                            result
                         } else if name == crate::vlm::MEMORY_SEARCH_TOOL {
                             emit(
                                 tx,
@@ -2132,11 +2090,36 @@ async fn reason_turn(
                         }
                     }
                 };
-                if result.success && (name == "spotify_find" || name == "spotify:find") {
-                    if let Some(scope) = &memory {
-                        crate::media_confirm::record(scope.session, current, &result.output);
-                    }
-                    guard.stop("Ask the user the confirmation question for the Spotify result (its full name and creator) and wait for their answer. Do not call more tools in this turn.");
+                // Asking for music plays it: the best match starts in this round, so the model
+                // only has to say what is playing (each model round takes minutes here).
+                let mut result = result;
+                if publish
+                    && result.success
+                    && (name == "spotify_find" || name == "spotify:find")
+                    && let Some(uri) = spotify_best_uri(&result.output)
+                {
+                    emit(
+                        tx,
+                        current,
+                        json!({"type":"tool_started","channel":"voice:vlm","tool":"spotify:play"}),
+                    )
+                    .await;
+                    let played = execute_scheduled_tool(
+                        "spotify:play",
+                        json!({"uri": uri}),
+                        None,
+                        correlation,
+                        tx,
+                        current,
+                    )
+                    .await;
+                    info!(success = played.success, "Played the Spotify best match");
+                    result.output = json!({"found": result.output, "played": played.success, "play_result": played.output});
+                    guard.stop(if played.success {
+                        "The best match is now playing. Tell the user in one short sentence what is playing (its full name and creator). Do not call more tools in this turn."
+                    } else {
+                        "Playing the best match failed. Tell the user why in one short sentence. Do not call more tools in this turn."
+                    });
                 }
                 if publish {
                     if let Some(true) = result

@@ -5,8 +5,7 @@
 //! playlists, playback control and the current player state. Playback needs Spotify Premium
 //! and an available Spotify Connect device; failures are reported, never simulated.
 //!
-//! Choosing what to play is a two-step conversation (find, then confirm): this module only
-//! plays a URI that Dialogue has marked confirmed through [`Spotify::confirm`].
+//! Asking for music plays it: Dialogue finds the best match and plays it in the same turn.
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::rand::SecureRandom;
@@ -23,8 +22,6 @@ const API: &str = "https://api.spotify.com/v1";
 pub const SCOPES: &str = "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative";
 /// Login attempts expire; a callback after this is refused.
 const LOGIN_TTL: Duration = Duration::from_secs(600);
-/// A confirmation lets exactly one play of that URI happen shortly after the owner said yes.
-const CONFIRM_TTL: Duration = Duration::from_secs(120);
 const MAX_OWN_PLAYLISTS: usize = 200;
 /// The playlist index is rebuilt in the background when older than this.
 const INDEX_TTL_SECS: u64 = 6 * 3600;
@@ -91,23 +88,13 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// The exact question SAIL asks before playing, with the full name of the element.
-    pub fn confirmation_question(&self) -> String {
+    /// What SAIL says it is playing, with the full name: "the playlist 'Cabeça de Radio' by
+    /// Pedro Victor".
+    pub fn describe(&self) -> String {
         match self.kind {
-            Kind::Playlist => format!(
-                "Should we proceed by playing the playlist with the name: '{}' created by '{}'?",
-                self.name, self.by
-            ),
-            Kind::Artist => format!(
-                "Should we proceed by playing the artist with the name: '{}'?",
-                self.name
-            ),
-            kind => format!(
-                "Should we proceed by playing the {} with the name: '{}' by '{}'?",
-                kind.noun(),
-                self.name,
-                self.by
-            ),
+            Kind::Artist => format!("the artist '{}'", self.name),
+            _ if self.by.is_empty() => format!("the {} '{}'", self.kind.noun(), self.name),
+            kind => format!("the {} '{}' by {}", kind.noun(), self.name, self.by),
         }
     }
 }
@@ -302,7 +289,6 @@ pub struct Spotify {
     config: Mutex<Config>,
     token: tokio::sync::Mutex<Option<Token>>,
     logins: Mutex<HashMap<String, (String, String, Instant)>>,
-    confirmed: Mutex<HashMap<String, Instant>>,
     index: Mutex<Option<PlaylistIndex>>,
     indexing: std::sync::atomic::AtomicBool,
     api: String,
@@ -345,7 +331,6 @@ impl Spotify {
             config: Mutex::new(config),
             token: tokio::sync::Mutex::new(token),
             logins: Mutex::new(HashMap::new()),
-            confirmed: Mutex::new(HashMap::new()),
             index: Mutex::new(index),
             indexing: std::sync::atomic::AtomicBool::new(false),
             api: api.trim_end_matches('/').into(),
@@ -730,14 +715,7 @@ impl Spotify {
             .collect())
     }
 
-    /// Mark a URI the owner just confirmed; the next [`Self::play`] of it may proceed.
-    pub fn confirm(&self, uri: &str) {
-        let mut confirmed = self.confirmed.lock().expect("spotify confirmations");
-        confirmed.retain(|_, at| at.elapsed() < CONFIRM_TTL);
-        confirmed.insert(uri.into(), Instant::now());
-    }
-
-    /// Play a confirmed URI on the active device, or the first available one.
+    /// Play a URI on the active device, or the first available one.
     pub async fn play(&self, uri: &str) -> Result<Value> {
         let kind = Kind::of_uri(uri).ok_or_else(|| {
             SpotifyError::new(
@@ -745,18 +723,6 @@ impl Spotify {
                 "That is not a Spotify playlist, song, album or artist.",
             )
         })?;
-        let fresh = self
-            .confirmed
-            .lock()
-            .expect("spotify confirmations")
-            .remove(uri)
-            .is_some_and(|at| at.elapsed() < CONFIRM_TTL);
-        if !fresh {
-            return Err(SpotifyError::new(
-                "not_confirmed",
-                "Not played: the owner has not confirmed this choice. Find it with spotify_find and ask the confirmation question first.",
-            ));
-        }
         let devices = self.get("/me/player/devices").await?;
         let list = devices["devices"].as_array().cloned().unwrap_or_default();
         let usable: Vec<&Value> = list.iter().filter(|d| d["is_restricted"] != true).collect();
@@ -1133,15 +1099,15 @@ mod tests {
     }
 
     #[test]
-    fn playlist_question_names_the_playlist_and_its_creator() {
+    fn playlists_are_described_with_their_creator() {
         let c = candidate(
             Kind::Playlist,
             &json!({"name":"Cabeça de Radio","uri":"spotify:playlist:37i9dQZF1DX","owner":{"display_name":"Pedro Victor","id":"pedro"},"description":"","tracks":{"total":42}}),
         )
         .unwrap();
         assert_eq!(
-            c.confirmation_question(),
-            "Should we proceed by playing the playlist with the name: 'Cabeça de Radio' created by 'Pedro Victor'?"
+            c.describe(),
+            "the playlist 'Cabeça de Radio' by Pedro Victor"
         );
         assert_eq!(c.detail.as_deref(), Some("42 tracks"));
     }
@@ -1150,8 +1116,8 @@ mod tests {
     fn tracks_and_albums_name_their_artists() {
         let t = candidate(Kind::Track, &json!({"name":"How to Disappear Completely","uri":"spotify:track:2rtGaCAeYal","artists":[{"name":"Radiohead"}],"album":{"name":"Kid A"}})).unwrap();
         assert_eq!(
-            t.confirmation_question(),
-            "Should we proceed by playing the song with the name: 'How to Disappear Completely' by 'Radiohead'?"
+            t.describe(),
+            "the song 'How to Disappear Completely' by Radiohead"
         );
         assert!(candidate(Kind::Track, &Value::Null).is_none());
         assert!(candidate(Kind::Track, &json!({"name":"x","uri":"spotify:album:abc"})).is_none());
@@ -1197,12 +1163,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn play_refuses_unconfirmed_uris_before_any_network_call() {
+    async fn play_rejects_non_spotify_uris_before_any_network_call() {
         let dir = std::env::temp_dir().join(format!("sail-spotify-test-{}", random_token(6)));
         let spotify =
             Spotify::with_endpoints(dir.clone(), "http://127.0.0.1:9", "http://127.0.0.1:9");
-        let err = spotify.play("spotify:playlist:abc").await.unwrap_err();
-        assert_eq!(err.code, "not_confirmed");
+        let err = spotify
+            .play("https://open.spotify.com/playlist/abc")
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "invalid");
         let _ = std::fs::remove_dir_all(dir);
     }
 

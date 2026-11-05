@@ -1,20 +1,17 @@
 //! Music requests answered without the reasoning model.
 //!
-//! "Play my radiohead playlist", "pause", "next song", and the "yes" that confirms a choice
-//! have a fixed shape and a fixed answer, so SAIL handles them in code: parse the request,
-//! ask Spotify, and reply with the templated confirmation question or the result. That takes
-//! about a second instead of minutes of local model inference. Anything this does not
-//! recognise, or cannot resolve confidently, goes to the model exactly as before. The same
-//! confirmation rules apply either way (`crate::media_confirm`).
-use crate::media_confirm;
+//! "Play my radiohead playlist", "pause" and "next song" have a fixed shape and a fixed
+//! answer, so SAIL handles them in code: parse the request, ask Spotify, play the best match
+//! and say what is playing. That takes about a second instead of minutes of local model
+//! inference. Anything this does not recognise, or cannot resolve confidently, goes to the
+//! model exactly as before.
 use sail_bridge::spotify::{Candidate, Kind, PlaylistIndex, Spotify, rank_playlists};
-use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Intent {
-    /// Find something to play; never plays without a confirmed reply.
+    /// Find something and play the best match.
     Play {
         query: String,
         kind: Option<Kind>,
@@ -296,24 +293,10 @@ pub fn parse(prompt: &str) -> Option<Intent> {
     Some(Intent::Play { query, kind, mine })
 }
 
-fn label(item: &Candidate) -> String {
-    match item.kind {
-        Kind::Artist => format!("'{}'", item.name),
-        _ if item.by.is_empty() => format!("'{}'", item.name),
-        _ => format!("'{}' by {}", item.name, item.by),
-    }
-}
-
 /// Answer a music request without the model, or `None` to let the model handle the turn.
-pub async fn try_handle(
-    spotify: &Arc<Spotify>,
-    session: &str,
-    turn: u64,
-    prompt: &str,
-    previous_reply: &str,
-) -> Option<String> {
+pub async fn try_handle(spotify: &Arc<Spotify>, prompt: &str) -> Option<String> {
     let started = Instant::now();
-    let reply = answer(spotify, session, turn, prompt, previous_reply).await?;
+    let reply = answer(spotify, prompt).await?;
     tracing::info!(
         elapsed_ms = started.elapsed().as_millis() as u64,
         "Music request answered without the reasoning model"
@@ -321,41 +304,7 @@ pub async fn try_handle(
     Some(reply)
 }
 
-async fn answer(
-    spotify: &Arc<Spotify>,
-    session: &str,
-    turn: u64,
-    prompt: &str,
-    previous_reply: &str,
-) -> Option<String> {
-    // 1. A reply to SAIL's "Should we proceed by playing …?"
-    if let Some(choice) = media_confirm::pending_choice(session, turn, prompt, previous_reply) {
-        let named = normalized(prompt).contains(&normalized(&choice.name));
-        if media_confirm::is_refusal(prompt) && !named {
-            media_confirm::clear(session);
-            return Some("Okay, I won't play it.".into());
-        }
-        if let Ok(item) =
-            media_confirm::authorize(session, turn, &choice.uri, prompt, previous_reply)
-        {
-            media_confirm::clear(session);
-            spotify.confirm(&item.uri);
-            return Some(match spotify.play(&item.uri).await {
-                Ok(done) => format!(
-                    "Playing {} on {}.",
-                    label(&item),
-                    done["device"]
-                        .as_str()
-                        .filter(|d| !d.is_empty())
-                        .unwrap_or("Spotify")
-                ),
-                Err(error) => error.message,
-            });
-        }
-        // Neither yes nor no: it may be a new request; carry on.
-    }
-
-    // 2. A new request.
+async fn answer(spotify: &Arc<Spotify>, prompt: &str) -> Option<String> {
     let intent = parse(prompt)?;
     if !spotify.configured() {
         return Some(
@@ -382,17 +331,20 @@ async fn answer(
                     Err(error) => return Some(error.message),
                 }
             };
-            let mut found = found.into_iter();
-            let Some(best) = found.next() else {
+            let Some(best) = found.into_iter().next() else {
                 return Some(format!("I couldn't find \"{query}\" on Spotify."));
             };
-            let alternatives: Vec<Candidate> = found.take(4).collect();
-            media_confirm::record(
-                session,
-                turn,
-                &json!({"best": best, "alternatives": alternatives}),
-            );
-            Some(best.confirmation_question())
+            Some(match spotify.play(&best.uri).await {
+                Ok(done) => format!(
+                    "Playing {} on {}.",
+                    best.describe(),
+                    done["device"]
+                        .as_str()
+                        .filter(|d| !d.is_empty())
+                        .unwrap_or("Spotify")
+                ),
+                Err(error) => error.message,
+            })
         }
     }
 }
@@ -473,6 +425,7 @@ async fn control(spotify: &Spotify, action: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn play(query: &str, kind: Option<Kind>, mine: bool) -> Option<Intent> {
         Some(Intent::Play {
@@ -513,33 +466,22 @@ mod tests {
         )
         .unwrap();
         let spotify = Arc::new(Spotify::with_endpoints(dir.clone(), &base, &base));
-        let session = "s-radiohead";
 
         // Before the index exists, a name that does not say "radiohead" is left to the model.
         assert_eq!(
-            try_handle(&spotify, "s-cold", 1, "Play my radiohead playlist.", "").await,
+            try_handle(&spotify, "Play my radiohead playlist.").await,
             None
         );
         spotify.build_index().await.unwrap();
 
+        // Asking plays the best match straight away, without a confirmation question.
         let started = Instant::now();
-        let asked = try_handle(&spotify, session, 1, "Play my radiohead playlist.", "")
-            .await
-            .unwrap();
-        assert_eq!(
-            asked,
-            "Should we proceed by playing the playlist with the name: 'Cabeça de Radio' created by 'Pedro Victor'?"
-        );
-        assert!(
-            played.lock().unwrap().is_empty(),
-            "nothing plays before the answer"
-        );
-        let done = try_handle(&spotify, session, 2, "Yes go ahead", &asked)
+        let done = try_handle(&spotify, "Play my radiohead playlist.")
             .await
             .unwrap();
         assert_eq!(
             done,
-            "Playing 'Cabeça de Radio' by Pedro Victor on Pedro's phone."
+            "Playing the playlist 'Cabeça de Radio' by Pedro Victor on Pedro's phone."
         );
         assert_eq!(
             played.lock().unwrap()[0]["context_uri"],
@@ -551,25 +493,9 @@ mod tests {
             started.elapsed()
         );
 
-        // A "no" drops the offer; an unrelated turn is left to the model.
-        let asked = try_handle(&spotify, "s-no", 1, "play my radiohead playlist", "")
-            .await
-            .unwrap();
-        assert_eq!(
-            try_handle(&spotify, "s-no", 2, "no", &asked)
-                .await
-                .as_deref(),
-            Some("Okay, I won't play it.")
-        );
-        assert_eq!(
-            try_handle(&spotify, "s-no", 3, "yes", &asked).await,
-            None,
-            "the offer is gone"
-        );
-        assert_eq!(
-            try_handle(&spotify, "s-other", 1, "what's the weather?", "").await,
-            None
-        );
+        // A bare "yes" or an unrelated turn is left to the model and plays nothing.
+        assert_eq!(try_handle(&spotify, "yes").await, None);
+        assert_eq!(try_handle(&spotify, "what's the weather?").await, None);
         assert_eq!(played.lock().unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(dir);
     }
