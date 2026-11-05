@@ -7,7 +7,7 @@ const subsystemPages = [
     "name": "Factory",
     "icon": "factory",
     "subtitle": "Live tools map",
-    "description": "Explore systems, models, tasks and recent activity in your workspace.",
+    "description": "Your workspace: every system on one live map, with Dialogue beside it.",
     "card": null,
     "panel": null,
     "settings": null,
@@ -207,11 +207,8 @@ function initializeSubsystemPages() {
   const page = document.getElementById('subsystemPage');
   const title = document.getElementById('subsystemTitle');
   const content = document.getElementById('subsystemContent');
-  const dialog = document.getElementById('subsystemDialog');
-  const factory = document.getElementById('factoryWorkspace');
   const cardHomes = new Map();
-  let popupTrigger = null;
-  let currentPage = 'factory';
+  let currentPage = 'home';
   let requestedPanel = null;
   for (const id of new Set(subsystemPages.map(item => item.card).filter(Boolean))) {
     const card = document.getElementById(id);
@@ -227,12 +224,7 @@ function initializeSubsystemPages() {
     const use = document.createElementNS(svg.namespaceURI, 'use');
     use.setAttribute('href', `/icons.svg#${item.icon}`); svg.append(use); icon.append(svg);
     const label = document.createElement('span'); label.textContent = item.name;
-    link.append(icon, label);
-    link.addEventListener('click', event => {
-      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-      event.preventDefault(); window.sailNavigate(item.id);
-    });
-    return link;
+    link.append(icon, label); return link;
   }
   for (const item of subsystemPages) {
     document.getElementById('subsystemNav').append(pageLink(item, 'quiet-button nav-item'));
@@ -240,69 +232,48 @@ function initializeSubsystemPages() {
   // Routes: #home (also #factory) is the Tools Map workspace; a subsystem id opens that
   // system in the workspace popup (toolsmap.js); #classic is the card dashboard.
   function renderRoute(focus = true) {
-    const id = location.hash.slice(1) || 'factory';
+    const id = location.hash.slice(1) || 'home';
     if (id === 'spaces') return; // Spaces overlays the current workspace.
-    const item = subsystemPages.find(entry => entry.id === id);
-    const route = item?.id || 'factory';
-    if (!item || id === 'home') history.replaceState(null, '', '#factory');
-    const popup = route !== 'factory' && route !== 'dialogue';
-    if (popup && !dialog.open) popupTrigger = document.activeElement;
+    const found = subsystemPages.find(entry => entry.id === id);
+    const item = found?.id === 'factory' ? null : found;
+    const route = item?.id || (id === 'classic' ? 'classic' : 'home');
+    if (!found && id !== 'home' && id !== 'classic') history.replaceState(null, '', '#home');
     closeSheet();
     // Move original nodes so socket updates, form state, and listeners stay live.
     for (const [card, marker] of cardHomes) marker.after(card);
-    content.replaceChildren(); home.hidden = true; page.hidden = !popup;
-    factory.inert = popup;
-    page.querySelector('.subsystem-about').hidden = !popup;
-    workspace.setAttribute('aria-label', 'Factory workspace');
-    document.title = `SAIL — ${popup ? item.name : route === 'dialogue' ? 'Dialogue' : 'Factory'}`;
+    content.replaceChildren(); home.hidden = route !== 'classic'; page.hidden = !item;
+    workspace.setAttribute('aria-label', `${item?.name || 'Home'} workspace`);
+    document.title = `SAIL — ${item?.name || (route === 'classic' ? 'Home' : 'Workspace')}`;
     document.querySelectorAll('[data-page]').forEach(link => {
       const page = link.dataset.page === 'factory' ? 'home' : link.dataset.page;
       const selected = page === (route === 'classic' ? 'home' : route); link.classList.toggle('selected', selected);
       if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     });
-    if (popup) {
+    if (item) {
       title.textContent = item.name;
       document.getElementById('subsystemDescription').textContent = item.description;
       document.getElementById('subsystemEyebrow').textContent = item.subtitle;
       const list = document.getElementById('subsystemCapabilities'); list.replaceChildren();
       for (const text of item.details) { const li = document.createElement('li'); li.textContent = text; list.append(li); }
       const notice = document.getElementById('subsystemNotice'); notice.hidden = !!item.card;
-      notice.textContent = notice.hidden ? '' : `${item.name} controls and results are not connected to this interface yet.`;
+      notice.textContent = item.card ? '' : `${item.name} controls and results are not connected to this interface yet.`;
       const settings = document.getElementById('subsystemSettings'); settings.hidden = !item.settings;
       settings.onclick = () => { openSheet(contextSheet); contextSheet.querySelector(`[data-settings-tab="${item.settings}"]`)?.click(); };
       if (item.card) { content.append(document.getElementById(item.card)); if (item.panel) switchCardTab(item.card, requestedPanel || item.panel); }
 
     }
-    if (popup && currentPage !== route) dialog.scrollTop = 0;
-    currentPage = route; requestedPanel = null;
-    if (popup && !dialog.open) dialog.show();
-    if (!popup && dialog.open) dialog.close();
+    currentPage = route; requestedPanel = null; workspace.scrollTop = 0;
     window.dispatchEvent(new CustomEvent('sail:page', {detail:route}));
-    if (focus) {
-      if (popup) title.focus({preventScroll:true});
-      else if (route === 'dialogue') document.getElementById('textInput').focus();
-      else {
-        const target = document.getElementById(popupTrigger?.id) ||
-          (popupTrigger?.isConnected ? popupTrigger : document.getElementById('factoryTitle'));
-        target.focus({preventScroll:true}); popupTrigger = null;
-      }
-    }
+    // The map restores focus to whatever opened a closed popup.
+    if (focus && route !== 'home') (item ? title : document.getElementById('welcomeGreeting')).focus({ preventScroll:true });
   }
-
   window.sailNavigate = (id, panel = null) => {
     requestedPanel = panel;
     if (location.hash === `#${id}`) renderRoute(); else location.hash = id;
   };
   window.sailCurrentPage = () => currentPage;
   document.getElementById('homeNav').addEventListener('click', event => {
-    event.preventDefault(); window.sailNavigate('factory');
+    if (currentPage === 'home' && location.hash !== '#spaces') { event.preventDefault(); renderRoute(); }
   });
-  document.getElementById('subsystemClose').addEventListener('click', () => window.sailNavigate('factory'));
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && dialog.open && !activeSheet && !document.querySelector('dialog:modal')) {
-      event.preventDefault(); window.sailNavigate('factory');
-    }
-  }, true);
-  document.querySelector('[data-page="dialogue"]')?.setAttribute('aria-controls', 'homeView');
   window.addEventListener('hashchange', () => renderRoute()); renderRoute(false);
 }

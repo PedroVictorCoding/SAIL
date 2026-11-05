@@ -34,12 +34,8 @@
       <button class="quiet-button nav-item nav-settings" id="settingsRail" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#settings"></use></svg></span><span>Settings</span></button>
     </nav>
 
-    <section class="workspace" id="workspace" aria-label="Factory workspace">
-      <section id="factoryWorkspace" aria-labelledby="factoryTitle">
-        <header class="factory-heading"><h1 id="factoryTitle" tabindex="-1">Factory</h1><p>Explore systems, models and tools. Open a system to work with it.</p></header>
-        <div id="factoryMapContent" class="tools-map-host"></div>
-      </section>
-      <div id="homePage" hidden>
+    <section class="workspace" id="workspace" aria-label="Home workspace">
+      <div id="homePage">
       <article class="welcome-card" aria-labelledby="welcomeGreeting">
         <div class="welcome-copy"><h1 id="welcomeGreeting" tabindex="-1">Good day</h1><time id="localDateTime">Local time</time></div>
         <div class="welcome-art" aria-hidden="true"><svg viewBox="0 0 640 160" preserveAspectRatio="none"><defs><linearGradient id="horizonLine" x1="0" x2="1"><stop stop-color="#8174d4" stop-opacity="0"/><stop offset=".48" stop-color="#d080ac" stop-opacity=".32"/><stop offset=".72" stop-color="#e7a290" stop-opacity=".42"/><stop offset="1" stop-color="#6488ce" stop-opacity="0"/></linearGradient><radialGradient id="horizonSun"><stop stop-color="#f2b39d" stop-opacity=".75"/><stop offset="1" stop-color="#e58b9c" stop-opacity="0"/></radialGradient></defs><path d="M0 127 C70 130 90 101 148 114 S226 144 288 116 374 95 423 119 511 149 558 119 614 105 640 112" fill="none" stroke="url(#horizonLine)" stroke-width="2"/><path d="M0 145 C90 140 125 120 190 132 S280 155 350 130 450 118 503 135 585 147 640 131" fill="none" stroke="url(#horizonLine)" stroke-width="1"/><circle cx="476" cy="112" r="58" fill="url(#horizonSun)"/></svg></div>
@@ -391,10 +387,9 @@
         </article>
       </section>
       </div>
-      <dialog id="subsystemDialog" class="subsystem-popup" aria-labelledby="subsystemTitle" aria-modal="false">
-      <button type="button" id="subsystemClose" class="quiet-button subsystem-close" aria-label="Close system view">Close ×</button>
       <section class="subsystem-page" id="subsystemPage" aria-labelledby="subsystemTitle" hidden>
         <header class="subsystem-header">
+          <a href="#home" class="quiet-button subsystem-back">← Home</a>
           <p class="subsystem-eyebrow" id="subsystemEyebrow"></p>
           <h1 id="subsystemTitle" tabindex="-1"></h1>
           <p id="subsystemDescription"></p>
@@ -404,7 +399,6 @@
         <div class="subsystem-content" id="subsystemContent"></div>
         <section class="subsystem-about" aria-labelledby="subsystemAboutTitle"><h2 id="subsystemAboutTitle">Responsibilities</h2><ul id="subsystemCapabilities"></ul></section>
       </section>
-      </dialog>
     </section>
 
     <div id="memoryParking" hidden>
@@ -464,8 +458,8 @@
         </div>
       </article>
     </div>
-    <aside class="assistant-panel" id="homeView" aria-label="Dialogue">
-      <div class="assistant-topline"><h2 class="assistant-name">Dialogue</h2><span class="assistant-presence" id="activityPill" hidden><i class="activity-dot"></i><span id="activityText">Working</span></span></div>
+    <aside class="assistant-panel" id="homeView" aria-label="SAIL assistant">
+      <div class="assistant-topline"><span class="assistant-presence" id="activityPill" hidden><i class="activity-dot"></i><span id="activityText">Working</span></span></div>
       <div class="assistant-identity">
         <div class="orb-wrap" id="orbWrap"><canvas id="orbCanvas" width="360" height="360" role="img" aria-label="SAIL assistant orb"></canvas></div>
         <div class="state-label" id="statusBadge" role="status" aria-live="polite">Ready</div>
