@@ -1474,6 +1474,16 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
         let search = ranked.remove(pos);
         ranked.insert(usize::from(has_handles), search);
     }
+    // A short "yes" shares no words with spotify_play; when SAIL's last reply asked to play
+    // something, offer it first so the confirmed choice can actually start.
+    if asked_to_play(messages)
+        && let Some(pos) = ranked
+            .iter()
+            .position(|(_, _, tool)| tool["function"]["name"] == "spotify_play")
+    {
+        let play = ranked.remove(pos);
+        ranked.insert(0, play);
+    }
     // Always offer visual_snapshot, as realtime voice assistants do: the model decides when
     // to look, and the user approves each capture. It follows the memory tools.
     if let Some(pos) = ranked
@@ -1496,6 +1506,25 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
         }
     }
     serde_json::Value::Array(selected)
+}
+/// SAIL's reply just before the latest user message, if it was a play confirmation question.
+pub fn asked_to_play(messages: &[serde_json::Value]) -> bool {
+    previous_assistant_reply(messages).contains("proceed by playing")
+}
+/// The text of SAIL's reply that precedes the latest user message ("" if none).
+pub fn previous_assistant_reply(messages: &[serde_json::Value]) -> String {
+    let Some(last_user) = messages.iter().rposition(|m| m["role"] == "user") else {
+        return String::new();
+    };
+    messages[..last_user]
+        .iter()
+        .rev()
+        .find(|m| {
+            m["role"] == "assistant" && m["content"].as_str().is_some_and(|c| !c.trim().is_empty())
+        })
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 /// Every tool the voice model may call: the shared registry's tools
 /// (`crate::execution::registry`), plus the two that act on the current turn itself.
@@ -1581,10 +1610,49 @@ mod schema_selection_tests {
     }
 
     #[test]
+    fn a_yes_after_a_play_question_offers_spotify_play_first() {
+        let history = [
+            serde_json::json!({"role":"system","content":"You are SAIL"}),
+            serde_json::json!({"role":"user","content":"Play my radiohead playlist"}),
+            serde_json::json!({"role":"assistant","content":"Should we proceed by playing the playlist with the name: 'Cabeça de Radio' created by 'Pedro Victor'?"}),
+            serde_json::json!({"role":"user","content":"Yes go ahead"}),
+        ];
+        let tools = super::selected_tool_definitions(&history);
+        assert!(
+            tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["function"]["name"] == "spotify_play")
+        );
+        let unrelated = super::selected_tool_definitions(&[
+            serde_json::json!({"role":"assistant","content":"It is 3pm."}),
+            serde_json::json!({"role":"user","content":"Yes go ahead"}),
+        ]);
+        assert!(
+            !unrelated
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["function"]["name"] == "spotify_play")
+        );
+        let fresh = super::selected_tool_definitions(&[
+            serde_json::json!({"role":"user","content":"Play my radiohead playlist"}),
+        ]);
+        assert!(
+            fresh
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["function"]["name"] == "spotify_find")
+        );
+    }
+
+    #[test]
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 25);
+        assert_eq!(tools.len(), 28);
 
         let names: Vec<_> = tools
             .iter()
@@ -1614,6 +1682,9 @@ mod schema_selection_tests {
         assert!(names.contains(&"visual_snapshot"));
         for pulse in ["pulse_create", "pulse_list", "pulse_cancel", "pulse_snooze"] {
             assert!(names.contains(&pulse), "{pulse}");
+        }
+        for spotify in ["spotify_find", "spotify_play", "spotify_control"] {
+            assert!(names.contains(&spotify), "{spotify}");
         }
     }
 

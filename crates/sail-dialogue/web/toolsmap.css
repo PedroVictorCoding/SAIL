@@ -68,6 +68,38 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-nav-item.selected .tm-icon { color: var(--tm-accent); }
 .tm-nav-item.current { background: #1e2125; }
 .tm-dot-accent { width: 8px; height: 8px; margin: 0 5px; border-radius: 50%; background: var(--tm-accent); box-shadow: 0 0 8px var(--tm-accent); }
+/* Now Playing (Spotify): sits under the secondary navigation. */
+.tm-np { margin-top: 12px; padding: 10px; background: var(--tm-panel); border: 1px solid var(--tm-line); border-radius: 10px; display: grid; gap: 8px; }
+.tm-np[hidden] { display: none; }
+.tm-np p { margin: 0; }
+.tm-np-row { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.tm-np-art { flex: none; width: 44px; height: 44px; border-radius: 6px; background: #22262a; object-fit: cover; }
+.tm-np-text { min-width: 0; display: grid; gap: 1px; }
+.tm-np-label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--tm-muted); }
+.tm-np-mark { color: var(--tm-accent); font-size: 9px; }
+.tm-np-text .tm-np-label .tm-np-mark { display: none; }
+.tm-np-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tm-np-by { font-size: 12px; color: var(--tm-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tm-np-note { font-size: 12px; color: var(--tm-muted); }
+.tm-np-action { justify-self: start; min-height: 32px; font-size: 12px; padding: 0 12px; }
+.tm-np-ctl { display: flex; justify-content: center; gap: 6px; }
+.tm-np-btn { min-width: 36px; min-height: 32px; display: grid; place-items: center; background: none; border: 1px solid transparent; border-radius: 8px; color: var(--tm-text); font-size: 13px; cursor: pointer; }
+.tm-np-btn:hover { background: #22262a; border-color: var(--tm-line); }
+.tm-np-btn:focus-visible, .tm-np-action:focus-visible { outline: 2px solid var(--tm-accent); outline-offset: 1px; }
+/* Spotify setup dialog */
+.tm-dialog { max-width: min(30rem, calc(100vw - 32px)); padding: 0; background: var(--tm-panel); color: var(--tm-text); border: 1px solid var(--tm-line); border-radius: 12px; }
+.tm-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+.tm-dialog-body { display: grid; gap: 10px; padding: 18px; }
+.tm-dialog-body h2 { margin: 0; font-size: 18px; }
+.tm-steps { margin: 0; padding-left: 20px; display: grid; gap: 10px; font-size: 13px; line-height: 1.45; }
+.tm-steps a { color: #ffb27a; }
+.tm-copy { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.tm-copy code { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 6px 8px; background: #16181b; border: 1px solid var(--tm-line); border-radius: 6px; font-size: 12px; }
+.tm-input { display: block; width: 100%; box-sizing: border-box; margin-top: 6px; min-height: 36px; padding: 0 10px; background: #16181b; color: var(--tm-text); border: 1px solid #4a5058; border-radius: 8px; font: inherit; }
+.tm-input:focus-visible { outline: 2px solid var(--tm-accent); outline-offset: 1px; }
+.tm-form-error { margin: 0; min-height: 1em; font-size: 12px; color: #ff9d8a; }
+.tm-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.tm-btn-primary { border-color: var(--tm-accent); }
 .tm-sidecard { margin-top: auto; padding: 12px; background: var(--tm-panel); border: 1px solid var(--tm-line); border-radius: 10px; }
 .tm-sidecard-title { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 600; }
 .tm-sidecard-sub { margin: 4px 0 10px; font-size: 11px; color: var(--tm-muted); min-height: 1em; }
@@ -325,7 +357,7 @@ html.tm-active, html.tm-active body { overflow: hidden; }
   .tm-brand div, .tm-nav-item { font-size: 0; }
   .tm-nav-item { justify-content: center; padding: 0; }
   .tm-brand { justify-content: center; padding: 0 0 14px; }
-  .tm-sidecard { display: none; }
+  .tm-sidecard, .tm-np { display: none; }
   .tm-meter-sub { display: none; }
 }
 @media (max-width: 1100px) {

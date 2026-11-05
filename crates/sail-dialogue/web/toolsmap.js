@@ -196,6 +196,7 @@
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: (e) => openStation('forge', e.currentTarget, 'tasks')}, icon('tasks'), 'Tasks')),
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: () => document.getElementById('terminalRailBtn')?.click()}, icon('terminal'), 'Terminal')),
         navItem('tracker', 'Tracker', 'sense')),
+      el('section', {class: 'tm-np', id: 'tmNowPlaying', 'aria-label': 'Now playing', hidden: true}),
       el('div', {class: 'tm-sidecard'},
         el('p', {class: 'tm-sidecard-title'}, el('span', {class: 'tm-status', id: 'tmCoreDot'}), el('span', {id: 'tmCoreState', text: 'Connecting…'})),
         el('p', {class: 'tm-sidecard-sub', id: 'tmUptime', text: ''}),
@@ -463,9 +464,12 @@
       metrics: '/api/system/metrics', mind: '/api/mind/status', health: '/api/health',
       guardian: '/api/guardian/status', audit: '/api/guardian/audit', approvals: '/api/guardian/approvals',
       plans: '/api/plans/', reminders: '/api/pulse/reminders', tracker: '/api/tracker/config',
+      spotify: '/api/spotify/status',
     };
     const res = {};
     await Promise.all(Object.entries(jobs).map(([k, path]) => get(path).then((v) => { res[k] = v; }, () => { res[k] = null; })));
+    state.spotify = res.spotify;
+    renderNowPlaying();
     const was = state.online;
     state.online = !!res.health || !!res.metrics;
     if (was !== null && was !== state.online) log('core', state.online ? 'Connection to SAIL restored' : 'Lost connection to SAIL');
@@ -746,6 +750,120 @@
       items.length ? el('dl', {class: 'tm-config'}, items.map(([k, v]) => row(k, v))) : el('p', {class: 'tm-empty', text: 'Settings for this subsystem live in SAIL Settings.'}),
       el('button', {class: 'tm-btn', type: 'button', onclick: openSettings}, icon('settings'), 'Open Settings'));
   }
+
+  // ------------------------------------------------------------------ Now Playing (Spotify)
+  // The owner's Spotify player. SAIL plays music from the conversation after a spoken
+  // confirmation; this card shows what is playing and offers the basic controls.
+  function renderNowPlaying() {
+    const box = $('#tmNowPlaying'); if (!box) return;
+    const sp = state.spotify;
+    box.hidden = !sp;
+    if (!sp) return;
+    const focused = box.contains(document.activeElement) ? document.activeElement.dataset.key : null;
+    const now = sp.now_playing;
+    const head = (text) => el('p', {class: 'tm-np-label'}, el('span', {class: 'tm-np-mark', 'aria-hidden': 'true', text: '●'}), text);
+    let kids;
+    if (!sp.configured) {
+      kids = [head('Spotify'), el('p', {class: 'tm-np-note', text: 'Let SAIL play your music and playlists.'}),
+        el('button', {class: 'tm-btn tm-np-action', type: 'button', 'data-key': 'setup', onclick: openSpotifySetup, text: 'Set up Spotify'})];
+    } else if (!sp.connected) {
+      kids = [head('Spotify'), el('p', {class: 'tm-np-note', text: 'Sign in to Spotify to play music.'}),
+        el('button', {class: 'tm-btn tm-np-action', type: 'button', 'data-key': 'connect', onclick: connectSpotify, text: 'Connect Spotify'})];
+    } else if (!now) {
+      kids = [head('Spotify'), el('p', {class: 'tm-np-note', text: sp.error || 'Nothing playing. Ask SAIL to play something.'})];
+    } else {
+      const btn = (key, label, glyph) => el('button', {class: 'tm-np-btn', type: 'button', 'data-key': key, 'aria-label': label, title: label, onclick: () => spotifyControl(key)}, glyph);
+      kids = [
+        el('div', {class: 'tm-np-row'},
+          now.image ? el('img', {class: 'tm-np-art', src: now.image, alt: '', width: 44, height: 44, referrerpolicy: 'no-referrer'}) : el('span', {class: 'tm-np-art', 'aria-hidden': 'true'}),
+          el('div', {class: 'tm-np-text'},
+            el('p', {class: 'tm-np-label', text: now.is_playing ? 'Now Playing' : 'Paused'}),
+            el('p', {class: 'tm-np-name', text: now.name, title: now.name}),
+            el('p', {class: 'tm-np-by', text: now.by, title: now.device ? `${now.by} · on ${now.device}` : now.by}))),
+        el('div', {class: 'tm-np-ctl', role: 'group', 'aria-label': 'Playback'},
+          btn('previous', 'Previous', '⏮'),
+          now.is_playing ? btn('pause', 'Pause', '❚❚') : btn('resume', 'Play', '▶'),
+          btn('next', 'Next', '⏭')),
+      ];
+    }
+    box.replaceChildren(...kids);
+    if (focused) box.querySelector(`[data-key="${focused}"]`)?.focus({preventScroll: true})
+      || (['pause', 'resume'].includes(focused) && box.querySelector('[data-key="pause"],[data-key="resume"]')?.focus({preventScroll: true}));
+  }
+  async function spotifyPost(path, body) {
+    const t = await token();
+    const r = await fetch(`/api/spotify/${path}`, {method: 'POST', cache: 'no-store',
+      headers: {'Content-Type': 'application/json', ...(t ? {Authorization: `Bearer ${t}`} : {})}, body: JSON.stringify(body || {})});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `Spotify request failed (${r.status})`);
+    return data;
+  }
+  async function spotifyControl(action) {
+    try {
+      const data = await spotifyPost('control', {action});
+      state.spotify = {...state.spotify, now_playing: data.now_playing, error: null};
+    } catch (e) {
+      state.spotify = {...state.spotify, error: e.message};
+      log('dialogue', `Spotify: ${e.message}`);
+    }
+    renderNowPlaying();
+  }
+  async function connectSpotify() {
+    // Open the tab first so the browser treats it as a user action, then point it at Spotify.
+    const tab = window.open('about:blank', '_blank');
+    try {
+      const {url} = await spotifyPost('login');
+      if (tab) tab.location.href = url; else location.assign(url);
+    } catch (e) {
+      tab?.close();
+      log('dialogue', `Spotify: ${e.message}`);
+      state.spotify = {...state.spotify, error: e.message}; renderNowPlaying();
+    }
+  }
+  function openSpotifySetup() {
+    let dlg = $('#tmSpotifySetup');
+    const redirect = state.spotify?.redirect_uri || `${location.origin}/api/spotify/callback`;
+    if (!dlg) {
+      dlg = el('dialog', {class: 'tm-dialog', id: 'tmSpotifySetup', 'aria-labelledby': 'tmSpotifySetupTitle'},
+        el('form', {method: 'dialog', class: 'tm-dialog-body', onsubmit: saveSpotifySetup},
+          el('h2', {id: 'tmSpotifySetupTitle', text: 'Set up Spotify'}),
+          el('ol', {class: 'tm-steps'},
+            el('li', {}, 'Create an app at ', el('a', {href: 'https://developer.spotify.com/dashboard', target: '_blank', rel: 'noopener', text: 'developer.spotify.com/dashboard'}), ' and select Web API.'),
+            el('li', {}, 'Add this Redirect URI to the app:',
+              el('div', {class: 'tm-copy'}, el('code', {id: 'tmSpotifyRedirect'}),
+                el('button', {class: 'tm-btn', type: 'button', onclick: () => navigator.clipboard?.writeText($('#tmSpotifyRedirect').textContent), text: 'Copy'}))),
+            el('li', {}, el('label', {for: 'tmSpotifyClient', text: 'Paste the app’s Client ID:'}),
+              el('input', {id: 'tmSpotifyClient', class: 'tm-input', required: true, autocomplete: 'off', spellcheck: 'false', minlength: '16', maxlength: '64', pattern: '[A-Za-z0-9]+'}))),
+          el('p', {class: 'tm-np-note', text: 'Playback control needs Spotify Premium and an open Spotify app or speaker.'}),
+          el('p', {class: 'tm-form-error', id: 'tmSpotifyError', role: 'alert'}),
+          el('div', {class: 'tm-dialog-actions'},
+            el('button', {class: 'tm-btn', type: 'button', onclick: () => dlg.close(), text: 'Cancel'}),
+            el('button', {class: 'tm-btn tm-btn-primary', type: 'submit', value: 'save', text: 'Save and connect'}))));
+      root.append(dlg);
+    }
+    $('#tmSpotifyRedirect').textContent = redirect;
+    $('#tmSpotifyError').textContent = '';
+    dlg.showModal();
+    $('#tmSpotifyClient').focus();
+  }
+  async function saveSpotifySetup(e) {
+    e.preventDefault();
+    const tab = window.open('about:blank', '_blank');
+    try {
+      const saved = await spotifyPost('setup', {client_id: $('#tmSpotifyClient').value.trim()});
+      state.spotify = {...state.spotify, configured: true, redirect_uri: saved.redirect_uri};
+      const {url} = await spotifyPost('login');
+      if (tab) tab.location.href = url;
+      $('#tmSpotifySetup').close();
+      renderNowPlaying();
+    } catch (err) {
+      tab?.close();
+      $('#tmSpotifyError').textContent = err.message;
+    }
+  }
+  window.addEventListener('message', (e) => {
+    if (e.origin === location.origin && e.data?.type === 'sail-spotify' && state.live) poll();
+  });
 
   function renderActivity() {
     $('#tmActivity').replaceChildren(...state.activity.slice(0, 30).map((a) => el('li', {},
