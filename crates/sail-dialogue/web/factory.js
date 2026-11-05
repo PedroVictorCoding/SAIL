@@ -63,4 +63,103 @@ FACTORY.props = [
   { kind: 'valve', x: 8, y: 5, w: 1, d: 1, h: 0.7 },
   { kind: 'silo', x: 9, y: 9, w: 1, d: 1, h: 1.2 },
   { kind: 'canisters', x: 6, y: 9, w: 1, d: 1, h: 0.7 },
-];
+
+// ---------------------------------------------------------------- projection --
+
+const COS30 = Math.cos(Math.PI / 6);
+const SIN30 = 0.5;
+
+/** Tile space (x, y, z) to screen space. */
+function isoPoint(x, y, z = 0, camera = FACTORY.camera, unit = FACTORY.unit) {
+  const scale = unit * camera.zoom;
+  return {
+    x: camera.panX + (x - y) * COS30 * scale,
+    y: camera.panY + (x + y) * SIN30 * scale - z * scale,
+  };
+}
+
+/** Screen space back to the floor plane, for hit testing. */
+function screenToTile(px, py, camera = FACTORY.camera, unit = FACTORY.unit) {
+  const scale = unit * camera.zoom;
+  const dx = (px - camera.panX) / scale;
+  const dy = (py - camera.panY) / scale;
+  return { x: dy / SIN30 / 2 + dx / COS30 / 2, y: dy / SIN30 / 2 - dx / COS30 / 2 };
+}
+
+/** Painter's order: things further along +x and +y sit nearer the viewer. */
+function depth(record) {
+  return record.x + record.y + (record.w || 0) / 2 + (record.d || 0) / 2;
+}
+
+function visibleStations(registry = FACTORY.registry) {
+  return registry.slice().sort((a, b) => depth(a) - depth(b));
+}
+
+/** Below 80% zoom stations reduce to silhouette plus a status light. */
+function detailForZoom(zoom = FACTORY.camera.zoom) {
+  if (zoom < 0.8) return 'silhouette';
+  if (zoom > 1.1) return 'full';
+  return 'normal';
+}
+
+/** Frames the whole plant once, on mount. After that the camera only moves by hand. */
+function fitCamera(width, height, unit = FACTORY.unit) {
+  const flat = { panX: 0, panY: 0, zoom: 1 };
+  const points = [];
+  for (const record of FACTORY.registry) {
+    for (const [x, y, z] of [
+      [record.x, record.y, 0], [record.x + record.w, record.y, 0],
+      [record.x, record.y + record.d, record.h], [record.x + record.w, record.y + record.d, record.h],
+    ]) points.push(isoPoint(x, y, z, flat, unit));
+  }
+  const xs = points.map(point => point.x), ys = points.map(point => point.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const zoom = Math.min((width - 140) / Math.max(1, maxX - minX), (height - 190) / Math.max(1, maxY - minY));
+  FACTORY.camera.zoom = Math.min(1.5, Math.max(0.5, zoom));
+  const centreX = (minX + maxX) / 2, centreY = (minY + maxY) / 2;
+  FACTORY.camera.panX = width / 2 - centreX * FACTORY.camera.zoom;
+  FACTORY.camera.panY = height / 2 - centreY * FACTORY.camera.zoom + 10;
+  return FACTORY.camera;
+}
+
+// ------------------------------------------------------------------ drawing --
+
+function polygon(ctx, points, fill, stroke, lineWidth = 1) {
+  ctx.beginPath();
+  points.forEach((point, index) => (index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y)));
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lineWidth; ctx.stroke(); }
+}
+
+/** Floor plate: dotted grid inside the plant's own bounds, never infinite. */
+function drawFloor(ctx, width, height) {
+  const { palette } = FACTORY;
+  ctx.fillStyle = palette.floor;
+  ctx.fillRect(0, 0, width, height);
+
+  const tiles = FACTORY.registry.concat(FACTORY.props);
+  const bounds = tiles.reduce((acc, record) => ({
+    minX: Math.min(acc.minX, record.x), minY: Math.min(acc.minY, record.y),
+    maxX: Math.max(acc.maxX, record.x + record.w), maxY: Math.max(acc.maxY, record.y + record.d),
+  }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+  bounds.minX -= 2; bounds.minY -= 2; bounds.maxX += 2; bounds.maxY += 2;
+
+  ctx.fillStyle = palette.floorDot;
+  const size = FACTORY.camera.zoom >= 0.8 ? 1.4 : 1;
+  for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+    for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+      const point = isoPoint(x, y);
+      if (point.x < -20 || point.x > width + 20 || point.y < -20 || point.y > height + 20) continue;
+      ctx.fillRect(point.x, point.y, size, size);
+    }
+  }
+  if (FACTORY.camera.zoom >= 0.6) {
+    polygon(ctx, [
+      isoPoint(bounds.minX, bounds.minY), isoPoint(bounds.maxX, bounds.minY),
+      isoPoint(bounds.maxX, bounds.maxY), isoPoint(bounds.minX, bounds.maxY),
+    ], null, palette.structure, 1);
+  }
+}
+
