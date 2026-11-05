@@ -759,3 +759,91 @@ function positionSpecCard(floor) {
   card.hidden = false;
 }
 
+
+// ----------------------------------------------------------------- selection --
+
+function drawSpark(canvas, seed = 0) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width, height = canvas.height;
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#1B1F23';
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = '#2C3137';
+  ctx.lineWidth = 1;
+  for (let index = 1; index < 4; index += 1) {
+    ctx.beginPath();
+    ctx.moveTo(0, (height / 4) * index);
+    ctx.lineTo(width, (height / 4) * index);
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  for (let index = 0; index <= 24; index += 1) {
+    const t = index / 24;
+    const value = 0.55 + 0.3 * Math.sin(t * 5 + seed) * Math.cos(t * 2.4 + seed * 0.7);
+    const x = t * width, y = height - value * height * 0.85;
+    if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = FACTORY.palette.accent;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+function selectStation(station, floor = document.getElementById('factoryFloor')) {
+  if (!floor) return;
+  const crumb = floor.querySelector('#factoryCrumb');
+  const inspector = floor.querySelector('#factoryInspector');
+  if (!station) {
+    FACTORY.selected = null;
+    if (inspector) inspector.hidden = true;
+    if (crumb) crumb.textContent = FACTORY.scenes[FACTORY.sceneIndex];
+    renderFrame(floor);
+    return;
+  }
+  FACTORY.selected = station;
+  if (crumb) crumb.textContent = station.name;
+  if (inspector) {
+    inspector.hidden = false;
+    floor.querySelector('#factoryInspectorTitle').textContent = station.name;
+    floor.querySelector('#factoryInspectorZone').textContent = station.zone;
+    const readout = floor.querySelector('#factoryReadout');
+    readout.replaceChildren();
+    for (const [label, value] of station.rows) {
+      readout.append(factoryElement('dt', null, label), factoryElement('dd', null, value));
+    }
+    const log = floor.querySelector('#factoryLog');
+    log.replaceChildren();
+    for (const line of [
+      `Opened on ${FACTORY.scenes[FACTORY.sceneIndex]}`,
+      'Reading comes from the running station',
+      'Selection stays inside this room',
+    ]) log.append(factoryElement('li', null, line));
+    drawSpark(floor.querySelector('#factorySpark'), station.id.length % 5);
+  }
+  renderFrame(floor);
+}
+
+/** Moves the camera to a station, keeping the room itself where it is. */
+function flyTo(station, floor = document.getElementById('factoryFloor')) {
+  const canvas = floor?.querySelector('#factoryCanvas');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const unit = FACTORY.unit * FACTORY.camera.zoom;
+  const cx = station.x + station.w / 2;
+  const cy = station.y + station.d / 2;
+  FACTORY.camera.panX = rect.width / 2 - (cx - cy) * COS30 * unit;
+  FACTORY.camera.panY = rect.height / 2 - (cx + cy) * SIN30 * unit + 40;
+  selectStation(station, floor);
+}
+
+/** List mode: the same stations as a table, for keyboard and screen readers. */
+function toggleList(floor = document.getElementById('factoryFloor'), force) {
+  if (!floor) return;
+  FACTORY.listMode = force == null ? !FACTORY.listMode : force;
+  const table = floor.querySelector('#factoryList');
+  if (table) table.hidden = !FACTORY.listMode;
+  if (FACTORY.listMode) table?.querySelector('tbody tr')?.focus();
+  else floor.querySelector('#factoryCanvas')?.focus?.();
+  renderFrame(floor);
+}
+
