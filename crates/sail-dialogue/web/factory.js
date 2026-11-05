@@ -203,11 +203,13 @@ function drawPipes(ctx) {
 function drawContactShadow(ctx, record) {
   const centre = isoPoint(record.x + (record.w || 1) / 2, record.y + (record.d || 1) / 2, 0);
   const scale = FACTORY.unit * FACTORY.camera.zoom;
-  const span = ((record.w || 1) + (record.d || 1)) / 2;
-  const rx = span * scale * COS30 * 0.95;
-  const ry = span * scale * SIN30 * 0.95;
+  // Round plant sits on a smaller footprint than the plate it marks out.
+  const round = record.kind === 'tank' || record.kind === 'silo' || record.kind === 'canisters';
+  const span = round
+    ? (Math.min(record.w || 1, record.d || 1) / 2) * 1.5
+    : ((record.w || 1) + (record.d || 1)) / 2 * 0.85;
   ctx.beginPath();
-  ctx.ellipse(centre.x, centre.y + 2, rx, ry, 0, 0, Math.PI * 2);
+  ctx.ellipse(centre.x, centre.y + 2, span * scale * COS30, span * scale * SIN30, 0, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(6,8,10,0.55)';
   ctx.fill();
 }
@@ -535,7 +537,7 @@ function mountFactory(workspace) {
     <canvas id="factoryCanvas" class="factory-canvas" role="img" tabindex="0"
       aria-label="Isometric SAIL room. Every subsystem is a fixed station on the floor."></canvas>
     <div class="factory-chrome">
-      <div class="factory-breadcrumb"><span>ROOM</span><i>/</i><strong id="factoryCrumb">Overview</strong></div>
+      <div class="factory-breadcrumb"><span>ROOM</span><i>/</i><strong id="factoryCrumb">Overview</strong><em id="factoryCrumbStation" hidden></em></div>
       <div class="factory-status">
         <span id="factoryClock">--</span><span id="factoryDay"></span>
         <span class="factory-live"><i></i>LIVE<span id="factoryLatency">--</span></span>
@@ -676,7 +678,7 @@ function buildScenes(floor) {
 function setScene(index, floor = document.getElementById('factoryFloor')) {
   FACTORY.sceneIndex = (index + FACTORY.scenes.length) % FACTORY.scenes.length;
   const crumb = floor?.querySelector('#factoryCrumb');
-  if (crumb && !FACTORY.selected) crumb.textContent = FACTORY.scenes[FACTORY.sceneIndex];
+  if (crumb) crumb.textContent = FACTORY.scenes[FACTORY.sceneIndex];
   floor?.querySelectorAll('.factory-scene').forEach((button, position) => {
     button.setAttribute('aria-pressed', String(position === FACTORY.sceneIndex));
   });
@@ -753,11 +755,15 @@ function positionSpecCard(floor) {
     row.append(factoryElement('span', null, label), factoryElement('b', null, value));
     card.append(row);
   }
-  const bounds = floor.getBoundingClientRect();
-  const width = 200;
-  card.style.left = `${Math.min(Math.max(anchor.x + 14, 8), bounds.width - width - 8)}px`;
-  card.style.top = `${Math.max(anchor.y - 74, 8)}px`;
   card.hidden = false;
+  const bounds = floor.getBoundingClientRect();
+  const width = card.offsetWidth || 200;
+  const height = card.offsetHeight || 90;
+  const inspector = floor.querySelector('#factoryInspector');
+  const reserve = inspector && !inspector.hidden ? Math.min(300, bounds.width * 0.4) : 0;
+  const maxLeft = Math.max(8, bounds.width - reserve - width - 12);
+  card.style.left = `${Math.min(Math.max(anchor.x + 20, 8), maxLeft)}px`;
+  card.style.top = `${Math.max(anchor.y - height - 12, 8)}px`;
 }
 
 
@@ -792,17 +798,20 @@ function drawSpark(canvas, seed = 0) {
 
 function selectStation(station, floor = document.getElementById('factoryFloor')) {
   if (!floor) return;
-  const crumb = floor.querySelector('#factoryCrumb');
+  const crumbStation = floor.querySelector('#factoryCrumbStation');
   const inspector = floor.querySelector('#factoryInspector');
   if (!station) {
     FACTORY.selected = null;
     if (inspector) inspector.hidden = true;
-    if (crumb) crumb.textContent = FACTORY.scenes[FACTORY.sceneIndex];
+    if (crumbStation) { crumbStation.hidden = true; crumbStation.textContent = ''; }
     renderFrame(floor);
     return;
   }
   FACTORY.selected = station;
-  if (crumb) crumb.textContent = station.name;
+  if (crumbStation) {
+    crumbStation.textContent = station.name;
+    crumbStation.hidden = false;
+  }
   if (inspector) {
     inspector.hidden = false;
     floor.querySelector('#factoryInspectorTitle').textContent = station.name;
@@ -966,6 +975,8 @@ const FACTORY_STYLES = `
   font:500 10px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace; letter-spacing:.08em; color:#8A919B }
 .factory-breadcrumb i { font-style:normal; color:#3A3E45 }
 .factory-breadcrumb strong { color:#C9CDD4; font-weight:600 }
+.factory-breadcrumb em { font-style:normal; color:#F26B21 }
+.factory-breadcrumb em::before { content:"/ "; color:#3A3E45 }
 .factory-status { position:absolute; top:12px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:14px;
   padding:6px 14px; border:1px solid #2C3137; border-radius:4px; background:#1B1F23E6;
   font:500 11px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace; letter-spacing:.06em; color:#C9CDD4;
