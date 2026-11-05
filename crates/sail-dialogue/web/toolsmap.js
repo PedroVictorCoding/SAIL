@@ -978,7 +978,7 @@
     if (!routed) { $('#tmPaneTitle').textContent = byId[id].name; $('#tmPaneAbout').textContent = byId[id].about; }
     if (state.popup !== id || pane.hidden || state.tracker) paneMain.scrollTop = 0;
     state.tracker = false;
-    showPane('station');
+    showPane(id === 'arena' ? 'arena' : 'station');
     state.popup = id;
     select(id);
   }
