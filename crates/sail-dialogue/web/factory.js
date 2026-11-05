@@ -847,3 +847,96 @@ function toggleList(floor = document.getElementById('factoryFloor'), force) {
   renderFrame(floor);
 }
 
+
+// ------------------------------------------------------------------- events --
+
+function bindFactoryEvents(floor) {
+  const canvas = floor.querySelector('#factoryCanvas');
+  if (!canvas) return;
+  let drag = null;
+
+  const local = event => {
+    const rect = canvas.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+
+  canvas.addEventListener('pointerdown', event => {
+    const point = local(event);
+    drag = { ...point, panX: FACTORY.camera.panX, panY: FACTORY.camera.panY, moved: false };
+    canvas.setPointerCapture?.(event.pointerId);
+  });
+
+  canvas.addEventListener('pointermove', event => {
+    const point = local(event);
+    if (drag) {
+      const dx = point.x - drag.x, dy = point.y - drag.y;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
+      if (drag.moved) {
+        FACTORY.camera.panX = drag.panX + dx;
+        FACTORY.camera.panY = drag.panY + dy;
+        renderFrame(floor);
+        return;
+      }
+    }
+    const station = hitTest(point.x, point.y);
+    if ((station?.id || null) !== (FACTORY.hover?.id || null)) {
+      FACTORY.hover = station;
+      canvas.style.cursor = station ? 'pointer' : 'grab';
+      renderFrame(floor);
+    }
+  });
+
+  canvas.addEventListener('pointerup', event => {
+    const point = local(event);
+    const moved = drag?.moved;
+    drag = null;
+    if (moved) return;
+    selectStation(hitTest(point.x, point.y), floor);
+  });
+
+  canvas.addEventListener('pointerleave', () => {
+    drag = null;
+    if (FACTORY.hover) { FACTORY.hover = null; renderFrame(floor); }
+  });
+
+  canvas.addEventListener('wheel', event => {
+    event.preventDefault();
+    const point = local(event);
+    const before = screenToTile(point.x, point.y);
+    FACTORY.camera.zoom = Math.min(1.5, Math.max(0.5,
+      FACTORY.camera.zoom + (event.deltaY > 0 ? -0.08 : 0.08)));
+    const unit = FACTORY.unit * FACTORY.camera.zoom;
+    FACTORY.camera.panX = point.x - (before.x - before.y) * COS30 * unit;
+    FACTORY.camera.panY = point.y - (before.x + before.y) * SIN30 * unit;
+    renderFrame(floor);
+  }, { passive: false });
+
+  floor.querySelector('#factoryInspectorClose')?.addEventListener('click', () => selectStation(null, floor));
+
+  canvas.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (FACTORY.hover) selectStation(FACTORY.hover, floor);
+    }
+  });
+
+  document.addEventListener('keydown', event => {
+    if (!FACTORY.mounted) return;
+    if (event.target && /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) return;
+    if (event.key === 'Escape') selectStation(null, floor);
+    else if (event.key === '\\') { event.preventDefault(); toggleList(floor); }
+    else if (event.key === 'F' || event.key === 'f') {
+      // Full-bleed is deliberately the only state that leaves the room metaphor.
+      if (FACTORY.selected && (FACTORY.selected.kind === 'bank' || FACTORY.selected.id === 'canvas')) {
+        canvas.classList.toggle('is-fullbleed');
+        renderFrame(floor);
+      }
+    } else if (['1', '2', '3', '4'].includes(event.key) && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      setScene(Number(event.key) - 1, floor);
+    }
+  });
+
+  window.addEventListener('resize', () => renderFrame(floor));
+}
+
