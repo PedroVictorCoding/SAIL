@@ -104,13 +104,19 @@ with sync_playwright() as p:
     # The Dialogue column stays on Chat; its info tabs show the open system's status.
     assert page.locator('#tmTab-chat').get_attribute('aria-selected') == 'true'
     assert page.is_hidden('#tmInspector') and page.is_visible('#tmChat #homeView')
-    page.locator('#tmTab-overview').click()
+    page.locator('#tmTab-context').click()
     assert page.locator('#tmInspector .tm-insp-head h3').inner_text() == 'Mind'
     assert page.is_hidden('#tmChat #homeView')
-    assert page.locator('#tmInspector').get_attribute('aria-labelledby') == 'tmTab-overview'
+    assert page.locator('#tmInspector').get_attribute('aria-labelledby') == 'tmTab-context'
+    assert page.locator('#tmInfo-overview').get_attribute('aria-selected') == 'true'
+    assert page.locator('#tmInfoPanel').get_attribute('aria-labelledby') == 'tmInfo-overview'
+    page.locator('#tmInfo-overview').focus()
     page.keyboard.press('ArrowRight')
-    assert page.evaluate('document.activeElement.id') == 'tmTab-tasks'
+    assert page.evaluate('document.activeElement.id') == 'tmInfo-tasks'
     assert page.locator('#tmInspector .tm-card h3').first.inner_text() == 'Task Queue'
+    page.keyboard.press('End')
+    assert page.evaluate('document.activeElement.id') == 'tmInfo-config'
+    page.locator('#tmTab-context').focus()
     page.keyboard.press('Home')
     assert page.evaluate('document.activeElement.id') == 'tmTab-chat'
     assert page.is_visible('#tmChat #homeView') and page.is_hidden('#tmInspector')
@@ -126,7 +132,8 @@ with sync_playwright() as p:
     page.locator('#textInput').fill('')
     page.keyboard.press('Escape')
     assert page.is_visible('#tmPane'), 'Escape no longer leaves a system'
-    page.locator('#tmTab-overview').click()
+    page.locator('#tmTab-context').click()
+    assert page.locator('#tmInfo-config').get_attribute('aria-selected') == 'true'  # Context keeps its view
 
     # Sidebar entries switch the centre directly; Home brings the map back.
     page.locator('.tm-nav-item[data-nav="guardian"]').click()
@@ -172,7 +179,7 @@ with sync_playwright() as p:
 
     # Tasks opens Forge on its task list; dialogs from a system work in place.
     page.locator('.tm-nav-item', has_text='Tasks').click()
-    page.wait_for_function("document.getElementById('tmTab-tasks')?.getAttribute('aria-selected') === 'true'")
+    page.wait_for_function("document.getElementById('tmInfo-tasks')?.getAttribute('aria-selected') === 'true'")
     page.wait_for_function("document.querySelector('#tmInspector .tm-insp-head h3')?.textContent === 'Forge'")
     assert page.evaluate('location.hash') == '#forge'
     assert page.is_hidden('.tm-pane-tracker')
@@ -204,7 +211,8 @@ with sync_playwright() as p:
     assert page.is_hidden('#contextSheet') and page.is_visible('#tmPane')
     page.locator('.tm-nav-item[data-nav="home"]').click()
     page.wait_for_selector('#tmPane', state='hidden')
-    page.locator('#tmTab-overview').click()
+    page.locator('#tmTab-context').click()
+    page.locator('#tmInfo-overview').click()
     page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-column-overview.png')))
     # Asking from the header search returns the column to the conversation.
     page.locator('#tmAskInput').fill('hello')
