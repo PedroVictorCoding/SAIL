@@ -51,15 +51,16 @@ pub struct ServerState {
     inference: sail_mind::MindService,
     plans: Option<Arc<crate::plans::Plans>>,
     pulse: Option<Arc<sail_pulse::Pulse>>,
+    briefing: Option<Arc<crate::briefing::BriefingEngine>>,
 }
 /// Arena Learn's owner API over the resident model. Learning is unavailable (and logged)
 /// if its store cannot be opened; the rest of Dialogue still starts.
-fn learn_routes(
+fn learn_services(
     inference: &sail_mind::MindService,
     arena: &Arc<sail_arena::ArenaSubsystem>,
     authority: Option<sail_guardian::authority::ApprovalAuthority>,
     pulse: Option<Arc<sail_pulse::Pulse>>,
-) -> Option<Router> {
+) -> (Option<Arc<sail_arena_learn::Engine>>, Option<Router>) {
     use sail_arena_learn::{Engine, SqliteEventStore, agent::ArenaKnowledge, agent::MindModel};
     let path = SqliteEventStore::default_path();
     match SqliteEventStore::open(&path) {
@@ -70,15 +71,17 @@ fn learn_routes(
                 Ok(knowledge) => engine = engine.with_knowledge(Arc::new(knowledge)),
                 Err(error) => warn!(%error, "Arena Learn graph unavailable; knowledge is disabled"),
             }
-            Some(crate::learn_http::router_with_pulse(
-                Arc::new(engine),
+            let engine = Arc::new(engine);
+            let router = crate::learn_http::router_with_pulse(
+                engine.clone(),
                 authority,
                 pulse,
-            ))
+            );
+            (Some(engine), Some(router))
         }
         Err(error) => {
             warn!(%error, path=%path.display(), "Arena Learn store unavailable; learning disabled");
-            None
+            (None, None)
         }
     }
 }
@@ -142,10 +145,19 @@ pub async fn run_dialogue_server_with_plans(
     };
     let live_context_authority = authority();
     let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
-    let learn_routes = learn_routes(&inference, &arena, authority(), pulse.clone());
+    let (learn_engine, learn_routes) = learn_services(&inference, &arena, authority(), pulse.clone());
     let tracker_routes = tracker_routes(authority());
     let system_routes = crate::system_http::router(authority());
     let spotify_routes = crate::spotify_http::router(authority());
+    let briefing_dir = sail_common::storage::resolve().path.join("briefing");
+    let briefing_engine = Arc::new(crate::briefing::BriefingEngine::new(
+        sail_bridge::spotify::global(),
+        pulse.clone(),
+        Some(arena.clone()),
+        learn_engine,
+        briefing_dir,
+    ));
+    let briefing_routes = crate::briefing_http::router(briefing_engine.clone(), authority());
     let plan_routes = plans
         .clone()
         .map(|plans| crate::plans::router(plans, authority()));
@@ -167,6 +179,7 @@ pub async fn run_dialogue_server_with_plans(
         .merge(crate::ui_assets::router())
         .nest_service("/api/system", system_routes)
         .nest_service("/api/spotify", spotify_routes)
+        .nest_service("/api/briefing", briefing_routes)
         .route("/api/health", get(health))
         .route("/api/mind/status", get(mind_status))
         .route("/ws/voice", get(ws_handler))
@@ -179,6 +192,7 @@ pub async fn run_dialogue_server_with_plans(
             inference,
             plans,
             pulse,
+            briefing: Some(briefing_engine),
         }));
     if let Some(routes) = plan_routes {
         app = app.nest_service("/api/plans", routes);
@@ -340,6 +354,9 @@ impl Drop for AbortTask {
 }
 
 async fn handle_voice_socket(socket: WebSocket, state: Arc<ServerState>) {
+    if let Some(briefing) = &state.briefing {
+        briefing.record_client_activity();
+    }
     let session = uuid::Uuid::new_v4().to_string();
     let span = tracing::info_span!("voice_session",session_id=%session);
     handle_session(socket, state, session)

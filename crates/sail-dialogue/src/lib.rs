@@ -1,4 +1,6 @@
 pub mod approval_http;
+pub mod briefing;
+pub mod briefing_http;
 pub mod connection_controller;
 pub mod control;
 pub mod conversation_controller;

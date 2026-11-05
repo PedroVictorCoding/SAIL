@@ -41,6 +41,98 @@
         <div class="welcome-art" aria-hidden="true"><svg viewBox="0 0 640 160" preserveAspectRatio="none"><defs><linearGradient id="horizonLine" x1="0" x2="1"><stop stop-color="#8174d4" stop-opacity="0"/><stop offset=".48" stop-color="#d080ac" stop-opacity=".32"/><stop offset=".72" stop-color="#e7a290" stop-opacity=".42"/><stop offset="1" stop-color="#6488ce" stop-opacity="0"/></linearGradient><radialGradient id="horizonSun"><stop stop-color="#f2b39d" stop-opacity=".75"/><stop offset="1" stop-color="#e58b9c" stop-opacity="0"/></radialGradient></defs><path d="M0 127 C70 130 90 101 148 114 S226 144 288 116 374 95 423 119 511 149 558 119 614 105 640 112" fill="none" stroke="url(#horizonLine)" stroke-width="2"/><path d="M0 145 C90 140 125 120 190 132 S280 155 350 130 450 118 503 135 585 147 640 131" fill="none" stroke="url(#horizonLine)" stroke-width="1"/><circle cx="476" cy="112" r="58" fill="url(#horizonSun)"/></svg></div>
       </article>
 
+      <!-- Return Briefing & Session Staging Deck ("While Away" Intelligence Layer) -->
+      <section class="return-briefing-deck" id="returnBriefingDeck" aria-label="Return Briefing Deck" hidden>
+        <header class="briefing-deck-header">
+          <div class="briefing-deck-meta">
+            <span class="briefing-badge">While You Were Away</span>
+            <h2 id="briefingHeadline" class="briefing-headline">SAIL prepared your return deck.</h2>
+            <time id="briefingLocalTime" class="briefing-time"></time>
+          </div>
+          <div class="briefing-deck-actions">
+            <button class="tactile-btn briefing-refresh-btn" id="briefingRefreshBtn" type="button" aria-label="Refresh briefing">↻ Refresh</button>
+            <button class="tactile-btn briefing-dismiss-btn" id="briefingDismissBtn" type="button" aria-label="Dismiss briefing">✕</button>
+          </div>
+        </header>
+
+        <div class="briefing-cards-grid">
+          <!-- 1. Staged Music Card -->
+          <article class="briefing-card briefing-music-card" id="briefingMusicCard">
+            <div class="briefing-card-top">
+              <span class="briefing-category-tag tag-music">Music Staging</span>
+              <span class="briefing-slot-badge" id="briefingMusicSlot">Focus Flow</span>
+            </div>
+            <div class="briefing-card-body">
+              <h3 id="briefingMusicTitle" class="briefing-item-title">Loading track…</h3>
+              <p id="briefingMusicArtist" class="briefing-item-sub"></p>
+              <p id="briefingMusicRationale" class="briefing-item-desc"></p>
+            </div>
+            <button class="tactile-btn tactile-action-btn music-action-btn" id="briefingPlayMusicBtn" type="button">▶ Play Staged Music</button>
+          </article>
+
+          <!-- 2. Adaptive Learning Card -->
+          <article class="briefing-card briefing-learn-card" id="briefingLearnCard">
+            <div class="briefing-card-top">
+              <span class="briefing-category-tag tag-learn">Adaptive Learning</span>
+              <span class="briefing-slot-badge" id="briefingLearnDomain">Arena Learn</span>
+            </div>
+            <div class="briefing-card-body">
+              <h3 id="briefingLearnTopic" class="briefing-item-title">Loading lesson…</h3>
+              <p id="briefingLearnEstimate" class="briefing-item-sub">~15 min lesson</p>
+              <p id="briefingLearnRationale" class="briefing-item-desc"></p>
+            </div>
+            <button class="tactile-btn tactile-action-btn learn-action-btn" id="briefingStartLearnBtn" type="button">✦ Continue Lesson</button>
+          </article>
+
+          <!-- 3. Vigilance Events Card -->
+          <article class="briefing-card briefing-events-card" id="briefingEventsCard">
+            <div class="briefing-card-top">
+              <span class="briefing-category-tag tag-events">Events & Vigilance</span>
+              <span class="briefing-slot-badge" id="briefingEventsCount">Schedule</span>
+            </div>
+            <div class="briefing-card-body">
+              <ul class="briefing-events-list" id="briefingEventsList">
+                <li class="briefing-event-item">Scanning schedule…</li>
+              </ul>
+            </div>
+            <button class="tactile-btn tactile-action-btn events-action-btn" id="briefingEventsBtn" type="button">View Reminders</button>
+          </article>
+
+          <!-- 4. News & Tech Radar Card -->
+          <article class="briefing-card briefing-news-card" id="briefingNewsCard">
+            <div class="briefing-card-top">
+              <span class="briefing-category-tag tag-news">Interest Radar</span>
+              <span class="briefing-slot-badge">Curated</span>
+            </div>
+            <div class="briefing-card-body">
+              <ul class="briefing-news-list" id="briefingNewsList">
+                <li class="briefing-news-item">Gathering radar updates…</li>
+              </ul>
+            </div>
+          </article>
+
+          <!-- 5. Continuity & Sentinel Card -->
+          <article class="briefing-card briefing-continuity-card" id="briefingContinuityCard">
+            <div class="briefing-card-top">
+              <span class="briefing-category-tag tag-continuity">Continuity & Host</span>
+              <span class="briefing-slot-badge">Healthy</span>
+            </div>
+            <div class="briefing-card-body">
+              <div class="briefing-continuity-block">
+                <span>Workspace:</span>
+                <strong id="briefingContinuityWorkspace">SAIL</strong>
+              </div>
+              <p id="briefingContinuityForge" class="briefing-item-sub">Background tasks idle.</p>
+              <p id="briefingContinuityAction" class="briefing-item-desc"></p>
+              <div class="briefing-sentinel-stats">
+                <div><span>Storage</span><small id="briefingSentinelStorage">—</small></div>
+                <div><span>Memory</span><small id="briefingSentinelMemory">—</small></div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
       <section class="workspace-grid" aria-label="Live system and session cards">
         <article class="workspace-card system-card" id="systemCard" data-card="systemCard">
           <header class="card-heading">
@@ -1197,6 +1289,7 @@
 <script src="/approvals.js" defer></script>
 <script src="/plans.js" defer></script>
 <script src="/reminders.js" defer></script>
+<script src="/briefing.js" defer></script>
 <script src="/subsystem-pages.js" defer></script>
 <script src="/memory.js" defer></script>
 <script src="/learn.js" defer></script>
