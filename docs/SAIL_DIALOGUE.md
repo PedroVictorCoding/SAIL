@@ -28,6 +28,9 @@ Mind, Core audio bus, Relay, Vision, Arena, Guardian; concurrent tools #42.
 - Handle partial failures, reconnects, cancellation and restarts without synthesizing successful outputs. Prefer local-first operation and persist only consented, minimized state.
 
 ## 5. UI and interaction mapping
+
+For compact shared model instructions, changing turn context and reproducible
+prompt-processing measurements, see [Dialogue prompt processing](VOICE_PREFILL.md).
 Persistent Orb and voice-session card; explicit mic and recording state, language and listening/cancel controls.
 
 Use the existing SAIL design: compact dark UI, contextual cards, ambient Orb, progressive disclosure, accessible keyboard/touch controls, and no permanent new tab unless justified by repeated user use. Show honest loading, empty, unavailable, permission-denied and reconnection states. Web and Android share one typed state model.

@@ -331,9 +331,18 @@ for line in sys.stdin:
     receive_type(&mut socket, "turn_finished").await;
     let observed_request = requests.lock().await[0].clone();
     let system = observed_request["messages"][0]["content"].as_str().unwrap();
-    assert!(system.contains("Live conversation observations"));
-    assert!(system.contains("The launch is on Tuesday."));
-    assert!(system.contains("untrusted quoted speech"));
+    assert!(!system.contains("The launch is on Tuesday."));
+    let user = observed_request["messages"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["content"]
+        .as_str()
+        .unwrap();
+    assert!(user.contains("Live conversation observations"));
+    assert!(user.contains("The launch is on Tuesday."));
+    assert!(user.contains("untrusted quoted speech"));
+    assert!(user.contains(crate::vlm::MEMORY_CONTEXT_BEGIN));
     assert!(
         observed_request["messages"]
             .as_array()

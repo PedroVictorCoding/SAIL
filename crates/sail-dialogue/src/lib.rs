@@ -11,6 +11,7 @@ mod media_confirm;
 pub mod memory_http;
 pub mod orb;
 pub mod pipeline;
+pub mod prompt;
 pub mod plans;
 pub mod pulse_http;
 pub mod server;
