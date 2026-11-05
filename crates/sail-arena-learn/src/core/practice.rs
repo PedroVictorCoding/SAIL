@@ -5,7 +5,7 @@
 //! to the learner (or in a learner-facing view) until `conclude`. Only one problem is active
 //! at a time. Hints are requested by the learner and recorded per problem. Outcomes are
 //! session evidence only: they never change plan progress or the learning graph.
-use super::{Invalid, MAX_TEXT, bounded};
+use super::{Invalid, MAX_SHORT, MAX_TEXT, bounded};
 use serde::{Deserialize, Serialize};
 
 /// Hints a problem may carry.
@@ -24,6 +24,12 @@ pub struct ProblemSpec {
     /// Optional plan step this problem practises; it does not change plan progress.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// Optional practice mode (e.g. `recall`, `apply`, `synthesize`, `debug`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Optional target proposition/concept names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target: Vec<String>,
 }
 
 impl ProblemSpec {
@@ -38,6 +44,9 @@ impl ProblemSpec {
         for hint in &self.hints {
             bounded("hints[]", hint, MAX_HINT)?;
         }
+        if let Some(mode) = &self.mode {
+            bounded("mode", mode, MAX_SHORT)?;
+        }
         Ok(())
     }
 }
@@ -48,6 +57,9 @@ impl ProblemSpec {
 pub enum PracticeOutcome {
     Solved,
     SolvedWithHints,
+    MovedOn,
+    Surrendered,
+    Dismissed,
     NotSolved,
 }
 
@@ -71,6 +83,18 @@ pub struct ProblemView {
     pub solution: Option<String>,
     pub outcome: Option<PracticeOutcome>,
     pub attempts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub target: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rung: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub miss_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retest: Option<String>,
 }
 
 /// Practice progress for one session. There is no score or mastery field.

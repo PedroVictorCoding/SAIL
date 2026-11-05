@@ -1,5 +1,6 @@
 //! The learning event log (#233). Session state is a projection of these events; the
 //! browser never owns transcript truth.
+use super::graph::GraphContextProp;
 use super::judgment::Judgment;
 use super::plan::LessonPlan;
 use super::practice::{PracticeOutcome, ProblemSpec};
@@ -57,6 +58,12 @@ pub enum LearningEvent {
     SessionCreated {
         goal: String,
     },
+    SessionRenamed {
+        title: String,
+    },
+    GraphContextAttached {
+        propositions: Vec<GraphContextProp>,
+    },
     LearnerMessage {
         text: String,
     },
@@ -85,6 +92,9 @@ pub enum LearningEvent {
         call_id: String,
         answer: Answer,
         grade: Grade,
+    },
+    QuestionDismissed {
+        call_id: String,
     },
     /// The judge's verdict on a free-recall answer (#243). Recorded before the tutor
     /// replies, so the reply and the learner's view agree on it.
@@ -146,6 +156,14 @@ pub enum LearningEvent {
     PracticeConcluded {
         problem_id: String,
         outcome: PracticeOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        verdict: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rung: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        miss_class: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retest: Option<String>,
     },
     /// The learner cancelled the opt-in review reminder (#257).
     PracticeReviewCancelled,

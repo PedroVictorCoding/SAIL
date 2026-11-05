@@ -112,7 +112,9 @@ pub fn system(role: AgentRole, view: &SessionView, dir: Option<&Path>) -> String
     });
     let state = json!({
         "learning_goal": view.goal,
+        "session_kind": view.kind,
         "mode": view.mode,
+        "graph_context": view.graph_context,
         "assessment": view.probe,
         "lesson_plan": plan,
         "visited_steps": view.progress.visited,

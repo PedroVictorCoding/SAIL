@@ -15,6 +15,10 @@ use super::{args, extraction, models::RoleModels, prompts, tools};
 use crate::core::events::{
     AgentRole, Envelope, LearningEvent, NewEvent, PresentKind, ToolCallRecord, TurnOutcome,
 };
+use crate::core::graph::{
+    GraphContextProp, GraphNodePosition, GraphProposition, GraphReasoningChain,
+    GraphRenderSettings, GraphSnapshot, extract_from_notes,
+};
 use crate::core::messages::{compact_digest, compaction_cut, to_llm_messages, window};
 use crate::core::plan::LessonPlan;
 use crate::core::ports::{
@@ -28,8 +32,8 @@ use crate::core::view::{
 };
 use crate::core::{Invalid, MAX_SHORT, MAX_TEXT, bounded};
 use sail_protocol::{Generation, InferenceRequest, ToolChoice};
-use serde::Deserialize;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
@@ -65,6 +69,33 @@ pub struct AnswerOutcome {
     pub grade: Grade,
     /// True when this answer had already been recorded; nothing changed.
     pub duplicate: bool,
+}
+
+/// Detailed session summary for the LearnHarness sidebar list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DetailedSessionSummary {
+    pub id: String,
+    pub title: String,
+    pub goal: String,
+    pub kind: String,
+    pub mode: Mode,
+    pub paused: bool,
+    pub running: bool,
+    pub waiting_question: bool,
+    pub waiting_problem: bool,
+    pub created_ms: i64,
+    pub updated_ms: i64,
+    pub node_count: usize,
+    pub visited_count: usize,
+}
+
+/// Active background agent entry for the sidebar activity dock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ActiveAgentEntry {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub session_id: String,
 }
 
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -148,6 +179,14 @@ struct DiagramArgs {
 #[serde(deny_unknown_fields)]
 struct ConcludeArgs {
     outcome: PracticeOutcome,
+    #[serde(default)]
+    verdict: Option<String>,
+    #[serde(default)]
+    rung: Option<u8>,
+    #[serde(default)]
+    miss_class: Option<String>,
+    #[serde(default)]
+    retest: Option<String>,
 }
 
 /// What one tool call did to the turn.
@@ -238,32 +277,134 @@ impl Engine {
             .contains_key(session)
     }
 
+    pub fn active_agents(&self) -> Vec<ActiveAgentEntry> {
+        let running_ids: Vec<String> = self
+            .running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        let mut entries = Vec::new();
+        for sid in running_ids {
+            let label = self
+                .view(&sid)
+                .map(|v| {
+                    if v.title.trim().is_empty() {
+                        v.goal
+                    } else {
+                        v.title
+                    }
+                })
+                .unwrap_or_else(|_| sid.clone());
+            entries.push(ActiveAgentEntry {
+                id: format!("turn:{sid}"),
+                kind: "turn".into(),
+                label,
+                session_id: sid,
+            });
+        }
+        entries
+    }
+
     pub fn create_session(&self, goal: &str) -> Result<SessionView, TurnError> {
-        bounded("goal", goal, MAX_SHORT)?;
-        let id = new_id("learn");
-        let created = self.store.create(&id, goal.trim(), (self.clock)())?;
-        self.publish(std::slice::from_ref(&created));
-        self.view(&id)
+        self.create_session_with_options(goal, "teach", Vec::new())
     }
 
     /// A separate practice-only session (#244).
     pub fn create_practice_session(&self, topic: &str) -> Result<SessionView, TurnError> {
-        bounded("topic", topic, MAX_SHORT)?;
-        let id = new_id("practice");
-        let created = self.store.create(&id, topic.trim(), (self.clock)())?;
+        self.create_session_with_options(topic, "practice", Vec::new())
+    }
+
+    pub fn create_session_with_options(
+        &self,
+        goal: &str,
+        kind: &str,
+        graph_context: Vec<GraphContextProp>,
+    ) -> Result<SessionView, TurnError> {
+        let is_practice = kind.eq_ignore_ascii_case("practice");
+        bounded(if is_practice { "topic" } else { "goal" }, goal, MAX_SHORT)?;
+        let id = new_id(if is_practice { "practice" } else { "learn" });
+        let created = self.store.create(&id, goal.trim(), (self.clock)())?;
         self.publish(std::slice::from_ref(&created));
-        let stored = self.append(
-            &id,
-            1,
-            vec![NewEvent::new(
+
+        let mut follow_events = Vec::new();
+        if !graph_context.is_empty() {
+            follow_events.push(NewEvent::new(
+                "graph_context",
+                LearningEvent::GraphContextAttached {
+                    propositions: graph_context,
+                },
+            ));
+        }
+        if is_practice {
+            follow_events.push(NewEvent::new(
                 "practice_started",
                 LearningEvent::PracticeStarted {
-                    topic: topic.trim().to_string(),
+                    topic: goal.trim().to_string(),
+                },
+            ));
+        }
+        if !follow_events.is_empty() {
+            let stored = self.append(&id, 1, follow_events)?;
+            self.publish(&stored);
+        }
+        self.view(&id)
+    }
+
+    pub fn rename_session(&self, session: &str, title: &str) -> Result<SessionView, TurnError> {
+        bounded("title", title, MAX_SHORT)?;
+        let view = self.view(session)?;
+        self.append(
+            session,
+            view.last_seq,
+            vec![NewEvent::new(
+                new_id("rename"),
+                LearningEvent::SessionRenamed {
+                    title: title.trim().to_string(),
                 },
             )],
         )?;
-        self.publish(&stored);
-        self.view(&id)
+        self.view(session)
+    }
+
+    /// Dismisses the active question or active practice problem so the learner can continue in chat.
+    pub fn dismiss(&self, session: &str) -> Result<SessionView, TurnError> {
+        let view = self.view(session)?;
+        if let Some(call_id) = view.active_question.clone() {
+            self.append(
+                session,
+                view.last_seq,
+                vec![NewEvent::new(
+                    format!("dismiss_q:{call_id}"),
+                    LearningEvent::QuestionDismissed { call_id },
+                )],
+            )?;
+            return self.view(session);
+        }
+        if let Some(problem_id) = view
+            .practice
+            .as_ref()
+            .and_then(|p| p.active_problem.clone())
+        {
+            self.append(
+                session,
+                view.last_seq,
+                vec![NewEvent::new(
+                    format!("dismiss_p:{problem_id}"),
+                    LearningEvent::PracticeConcluded {
+                        problem_id,
+                        outcome: PracticeOutcome::Dismissed,
+                        verdict: None,
+                        rung: None,
+                        miss_class: None,
+                        retest: None,
+                    },
+                )],
+            )?;
+            return self.view(session);
+        }
+        Ok(view)
     }
 
     /// The learner asks for the next hint of the active problem (#244).
@@ -414,6 +555,120 @@ impl Engine {
 
     pub fn sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, TurnError> {
         Ok(self.store.sessions(limit)?)
+    }
+
+    pub fn sessions_detailed(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<DetailedSessionSummary>, TurnError> {
+        let summaries = self.store.sessions(limit)?;
+        let mut out = Vec::with_capacity(summaries.len());
+        for s in summaries {
+            let running = self.is_running(&s.id);
+            if let Ok(v) = self.view(&s.id) {
+                let node_count = v.plan.as_ref().map(|p| p.nodes.len()).unwrap_or(0);
+                let visited_count = v.progress.visited.len();
+                let waiting_problem = v
+                    .practice
+                    .as_ref()
+                    .and_then(|p| p.active_problem.as_ref())
+                    .is_some();
+                let title = if v.title.trim().is_empty() {
+                    v.goal.clone()
+                } else {
+                    v.title.clone()
+                };
+                out.push(DetailedSessionSummary {
+                    id: s.id,
+                    title,
+                    goal: v.goal,
+                    kind: v.kind,
+                    mode: v.mode,
+                    paused: v.paused,
+                    running,
+                    waiting_question: v.active_question.is_some(),
+                    waiting_problem,
+                    created_ms: if v.created_ms > 0 {
+                        v.created_ms
+                    } else {
+                        s.created_ms
+                    },
+                    updated_ms: if v.updated_ms > 0 {
+                        v.updated_ms
+                    } else {
+                        s.updated_ms
+                    },
+                    node_count,
+                    visited_count,
+                });
+            } else {
+                out.push(DetailedSessionSummary {
+                    id: s.id,
+                    title: s.goal.clone(),
+                    goal: s.goal,
+                    kind: "teach".into(),
+                    mode: Mode::Assess,
+                    paused: false,
+                    running,
+                    waiting_question: false,
+                    waiting_problem: false,
+                    created_ms: s.created_ms,
+                    updated_ms: s.updated_ms,
+                    node_count: 0,
+                    visited_count: 0,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    // --- Knowledge Graph operations ---
+
+    pub fn graph_snapshot(&self) -> Result<GraphSnapshot, TurnError> {
+        Ok(self.store.graph_snapshot()?)
+    }
+
+    pub fn extract_session_to_graph(
+        &self,
+        session: &str,
+    ) -> Result<(Vec<GraphProposition>, Vec<GraphReasoningChain>), TurnError> {
+        let view = self.view(session)?;
+        let (props, chains) = view.extract_graph_items((self.clock)());
+        self.store.upsert_graph_items(&props, &chains)?;
+        Ok((props, chains))
+    }
+
+    pub fn import_notes_to_graph(
+        &self,
+        file_name: &str,
+        content: &str,
+    ) -> Result<(Vec<GraphProposition>, Vec<GraphReasoningChain>), TurnError> {
+        bounded("file_name", file_name, MAX_SHORT)?;
+        if content.trim().is_empty() {
+            return Err(TurnError::Invalid("notes content cannot be empty".into()));
+        }
+        let (props, chains) = extract_from_notes(file_name.trim(), content, (self.clock)());
+        self.store.upsert_graph_items(&props, &chains)?;
+        Ok((props, chains))
+    }
+
+    pub fn delete_graph_nodes(&self, names_or_ids: &[String]) -> Result<usize, TurnError> {
+        Ok(self.store.delete_graph_nodes(names_or_ids)?)
+    }
+
+    pub fn delete_graph_source(&self, source_id: &str) -> Result<usize, TurnError> {
+        Ok(self.store.delete_graph_source(source_id)?)
+    }
+
+    pub fn save_graph_positions(
+        &self,
+        positions: &BTreeMap<String, GraphNodePosition>,
+    ) -> Result<(), TurnError> {
+        Ok(self.store.save_graph_positions(positions)?)
+    }
+
+    pub fn save_graph_settings(&self, settings: &GraphRenderSettings) -> Result<(), TurnError> {
+        Ok(self.store.save_graph_settings(settings)?)
     }
 
     pub fn events(&self, session: &str) -> Result<Vec<Envelope>, TurnError> {
@@ -1006,6 +1261,10 @@ fn judged_batch(
         correct: Vec::new(),
         node_id: pending.spec.node_id.clone(),
         rubric: pending.spec.rubric.clone(),
+        tool: pending.spec.tool.clone(),
+        question_type: pending.spec.question_type.clone(),
+        details: None,
+        explanation: None,
     };
     // Recorded as a call of the same tool, so the model's history shows the question it
     // will later see answered. The text is the judge's, asked on the tutor's behalf.
@@ -1109,6 +1368,9 @@ fn execute(
         Tool::Probe | Tool::AskUserQuestion => {
             let mut spec = decode(&call.arguments)?;
             spec.node_id = None;
+            if spec.tool.is_none() {
+                spec.tool = Some(tool.name().to_string());
+            }
             out.push(LearningEvent::QuestionAsked {
                 call_id: call.id.clone(),
                 spec,
@@ -1117,7 +1379,10 @@ fn execute(
             Ok(Effect::Question)
         }
         Tool::Quiz => {
-            let spec = decode(&call.arguments)?;
+            let mut spec = decode(&call.arguments)?;
+            if spec.tool.is_none() {
+                spec.tool = Some("quiz".to_string());
+            }
             let node = spec
                 .node_id
                 .clone()
@@ -1224,6 +1489,10 @@ fn execute(
             out.push(LearningEvent::PracticeConcluded {
                 problem_id,
                 outcome: a.outcome,
+                verdict: a.verdict,
+                rung: a.rung,
+                miss_class: a.miss_class,
+                retest: a.retest,
             });
             out.push(ok(
                 "Outcome recorded and the solution revealed to the learner.".into(),

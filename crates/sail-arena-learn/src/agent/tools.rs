@@ -99,7 +99,11 @@ impl Tool {
                 "correct": {"type":"array","items":{"type":"string"},
                     "description":"Correct option ids; hidden from the learner until they answer"},
                 "rubric": {"type":"string",
-                    "description":"free_recall only: the idea a good answer must contain, in one to three short points. Never shown to the learner; used to judge the answer"}
+                    "description":"free_recall only: the idea a good answer must contain, in one to three short points. Never shown to the learner; used to judge the answer"},
+                "question_type": {"type":"string","enum":["predict","check"],
+                    "description":"Optional subtype: predict (before explanation) or check (after explanation)"},
+                "details": {"type":"string","description":"Optional supporting context or code snippet"},
+                "explanation": {"type":"string","description":"Optional explanation revealed after the learner answers"}
             });
             let mut required = vec!["kind", "prompt"];
             if node {
@@ -132,10 +136,16 @@ impl Tool {
                 "statement":{"type":"string","description":"The problem, without its solution"},
                 "solution":{"type":"string","description":"The full worked solution; hidden from the learner until conclude"},
                 "hints":{"type":"array","items":{"type":"string"},"description":"Up to 5 short hints, revealed only when the learner asks"},
-                "node_id":{"type":"string","description":"Optional lesson step this practises; progress is not changed"}
+                "node_id":{"type":"string","description":"Optional lesson step this practises; progress is not changed"},
+                "mode":{"type":"string","description":"Optional practice mode (recall, apply, synthesize, debug)"},
+                "target":{"type":"array","items":{"type":"string"},"description":"Optional target concepts"}
             },"required":["statement","solution"]}),
             Tool::Conclude => json!({"type":"object","properties":{
-                "outcome":{"type":"string","enum":["solved","solved_with_hints","not_solved"]}
+                "outcome":{"type":"string","enum":["solved","solved_with_hints","moved_on","surrendered","dismissed","not_solved"]},
+                "verdict":{"type":"string","description":"Optional summary of the learner's reasoning"},
+                "rung":{"type":"integer","description":"Optional hint rung used"},
+                "miss_class":{"type":"string","description":"Optional error classification"},
+                "retest":{"type":"string","description":"Optional retest recommendation"}
             },"required":["outcome"]}),
             Tool::ShowDiagram => json!({"type":"object","properties":{
                 "node_id":{"type":"string","description":"Plan step this diagram belongs to"},

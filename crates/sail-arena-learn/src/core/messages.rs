@@ -80,7 +80,10 @@ pub fn answer_result(
         "learner_answer": {
             "chosen": chosen,
             "text": answer.text,
+            "other": answer.other,
+            "dont_know": answer.dont_know,
             "confidence_1_to_5": answer.confidence,
+            "confidence_pct": answer.confidence_pct,
             "thinking": answer.thinking,
         },
         "grade": grade,
@@ -231,6 +234,9 @@ pub fn to_llm_messages(system_prompt: &str, events: &[Envelope]) -> Vec<Message>
                 }
             }
             LearningEvent::AnswerJudged { .. }
+            | LearningEvent::SessionRenamed { .. }
+            | LearningEvent::GraphContextAttached { .. }
+            | LearningEvent::QuestionDismissed { .. }
             | LearningEvent::ProbeDone { .. }
             | LearningEvent::PlanUpdated { .. }
             | LearningEvent::ConceptPresented { .. }

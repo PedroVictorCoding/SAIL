@@ -9,14 +9,16 @@ use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use futures_util::stream::{self, Stream};
+use sail_arena_learn::core::graph::{GraphContextProp, GraphNodePosition, GraphRenderSettings};
 use sail_arena_learn::core::question::Answer;
 use sail_arena_learn::{Engine, StoreError, TurnError};
 use sail_guardian::authority::ApprovalAuthority;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::broadcast::error::RecvError;
@@ -48,11 +50,13 @@ pub fn router_with_pulse(
         )
         .route("/sources/:id", delete(remove_source))
         .route("/sessions", get(list).post(create))
-        .route("/sessions/:id", get(view).delete(remove))
+        .route("/sessions/:id", get(view).put(rename).delete(remove))
+        .route("/sessions/:id/markdown", get(export_markdown))
         .route("/sessions/:id/turn", post(turn))
         .route("/sessions/:id/answer", post(answer))
         .route("/sessions/:id/hint", post(hint))
         .route("/sessions/:id/attempt", post(attempt))
+        .route("/sessions/:id/dismiss", post(dismiss))
         .route("/sessions/:id/diagram-error", post(diagram_error))
         .route(
             "/sessions/:id/review",
@@ -62,6 +66,14 @@ pub fn router_with_pulse(
         .route("/sessions/:id/abort", post(abort))
         .route("/sessions/:id/pause", post(pause))
         .route("/sessions/:id/stream", get(stream_view))
+        .route("/graph", get(get_graph))
+        .route("/graph/extract", post(extract_graph))
+        .route("/graph/import", post(import_graph_notes))
+        .route("/graph/delete-nodes", post(delete_graph_nodes))
+        .route("/graph/delete-source", post(delete_graph_source))
+        .route("/graph/positions", put(save_graph_positions))
+        .route("/graph/settings", put(save_graph_settings))
+        .route("/activity", get(activity))
         .layer(axum::extract::DefaultBodyLimit::max(
             5 * 1024 * 1024 + 64_000,
         ))
@@ -142,7 +154,7 @@ fn continue_session(engine: &Arc<Engine>, id: &str) {
 
 async fn list(State(s): State<Arc<LearnState>>, h: HeaderMap) -> Reply {
     authorize(&s, &h)?;
-    let sessions = s.engine.sessions(100).map_err(error)?;
+    let sessions = s.engine.sessions_detailed(100).map_err(error)?;
     ok(StatusCode::OK, json!({"sessions":sessions}))
 }
 
@@ -150,21 +162,31 @@ async fn list(State(s): State<Arc<LearnState>>, h: HeaderMap) -> Reply {
 #[serde(deny_unknown_fields)]
 struct Create {
     goal: String,
+    #[serde(default)]
+    kind: Option<String>,
     /// `learn` (default) or `practice` (#244).
     #[serde(default)]
     mode: Option<String>,
+    #[serde(default)]
+    graph_context: Vec<GraphContextProp>,
 }
 
 async fn create(State(s): State<Arc<LearnState>>, h: HeaderMap, Json(c): Json<Create>) -> Reply {
     authorize(&s, &h)?;
-    let view = match c.mode.as_deref() {
-        None | Some("learn") => s.engine.create_session(&c.goal),
-        Some("practice") => s.engine.create_practice_session(&c.goal),
-        Some(other) => Err(TurnError::Invalid(format!(
-            "mode must be `learn` or `practice`, not `{other}`"
-        ))),
-    }
-    .map_err(error)?;
+    let requested = c.kind.as_deref().or(c.mode.as_deref()).unwrap_or("teach");
+    let kind = match requested {
+        "learn" | "teach" | "teaching" => "teach",
+        "practice" => "practice",
+        other => {
+            return Err(error(TurnError::Invalid(format!(
+                "mode must be `learn` or `practice`, not `{other}`"
+            ))));
+        }
+    };
+    let view = s
+        .engine
+        .create_session_with_options(&c.goal, kind, c.graph_context)
+        .map_err(error)?;
     continue_session(&s.engine, &view.session);
     ok(
         StatusCode::CREATED,
@@ -269,6 +291,46 @@ async fn view(State(s): State<Arc<LearnState>>, h: HeaderMap, Path(id): Path<Str
     ok(StatusCode::OK, snapshot(&s.engine, &id).map_err(error)?)
 }
 
+#[derive(Deserialize)]
+struct RenameBody {
+    title: String,
+}
+
+async fn rename(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(b): Json<RenameBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    s.engine.rename_session(&id, &b.title).map_err(error)?;
+    ok(StatusCode::OK, snapshot(&s.engine, &id).map_err(error)?)
+}
+
+async fn export_markdown(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<
+    (
+        StatusCode,
+        [(axum::http::header::HeaderName, &'static str); 1],
+        String,
+    ),
+    (StatusCode, Json<Value>),
+> {
+    authorize(&s, &h)?;
+    let v = s.engine.view(&id).map_err(error)?;
+    Ok((
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/markdown; charset=utf-8",
+        )],
+        v.to_markdown(),
+    ))
+}
+
 async fn remove(State(s): State<Arc<LearnState>>, h: HeaderMap, Path(id): Path<String>) -> Reply {
     authorize(&s, &h)?;
     let deleted = s.engine.delete(&id).map_err(error)?;
@@ -355,7 +417,16 @@ async fn attempt(
         .attempt(&id, &b.problem_id, &b.text)
         .map_err(error)?;
     continue_session(&s.engine, &id);
-    ok(StatusCode::ACCEPTED, json!({"accepted":true}))
+    ok(
+        StatusCode::ACCEPTED,
+        snapshot(&s.engine, &id).map_err(error)?,
+    )
+}
+
+async fn dismiss(State(s): State<Arc<LearnState>>, h: HeaderMap, Path(id): Path<String>) -> Reply {
+    authorize(&s, &h)?;
+    s.engine.dismiss(&id).map_err(error)?;
+    ok(StatusCode::OK, snapshot(&s.engine, &id).map_err(error)?)
 }
 
 #[derive(Deserialize)]
@@ -521,4 +592,136 @@ async fn stream_view(
         },
     );
     Ok(Sse::new(events).keep_alive(KeepAlive::default()))
+}
+
+// --- Knowledge Graph & Activity Endpoints ---
+
+#[derive(Deserialize)]
+struct ExtractGraphBody {
+    session_id: String,
+}
+
+#[derive(Deserialize)]
+struct ImportNotesBody {
+    file_name: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct DeleteNodesBody {
+    names: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct DeleteSourceBody {
+    source_id: String,
+}
+
+#[derive(Deserialize)]
+struct SavePositionsBody {
+    positions: BTreeMap<String, GraphNodePosition>,
+}
+
+async fn get_graph(State(s): State<Arc<LearnState>>, h: HeaderMap) -> Reply {
+    authorize(&s, &h)?;
+    if let Ok(sessions) = s.engine.sessions(50) {
+        for sess in sessions {
+            if let Ok(v) = s.engine.view(&sess.id)
+                && v.plan.is_some()
+            {
+                let _ = s.engine.extract_session_to_graph(&sess.id);
+            }
+        }
+    }
+    let snap = s.engine.graph_snapshot().map_err(error)?;
+    ok(
+        StatusCode::OK,
+        serde_json::to_value(snap).unwrap_or(Value::Null),
+    )
+}
+
+async fn extract_graph(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Json(b): Json<ExtractGraphBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    s.engine
+        .extract_session_to_graph(&b.session_id)
+        .map_err(error)?;
+    let snap = s.engine.graph_snapshot().map_err(error)?;
+    ok(
+        StatusCode::OK,
+        serde_json::to_value(snap).unwrap_or(Value::Null),
+    )
+}
+
+async fn import_graph_notes(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Json(b): Json<ImportNotesBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    s.engine
+        .import_notes_to_graph(&b.file_name, &b.content)
+        .map_err(error)?;
+    let snap = s.engine.graph_snapshot().map_err(error)?;
+    ok(
+        StatusCode::OK,
+        serde_json::to_value(snap).unwrap_or(Value::Null),
+    )
+}
+
+async fn delete_graph_nodes(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Json(b): Json<DeleteNodesBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    s.engine.delete_graph_nodes(&b.names).map_err(error)?;
+    let snap = s.engine.graph_snapshot().map_err(error)?;
+    ok(
+        StatusCode::OK,
+        serde_json::to_value(snap).unwrap_or(Value::Null),
+    )
+}
+
+async fn delete_graph_source(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Json(b): Json<DeleteSourceBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    s.engine.delete_graph_source(&b.source_id).map_err(error)?;
+    let snap = s.engine.graph_snapshot().map_err(error)?;
+    ok(
+        StatusCode::OK,
+        serde_json::to_value(snap).unwrap_or(Value::Null),
+    )
+}
+
+async fn save_graph_positions(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Json(b): Json<SavePositionsBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    s.engine.save_graph_positions(&b.positions).map_err(error)?;
+    ok(StatusCode::OK, json!({"saved":true}))
+}
+
+async fn save_graph_settings(
+    State(s): State<Arc<LearnState>>,
+    h: HeaderMap,
+    Json(settings): Json<GraphRenderSettings>,
+) -> Reply {
+    authorize(&s, &h)?;
+    s.engine.save_graph_settings(&settings).map_err(error)?;
+    ok(StatusCode::OK, json!({"saved":true}))
+}
+
+async fn activity(State(s): State<Arc<LearnState>>, h: HeaderMap) -> Reply {
+    authorize(&s, &h)?;
+    let agents = s.engine.active_agents();
+    ok(StatusCode::OK, json!({"agents":agents}))
 }
