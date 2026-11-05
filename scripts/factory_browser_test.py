@@ -1,9 +1,8 @@
 """Verifies the Tools Map workspace in a real headless browser.
 
 Serves `crates/sail-dialogue/web` the way Dialogue does (index.html plus the static
-files the page requests) and checks that the map is the default workspace with
-Dialogue beside it, that systems open in the popup (history, direct links, focus,
-Settings and dialogs above it), the classic dashboard exit, and mobile layout.
+files the page requests), verifies Factory and Settings share the Tools Map,
+and checks system popups, persistent Dialogue, browser history and mobile layouts.
 
 Run with: .venv-voice/bin/python scripts/factory_browser_test.py [screenshot.png]
 """
@@ -56,124 +55,196 @@ with sync_playwright() as p:
     page.on("response", lambda response: failed.append(f"{response.status} {response.url}")
             if response.status >= 400 else None)
 
+    # Count only work scheduled by toolsmap.js, independently of the shared UI.
+    page.add_init_script("""
+      window.factoryWork = {frames: 0, requests: 0};
+      const raf = window.requestAnimationFrame;
+      window.requestAnimationFrame = function(callback) {
+        const map = new Error().stack.includes('toolsmap.js');
+        return raf.call(window, time => {
+          if (map) window.factoryWork.frames++;
+          callback(time);
+        });
+      };
+      const fetch = window.fetch;
+      window.fetch = function(...args) {
+        if (new Error().stack.includes('toolsmap.js')) window.factoryWork.requests++;
+        return fetch.apply(window, args);
+      };
+    """)
     page.goto(base, wait_until="load")
     page.wait_for_function("window.sailFactory !== undefined")
-
-    # The Tools Map is the default workspace, with the live Dialogue panel beside it.
-    page.wait_for_selector('#toolsMap')
-    assert page.evaluate('location.hash') in ('', '#home')
-    assert page.title() == 'SAIL — Workspace'
-    assert page.locator('#factoryFloor').count() == 0
     assert page.locator('[data-ui-style]').count() == 0
-    assert page.evaluate("localStorage.getItem('sail_ui_style')") is None
-    assert page.locator('.tm-label').count() == 13
-    assert page.locator('#tmChat #homeView #textForm').count() == 1
-    assert page.locator('#tmInspector').count() == 1
-    page.wait_for_selector('#tmPop', state='hidden')
-    page.locator('#textInput').fill('hello')
-    assert page.locator('#textInput').evaluate('(n) => n === document.activeElement')
-    page.locator('#textInput').fill('')
-
-    # A station opens its system in the popup, with its real controls and status.
-    page.locator('.tm-label[data-station="mind"]').click()
-    page.wait_for_function("location.hash === '#mind'")
-    page.wait_for_selector('#tmPop')
-    assert page.locator('#tmPop #subsystemTitle').inner_text() == 'Mind'
-    assert page.evaluate('document.activeElement.id') == 'subsystemTitle'
-    assert page.locator('#tmPop #modelsCard').is_visible()
-    assert page.locator('#tmInspector h2').inner_text() == 'Mind'
-    assert page.evaluate("document.getElementById('tmChat').inert")
-    box = page.locator('.tm-pop-frame').bounding_box()
-    assert box['width'] > 1440 * 0.9 and box['height'] > 900 * 0.9, box
-    page.keyboard.press('Escape')
-    page.wait_for_function("location.hash === '#home'")
-    page.wait_for_selector('#tmPop', state='hidden')
-    assert page.evaluate("document.activeElement.dataset.station") == 'mind'
-    assert not page.evaluate("document.getElementById('tmChat').inert")
-
-    # Stations sharing a page keep their own inspector; Close returns to the map.
-    page.locator('.tm-label[data-station="memory"]').click()
-    page.wait_for_function("location.hash === '#arena'")
-    page.wait_for_function("document.querySelector('#tmInspector h2')?.textContent === 'Memory'")
-    page.locator('#tmPopClose').click()
-    page.wait_for_selector('#tmPop', state='hidden')
-
-    # Systems without a page still open, without changing the route.
-    page.locator('.tm-label[data-station="entertainment"]').click()
-    assert page.is_visible('#tmPop') and page.is_visible('#tmPopTitle')
-    assert page.is_hidden('#subsystemPage')
-    assert page.evaluate('location.hash') == '#home'
-    page.keyboard.press('Escape')
-    page.wait_for_selector('#tmPop', state='hidden')
-
-    # Sidebar entries open systems; Tasks opens Forge on its task list.
-    page.locator('.tm-nav-item', has_text='Tasks').click()
-    page.wait_for_function("document.getElementById('tmTab-tasks')?.getAttribute('aria-selected') === 'true'")
-    assert page.evaluate('location.hash') == '#forge'
-    page.locator('#forgeQuickEnqueueBtn').click()
-    assert page.is_visible('#forgeEnqueueDialog')
-    page.keyboard.press('Escape')
-    assert page.is_hidden('#forgeEnqueueDialog') and page.is_visible('#tmPop')
-
-    # Browser history and direct links.
-    page.go_back()
-    page.wait_for_selector('#tmPop', state='hidden')
-    page.go_forward()
-    page.wait_for_selector('#tmPop')
-    page.goto(base + '#guardian')
+    page.evaluate("localStorage.setItem('sail_ui_style', 'tools-map')")
     page.reload(wait_until="load")
-    page.wait_for_selector('#tmPop')
-    assert page.locator('#subsystemTitle').inner_text() == 'Guardian'
-    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-popup.png')))
+    assert page.locator('#factoryMapContent > #toolsMap').count() == 1
+    assert page.evaluate("localStorage.getItem('sail_ui_style')") is None
 
-    # Settings opened from a system sits above the popup; Escape closes it first.
-    page.goto(base + '#mind')
-    page.wait_for_function("document.getElementById('subsystemTitle').textContent === 'Mind'")
-    page.locator('#subsystemSettings').click()
-    page.wait_for_selector('[data-category="models"]')
-    assert page.evaluate("""(() => { const r = document.getElementById('contextSheet').getBoundingClientRect();
-      return document.getElementById('contextSheet').contains(document.elementFromPoint(r.left + r.width / 2, r.top + 40)); })()""")
-    page.keyboard.press('Escape')
-    assert page.is_hidden('#contextSheet') and page.is_visible('#tmPop')
-    page.keyboard.press('Escape')
-    page.wait_for_selector('#tmPop', state='hidden')
+    def check_embedded():
+        page.wait_for_selector('#factoryMapContent > #toolsMap')
+        assert page.locator('#toolsMap').count() == 1
+        assert page.locator('#toolsMap').evaluate("n => getComputedStyle(n).position") != 'fixed'
+        assert page.locator('.tm-side, .tm-top, .tm-ask, .tm-home, .tm-title').count() == 0
+        assert page.locator('.tm-label').count() == 13
+        assert page.is_hidden('#subsystemNotice')
+        assert page.is_hidden('.subsystem-about')
+        assert page.is_visible('#factoryTitle')
+        for selector in ['#homeView', '#orbCanvas', '#conversation', '#textForm']:
+            assert page.is_visible(selector), selector
+        assert page.locator('#settingsOpen:visible, #settingsRail:visible').count() >= 1
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        assert page.locator('#toolsMap').evaluate("n => n.scrollWidth <= n.clientWidth")
+
+    page.click('[data-page="factory"]')
+    check_embedded()
+    assert page.title() == 'SAIL — Factory'
     page.screenshot(path=str(SHOT))
 
-    # The classic dashboard stays available and gets its Dialogue panel back.
-    page.locator('.tm-sidecard-actions button', has_text='Classic view').click()
-    page.wait_for_function("location.hash === '#classic'")
-    page.wait_for_selector('#toolsMap', state='hidden')
-    assert page.is_visible('#homePage')
-    assert page.evaluate("document.getElementById('homeView').parentElement.classList.contains('dashboard-layout')")
-    page.evaluate("document.getElementById('settingsOpen').click()")
-    page.click('[data-settings-tab="general"]')
+    # Native assistant input stays operable while Factory is active.
+    page.fill('#textInput', 'Message beside Factory')
+    assert page.input_value('#textInput') == 'Message beside Factory'
+    page.locator('#settingsOpen:visible, #settingsRail:visible').first.click()
+    page.wait_for_selector('#contextSheet')
+    page.click('#contextSheet .close-sheet')
+    page.locator('.tm-label[data-station="mind"]').click()
+    assert page.locator('.tm-label[data-station="mind"]').get_attribute('aria-pressed') == 'true'
+    page.locator('#tmTab-tasks').click()
+    assert page.locator('#tmTabPanel').get_attribute('aria-labelledby') == 'tmTab-tasks'
+    page.locator('.tm-open').click()
+    page.wait_for_function("window.sailCurrentPage() === 'mind'")
+    assert page.is_visible('#subsystemDialog')
+    assert page.is_visible('#toolsMap')
+    assert page.is_visible('.subsystem-about')
+    assert page.is_visible('#textForm')
+    page.fill('#textInput', 'Message beside Factory')
+    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-system.png')))
+    page.wait_for_timeout(100)
+    stopped = page.evaluate('({...window.factoryWork})')
+    page.wait_for_timeout(5200)
+    assert page.evaluate('window.factoryWork') == stopped, 'hidden map must stop polling and animation'
+    page.go_back()
+    check_embedded()
+    assert page.locator('.tm-label[data-station="mind"]').get_attribute('aria-pressed') == 'true'
+    assert page.locator('#tmTab-tasks').get_attribute('aria-selected') == 'true'
+    assert page.input_value('#textInput') == 'Message beside Factory'
+    page.evaluate("window.sailFactory.show()")
+    check_embedded()
+    assert page.locator('#tmTab-tasks').get_attribute('aria-selected') == 'true'
+
+    # View modes and keyboard camera controls use the embedded viewport.
+    for mode in ['topology', 'flows', 'resources', 'map']:
+        page.locator(f'[data-mode="{mode}"].tm-seg').click()
+        assert page.locator('#toolsMap').get_attribute('data-mode') == mode
+    page.locator('#tmViewport').focus()
+    before = page.locator('.tm-world').get_attribute('style')
+    page.keyboard.press('ArrowRight')
+    assert page.locator('.tm-world').get_attribute('style') != before
+    before = page.locator('.tm-world').get_attribute('style')
+    page.keyboard.press('+')
+    assert page.locator('.tm-world').get_attribute('style') != before
+    page.get_by_role('button', name='Fit map', exact=True).click()
+
+    # Live preference survives route changes; animation stops independently.
+    page.click('#tmLive')
+    page.evaluate("window.sailNavigate('home')")
+    page.wait_for_function("window.sailCurrentPage() === 'factory'")
+    page.evaluate("window.sailToolsMap.show()")
+    check_embedded()
+    assert page.locator('#tmLive').get_attribute('aria-pressed') == 'false'
+    requests = page.evaluate('window.factoryWork.requests')
+    page.wait_for_timeout(5200)
+    assert page.evaluate('window.factoryWork.requests') == requests
+    page.click('#tmLive')
+    page.wait_for_function('window.factoryWork.requests > ' + str(requests))
+
+    # Container width, rather than window width, determines inspector placement.
+    for width, name in [(1920, 'wide'), (1180, 'narrow'), (390, 'mobile')]:
+        page.set_viewport_size({"width": width, "height": 900})
+        page.wait_for_timeout(150)
+        check_embedded()
+        layout = page.evaluate("""() => {
+          const root = document.getElementById('toolsMap').getBoundingClientRect();
+          const stage = document.querySelector('.tm-stage').getBoundingClientRect();
+          const inspector = document.getElementById('tmInspector').getBoundingClientRect();
+          return {width: root.width, stacked: inspector.top >= stage.bottom};
+        }""")
+        assert layout['stacked'] == (layout['width'] < 900), layout
+        page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-' + name + '.png')))
+
+    # Resize within the same browser viewport also refits the map.
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.wait_for_timeout(100)
+    before = page.locator('.tm-world').get_attribute('style')
+    page.locator('#factoryMapContent').evaluate("n => n.style.width = '320px'")
+    page.wait_for_timeout(100)
+    assert page.locator('.tm-world').get_attribute('style') != before
+    page.locator('#factoryMapContent').evaluate("n => n.style.width = ''")
+
+    page.emulate_media(reduced_motion='reduce', forced_colors='active')
+    page.keyboard.press('Tab')
+    page.locator('#tmViewport').focus()
+    assert page.locator('#tmViewport').evaluate("n => getComputedStyle(n).outlineStyle") != 'none'
+    page.locator('[data-mode="resources"].tm-seg').click()
+    assert page.locator('[data-mode="resources"].tm-seg').get_attribute('aria-pressed') == 'true'
+    page.emulate_media(reduced_motion='no-preference', forced_colors='none')
+
+    page.reload(wait_until='load')
+    check_embedded()
+    page.click('#homeNav')
+    page.wait_for_function("window.sailCurrentPage() === 'factory'")
+    page.locator('#settingsOpen:visible, #settingsRail:visible').first.click()
     page.click('#openFactorySettings')
-    page.wait_for_selector('#toolsMap')
+    check_embedded()
     assert page.is_hidden('#contextSheet')
     page.goto(base + '#unknown')
     page.wait_for_function("location.hash === '#home'")
     assert page.is_visible('#toolsMap')
 
-    page.set_viewport_size({"width": 390, "height": 844})
-    page.emulate_media(reduced_motion="reduce")
-    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-mobile.png')))
+    # Every system opens its original live card inside the workspace popup.
+    page.evaluate("window.sailNavigate('guardian')")
+    page.wait_for_function("window.sailCurrentPage() === 'guardian'")
+    assert page.is_visible('#subsystemDialog #toolsCard')
+    page.keyboard.press('Escape')
+    page.wait_for_function("window.sailCurrentPage() === 'factory'")
+    assert page.is_hidden('#subsystemDialog')
+    page.evaluate("window.sailNavigate('dialogue')")
+    page.wait_for_function("window.sailCurrentPage() === 'dialogue'")
+    assert page.is_hidden('#subsystemDialog')
+    assert page.locator('#textInput').evaluate('n => document.activeElement === n')
+    for target in ['mind', 'arena', 'core', 'flow', 'forge']:
+        page.evaluate('(id) => window.sailNavigate(id)', target)
+        page.wait_for_function('(id) => window.sailCurrentPage() === id', arg=target)
+        assert page.is_visible('#subsystemDialog')
+        assert page.is_visible('#textForm')
+        page.click('#subsystemClose')
+        page.wait_for_function("window.sailCurrentPage() === 'factory'")
+    page.goto(base + '#mind', wait_until='load')
+    page.wait_for_selector('#subsystemDialog[open] #modelsCard')
+    assert page.is_visible('#toolsMap')
+    page.click('#subsystemClose')
+    page.wait_for_function("window.sailCurrentPage() === 'factory'")
+    page.locator('.tm-label[data-station="mind"]').click()
+    page.locator('.tm-open').click()
+    page.wait_for_selector('#subsystemDialog[open]')
+    page.click('#subsystemClose')
+    page.wait_for_function("window.sailCurrentPage() === 'factory'")
+    page.wait_for_function("document.activeElement.id === 'tmOpenSystem'")
+    page.set_viewport_size({'width': 390, 'height': 900})
+    page.evaluate("window.sailNavigate('mind')")
+    page.wait_for_selector('#subsystemDialog[open]')
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    page.locator('#tmViewport').focus()
-    page.keyboard.press('ArrowRight')
-    assert page.locator('#tmViewport').evaluate('(node) => node === document.activeElement')
-    page.locator('.tm-label[data-station="guardian"]').click()
-    page.wait_for_selector('#tmPopClose')
-    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-mobile-popup.png')))
-    page.locator('#tmPopClose').click()
-    page.wait_for_selector('#tmPop', state='hidden')
+    page.screenshot(path=str(SHOT.with_name(SHOT.stem + '-system-mobile.png')))
+    page.locator('#textInput').fill('Dialogue remains available')
+    page.click('#subsystemClose')
+    page.wait_for_function("window.sailCurrentPage() === 'factory'")
+
     # Existing reminders.js startup error is outside the Factory implementation.
     unrelated = [error for error in errors if error == 'createBtn is not defined']
     assert not [error for error in errors if error not in unrelated], errors
     if unrelated:
         print(f"Existing reminders.js startup error observed on {len(unrelated)} loads: {unrelated[0]}")
-    assert not [entry for entry in failed if 'factory.js' in entry], failed
+    assert not [entry for entry in failed if 'factory.js' in entry or 'toolsmap' in entry], failed
     browser.close()
 
 server.shutdown()
-print(f"Tools Map workspace, Dialogue column, system popups, history, Settings and mobile checks passed; screenshots: {SHOT}")
+print(f"Embedded Factory checks passed: shell access, routing, selection, polling, camera and responsive layout; screenshots: {SHOT}")

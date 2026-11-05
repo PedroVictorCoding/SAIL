@@ -53,12 +53,15 @@ def check_pages(page, url, screenshots=None):
     assert len(ids) == len(set(ids)), "each page must appear once in the navigation"
     assert registered - {"ui"} <= set(ids), "the Ui subsystem is the interface itself"
     assert page.locator("#subsystemNav a").count() == len(ids)
-    ids = [subsystem for subsystem in ids if subsystem != "factory"]
+    ids = [subsystem for subsystem in ids if subsystem not in {"factory", "dialogue"}]
     # Card tabs follow the WAI-ARIA tabs pattern; arrow keys replace the old cycle buttons.
     # The card dashboard is the #classic route; the default workspace is the Tools Map.
     page.goto(url + "/#classic")
     expect(page.locator("#homePage")).to_be_visible()
     assert page.locator(".card-cycle-btn").count() == 0
+    page.evaluate("window.originalCards = [...document.querySelectorAll('.workspace-grid > article')]")
+    page.evaluate("window.sailNavigate('core')")
+    expect(page.locator('#subsystemDialog')).to_be_visible()
     first = page.locator('#systemCard [role="tab"]').first
     first.focus()
     page.keyboard.press("ArrowRight")
@@ -68,13 +71,11 @@ def check_pages(page, url, screenshots=None):
     page.keyboard.press("Home")
     expect(page.locator("#systemPanelMetrics")).to_be_visible()
     # Tab strips sit on their own row and never overlap the card title.
-    assert page.evaluate("""[...document.querySelectorAll('.workspace-grid .card-heading')].every(h => {
+    assert page.evaluate("""[...document.querySelectorAll('#subsystemContent .card-heading')].every(h => {
       const title = h.querySelector('.card-title').getBoundingClientRect();
       const tabs = h.querySelector('.card-tabs')?.getBoundingClientRect();
       return !tabs || tabs.top >= title.bottom - 1;
     })""")
-    page.evaluate("""window.originalCards = [...document.querySelectorAll('.workspace-grid > article')];""")
-    # Every subsystem opens in the workspace popup over the map, keeping the original cards.
     for subsystem in ids:
         link = page.locator(f'#subsystemNav a[href="#{subsystem}"]')
         if page.locator("#homePage").is_visible():
@@ -97,11 +98,9 @@ def check_pages(page, url, screenshots=None):
         else:
             expect(page.locator("#subsystemContent > article")).to_be_visible()
 
-    page.keyboard.press("Escape")
-    expect(page.locator("#tmPop")).to_be_hidden()
-    expect(page.locator("#toolsMap")).to_be_visible()
-    page.goto(url + "/#classic")
-    expect(page.locator("#homePage")).to_be_visible()
+    page.locator("#homeNav").click()
+    expect(page.locator("#factoryWorkspace")).to_be_visible()
+    expect(page.locator("#subsystemDialog")).to_be_hidden()
     assert page.evaluate("originalCards.every(card => card.parentElement.matches('.workspace-grid'))")
     page.locator('#subsystemNav a[href="#forge"]').click()
     expect(page.locator("#subsystemContent #forgeCard")).to_be_visible()
@@ -140,13 +139,15 @@ def check_pages(page, url, screenshots=None):
     assert page.locator("#subsystemDirectory").count() == 0
     for width in (390, 820):
         page.set_viewport_size({"width": width, "height": 844})
-        for subsystem in [*ids, "home", "classic"]:
-            page.evaluate(f"sailNavigate('{subsystem}')")
-            if subsystem == "classic":
-                expect(page.locator("#homePage")).to_be_visible()
-            elif subsystem == "home":
-                expect(page.locator("#tmPop")).to_be_hidden()
-                expect(page.locator("#toolsMap")).to_be_visible()
+        for subsystem in [*ids, "home"]:
+            if subsystem == "home":
+                page.locator('.brand').click()
+            else:
+                page.locator("#spacesTop").click()
+                page.locator(f'#spaceList [data-space="{subsystem}"]').click()
+            if subsystem == "home":
+                expect(page.locator("#factoryWorkspace")).to_be_visible()
+                expect(page.locator("#subsystemDialog")).to_be_hidden()
             else:
                 expect(page.locator("#subsystemTitle")).to_have_text(subsystem.title())
                 expect(page.locator("#tmPopClose")).to_be_visible()
@@ -159,8 +160,9 @@ def check_pages(page, url, screenshots=None):
         expect(page.locator("#toolsPanelSafetyReview")).to_be_visible()
         page.screenshot(path=str(screenshots / "guardian-mobile.png"))
     page.goto(url + "/#unknown")
-    expect(page.locator("#toolsMap")).to_be_visible()
-    assert page.evaluate("location.hash") == "#home"
+    expect(page.locator("#factoryWorkspace")).to_be_visible()
+    expect(page.locator("#subsystemDialog")).to_be_hidden()
+    assert page.evaluate("location.hash") == "#factory"
     assert not errors, errors
 
 

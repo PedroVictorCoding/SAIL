@@ -1,9 +1,6 @@
 'use strict';
-// The Tools Map is SAIL's workspace: the isometric map of subsystems, with the live
-// Dialogue panel (the original #homeView, moved in so voice and the composer keep their
-// state) in the right column. Each system opens in a near-full-screen popup that holds
-// its real controls (#subsystemPage, filled by the shared page router) beside a live
-// status inspector. Visibility follows the router: every route but #classic shows it.
+// Factory uses the Tools Map workspace. Visibility follows the shared page router;
+// the shared navigation, assistant and composer stay alongside the map.
 
 (() => {
   const SVGNS = 'http://www.w3.org/2000/svg';
@@ -106,7 +103,6 @@
   }
   function pct(v) { return v == null || !isFinite(v) ? '—' : `${Math.round(v)}%`; }
   function hhmmss(d) { return d.toLocaleTimeString([], {hour12: false}); }
-  function level(v) { return v == null ? '' : v >= 95 ? 'crit' : v >= 80 ? 'warn' : ''; }
   function modelState(md) { return typeof md.state === 'string' ? md.state : Object.keys(md.state || {})[0] || 'unknown'; }
 
   // ------------------------------------------------------------------ iso projection
@@ -181,43 +177,10 @@
     if (state.built) return;
     state.built = true;
     root = el('div', {class: 'tm-root', id: 'toolsMap', role: 'region', 'aria-label': 'SAIL Tools Map'});
-    const nav = el('nav', {class: 'tm-side', 'aria-label': 'Main navigation'},
-      el('div', {class: 'tm-brand'}, logo(), el('div', {}, el('strong', {text: 'SAIL'}), el('span', {class: 'tm-version', id: 'tmVersion', text: 'local'}))),
-      el('ul', {class: 'tm-nav'},
-        navItem('home', 'Home', 'home'), navItem('dialogue', 'Dialogue', 'dialogue'), navItem('arena', 'Arena', 'arena'),
-        navItem('canvas', 'Canvas', 'canvas'), navItem('forge', 'Forge', 'forge'), navItem('flow', 'Flow', 'flow'),
-        navItem('system', 'System', 'sense'), navItem('mind', 'Mind', 'mind'), navItem('memory', 'Memory', 'mesh'),
-        navItem('discover', 'Discover', 'discovery'), navItem('guardian', 'Guardian', 'guardian')),
-      el('ul', {class: 'tm-nav tm-nav-2'},
-        el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: (e) => openStation('forge', e.currentTarget, 'tasks')}, icon('tasks'), 'Tasks')),
-        el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: () => document.getElementById('terminalRailBtn')?.click()}, icon('terminal'), 'Terminal')),
-        el('li', {}, el('a', {class: 'tm-nav-item', href: '/tracker'}, icon('sense'), 'Tracker'))),
-      el('div', {class: 'tm-sidecard'},
-        el('p', {class: 'tm-sidecard-title'}, el('span', {class: 'tm-status', id: 'tmCoreDot'}), el('span', {id: 'tmCoreState', text: 'Connecting…'})),
-        el('p', {class: 'tm-sidecard-sub', id: 'tmUptime', text: ''}),
-        el('div', {class: 'tm-sidecard-actions'},
-          el('button', {class: 'tm-btn', type: 'button', onclick: openSettings}, icon('settings'), 'Settings'),
-          el('button', {class: 'tm-btn', type: 'button', onclick: () => window.sailNavigate?.('classic')}, 'Classic view'))));
-
-    const top = el('header', {class: 'tm-top'},
-      el('div', {class: 'tm-crumbs'},
-        el('h1', {}, el('span', {id: 'tmCrumb', text: 'SAIL'}), el('span', {class: 'tm-crumb-sep', text: ' / '}), 'Workspace'),
-        el('p', {text: 'Spatial orchestration of SAIL’s tools, models and agents'})),
-      el('form', {class: 'tm-ask', role: 'search', onsubmit: ask},
-        el('span', {class: 'tm-ask-icon', 'aria-hidden': 'true', text: '⌕'}),
-        el('label', {class: 'tm-sr', for: 'tmAskInput', text: 'Ask SAIL or run a command'}),
-        el('input', {id: 'tmAskInput', type: 'search', placeholder: 'Ask SAIL or run a command…', autocomplete: 'off', maxlength: '2000'}),
-        el('kbd', {text: 'Ctrl K'})),
-      el('ul', {class: 'tm-meters', id: 'tmMeters', 'aria-label': 'Host resources'}),
-      el('button', {class: 'tm-bell', type: 'button', id: 'tmBell', 'aria-label': 'Approvals', onclick: (e) => openStation('guardian', e.currentTarget)},
-        icon('guardian'), el('span', {class: 'tm-badge', id: 'tmBellCount', hidden: true})),
-      el('button', {class: 'tm-bell', type: 'button', 'aria-label': 'Settings', onclick: openSettings}, icon('settings')),
-      el('span', {class: 'tm-avatar', 'aria-hidden': 'true'}));
-
     const stage = el('section', {class: 'tm-stage', 'aria-label': 'Subsystem map'},
-      el('div', {class: 'tm-title'}, el('h2', {}, 'SAIL', el('br'), 'TOOLS MAP'), el('p', {text: 'Live systems, models and tools. Select one to open it.'})),
       el('div', {class: 'tm-viewport', id: 'tmViewport', tabindex: '0', 'aria-label': 'Map. Drag or use arrow keys to pan, plus and minus to zoom.'},
         world = el('div', {class: 'tm-world'})),
+      el('div', {class: 'tm-toolbar'},
       el('div', {class: 'tm-ctl tm-ctl-left'},
         el('button', {class: 'tm-btn', type: 'button', id: 'tmLive', 'aria-pressed': 'true', onclick: toggleLive}, el('span', {class: 'tm-status on', 'aria-hidden': 'true'}), 'Live'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', id: 'tmPause', 'aria-pressed': 'false', 'aria-label': 'Pause animation', onclick: togglePause}, '❚❚'),
@@ -229,7 +192,7 @@
       el('div', {class: 'tm-ctl tm-ctl-right'},
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Fit map', onclick: fit}, '⛶'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom out', onclick: () => zoom(1 / 1.2)}, '−'),
-        el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoom(1.2)}, '+')));
+        el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoom(1.2)}, '+'))));
 
     // Right column: the live Dialogue panel. #homeView is moved in by showChat().
     const chat = el('aside', {class: 'tm-chat', id: 'tmChat', 'aria-labelledby': 'tmChatTitle'},
@@ -256,20 +219,10 @@
       el('ol', {class: 'tm-activity-list', id: 'tmActivity'}),
       el('div', {class: 'tm-histo', id: 'tmHisto', 'aria-hidden': 'true'}));
 
-    root.append(nav, top, stage, chat, activity, pop);
-    // Inside #appShell so the moved Dialogue panel keeps its state-driven styles.
-    (document.getElementById('appShell') || document.body).append(root);
-    const page = document.getElementById('subsystemPage');
-    if (page) popMain.prepend(page);
+    root.append(stage, inspector, activity);
+    document.getElementById('factoryMapContent').append(root);
     buildWorld();
     bindViewport();
-    document.addEventListener('keydown', (e) => {
-      if (!state.on) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); $('#tmAskInput').focus(); }
-    });
-  }
-  function navItem(target, label, ic) {
-    return el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', 'data-nav': target, onclick: (e) => navTo(target, e.currentTarget)}, icon(ic), label));
   }
   function modeBtn(mode, label) {
     return el('button', {class: 'tm-seg', type: 'button', 'data-mode': mode, 'aria-pressed': state.mode === mode ? 'true' : 'false', onclick: () => setMode(mode)},
@@ -355,7 +308,7 @@
     // Labels keep a readable size as the map zooms out.
     world.style.setProperty('--ls', labelScale().toFixed(3));
   }
-  function labelScale() { return Math.max(state.k, innerWidth < 860 ? 0.62 : 0.95) / state.k; }
+  function labelScale() { return Math.max(state.k, $('#tmViewport').clientWidth < 600 ? 0.62 : 0.95) / state.k; }
   function fit() {
     const vp = $('#tmViewport'); if (!vp || !state.world) return;
     const xs = STATIONS.flatMap((s) => [P(s.gx - 3, s.gy + 3)[0], P(s.gx + 3, s.gy - 3)[0]]);
@@ -390,11 +343,11 @@
       if (m && e.target === vp) { e.preventDefault(); state.tx += m[0]; state.ty += m[1]; applyView(); }
       else if (e.key === '+' || e.key === '=') zoom(1.2); else if (e.key === '-') zoom(1 / 1.2);
     });
-    new ResizeObserver(() => { if (state.on) fit(); }).observe(vp);
+    resizeObserver = new ResizeObserver(() => { if (state.on) fit(); });
   }
 
   // ------------------------------------------------------------------ animation
-  let lastFrame = 0;
+  let lastFrame = 0, frameId = null, resizeObserver;
   function frame(ts) {
     if (!state.on) return;
     const dt = lastFrame ? Math.min(0.1, (ts - lastFrame) / 1000) : 0;
@@ -408,7 +361,7 @@
       p.dot.setAttribute('cx', (a[0] + (b[0] - a[0]) * f).toFixed(1));
       p.dot.setAttribute('cy', (a[1] + (b[1] - a[1]) * f).toFixed(1));
     }
-    requestAnimationFrame(frame);
+    frameId = requestAnimationFrame(frame);
   }
 
   // ------------------------------------------------------------------ data
@@ -416,10 +369,11 @@
     if (typeof getOrFetchOwnerToken === 'function') return getOrFetchOwnerToken();
     try { return localStorage.getItem('sail_owner_token'); } catch (_) { return null; }
   }
-  async function get(path) {
+  async function get(path, signal) {
     const t = await token();
+    signal.throwIfAborted();
     const started = performance.now();
-    const r = await fetch(path, {cache: 'no-store', headers: t ? {Authorization: `Bearer ${t}`} : {}});
+    const r = await fetch(path, {signal, cache: 'no-store', headers: t ? {Authorization: `Bearer ${t}`} : {}});
     const ms = Math.round(performance.now() - started);
     for (const s of STATIONS) if (s.endpoint === path) state.latency[s.id] = r.ok ? ms : null;
     if (!r.ok) throw new Error(`${path} ${r.status}`);
@@ -444,14 +398,18 @@
   }
 
   async function poll() {
-    if (!state.on || !state.live) return;
+    if (!state.on || !state.live || pollController) return;
+    const controller = new AbortController();
+    pollController = controller;
     const jobs = {
       metrics: '/api/system/metrics', mind: '/api/mind/status', health: '/api/health',
       guardian: '/api/guardian/status', audit: '/api/guardian/audit', approvals: '/api/guardian/approvals',
       plans: '/api/plans/', reminders: '/api/pulse/reminders', tracker: '/api/tracker/config',
     };
     const res = {};
-    await Promise.all(Object.entries(jobs).map(([k, path]) => get(path).then((v) => { res[k] = v; }, () => { res[k] = null; })));
+    await Promise.all(Object.entries(jobs).map(([k, path]) => get(path, controller.signal).then((v) => { res[k] = v; }, () => { res[k] = null; })));
+    if (controller.signal.aborted) return;
+    pollController = null;
     const was = state.online;
     state.online = !!res.health || !!res.metrics;
     if (was !== null && was !== state.online) log('core', state.online ? 'Connection to SAIL restored' : 'Lost connection to SAIL');
@@ -501,9 +459,12 @@
     if (!state.activity.length) log('core', 'Tools Map connected');
     render();
   }
-  let pollTimer = null;
+  let pollTimer = null, pollController = null;
   function startPolling() { stopPolling(); poll(); pollTimer = setInterval(poll, 5000); }
-  function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
+  function stopPolling() {
+    clearInterval(pollTimer); pollTimer = null;
+    pollController?.abort(); pollController = null;
+  }
 
   // ------------------------------------------------------------------ station status
   function stationStatus(id) {
@@ -541,8 +502,6 @@
   // ------------------------------------------------------------------ render
   function render() {
     if (!state.on) return;
-    $('#tmVersion').textContent = state.version ? `v${state.version}` : 'local';
-    renderMeters();
     for (const s of STATIONS) {
       const st = stationStatus(s.id);
       for (const n of root.querySelectorAll(`[data-status="${s.id}"]`)) n.className = `tm-status ${n.classList.contains('small') ? 'small ' : ''}${st}`;
@@ -559,37 +518,9 @@
       l.classList.toggle('hot', !!state.selected && (l.dataset.a === state.selected || l.dataset.b === state.selected));
     }
     for (const p of packets) p.dot.style.display = stationStatus(p.a) === 'off' ? 'none' : '';
-    $('#tmCoreDot').className = `tm-status ${state.online ? 'on' : state.online === false ? 'off' : 'idle'}`;
-    $('#tmCoreState').textContent = state.online ? 'SAIL Core online' : state.online === false ? 'SAIL Core unreachable' : 'Connecting…';
-    const core = state.online ? 'on' : state.online === false ? 'off' : 'idle';
-    $('#tmChatPill').className = `tm-pill ${core}`;
-    $('#tmChatPill').replaceChildren(el('span', {class: `tm-status ${core}`}), state.online ? 'Online' : state.online === false ? 'Offline' : 'Connecting');
-    const up = state.metrics?.uptime_secs;
-    $('#tmUptime').textContent = up ? `Host up ${Math.floor(up / 86400)}d ${Math.floor((up % 86400) / 3600)}h` : '';
-    const bell = $('#tmBellCount');
-    bell.hidden = !state.approvals; bell.textContent = state.approvals || '';
-    $('#tmBell').setAttribute('aria-label', state.approvals ? `${state.approvals} approvals waiting` : 'Approvals: none waiting');
     renderDetail();
     if (state.popup) renderInspector();
     renderActivity();
-  }
-
-  function meter(label, value, sub, p) {
-    return el('li', {class: `tm-meter ${level(p)}`},
-      el('span', {class: 'tm-meter-label', text: label}),
-      el('span', {class: 'tm-meter-value'}, el('span', {class: 'tm-meter-bar', 'aria-hidden': 'true'}, el('span', {style: `width:${Math.max(0, Math.min(100, p ?? 0))}%`})), value),
-      sub ? el('span', {class: 'tm-meter-sub', text: sub}) : null);
-  }
-  function renderMeters() {
-    const m = state.metrics, g = m?.gpus?.[0];
-    const disk = (m?.disks || []).slice().sort((a, b) => b.used_bytes / b.total_bytes - a.used_bytes / a.total_bytes)[0];
-    const diskP = disk ? disk.used_bytes / disk.total_bytes * 100 : null;
-    const unit = disk && disk.total_bytes >= 1099511627776 ? 'TB' : 'GB';
-    $('#tmMeters').replaceChildren(
-      meter('CPU', pct(m?.cpu_percent), null, m?.cpu_percent),
-      meter('GPU', g ? pct(g.busy_percent) : 'n/a', null, g?.busy_percent),
-      meter('RAM', m ? `${bytes(m.ram_used_bytes)} / ${bytes(m.ram_total_bytes)} GB` : '—', null, m?.ram_total_bytes ? m.ram_used_bytes / m.ram_total_bytes * 100 : null),
-      meter('Disk', disk ? `${bytes(disk.used_bytes, unit)} / ${bytes(disk.total_bytes, unit)} ${unit}` : '—', disk ? `fullest: ${disk.path}` : null, diskP));
   }
 
   function row(k, v) { return el('div', {}, el('dt', {text: k}), el('dd', {text: v})); }
@@ -628,7 +559,7 @@
       [x - w * 0.18, me.t - gap - h], [me.r + gap, me.b - h], [me.l - gap - w, me.b - h], [x - w / 2, me.b + gap],
     ];
     const free = spots.find(([l, t]) => others.every((o) => l + w <= o.l || o.r <= l || t + h <= o.t || o.b <= t));
-    if (!free) { box.hidden = true; return; }
+    if (!free || free[1] * state.k + state.ty < 0) { box.hidden = true; return; }
     box.style.left = `${free[0]}px`; box.style.top = `${free[1]}px`;
   }
 
@@ -657,7 +588,8 @@
           onclick: () => setTab(t),
           onkeydown: (e) => { const i = tabs.indexOf(t); const j = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : null; if (j !== null) { setTab(tabs[(j + tabs.length) % tabs.length]); $(`#tmTab-${state.tab}`)?.focus(); } }},
           t[0].toUpperCase() + t.slice(1)))),
-      el('div', {class: 'tm-insp-body', id: 'tmTabPanel', role: 'tabpanel', 'aria-labelledby': `tmTab-${state.tab}`}, tabBody(s)));
+      el('div', {class: 'tm-insp-body', id: 'tmTabPanel', role: 'tabpanel', 'aria-labelledby': `tmTab-${state.tab}`}, tabBody(s)),
+      el('button', {class: 'tm-open', id: 'tmOpenSystem', type: 'button', onclick: () => { window.sailNavigate?.(s.page); }}, 'Open system ', el('span', {'aria-hidden': 'true', text: '↗'})));
     const body = insp.querySelector('.tm-insp-body'); if (body) body.scrollTop = scroll;
     if (hadFocus) document.getElementById(hadFocus)?.focus();
   }
@@ -751,12 +683,6 @@
   function select(id) {
     state.selected = id;
     for (const l of root.querySelectorAll('.tm-label')) l.setAttribute('aria-pressed', l.dataset.station === id ? 'true' : 'false');
-    for (const n of root.querySelectorAll('.tm-nav-item[data-nav]')) {
-      const on = n.dataset.nav === (state.popup || 'home');
-      n.classList.toggle('selected', on);
-      if (on) n.setAttribute('aria-current', 'page'); else n.removeAttribute('aria-current');
-    }
-    $('#tmCrumb').textContent = state.popup ? byId[state.popup].name : 'SAIL';
     svgRoot.querySelectorAll('.tm-station').forEach((g) => g.classList.toggle('selected', g.dataset.station === id));
     render();
   }
@@ -766,64 +692,6 @@
     root.dataset.mode = m;
     root.querySelectorAll('.tm-seg').forEach((b) => b.setAttribute('aria-pressed', b.dataset.mode === m ? 'true' : 'false'));
     render();
-  }
-  function navTo(target, trigger) {
-    if (target === 'home') { if (state.popup) closePopup(); else { select(null); fit(); } return; }
-    openStation(target, trigger);
-  }
-
-  // ------------------------------------------------------------------ system popup
-  // Stations with a page go through the router (#mind, #forge…) so links, reloads and
-  // Back work; the router fills #subsystemPage and announces the route on `sail:page`.
-  function openStation(id, trigger, tab = 'overview') {
-    const s = byId[id]; if (!s) return;
-    state.trigger = trigger || document.activeElement;
-    state.tab = tab;
-    if (!s.page) { openPopup(id, false); $('#tmPopTitle').focus({preventScroll: true}); return; }
-    state.pending = id;
-    window.sailNavigate?.(s.page);
-  }
-  function openPopup(id, routed) {
-    popEmpty.hidden = routed;
-    const page = document.getElementById('subsystemPage');
-    if (page) page.hidden = !routed;
-    if (!routed) { $('#tmPopTitle').textContent = byId[id].name; $('#tmPopAbout').textContent = byId[id].about; }
-    pop.firstElementChild.setAttribute('aria-labelledby', routed ? 'subsystemTitle' : 'tmPopTitle');
-    if (state.popup !== id || pop.hidden) popMain.scrollTop = 0;
-    if (pop.hidden) {
-      pop.hidden = false;
-      for (const n of root.children) if (n !== pop) n.inert = true;
-      document.documentElement.classList.add('tm-pop-open');
-    }
-    state.popup = id;
-    select(id);
-  }
-  function hidePopup() {
-    if (pop.hidden) return;
-    pop.hidden = true; state.popup = null;
-    for (const n of root.children) n.inert = false;
-    document.documentElement.classList.remove('tm-pop-open');
-    select(state.selected);
-    const back = state.trigger?.isConnected && !state.trigger.closest('.tm-pop') ? state.trigger : $('#tmViewport');
-    state.trigger = null;
-    back?.focus({preventScroll: true});
-  }
-  function closePopup() {
-    if (pop.hidden) return;
-    if (window.sailCurrentPage?.() !== 'home') window.sailNavigate?.('home'); else hidePopup();
-  }
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || !state.on || !pop || pop.hidden || e.defaultPrevented) return;
-    // Settings, Spaces and dialogs opened from a system close first.
-    if (document.querySelector('.sheet:not([hidden]), dialog[open]')) return;
-    e.preventDefault(); closePopup();
-  });
-
-  // ------------------------------------------------------------------ Dialogue column
-  function showChat(on) {
-    const panel = document.getElementById('homeView'); if (!panel) return;
-    if (!chatMarker) { chatMarker = document.createComment('homeView classic position'); panel.before(chatMarker); }
-    if (on) chatSlot.append(panel); else chatMarker.after(panel);
   }
   function toggleLive() {
     state.live = !state.live;
@@ -838,64 +706,35 @@
     b.setAttribute('aria-label', state.paused ? 'Resume animation' : 'Pause animation');
     b.textContent = state.paused ? '▶' : '❚❚';
   }
-  function ask(e) {
-    e.preventDefault();
-    const input = $('#tmAskInput');
-    const text = input.value.trim();
-    if (!text) return;
-    const match = STATIONS.find((s) => s.name.toLowerCase() === text.toLowerCase().replace(/^(open|go to|show)\s+/, ''));
-    if (match) { input.value = ''; openStation(match.id, input); return; }
-    const classic = document.getElementById('textInput'), form = document.getElementById('textForm');
-    if (classic && form) {
-      classic.value = text;
-      form.requestSubmit();
-      log('dialogue', `You asked: ${text.length > 80 ? `${text.slice(0, 80)}…` : text}`);
-      input.value = '';
-      classic.focus();
-    }
-  }
   function openSettings() { (document.getElementById('settingsOpen') || document.getElementById('settingsRail'))?.click(); }
 
   // ------------------------------------------------------------------ routing
   function apply(on) {
+    build();
     if (on === state.on) return;
     state.on = on;
     if (on) {
-      build();
       root.hidden = false;
-      document.documentElement.classList.add('tm-active');
-      showChat(true);
-      // The classic layout stays mounted underneath; keep it out of the tab order.
-      for (const n of document.querySelectorAll('.dashboard-header, .dashboard-layout')) n.inert = true;
       setMode(state.mode);
-      requestAnimationFrame(() => { if (state.on) { fit(); select(state.selected); } });
-      lastFrame = 0; requestAnimationFrame(frame);
+      fit(); select(state.selected);
+      resizeObserver.observe($('#tmViewport'));
+      lastFrame = 0;
+      frameId = requestAnimationFrame(frame);
       if (state.live) startPolling();
     } else {
       stopPolling();
-      if (root) { hidePopup(); root.hidden = true; }
-      showChat(false);
-      for (const n of document.querySelectorAll('.dashboard-header, .dashboard-layout')) n.inert = false;
-      document.documentElement.classList.remove('tm-active');
+      cancelAnimationFrame(frameId); frameId = null;
+      resizeObserver?.disconnect();
+      // Keep the map beneath the system popup, without background work.
     }
   }
-  function route(page) {
-    apply(page !== 'classic');
-    if (!state.on) return;
-    if (page === 'home') { state.pending = null; hidePopup(); return; }
-    // Two stations can share a page (Memory and Arena); keep the one that was chosen.
-    const pending = state.pending && byId[state.pending].page === page ? state.pending : null;
-    const current = !pop.hidden && state.popup && byId[state.popup].page === page ? state.popup : null;
-    state.pending = null;
-    openPopup(pending || current || PAGE_STATION[page] || 'core', true);
-  }
-  const show = () => window.sailNavigate?.('home');
-  const hide = () => window.sailNavigate?.('classic');
-  window.sailToolsMap = {show, hide, open: (id) => openStation(id)};
-  window.sailFactory = window.sailToolsMap;
-  window.addEventListener('sail:page', (event) => route(event.detail));
+  const show = () => window.sailNavigate?.('factory');
+  const hide = () => window.sailNavigate?.('home');
+  window.sailToolsMap = {show, hide};
+  window.sailFactory = {show, hide};
+  window.addEventListener('sail:page', (event) => apply(event.detail === 'factory' || event.detail === 'dialogue'));
   document.getElementById('openFactorySettings')?.addEventListener('click', show);
   // Retire the browser-wide style preference; the map is now the workspace.
   try { localStorage.removeItem('sail_ui_style'); } catch (_) {}
-  if (window.sailCurrentPage) route(window.sailCurrentPage());
+  apply(!window.sailCurrentPage || ['factory', 'dialogue'].includes(window.sailCurrentPage()));
 })();
