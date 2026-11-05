@@ -930,11 +930,11 @@
         <div class="vscode-setting-item" data-search-terms="memory learn learning conversation privacy">
           <div class="vscode-setting-info">
             <label for="learningBtn" class="vscode-setting-name">Learn from this conversation</label>
-            <p class="vscode-setting-desc" id="learningDescription">Off on every connection. When enabled, voice and text turns and large tool results enter local memory processing. Pending transcripts await scheduled cleanup (30-day default retention) and are not encrypted by SAIL. Turning off discards pending raw turns; saved knowledge can be corrected or forgotten in Arena. This does not authorize actions.</p>
+            <p class="vscode-setting-desc" id="learningDescription">Enabled by default on every connection. When enabled, voice and text turns and large tool results enter local memory processing. Pending transcripts await scheduled cleanup (30-day default retention) and are not encrypted by SAIL. Turning off discards pending raw turns; saved knowledge can be corrected or forgotten in Arena. This does not authorize actions.</p>
           </div>
           <div class="vscode-setting-control">
-            <button class="quiet-button" id="learningBtn" type="button" aria-pressed="false" aria-describedby="learningDescription" disabled>Enable learning</button>
-            <span id="learningStatus" role="status" aria-live="polite">Disconnected · learning off</span>
+            <button class="quiet-button" id="learningBtn" type="button" aria-pressed="true" aria-describedby="learningDescription" disabled>Disable learning</button>
+            <span id="learningStatus" role="status" aria-live="polite">Learning enabled for this conversation</span>
           </div>
         </div>
 

@@ -262,6 +262,7 @@ for line in sys.stdin:
         .await
         .unwrap();
     let hello = receive_type(&mut socket, "session").await;
+    assert_eq!(hello["learning"], true);
     let socket_session = hello["session_id"].as_str().unwrap();
     arena.set_session_learning(socket_session, true).unwrap();
     socket

@@ -60,3 +60,8 @@ test('a delayed response cannot enable a replacement connection', async () => {
   context.renderLearning();
   assert.equal(button.disabled, true);
 });
+test('voice setting Learn from this conversation defaults to enabled', () => {
+  assert.match(source, /let learningSession = null, learningEnabled = true, learningBusy = false;/);
+  const html = readFileSync(`${__dirname}/../web/index.html`, 'utf8');
+  assert.match(html, /id="learningBtn"[^>]*aria-pressed="true"/);
+});

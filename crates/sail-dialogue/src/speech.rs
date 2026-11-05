@@ -158,7 +158,11 @@ impl SpeechChunker {
 fn boundary(text: &str, finished: bool, min_words: usize) -> Option<usize> {
     for (index, ch) in text.char_indices() {
         let sentence = matches!(ch, '.' | '?' | '!' | '。' | '？' | '！');
-        let clause = matches!(ch, ',' | ';' | ':' | '—') && text[..index].chars().count() >= 70;
+        // Never split normal sentences at mid-sentence commas/clauses: neural TTS resets
+        // pitch contour (F0) on each segment, so starting synthesis after a comma sounds
+        // like a new sentence starting mid-thought. Only use a clause break as a safety
+        // valve when an unpunctuated sentence exceeds 240 characters.
+        let clause = matches!(ch, ',' | ';' | ':' | '—') && text[..index].chars().count() >= 240;
         let newline = ch == '\n' && text[..index].trim().len() >= 20;
         if !sentence && !clause && !newline {
             continue;
@@ -179,9 +183,14 @@ fn boundary(text: &str, finished: bool, min_words: usize) -> Option<usize> {
         if !unambiguous {
             if next.is_none() && !finished {
                 // For a period at the end of a multi-word phrase (not a single isolated token),
-                // check if the preceding token is a valid word rather than an abbreviation/digit.
-                let has_preceding_space = text[..index].trim_start().contains(char::is_whitespace);
-                if !has_preceding_space {
+                // check that the phrase has at least 3 words and the final token is plain
+                // alphabetic prose rather than a path, domain, version, or abbreviation.
+                let words: Vec<&str> = text[..index].split_whitespace().collect();
+                let plain_prose_word = words.last().is_some_and(|w| {
+                    let trimmed = w.trim_matches(['"', '\'', '(', '[']);
+                    trimmed.chars().count() >= 2 && trimmed.chars().all(char::is_alphabetic)
+                });
+                if words.len() < 3 || !plain_prose_word {
                     continue;
                 }
             }
@@ -204,6 +213,16 @@ fn boundary(text: &str, finished: bool, min_words: usize) -> Option<usize> {
                     | "sr"
                     | "sra"
                     | "srta"
+                    | "st"
+                    | "jr"
+                    | "inc"
+                    | "ltd"
+                    | "co"
+                    | "fig"
+                    | "no"
+                    | "approx"
+                    | "est"
+                    | "dept"
                     | "e.g"
                     | "i.e"
                     | "etc"
@@ -258,9 +277,9 @@ pub fn pause_after_ms(text: &str) -> usize {
         .chars()
         .next_back()
     {
-        Some('.' | '?' | '!' | '。' | '？' | '！') => 35,
-        Some(';' | ':') => 20,
-        Some(',' | '—') => 15,
+        Some('.' | '?' | '!' | '。' | '？' | '！') => 140,
+        Some(';' | ':') => 90,
+        Some(',' | '—') => 60,
         _ => 0,
     }
 }
@@ -307,17 +326,36 @@ mod tests {
     }
     #[test]
     fn long_clauses_and_cadence_use_natural_boundaries() {
+        // Normal sentences with commas (even > 70 chars) stay intact so neural TTS
+        // never starts synthesizing in the middle of a sentence after a comma.
+        let normal_sentence_with_comma = "When the voice pipeline synthesizes a multi-clause sentence with commas, it waits for the full sentence terminator.";
+        let mut c = SpeechChunker::with_min_words(0);
+        assert_eq!(
+            c.push(normal_sentence_with_comma),
+            vec![normal_sentence_with_comma]
+        );
+
+        // Only an oversized unpunctuated run (>= 240 chars) uses a clause break as a safety valve.
         let clause = format!(
             "{}, and the next clause continues",
-            "A complete phrase with useful context ".repeat(5).trim()
+            "A complete phrase with useful context ".repeat(7).trim()
         );
         let mut c = SpeechChunker::with_min_words(0);
         let chunks = c.push(&clause);
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].ends_with(','));
-        assert_eq!(pause_after_ms(&chunks[0]), 15);
-        assert_eq!(pause_after_ms("Really?\""), 35);
-        assert_eq!(pause_after_ms("Hello."), 35);
+        assert_eq!(pause_after_ms(&chunks[0]), 60);
+        assert_eq!(pause_after_ms("Really?\""), 140);
+        assert_eq!(pause_after_ms("Hello."), 140);
+    }
+    #[test]
+    fn streaming_paths_and_versions_do_not_split_mid_sentence() {
+        let mut c = SpeechChunker::with_min_words(0);
+        assert!(c.push("Check the file at src/server.").is_empty());
+        assert_eq!(
+            c.push("rs and update version v1.2 before deploying."),
+            vec!["Check the file at src/server.rs and update version v1.2 before deploying."]
+        );
     }
     #[test]
     fn multi_word_sentences_and_questions_emit_promptly() {

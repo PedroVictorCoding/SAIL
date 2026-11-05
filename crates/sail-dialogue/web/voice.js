@@ -1,6 +1,6 @@
 'use strict';
 let liveContextEnabled = false, liveContextReplyPending = false;
-let learningSession = null, learningEnabled = false, learningBusy = false;
+let learningSession = null, learningEnabled = true, learningBusy = false;
 let ws, audioCtx, micStream, processor, micSource;
 let workletLoaded=false;
 const playbackTimers=new Set();
@@ -103,7 +103,7 @@ function connectWs() {
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
     liveContextReplyPending = false; liveContextEnabled = false; renderLiveContext(); document.getElementById('liveContextBtn').disabled = true;
-    learningSession = null; learningEnabled = false; renderLearning();
+    learningSession = null; learningEnabled = true; renderLearning();
     pendingApprovalActions.clear(); lastToolCalls.clear();
     cancelVisualCapture(); captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
@@ -115,7 +115,7 @@ function connectWs() {
       case 'snapshot_request':
         requestVisualCapture(data); break;
       case 'session':
-        learningSession = data.session_id; learningEnabled = data.learning === true; renderLearning();
+        learningSession = data.session_id; learningEnabled = data.learning !== false; renderLearning();
         cancelVisualCapture();
         document.getElementById('conversation').replaceChildren(); responseNode = null; chatFollow.resume();
         applyControl(data.control); announceClientSpeech(); break;
@@ -125,7 +125,7 @@ function connectWs() {
       case 'live_context_observed':
         transcriptBox.textContent = `Context · ${data.text}`; break;
       case 'learning_state':
-        learningEnabled = data.enabled === true; renderLearning(); break;
+        learningEnabled = data.enabled !== false; renderLearning(); break;
       case 'telemetry':
         document.getElementById('sessionConfidence').textContent = `${(data.confidence * 100).toFixed(0)}%`;
         document.getElementById('sessionRms').textContent = Number(data.rms).toFixed(3);
@@ -585,7 +585,7 @@ function queueAudio(data) {
 // actually playing, not packets received early.
 function schedulePlayback(context, buffer, generation, telemetry) {
   const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination);
-  const when = Math.max(context.currentTime + 0.015, nextAudioTime); nextAudioTime = when + buffer.duration;
+  const when = nextAudioTime > context.currentTime ? nextAudioTime : context.currentTime + 0.06; nextAudioTime = when + buffer.duration;
   playingSources.add(source);
   const timer = setTimeout(() => {
     playbackTimers.delete(timer);

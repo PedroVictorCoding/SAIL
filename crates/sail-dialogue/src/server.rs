@@ -571,6 +571,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
         "Voice client connected; creating isolated session"
     );
     state.arena.begin_voice_session(&session);
+    let _ = state.arena.set_session_learning(&session, true);
     let live_context = Arc::new(std::sync::Mutex::new(
         crate::live_context::LiveContext::default(),
     ));
@@ -593,8 +594,8 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
     let mut client_speech = ClientSpeech::default();
     let mut client_capture: Option<(Option<u64>, u64)> = None;
     let mut capture_learning_epoch = None;
-    let mut previous_learning_epoch = None;
-    let hello = json!({"type":"session","session_id":session,"sample_rate":16000,"frame_samples":512,"learning":false,"control":pipe.control_state()});
+    let mut previous_learning_epoch = state.arena.learning_epoch(&session);
+    let hello = json!({"type":"session","session_id":session,"sample_rate":16000,"frame_samples":512,"learning":previous_learning_epoch.is_some(),"control":pipe.control_state()});
     if sender.send(Message::Text(hello.to_string())).await.is_err() {
         return;
     }
@@ -860,7 +861,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                             "interrupt"|"reset"=>{
                                 client_tools.0.abort_all();
                                 client_capture.take();capture_priority.take();observation.take();turn.take();partial.take();pending.clear();epoch.fetch_add(1,Ordering::SeqCst);pipe.interrupt();
-                                if action=="reset"{live_context.lock().expect("live context lock").set_enabled(false);emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"live_context_state","enabled":false,"segments":0})).await;state.arena.clear_voice_session(&session);state.arena.begin_voice_session(&session);pipe.reset();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"learning_state","enabled":false})).await;}
+                                if action=="reset"{live_context.lock().expect("live context lock").set_enabled(false);emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"live_context_state","enabled":false,"segments":0})).await;state.arena.clear_voice_session(&session);state.arena.begin_voice_session(&session);let _ = state.arena.set_session_learning(&session, true);previous_learning_epoch = state.arena.learning_epoch(&session);pipe.reset();emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"learning_state","enabled":previous_learning_epoch.is_some()})).await;}
                                 state.services.reset_vad(&session).await;
                                 emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"interruption","state":"interrupted"})).await;
                             },
@@ -1936,6 +1937,7 @@ async fn reason_turn(
     let gen_start = Instant::now();
     let mut first_token_instant: Option<Instant> = None;
     let mut total_token_count = 0usize;
+    let mut final_chunker = SpeechChunker::default();
     for round in 0..=MAX_TOOL_ROUNDS {
         let allow_tools = guard.tools_enabled(round);
         if let Some(reason) = guard.reason(round) {
@@ -2011,7 +2013,6 @@ async fn reason_turn(
                             )
                             .await;
                         }
-                        queue_speech(chunker.finish(), speech_tx).await;
                     }
                 },
                 result=&mut completion=>{
@@ -2090,7 +2091,17 @@ async fn reason_turn(
             .await;
             assistant = json!({"role":"assistant","content":format!("{round_text}{addition}")});
         }
-        queue_speech(chunker.finish(), speech_tx).await;
+        let has_tool_calls = assistant["tool_calls"]
+            .as_array()
+            .is_some_and(|calls| !calls.is_empty());
+        let will_continue = !has_tool_calls && assistant["finish_reason"].as_str() == Some("length");
+        if will_continue {
+            // Preserve the incomplete trailing sentence across the token-limit continuation
+            // so TTS does not synthesize two broken halves of a single sentence.
+            final_chunker = chunker.clone();
+        } else {
+            queue_speech(chunker.finish(), speech_tx).await;
+        }
         let mut msg_for_history = assistant.clone();
         if let Some(obj) = msg_for_history.as_object_mut() {
             obj.remove("finish_reason");
@@ -2439,7 +2450,8 @@ async fn reason_turn(
         final_assistant.ok_or_else(|| SailError::Inference("Missing assistant response".into()))?;
 
     // If the model response was cut off by token limit (finish_reason == "length"),
-    // continue generating seamlessly.
+    // continue generating seamlessly while keeping the same SpeechChunker so any
+    // mid-sentence cut is joined before TTS synthesis.
     let mut continuations = 0usize;
     const MAX_CONTINUATIONS: usize = 2;
     while assistant["finish_reason"].as_str() == Some("length") && continuations < MAX_CONTINUATIONS
@@ -2459,7 +2471,6 @@ async fn reason_turn(
         let completion =
             vlm.stream_with_tools(final_answer_messages(&cont_messages), false, delta_tx);
         tokio::pin!(completion);
-        let mut chunker = SpeechChunker::default();
         let mut gate = SpeechTextGate::default();
         let mut deltas_open = true;
         let cont_assistant = loop {
@@ -2475,7 +2486,7 @@ async fn reason_turn(
                             0.0
                         };
                         let safe = gate.push(&delta);
-                        publish_spoken_text_with_stats(&safe, &mut reply, &mut chunker, tx, current, speech_tx, "model", total_token_count, tokens_per_sec, None).await;
+                        publish_spoken_text_with_stats(&safe, &mut reply, &mut final_chunker, tx, current, speech_tx, "model", total_token_count, tokens_per_sec, None).await;
                     } else {
                         deltas_open = false;
                         let tail = gate.finish();
@@ -2488,23 +2499,50 @@ async fn reason_turn(
                             } else {
                                 0.0
                             };
-                            publish_spoken_text_with_stats(&tail, &mut reply, &mut chunker, tx, current, speech_tx, "model", total_token_count, tokens_per_sec, None).await;
+                            publish_spoken_text_with_stats(&tail, &mut reply, &mut final_chunker, tx, current, speech_tx, "model", total_token_count, tokens_per_sec, None).await;
                         }
-                        queue_speech(chunker.finish(), speech_tx).await;
                     }
                 },
                 result = &mut completion => {
-                    match result {
-                        Ok(a) => break a,
+                    let cont = match result {
+                        Ok(a) => a,
                         Err(e) => {
                             warn!(error = %e, "Continuation generation failed; keeping output so far");
                             break assistant.clone();
                         }
+                    };
+                    while let Ok(delta) = delta_rx.try_recv() {
+                        let est_tokens = delta.chars().count().div_ceil(4);
+                        total_token_count += est_tokens.max(1);
+                        let elapsed_sec = gen_start.elapsed().as_secs_f64();
+                        let tokens_per_sec = if elapsed_sec > 0.05 {
+                            total_token_count as f64 / elapsed_sec
+                        } else {
+                            0.0
+                        };
+                        let safe = gate.push(&delta);
+                        publish_spoken_text_with_stats(&safe, &mut reply, &mut final_chunker, tx, current, speech_tx, "model", total_token_count, tokens_per_sec, None).await;
                     }
+                    break cont;
                 }
             }
         };
-        queue_speech(chunker.finish(), speech_tx).await;
+        let tail = gate.finish();
+        if !tail.is_empty() {
+            publish_spoken_text_with_stats(
+                &tail,
+                &mut reply,
+                &mut final_chunker,
+                tx,
+                current,
+                speech_tx,
+                "model",
+                total_token_count,
+                0.0,
+                None,
+            )
+            .await;
+        }
         if let Some(new_text) = cont_assistant["content"].as_str() {
             let prev_text = assistant["content"].as_str().unwrap_or_default();
             assistant["content"] = json!(format!("{prev_text}{new_text}"));
@@ -2514,6 +2552,7 @@ async fn reason_turn(
             .cloned()
             .unwrap_or_else(|| json!("stop"));
     }
+    queue_speech(final_chunker.finish(), speech_tx).await;
     let gen_duration = gen_start.elapsed();
     let gen_sec = gen_duration.as_secs_f64();
     if total_token_count == 0 && !reply.is_empty() {
@@ -2741,6 +2780,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn test_guardian() -> &'static sail_guardian::GuardianSubsystem {
         static GUARDIAN: std::sync::OnceLock<sail_guardian::GuardianSubsystem> =
             std::sync::OnceLock::new();
@@ -2879,7 +2919,12 @@ mod tests {
         } else {
             json!({"content":reply["content"]})
         };
-        let event = json!({"choices":[{"delta":delta,"finish_reason":if reply["tool_calls"].is_array(){"tool_calls"}else{"stop"}}]});
+        let finish_reason = if reply["tool_calls"].is_array() {
+            "tool_calls"
+        } else {
+            reply["finish_reason"].as_str().unwrap_or("stop")
+        };
+        let event = json!({"choices":[{"delta":delta,"finish_reason":finish_reason}]});
         (
             [("content-type", "text/event-stream")],
             format!("data: {event}\n\ndata: [DONE]\n\n"),
@@ -3150,6 +3195,76 @@ mod tests {
             consumer.await.unwrap();
             drop(server);
         }
+    }
+    #[tokio::test]
+    async fn token_limit_continuation_joins_cut_sentence_before_tts() {
+        let state = Arc::new(MockModel {
+            replies: Mutex::new(VecDeque::from(vec![
+                json!({
+                    "content": "When a model response hits the token limit right in the middle of a",
+                    "finish_reason": "length"
+                }),
+                json!({
+                    "content": " sentence, the continuation completes the sentence before synthesis.",
+                    "finish_reason": "stop"
+                }),
+            ])),
+            requests: Mutex::new(Vec::new()),
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/health", get(|| async { Json(json!({"status":"ok"})) }))
+            .route(
+                "/props",
+                get(|| async {
+                    Json(json!({"modalities":{"vision":true,"tools":true},"default_generation_settings":{"n_ctx":4096}}))
+                }),
+            )
+            .route(
+                "/apply-template",
+                axum::routing::post(|| async { Json(json!({"prompt":"rendered"})) }),
+            )
+            .route(
+                "/tokenize",
+                axum::routing::post(|| async { Json(json!({"tokens":[1,2,3,4]})) }),
+            )
+            .route("/v1/chat/completions", axum::routing::post(model_reply))
+            .with_state(state);
+        let server = AbortTask(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let vlm = test_vlm(addr);
+        let (speech_tx, mut speech_rx) = mpsc::channel::<String>(16);
+        let (tx, _rx) = mpsc::channel(128);
+        let mut messages = vec![
+            json!({"role":"system","content":"Answer naturally"}),
+            json!({"role":"user","content":"Explain continuation cadence"}),
+        ];
+        let (reply, _, _) = reason_turn(
+            &vlm,
+            &mut messages,
+            "Explain continuation cadence",
+            None,
+            &tx,
+            1,
+            &speech_tx,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        drop(speech_tx);
+        let mut spoken_segments = Vec::new();
+        while let Some(seg) = speech_rx.recv().await {
+            spoken_segments.push(seg);
+        }
+        assert_eq!(
+            spoken_segments,
+            vec!["When a model response hits the token limit right in the middle of a sentence, the continuation completes the sentence before synthesis."]
+        );
+        assert_eq!(reply, spoken_segments[0]);
+        drop(server);
     }
     #[tokio::test]
     async fn capability_question_requests_no_tools_or_host_observations() {
