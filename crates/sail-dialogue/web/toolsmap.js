@@ -57,13 +57,15 @@
   const byId = Object.fromEntries(STATIONS.map((s) => [s.id, s]));
   // Router pages that are not a station's own page still get a matching status inspector.
   const PAGE_STATION = {bridge: 'core', agents: 'forge', flow: 'flow', pulse: 'flow'};
-  // Tabs of the right-hand Dialogue column: the conversation, then the open system's status.
-  const COLUMN_TABS = ['chat', 'overview', 'tasks', 'logs', 'config'];
+  // Tabs of the right-hand Dialogue column: the conversation, and Context (the open
+  // system's status), which has its own row of views.
+  const COLUMN_TABS = ['chat', 'context'];
+  const INFO_TABS = ['overview', 'tasks', 'logs', 'config'];
   for (const s of STATIONS) if (s.page && !PAGE_STATION[s.page]) PAGE_STATION[s.page] = s.id;
   for (const s of STATIONS) { s.gx = (s.u + s.v) / 2; s.gy = (s.v - s.u) / 2; }
 
   const state = {
-    on: false, built: false, selected: null, popup: null, tracker: false, pending: null, trigger: null, tab: 'chat', chatScroll: null, mode: 'map',
+    on: false, built: false, selected: null, popup: null, tracker: false, pending: null, trigger: null, tab: 'chat', info: 'overview', chatScroll: null, mode: 'map',
     live: true, paused: false, speed: 1, k: 1, tx: 0, ty: 0,
     metrics: null, mind: null, health: null, guardian: null, approvals: 0, plans: [], reminders: [],
     latency: {}, history: {cpu: [], gpu: [], ram: [], io: []},
@@ -237,7 +239,7 @@
 
     // Right column: the live Dialogue panel (#homeView, moved in by showChat()) and, behind
     // the other tabs, the status of the open system (SAIL Core on the map).
-    inspector = el('div', {class: 'tm-inspector', id: 'tmInspector', role: 'tabpanel', hidden: true});
+    inspector = el('div', {class: 'tm-inspector', id: 'tmInspector', role: 'tabpanel', 'aria-labelledby': 'tmTab-context', hidden: true});
     const chat = el('aside', {class: 'tm-chat', id: 'tmChat', 'aria-labelledby': 'tmChatTitle'},
       el('header', {class: 'tm-chat-head'},
         el('span', {class: 'tm-insp-icon'}, logo()),
@@ -245,7 +247,7 @@
         el('span', {class: 'tm-pill', id: 'tmChatPill'}, el('span', {class: 'tm-status idle'}), 'Connecting')),
       el('div', {class: 'tm-tabs', id: 'tmTabs', role: 'tablist', 'aria-label': 'Dialogue column'},
         COLUMN_TABS.map((t) => el('button', {class: 'tm-tab', type: 'button', role: 'tab', id: `tmTab-${t}`,
-          'aria-controls': t === 'chat' ? 'tmChatPanel' : 'tmInspector', onclick: () => setTab(t), onkeydown: tabKey},
+          'aria-controls': t === 'chat' ? 'tmChatPanel' : 'tmInspector', onclick: () => setTab(t), onkeydown: (e) => tabKey(e, COLUMN_TABS, state.tab, 'tmTab')},
           t[0].toUpperCase() + t.slice(1)))),
       chatSlot = el('div', {class: 'tm-chat-slot', id: 'tmChatPanel', role: 'tabpanel', 'aria-labelledby': 'tmTab-chat'}),
       inspector);
@@ -653,9 +655,9 @@
     s.append(svg('polyline', {points: values.map((v, i) => `${(i / (values.length - 1) * 120).toFixed(1)},${(19 - Math.min(1, v / hi) * 18).toFixed(1)}`).join(' ')}));
     return s;
   }
-  // Status of the open system (SAIL Core on the map), shown behind the column's info tabs.
+  // Status of the open system (SAIL Core on the map), shown in the column's Context tab.
   function renderInspector() {
-    if (state.tab === 'chat') return;
+    if (state.tab !== 'context') return;
     const s = byId[state.popup || 'core'];
     const st = stationStatus(s.id);
     const insp = $('#tmInspector');
@@ -668,14 +670,18 @@
         el('span', {class: 'tm-insp-icon'}, s.kind === 'core' ? logo() : icon(s.kind === 'forge' ? 'forge' : s.icon)),
         el('h3', {text: s.name}),
         el('span', {class: `tm-pill ${st}`}, el('span', {class: `tm-status ${st}`}), stateWord(st).replace(/^./, (c) => c.toUpperCase()))),
-      el('div', {class: 'tm-insp-body'}, tabBody(s)));
+      el('div', {class: 'tm-subtabs', role: 'tablist', 'aria-label': `${s.name} context`},
+        INFO_TABS.map((t) => el('button', {class: 'tm-subtab', type: 'button', role: 'tab', id: `tmInfo-${t}`, 'aria-controls': 'tmInfoPanel',
+          'aria-selected': String(state.info === t), tabindex: state.info === t ? '0' : '-1',
+          onclick: () => setTab(t), onkeydown: (e) => tabKey(e, INFO_TABS, state.info, 'tmInfo')}, t[0].toUpperCase() + t.slice(1)))),
+      el('div', {class: 'tm-insp-body', id: 'tmInfoPanel', role: 'tabpanel', 'aria-labelledby': `tmInfo-${state.info}`}, tabBody(s)));
     const body = insp.querySelector('.tm-insp-body'); body.scrollTop = scroll;
     // Live refreshes rebuild the panel; keep keyboard focus on the same control.
     if (focusKey) [...insp.querySelectorAll('button')].find((b) => (b.id || b.textContent) === focusKey)?.focus({preventScroll: true});
   }
   function tabBody(s) {
     const m = state.metrics, g = m?.gpus?.[0];
-    if (state.tab === 'overview') {
+    if (state.info === 'overview') {
       const conns = LINKS.filter(([a, b]) => a === s.id || b === s.id).map(([a, b]) => byId[a === s.id ? b : a]);
       return [
         el('p', {class: 'tm-about', text: s.about}),
@@ -696,8 +702,8 @@
         taskCard(4),
       ];
     }
-    if (state.tab === 'tasks') return [taskCard(20), reminderCard()];
-    if (state.tab === 'logs') {
+    if (state.info === 'tasks') return [taskCard(20), reminderCard()];
+    if (state.info === 'logs') {
       const rows = state.activity.filter((a) => a.station === s.id || s.id === 'core').slice(0, 60);
       return el('section', {class: 'tm-card'}, el('h3', {text: 'Recent events'}),
         rows.length ? el('ol', {class: 'tm-log'}, rows.map((a) => el('li', {}, el('time', {text: hhmmss(a.at)}), el('span', {text: a.text})))) : el('p', {class: 'tm-empty', text: 'No events from this subsystem yet.'}));
@@ -711,7 +717,7 @@
     const plans = state.plans.slice(0, limit);
     return el('section', {class: 'tm-card'},
       el('div', {class: 'tm-card-row'}, el('h3', {text: 'Task Queue'}),
-        state.tab === 'overview' && state.plans.length ? el('button', {class: 'tm-link-btn', type: 'button', onclick: () => setTab('tasks'), text: 'View All'}) : null),
+        state.info === 'overview' && state.plans.length ? el('button', {class: 'tm-link-btn', type: 'button', onclick: () => setTab('tasks'), text: 'View All'}) : null),
       plans.length ? el('ul', {class: 'tm-tasks'}, plans.map((pv) => {
         const p = pv.plan, done = p.steps.filter((x) => x.state === 'done').length, total = p.steps.length || 1;
         const progress = p.state === 'succeeded' ? 100 : Math.round(done / total * 100);
@@ -772,9 +778,10 @@
     svgRoot.querySelectorAll('.tm-station').forEach((g) => g.classList.toggle('selected', g.dataset.station === id));
     render();
   }
-  // Chat keeps the Dialogue panel mounted (voice and replies keep running); the info tabs
-  // cover it with the open system's status.
+  // Chat keeps the Dialogue panel mounted (voice and replies keep running); Context covers
+  // it with the open system's status. Naming one of Context's views opens it there.
   function setTab(t) {
+    if (INFO_TABS.includes(t)) { state.info = t; t = 'context'; }
     if (!COLUMN_TABS.includes(t)) return;
     const conv = document.getElementById('conversation');
     if (state.tab === 'chat' && t !== 'chat' && conv) {
@@ -794,15 +801,16 @@
     }
     chatSlot.hidden = state.tab !== 'chat';
     inspector.hidden = state.tab === 'chat';
-    if (state.tab !== 'chat') inspector.setAttribute('aria-labelledby', `tmTab-${state.tab}`);
   }
-  function tabKey(e) {
-    const i = COLUMN_TABS.indexOf(state.tab), n = COLUMN_TABS.length;
+  // Arrow keys, Home and End move between the tabs of one row (ARIA tabs pattern).
+  function tabKey(e, tabs, current, prefix) {
+    const i = tabs.indexOf(current), n = tabs.length;
     const j = {ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: n - 1}[e.key];
     if (j === undefined) return;
     e.preventDefault();
-    setTab(COLUMN_TABS[(j + n) % n]);
-    $(`#tmTab-${state.tab}`).focus();
+    const next = tabs[(j + n) % n];
+    setTab(next);
+    $(`#${prefix}-${next}`).focus();
   }
   function setMode(m) {
     state.mode = m;
