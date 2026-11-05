@@ -135,6 +135,26 @@ async fn shutdown_cancels_in_progress_startup_without_waiting_for_loading_deadli
 }
 
 #[tokio::test]
+async fn backend_shutdown_does_not_wait_out_a_stuck_model_start() {
+    // A start nobody cancels (here: a direct backend call) holds the startup lock while
+    // the model never becomes healthy, as with a llama-server wedged in the GPU driver.
+    let (mut config, _files) = config_script(Some("#!/bin/sh\nexec sleep 120\n"));
+    config.startup_timeout = Duration::from_secs(60);
+    let backend = std::sync::Arc::new(LocalGemmaBackend::new(config, 1).unwrap());
+    let starting = tokio::spawn({
+        let backend = backend.clone();
+        async move { backend.start().await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let began = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(15), backend.shutdown())
+        .await
+        .expect("shutdown must not wait for the 60s startup deadline")
+        .unwrap();
+    assert!(began.elapsed() < Duration::from_secs(10), "{:?}", began.elapsed());
+    starting.abort();
+}
+#[tokio::test]
 async fn low_host_memory_prevents_managed_model_process_launch() {
     struct LowMemory;
     impl sail_common::resources::HostProbe for LowMemory {
