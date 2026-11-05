@@ -117,7 +117,7 @@ function connectWs() {
       case 'session':
         learningSession = data.session_id; learningEnabled = data.learning === true; renderLearning();
         cancelVisualCapture();
-        document.getElementById('conversation').replaceChildren(); responseNode = null;
+        document.getElementById('conversation').replaceChildren(); responseNode = null; chatFollow.resume();
         applyControl(data.control); announceClientSpeech(); break;
       case 'live_context_state':
         discardListeningCapture(); liveContextReplyPending = false;
@@ -292,8 +292,35 @@ function appendConversation(role, text) {
   const label = document.createElement('span'); label.className = 'message-label'; label.textContent = role;
   const content = document.createElement('div'); content.className = 'message-body';
   node.append(label, content); setMessageText(node, text);
-  document.getElementById('conversation').append(node); node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return node;
+  if (role === 'You') chatFollow.resume();
+  document.getElementById('conversation').append(node); return node;
 }
+// Keeps the conversation pinned to the newest text while replies stream in, until the
+// owner scrolls away from the bottom; scrolling back to the bottom resumes following.
+const chatFollow = (() => {
+  const box = document.getElementById('conversation');
+  let follow = true, queued = false;
+  const atBottom = () => box.scrollHeight - box.scrollTop - box.clientHeight <= 4;
+  const stick = () => {
+    queued = false;
+    // Hidden (e.g. behind another tab in the Dialogue column): nothing to scroll yet.
+    if (follow && box.clientHeight) box.scrollTop = box.scrollHeight;
+  };
+  const schedule = () => { if (follow && !queued) { queued = true; requestAnimationFrame(stick); } };
+  // Upward intent stops following at once, before a pending stick can pull the view back.
+  const leave = () => { if (box.scrollHeight > box.clientHeight) follow = false; };
+  box.addEventListener('wheel', (e) => { if (e.deltaY < 0) leave(); }, { passive: true });
+  box.addEventListener('keydown', (e) => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key)) leave(); });
+  let touchY = null;
+  box.addEventListener('touchstart', (e) => { touchY = e.touches[0]?.clientY ?? null; }, { passive: true });
+  box.addEventListener('touchmove', (e) => { const y = e.touches[0]?.clientY; if (touchY !== null && y > touchY) leave(); touchY = y; }, { passive: true });
+  // Scrollbar drags and everything else: follow exactly when the view is at the bottom.
+  box.addEventListener('scroll', () => { if (box.clientHeight) follow = atBottom(); }, { passive: true });
+  // Streamed tokens, Markdown/diagram renders and cards all grow the log.
+  new MutationObserver(schedule).observe(box, { childList: true, subtree: true, characterData: true });
+  new ResizeObserver(schedule).observe(box);
+  return { resume() { follow = true; schedule(); } };
+})();
 // Assistant replies are Markdown; user turns (mostly speech transcripts) stay plain text.
 function setMessageText(node, text) {
   const content = node.lastChild;

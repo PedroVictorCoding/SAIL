@@ -74,6 +74,34 @@ with sync_playwright() as p:
     assert page.is_hidden('#tmPane') and page.is_visible('#tmViewport')
     assert page.locator('.tm-nav-item[data-nav="home"]').get_attribute('aria-current') == 'page'
 
+    # The conversation follows streamed replies unless the owner has scrolled up.
+    gap = "(() => { const c = document.getElementById('conversation'); return c.scrollHeight - c.scrollTop - c.clientHeight; })()"
+    def stream(chunks):
+        page.evaluate("""(n) => { for (let i = 0; i < n; i++) window.__reply += 'word '.repeat(12) + '\\n\\n';
+          setMessageText(window.__node, window.__reply); }""", chunks)
+        page.wait_for_timeout(100)
+    page.evaluate("appendConversation('You', 'hello'); window.__node = appendConversation('SAIL', ''); window.__reply = ''")
+    for _ in range(12):
+        stream(2)
+    assert page.evaluate(gap) <= 4, 'did not follow the streamed reply'
+    conv = page.locator('#conversation').bounding_box()
+    page.mouse.move(conv['x'] + 40, conv['y'] + 40)
+    page.mouse.wheel(0, -300)
+    page.wait_for_timeout(200)
+    held = page.evaluate("document.getElementById('conversation').scrollTop")
+    stream(6)
+    assert page.evaluate("document.getElementById('conversation').scrollTop") == held, 'pulled away from where the owner scrolled'
+    page.mouse.wheel(0, 100000)
+    page.wait_for_timeout(300)
+    stream(4)
+    assert page.evaluate(gap) <= 4, 'did not resume following at the bottom'
+    page.mouse.wheel(0, -300)
+    page.wait_for_timeout(200)
+    page.evaluate("appendConversation('You', 'next'); window.__node = appendConversation('SAIL', ''); window.__reply = ''")
+    stream(4)
+    assert page.evaluate(gap) <= 4, 'own message did not resume following'
+    page.evaluate("document.getElementById('conversation').replaceChildren()")
+
     def centre_box(selector):
         return page.locator(selector).bounding_box()
 
@@ -259,4 +287,4 @@ with sync_playwright() as p:
     browser.close()
 
 server.shutdown()
-print(f"Tools Map workspace, Dialogue column, centre systems and Tracker, history, Settings and mobile checks passed; screenshots: {SHOT}")
+print(f"Tools Map workspace, Dialogue column and auto-scroll, centre systems and Tracker, history, Settings and mobile checks passed; screenshots: {SHOT}")
