@@ -724,9 +724,7 @@ function updateState(state) {
   statusBadge.textContent = labels[state] || 'Ready'; document.getElementById('appShell').dataset.state = state;
   const palette = statePalette(paletteState(state));
   ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, [palette.primary,palette.secondary,palette.tertiary][index]));
-  document.getElementById('sessionState').textContent = labels[state] || 'Ready';
-  const liveState = document.getElementById('sessionLiveState');
-  if (liveState) liveState.textContent = detailedLabels[state] || labels[state] || state || 'Ready';
+  document.getElementById('sessionState').textContent = detailedLabels[state] || labels[state] || 'Ready';
   if (changed && reduceMotion.matches && !document.hidden) renderVisuals();
   syncActivityPill();
   document.getElementById('interruptBtn').hidden = !['thinking','speaking','working','transcribing','generating'].includes(state);

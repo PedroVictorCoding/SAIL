@@ -273,9 +273,6 @@
     
     if (refreshBtn) refreshBtn.addEventListener('click', load);
     
-    if (createBtn) createBtn.addEventListener('click', createReminder);
-    if (saveSettingsBtn) saveSettingsBtn.addEventListener('click', saveSettings);
-    
     // Set default due time to 20 minutes from now
     defaultDue();
     

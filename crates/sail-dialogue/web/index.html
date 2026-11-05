@@ -18,9 +18,9 @@
       <span class="loading-indicator" id="speechLoadIndicator" hidden><span class="loading-short" aria-hidden="true">Voice</span><span id="speechLoadLabel">Loading voice models</span><progress id="speechLoadBar" max="100" aria-labelledby="speechLoadLabel" aria-describedby="speechLoadValue"></progress><span id="speechLoadValue" aria-live="off"></span></span>
       <span class="loading-indicator" id="modelLoadIndicator" hidden><span class="loading-short" aria-hidden="true">Model</span><span id="modelLoadLabel">Loading model</span><progress id="modelLoadBar" max="100" aria-labelledby="modelLoadLabel" aria-describedby="modelLoadValue"></progress><span id="modelLoadValue" aria-live="off"></span></span>
       <span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span>
-      <button class="icon-button" id="terminalHeaderBtn" type="button" aria-label="Open Terminal" title="Terminal (Ctrl+`)"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#terminal"></use></svg></button>
-      <button class="icon-button mobile-spaces" id="spacesTop" type="button" aria-label="Open Spaces"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#spaces"></use></svg></button>
-      <button class="icon-button" id="settingsOpen" aria-label="Open settings" title="Settings"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#settings"></use></svg></button>
+      <button class="icon-button mobile-only" id="terminalHeaderBtn" type="button" aria-label="Open Terminal" title="Terminal (Ctrl+`)"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#terminal"></use></svg></button>
+      <button class="icon-button mobile-only" id="spacesTop" type="button" aria-label="Open Spaces"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#spaces"></use></svg></button>
+      <button class="icon-button mobile-only" id="settingsOpen" type="button" aria-label="Open settings" title="Settings"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#settings"></use></svg></button>
     </div>
   </header>
 
@@ -51,12 +51,11 @@
                 <button type="button" class="card-tab active" data-tab-card="systemCard" data-tab-panel="systemPanelMetrics"><span>Metrics</span></button>
                 <button type="button" class="card-tab" data-tab-card="systemCard" data-tab-panel="systemPanelGuardian"><span>Guardian</span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="systemCard" type="button" aria-label="Cycle system view" title="Cycle view (Status / Guardian)">⇋</button>
               <button class="card-action" id="checkSystemBtn" type="button" aria-label="Check local system status" title="Ping metrics now">↻</button>
             </div>
           </header>
           <div class="card-tab-panel active" id="systemPanelMetrics">
-            <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">Querying…</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">Querying…</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">Querying…</strong></div></div>
+            <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">—</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">—</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">—</strong></div></div>
             <p class="card-footnote" id="systemNote">Telemetry auto-updates continuously in real time.</p>
           </div>
           <div class="card-tab-panel" id="systemPanelGuardian" hidden>
@@ -79,7 +78,6 @@
                 <button type="button" class="card-tab active" data-tab-card="sessionCard" data-tab-panel="sessionPanelMain"><span>Session</span></button>
                 <button type="button" class="card-tab" data-tab-card="sessionCard" data-tab-panel="sessionPanelAudio"><span>Audio</span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="sessionCard" type="button" aria-label="Cycle session view" title="Cycle view (Session / Audio)">⇋</button>
               <span class="mini-state" id="sessionState">Ready</span>
             </div>
           </header>
@@ -87,7 +85,6 @@
             <div class="session-lines">
               <div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div>
               <div><span>Microphone</span><strong id="sessionMic">Off</strong></div>
-              <div><span>State</span><strong id="sessionLiveState">Ready</strong></div>
               <div><span>Generation speed</span><strong id="sessionTokensPerSec">—</strong></div>
               <div><span>Time to first token</span><strong id="sessionTtft">—</strong></div>
               <div><span>Live output</span><strong id="sessionGenStats">—</strong></div>
@@ -122,7 +119,6 @@
                 <button type="button" class="card-tab active" data-tab-card="modelsCard" data-tab-panel="modelsPanelMain"><span>Models</span></button>
                 <button type="button" class="card-tab" data-tab-card="modelsCard" data-tab-panel="modelsPanelGovernor"><span>Governor</span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="modelsCard" type="button" aria-label="Cycle model view" title="Cycle view (Models / Governor)">⇋</button>
               <button class="card-action" id="modelsRefreshBtn" type="button" aria-label="Check local model status" title="Ping model health now">↻</button>
             </div>
           </header>
@@ -156,7 +152,6 @@
                 <button type="button" class="card-tab" data-tab-card="toolsCard" data-tab-panel="toolsPanelActivity"><span>Activity</span></button>
                 <button type="button" class="card-tab" data-tab-card="toolsCard" data-tab-panel="toolsPanelSafetyReview" id="tabSafetyReviewBtn"><span>Safety <i class="safety-badge-dot" id="safetyBadgeDot" hidden></i></span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="toolsCard" type="button" aria-label="Cycle tools view" title="Cycle view (Tools / Activity / Safety)">⇋</button>
             </div>
           </header>
           <div class="card-tab-panel active" id="toolsPanelMain">
@@ -165,7 +160,6 @@
               <button type="button" class="tool-action" data-tool="fs:query"><span aria-hidden="true">▱</span>Workspace files</button>
               <button type="button" class="tool-action" id="chooseVisionBtn"><span aria-hidden="true">▧</span>Analyze an image</button>
               <button type="button" class="tool-action" id="listIssuesBtn" data-tool="github:issues"><span aria-hidden="true">⌥</span>GitHub issues</button>
-              <button type="button" class="tool-action" id="forgeQuickEnqueueToolBtn"><span aria-hidden="true">⚒</span>Enqueue Forge task</button>
             </div>
           </div>
           <div class="card-tab-panel" id="toolsPanelActivity" hidden>
@@ -200,7 +194,6 @@
                 <button type="button" class="card-tab" data-tab-card="canvasCard" data-tab-panel="canvasPanelCamera" title="Live Camera Feed (Adaptive Slow Mode)"><span>Camera</span></button>
                 <button type="button" class="card-tab" data-tab-card="canvasCard" data-tab-panel="canvasPanelDesktop" title="Live Desktop Screen Share (Adaptive Slow Mode)"><span>Desktop</span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="canvasCard" type="button" aria-label="Cycle canvas view" title="Cycle view (Canvas / Camera / Desktop)">⇋</button>
               <button class="card-action" id="canvasClearBtn" type="button" aria-label="Clear Canvas" title="Clear Canvas">×</button>
             </div>
           </header>
@@ -272,7 +265,6 @@
                 <button type="button" class="card-tab active" data-tab-card="forgeCard" data-tab-panel="forgePanelMain"><span>Agent</span></button>
                 <button type="button" class="card-tab" data-tab-card="forgeCard" data-tab-panel="forgePanelStream"><span>Stream</span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="forgeCard" type="button" aria-label="Cycle forge view" title="Cycle view (Agent / Stream)">⇋</button>
               <button class="card-action" id="forgeRefreshBtn" type="button" aria-label="Refresh Forge jobs" title="Ping Forge jobs now">↻</button>
             </div>
           </header>
@@ -388,7 +380,6 @@
               <button type="button" class="quick-cmd-btn" data-cmd="cargo check">cargo check</button>
               <button type="button" class="quick-cmd-btn" data-cmd="ls -la">ls -la</button>
               <button type="button" class="quick-cmd-btn" data-cmd="cargo test">cargo test</button>
-              <button type="button" class="quick-cmd-btn" data-cmd="clear">clear</button>
             </div>
             <div class="terminal-container" id="terminalContainer" role="region" aria-label="Interactive terminal"></div>
             <p class="card-footnote">Interactive PTY shell running in host workspace. Supports Tab completion, ANSI colors, and Ctrl+C.</p>
@@ -529,28 +520,28 @@
     <nav class="vscode-settings-nav" aria-label="Settings categories">
       <div class="vscode-nav-section-label">Categories</div>
       <button type="button" class="vscode-nav-item active" data-settings-tab="general">
-        <span class="vscode-nav-icon">⚙</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#settings"></use></svg></span>
         <span class="vscode-nav-text">General</span>
       </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="voice">
-        <span class="vscode-nav-icon">🎙</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#dialogue"></use></svg></span>
         <span class="vscode-nav-text">Voice & Audio</span>
       </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="guardian">
-        <span class="vscode-nav-icon">🛡</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#guardian"></use></svg></span>
         <span class="vscode-nav-text">Guardian Security</span>
         <span class="vscode-nav-pill-badge" id="navGuardianBadge">Safe</span>
       </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="models">
-        <span class="vscode-nav-icon">🧠</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#mind"></use></svg></span>
         <span class="vscode-nav-text">Models & Inference</span>
       </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="forge">
-        <span class="vscode-nav-icon">⚒</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#forge"></use></svg></span>
         <span class="vscode-nav-text">Forge Coding Agent</span>
       </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="developer">
-        <span class="vscode-nav-icon">⚡</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#terminal"></use></svg></span>
         <span class="vscode-nav-text">Developer & Telemetry</span>
       </button>
     </nav>
@@ -595,15 +586,6 @@
           </div>
         </div>
 
-        <div class="vscode-setting-item" data-search-terms="spaces tools quick launch panel navigate">
-          <div class="vscode-setting-info">
-            <label class="vscode-setting-name">Workspace Spaces</label>
-            <p class="vscode-setting-desc">Browse integrated spaces for agents, tools, arena, and media.</p>
-          </div>
-          <div class="vscode-setting-control">
-            <button class="quiet-button" id="openSpacesFromSettingsBtn">Browse Spaces</button>
-          </div>
-        </div>
       </section>
 
       <!-- 2. Voice & Audio Category -->
@@ -850,15 +832,6 @@
           </div>
         </div>
 
-        <div class="vscode-setting-item" data-search-terms="forge quick dispatch enqueue task prompt">
-          <div class="vscode-setting-info">
-            <label class="vscode-setting-name">Dispatch New Forge Job</label>
-            <p class="vscode-setting-desc">Enqueue an issue or prompt for autonomous coding resolution.</p>
-          </div>
-          <div class="vscode-setting-control">
-            <button class="quiet-button" id="enqueueFromSettingsBtn">Enqueue Task</button>
-          </div>
-        </div>
       </section>
 
       <!-- 6. Developer & Telemetry Category -->

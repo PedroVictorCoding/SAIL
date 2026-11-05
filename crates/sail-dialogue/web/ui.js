@@ -8,7 +8,6 @@ const spaces = subsystemPages.map(page => ({
   } },
   { id:'life', name:'Life', subtitle:'Personal space', available:false },
   { id:'entertainment', name:'Entertainment', subtitle:'Listen and read', available:false },
-  { id:'pulse', name:'Pulse', subtitle:'Goals and routines', available:false },
   { id:'sense', name:'Sense', subtitle:'Context', available:false },
   { id:'mesh', name:'Mesh', subtitle:'Local network', available:false },
   { id:'lab', name:'Lab', subtitle:'Experiments', available:false },
@@ -124,16 +123,6 @@ function initVscodeSettings() {
     }
   }
 
-  // Cross-links inside settings
-  document.getElementById('openSpacesFromSettingsBtn')?.addEventListener('click', () => {
-    closeSheet();
-    location.hash = '#spaces';
-    openSheet(spacesSheet);
-  });
-  document.getElementById('enqueueFromSettingsBtn')?.addEventListener('click', () => {
-    closeSheet();
-    openForgeEnqueueDialog();
-  });
   document.getElementById('settingsRefreshTelemetryBtn')?.addEventListener('click', () => {
     if (typeof sendAction === 'function') sendAction('get_telemetry');
   });
@@ -146,7 +135,6 @@ initVscodeSettings();
 document.getElementById('checkSystemBtn').addEventListener('click', () => runKernelTool('os:status'));
 document.getElementById('modelsRefreshBtn').addEventListener('click', () => checkModels());
 document.getElementById('listIssuesBtn')?.addEventListener('click', () => runKernelTool('github:issues'));
-document.getElementById('forgeQuickEnqueueToolBtn')?.addEventListener('click', () => openForgeEnqueueDialog());
 document.getElementById('forgeQuickEnqueueBtn')?.addEventListener('click', () => openForgeEnqueueDialog());
 document.getElementById('forgeRefreshBtn')?.addEventListener('click', () => sendAction('forge:list'));
 document.getElementById('forgeClearCompletedBtn')?.addEventListener('click', () => sendAction('forge:clear', { job_id: 'all' }));
@@ -241,6 +229,7 @@ function switchCardTab(cardId, targetPanelId) {
     const isTarget = tab.dataset.tabPanel === targetPanelId;
     tab.classList.toggle('active', isTarget);
     tab.setAttribute('aria-selected', isTarget ? 'true' : 'false');
+    tab.tabIndex = isTarget ? 0 : -1;
   });
 
   const panels = card.querySelectorAll('.card-tab-panel');
@@ -279,33 +268,36 @@ function switchCardTab(cardId, targetPanelId) {
   }
 }
 
-function cycleCardTab(cardId) {
-  const card = document.getElementById(cardId);
-  if (!card) return;
-  const tabs = Array.from(card.querySelectorAll('.card-tab'));
-  if (tabs.length <= 1) return;
-  const activeIndex = tabs.findIndex(tab => tab.classList.contains('active'));
-  const nextIndex = (activeIndex + 1) % tabs.length;
-  const nextTab = tabs[nextIndex];
-  if (nextTab && nextTab.dataset.tabPanel) {
-    switchCardTab(cardId, nextTab.dataset.tabPanel);
-  }
-}
-
-document.querySelectorAll('.card-tab').forEach(tab => {
-  tab.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const cardId = tab.dataset.tabCard;
-    const panelId = tab.dataset.tabPanel;
-    if (cardId && panelId) switchCardTab(cardId, panelId);
+document.querySelectorAll('.card-tabs[role="tablist"]').forEach(list => {
+  const tabs = Array.from(list.querySelectorAll('.card-tab'));
+  tabs.forEach(tab => {
+    const active = tab.classList.contains('active');
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    if (tab.dataset.tabPanel) {
+      tab.setAttribute('aria-controls', tab.dataset.tabPanel);
+      document.getElementById(tab.dataset.tabPanel)?.setAttribute('role', 'tabpanel');
+    }
+    tab.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const cardId = tab.dataset.tabCard;
+      const panelId = tab.dataset.tabPanel;
+      if (cardId && panelId) switchCardTab(cardId, panelId);
+    });
   });
-});
-
-document.querySelectorAll('.card-cycle-btn').forEach(btn => {
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const cardId = btn.dataset.cycleCard;
-    if (cardId) cycleCardTab(cardId);
+  // Arrow keys move between tabs (WAI-ARIA tabs pattern), replacing the old cycle buttons.
+  list.addEventListener('keydown', (e) => {
+    const index = tabs.indexOf(document.activeElement);
+    if (index < 0) return;
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    let next = step === undefined ? null : (index + step + tabs.length) % tabs.length;
+    if (e.key === 'Home') next = 0;
+    if (e.key === 'End') next = tabs.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    tabs[next].click();
+    tabs[next].focus();
   });
 });
 
