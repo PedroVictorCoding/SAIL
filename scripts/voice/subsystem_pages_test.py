@@ -19,6 +19,9 @@ class UIHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT / "crates/sail-dialogue/web"), **kwargs)
 
     def do_GET(self):
+        # Dialogue serves the vendored xterm files from /vendor/<name>.
+        if self.path.startswith("/vendor/") and "/xterm/" not in self.path:
+            self.path = "/vendor/xterm/" + self.path.split("/")[-1]
         if self.path == "/icons.svg":
             self.send_response(200)
             self.send_header("Content-Type", "image/svg+xml")
@@ -46,8 +49,27 @@ def check_pages(page, url, screenshots=None):
     types = (ROOT / "crates/sail-common/src/types.rs").read_text()
     variants = types.split("pub enum SubsystemId {", 1)[1].split("}", 1)[0]
     registered = {name.lower() for name in re.findall(r"^\s*(\w+),", variants, re.M)}
-    assert set(ids) == registered
-    assert page.locator("#subsystemNav a").count() == len(registered)
+    # Every registered subsystem gets one page; extra rooms (the Factory) have their own tests.
+    assert len(ids) == len(set(ids)), "each page must appear once in the navigation"
+    assert registered - {"ui"} <= set(ids), "the Ui subsystem is the interface itself"
+    assert page.locator("#subsystemNav a").count() == len(ids)
+    ids = [subsystem for subsystem in ids if subsystem != "factory"]
+    # Card tabs follow the WAI-ARIA tabs pattern; arrow keys replace the old cycle buttons.
+    assert page.locator(".card-cycle-btn").count() == 0
+    first = page.locator('#systemCard [role="tab"]').first
+    first.focus()
+    page.keyboard.press("ArrowRight")
+    expect(page.locator('#systemCard [role="tab"][aria-controls="systemPanelGuardian"]')).to_have_attribute("aria-selected", "true")
+    expect(page.locator("#systemPanelGuardian")).to_be_visible()
+    assert page.evaluate("document.activeElement.getAttribute('aria-controls')") == "systemPanelGuardian"
+    page.keyboard.press("Home")
+    expect(page.locator("#systemPanelMetrics")).to_be_visible()
+    # Tab strips sit on their own row and never overlap the card title.
+    assert page.evaluate("""[...document.querySelectorAll('.workspace-grid .card-heading')].every(h => {
+      const title = h.querySelector('.card-title').getBoundingClientRect();
+      const tabs = h.querySelector('.card-tabs')?.getBoundingClientRect();
+      return !tabs || tabs.top >= title.bottom - 1;
+    })""")
     page.evaluate("""window.originalCards = [...document.querySelectorAll('.workspace-grid > article')];""")
     for subsystem in ids:
         link = page.locator(f'#subsystemNav a[href="#{subsystem}"]')
@@ -63,8 +85,10 @@ def check_pages(page, url, screenshots=None):
           document.getElementById(card.id) === card)""")
         if subsystem in {"flow", "discovery"}:
             expect(page.locator("#subsystemNotice")).to_be_visible()
-        else:
+        elif page.evaluate(f"subsystemPages.find(p => p.id === '{subsystem}').panel"):
             expect(page.locator("#subsystemContent .card-tab-panel.active")).to_be_visible()
+        else:
+            expect(page.locator("#subsystemContent > article")).to_be_visible()
 
     page.locator("#homeNav").click()
     expect(page.locator("#homePage")).to_be_visible()

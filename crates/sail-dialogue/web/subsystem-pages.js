@@ -5,9 +5,9 @@ const subsystemPages = [
   {
     "id": "factory",
     "name": "Factory",
-    "icon": "spaces",
-    "subtitle": "Live tools map",
-    "description": "Explore SAIL’s subsystems with live host metrics, tasks and recent activity.",
+    "icon": "factory",
+    "subtitle": "The room as the index",
+    "description": "One isometric room holding every station. Nothing hidden, nothing floating.",
     "card": null,
     "panel": null,
     "settings": null,
@@ -20,7 +20,7 @@ const subsystemPages = [
   {
     "id": "core",
     "name": "Core",
-    "icon": "home",
+    "icon": "core",
     "subtitle": "System coordination",
     "description": "The local runtime connects SAIL’s subsystems and coordinates their work.",
     "card": "systemCard",
@@ -125,22 +125,6 @@ const subsystemPages = [
     ]
   },
   {
-    "id": "pulse",
-    "name": "Pulse",
-    "icon": "pulse",
-    "subtitle": "Reminders and timing",
-    "description": "Local durable reminders and notification timing that survive browser closure and daemon restart.",
-    "card": "pulseCard",
-    "panel": "pulsePanelMain",
-    "settings": null,
-    "details": [
-      "Create and manage reminders",
-      "Quiet hours configuration",
-      "Snooze and acknowledge actions",
-      "Persistent across restarts"
-    ]
-  },
-  {
     "id": "mind",
     "name": "Mind",
     "icon": "mind",
@@ -188,7 +172,7 @@ const subsystemPages = [
   {
     "id": "forge",
     "name": "Forge",
-    "icon": "agents",
+    "icon": "forge",
     "subtitle": "Autonomous coding",
     "description": "Queue coding tasks, follow their progress, and inspect patches and review outcomes.",
     "card": "forgeCard",

@@ -25,7 +25,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 .connection-pill.is-disconnected i { background:var(--warning); color:var(--warning) }
 .privacy-indicator { border-color:#f08a8950; background:#28191b99; color:#ffc4c1 }
 .privacy-indicator i { background:#f08a89; color:#f08a89 }
-.mobile-spaces { display:none }
+.mobile-only { display:none }
 .dashboard-layout { display:grid; grid-template-columns:138px minmax(460px,1fr) minmax(360px,clamp(380px,28.5vw,490px)); gap:22px; height:calc(100svh - 96px); min-height:0 }
 .side-rail { display:flex; flex-direction:column; gap:9px; min-height:0; padding:55px 14px 25px 0; border-right:1px solid #ffffff0b }
 .nav-item { display:flex; align-items:center; gap:13px; width:100%; min-height:44px; padding:0 13px; border:0; border-radius:var(--radius-pill); background:transparent; color:#9da1af; text-align:left; font-size:13px; transition:background .2s,color .2s }
@@ -58,23 +58,22 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 .workspace-card { position:relative; display:flex; flex-direction:column; min-width:0; min-height:210px; overflow:hidden; padding:20px 20px 16px; border:var(--border); border-radius:var(--radius-card); background:linear-gradient(145deg,#262B2F,#22272B); box-shadow:var(--depth-panel); transition:background var(--transition-fast),box-shadow var(--transition-fast),transform var(--transition-fast) }
 .workspace-card::after { content:""; position:absolute; right:-30%; bottom:-85%; width:80%; height:130%; pointer-events:none; background:radial-gradient(ellipse,color-mix(in srgb,var(--accent) 7%,transparent),transparent 68%); opacity:.45; transition:opacity .7s }
 .workspace-card:hover { border-color:#ffffff18; box-shadow:2px 5px 14px rgba(0,0,0,0.55), -1px -1px 2px rgba(255,255,255,0.06); transform:translateY(-1px) }
-.card-heading { position:relative; z-index:1; display:flex; align-items:center; justify-content:space-between; gap:10px }
-.card-title { display:flex; align-items:center; gap:10px; min-width:0 }
+.card-heading { position:relative; z-index:1; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 6px }
+.card-title { display:flex; flex:1 1 0; align-items:center; gap:10px; min-width:0 }
+.card-title > div { min-width:0 }
 .card-icon { display:grid; place-items:center; flex:0 0 27px; width:27px; height:27px; color:var(--accent); font-size:20px }
 .card-title h3 { margin:0; font-size:14px; font-weight:540; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 .card-title p { margin:2px 0 0; color:var(--muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-.card-heading-actions { display:flex; align-items:center; gap:6px }
+.card-heading-actions { display:contents }
 .card-live-badge { display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:550; letter-spacing:0.02em; padding:2px 7px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06); color:var(--muted); text-transform:uppercase; transition:all var(--transition-fast) }
 .card-live-badge .live-dot { width:6px; height:6px; border-radius:50%; background:#4ade80; box-shadow:0 0 6px rgba(74,222,128,0.5); animation:cardLivePulse 2.4s ease-in-out infinite }
 .card-live-badge.idle .live-dot { background:#64748b; box-shadow:none; animation:none }
 .card-live-badge.busy .live-dot { background:var(--accent); box-shadow:0 0 6px var(--accent); animation:cardLivePulse 1.2s ease-in-out infinite }
 @keyframes cardLivePulse { 0%,100% { opacity:1; transform:scale(1) } 50% { opacity:0.4; transform:scale(0.85) } }
-.card-tabs { display:inline-flex; align-items:center; gap:3px; padding:3px; background:var(--recessed); box-shadow:var(--depth-inset); border:var(--border); border-radius:10px }
-.card-tab { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border:0; border-radius:8px; background:transparent; color:var(--muted); font-size:11px; font-weight:500; cursor:pointer; transition:all var(--transition-fast); white-space:nowrap }
+.card-tabs { order:10; display:flex; flex:1 0 100%; align-items:center; gap:3px; padding:3px; background:var(--recessed); box-shadow:var(--depth-inset); border:var(--border); border-radius:10px }
+.card-tab { display:inline-flex; flex:1 1 0; justify-content:center; align-items:center; gap:4px; min-height:28px; padding:3px 8px; border:0; border-radius:8px; background:transparent; color:var(--muted); font-size:11px; font-weight:500; cursor:pointer; transition:all var(--transition-fast); white-space:nowrap }
 .card-tab:hover { color:var(--text); background:rgba(255,255,255,0.04) }
 .card-tab.active { color:var(--text); background:var(--control); box-shadow:var(--depth-control); font-weight:550 }
-.card-cycle-btn { font-size:15px; color:var(--muted) }
-.card-cycle-btn:hover { color:var(--text); transform:rotate(180deg); transition:transform .3s ease }
 .card-action { display:grid; place-items:center; flex:0 0 32px; width:32px; height:32px; border:0; border-radius:8px; background:transparent; color:var(--muted); font-size:17px; transition:all var(--transition-fast); cursor:pointer }
 .card-action:hover { background:var(--control); color:var(--text); box-shadow:var(--depth-control) }
 .card-action:active { transform:translateY(1px); box-shadow:var(--depth-control-pressed) }
@@ -399,7 +398,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
   .dashboard-header { position:sticky;z-index:5;top:0;height:64px;margin:0 -15px;padding:0 15px;background:#0b0d14e8;backdrop-filter:blur(16px) }
   .brand { gap:9px }.brand-orb { width:25px;height:25px }.brand strong { font-size:13px }
   .top-actions { gap:6px }.connection-pill { min-height:33px;padding:0 9px;font-size:10px }.icon-button { width:39px;height:39px }
-  .mobile-spaces { display:grid }
+  .mobile-only { display:grid }
   .dashboard-layout { display:flex;height:auto;min-height:calc(100svh - 64px);flex-direction:column;gap:0 }
   .side-rail { display:none }
   .workspace { order:1;height:auto;overflow:visible;padding:16px 0 22px }
@@ -1221,9 +1220,13 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 }
 
 .vscode-nav-icon {
-  font-size: 14px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
 }
+.vscode-nav-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round }
 
 .vscode-nav-text {
   flex: 1;
@@ -1910,3 +1913,13 @@ a.nav-item { text-decoration:none; color:var(--muted) }
 .terminal-container .xterm { height: 100%; }
 .terminal-container:focus-within { outline: 2px solid var(--focus, #ffc184); outline-offset: 2px; }
 .terminal-card.terminal-fullscreen .terminal-container { flex: 1; min-height: 0; }
+
+/* Usability pass: visible keyboard focus on card tabs and header actions, and a rail
+   that keeps every destination on screen on laptop-height displays. */
+.card-tab:focus-visible,.card-action:focus-visible,.icon-button:focus-visible,.nav-item:focus-visible { outline:2px solid var(--focus); outline-offset:2px }
+.metric strong { overflow-wrap:normal; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+@media (min-width:821px) and (max-height:980px) {
+  .side-rail { gap:5px }
+  .side-rail .nav-item { min-height:36px }
+}
+.ui-style-switch .quiet-button[aria-pressed="true"] { background:var(--recessed); box-shadow:var(--depth-inset); border-color:var(--accent); color:var(--accent) }
