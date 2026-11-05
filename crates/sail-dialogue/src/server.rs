@@ -247,6 +247,15 @@ pub async fn run_dialogue_server_with_plans(
             }),
         )
         .route(
+            "/factory.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/factory.js"),
+                )
+            }),
+        )
+        .route(
             "/ui.js",
             get(|| async {
                 (

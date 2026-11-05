@@ -63,6 +63,7 @@ FACTORY.props = [
   { kind: 'valve', x: 8, y: 5, w: 1, d: 1, h: 0.7 },
   { kind: 'silo', x: 9, y: 9, w: 1, d: 1, h: 1.2 },
   { kind: 'canisters', x: 6, y: 9, w: 1, d: 1, h: 0.7 },
+];
 
 // ---------------------------------------------------------------- projection --
 
@@ -202,11 +203,13 @@ function drawPipes(ctx) {
 function drawContactShadow(ctx, record) {
   const centre = isoPoint(record.x + (record.w || 1) / 2, record.y + (record.d || 1) / 2, 0);
   const scale = FACTORY.unit * FACTORY.camera.zoom;
-  const span = ((record.w || 1) + (record.d || 1)) / 2;
-  const rx = span * scale * COS30 * 0.95;
-  const ry = span * scale * SIN30 * 0.95;
+  // Round plant sits on a smaller footprint than the plate it marks out.
+  const round = record.kind === 'tank' || record.kind === 'silo' || record.kind === 'canisters';
+  const span = round
+    ? (Math.min(record.w || 1, record.d || 1) / 2) * 1.5
+    : ((record.w || 1) + (record.d || 1)) / 2 * 0.85;
   ctx.beginPath();
-  ctx.ellipse(centre.x, centre.y + 2, rx, ry, 0, 0, Math.PI * 2);
+  ctx.ellipse(centre.x, centre.y + 2, span * scale * COS30, span * scale * SIN30, 0, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(6,8,10,0.55)';
   ctx.fill();
 }
@@ -534,7 +537,7 @@ function mountFactory(workspace) {
     <canvas id="factoryCanvas" class="factory-canvas" role="img" tabindex="0"
       aria-label="Isometric SAIL room. Every subsystem is a fixed station on the floor."></canvas>
     <div class="factory-chrome">
-      <div class="factory-breadcrumb"><span>ROOM</span><i>/</i><strong id="factoryCrumb">Overview</strong></div>
+      <div class="factory-breadcrumb"><span>ROOM</span><i>/</i><strong id="factoryCrumb">Overview</strong><em id="factoryCrumbStation" hidden></em></div>
       <div class="factory-status">
         <span id="factoryClock">--</span><span id="factoryDay"></span>
         <span class="factory-live"><i></i>LIVE<span id="factoryLatency">--</span></span>
@@ -675,7 +678,7 @@ function buildScenes(floor) {
 function setScene(index, floor = document.getElementById('factoryFloor')) {
   FACTORY.sceneIndex = (index + FACTORY.scenes.length) % FACTORY.scenes.length;
   const crumb = floor?.querySelector('#factoryCrumb');
-  if (crumb && !FACTORY.selected) crumb.textContent = FACTORY.scenes[FACTORY.sceneIndex];
+  if (crumb) crumb.textContent = FACTORY.scenes[FACTORY.sceneIndex];
   floor?.querySelectorAll('.factory-scene').forEach((button, position) => {
     button.setAttribute('aria-pressed', String(position === FACTORY.sceneIndex));
   });
@@ -752,11 +755,15 @@ function positionSpecCard(floor) {
     row.append(factoryElement('span', null, label), factoryElement('b', null, value));
     card.append(row);
   }
-  const bounds = floor.getBoundingClientRect();
-  const width = 200;
-  card.style.left = `${Math.min(Math.max(anchor.x + 14, 8), bounds.width - width - 8)}px`;
-  card.style.top = `${Math.max(anchor.y - 74, 8)}px`;
   card.hidden = false;
+  const bounds = floor.getBoundingClientRect();
+  const width = card.offsetWidth || 200;
+  const height = card.offsetHeight || 90;
+  const inspector = floor.querySelector('#factoryInspector');
+  const reserve = inspector && !inspector.hidden ? Math.min(300, bounds.width * 0.4) : 0;
+  const maxLeft = Math.max(8, bounds.width - reserve - width - 12);
+  card.style.left = `${Math.min(Math.max(anchor.x + 20, 8), maxLeft)}px`;
+  card.style.top = `${Math.max(anchor.y - height - 12, 8)}px`;
 }
 
 
@@ -791,17 +798,20 @@ function drawSpark(canvas, seed = 0) {
 
 function selectStation(station, floor = document.getElementById('factoryFloor')) {
   if (!floor) return;
-  const crumb = floor.querySelector('#factoryCrumb');
+  const crumbStation = floor.querySelector('#factoryCrumbStation');
   const inspector = floor.querySelector('#factoryInspector');
   if (!station) {
     FACTORY.selected = null;
     if (inspector) inspector.hidden = true;
-    if (crumb) crumb.textContent = FACTORY.scenes[FACTORY.sceneIndex];
+    if (crumbStation) { crumbStation.hidden = true; crumbStation.textContent = ''; }
     renderFrame(floor);
     return;
   }
   FACTORY.selected = station;
-  if (crumb) crumb.textContent = station.name;
+  if (crumbStation) {
+    crumbStation.textContent = station.name;
+    crumbStation.hidden = false;
+  }
   if (inspector) {
     inspector.hidden = false;
     floor.querySelector('#factoryInspectorTitle').textContent = station.name;
@@ -940,3 +950,145 @@ function bindFactoryEvents(floor) {
   window.addEventListener('resize', () => renderFrame(floor));
 }
 
+
+// ------------------------------------------------------------------- styles --
+
+const FACTORY_STYLES = `
+.app-shell.factory-route .dashboard-layout { position:relative; grid-template-columns:56px minmax(0,1fr); gap:0 }
+.app-shell.factory-route .workspace { position:relative; padding:0; overflow:hidden }
+.app-shell.factory-route #homePage,
+.app-shell.factory-route .subsystem-page { display:none !important }
+.app-shell.factory-route .assistant-panel { display:none }
+.app-shell.factory-route .side-rail { padding:55px 0 25px; border-right:1px solid #2C3137 }
+.app-shell.factory-route .side-rail .nav-item { gap:0; justify-content:center; padding:0 }
+.app-shell.factory-route .side-rail .nav-item > span:last-child { display:none }
+.app-shell.factory-route .side-rail:hover { position:absolute; z-index:30; top:96px; bottom:0; left:0; width:210px;
+  background:#1A1D21; box-shadow:1px 0 0 #2C3137; overflow-y:auto }
+.app-shell.factory-route .side-rail:hover .nav-item { gap:13px; justify-content:flex-start; padding:0 13px }
+.app-shell.factory-route .side-rail:hover .nav-item > span:last-child { display:inline }
+.factory-floor { position:absolute; inset:0; background:#17191D; overflow:hidden; isolation:isolate }
+.factory-canvas { display:block; width:100%; height:100%; cursor:grab; touch-action:none }
+.factory-canvas:focus-visible { outline:2px solid #F26B21; outline-offset:-2px }
+.factory-chrome { position:absolute; inset:0; pointer-events:none }
+.factory-chrome button, .factory-chrome table, .factory-inspector { pointer-events:auto }
+.factory-breadcrumb { position:absolute; top:14px; left:18px; display:flex; align-items:center; gap:8px;
+  font:500 10px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace; letter-spacing:.08em; color:#8A919B }
+.factory-breadcrumb i { font-style:normal; color:#3A3E45 }
+.factory-breadcrumb strong { color:#C9CDD4; font-weight:600 }
+.factory-breadcrumb em { font-style:normal; color:#F26B21 }
+.factory-breadcrumb em::before { content:"/ "; color:#3A3E45 }
+.factory-status { position:absolute; top:12px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:14px;
+  padding:6px 14px; border:1px solid #2C3137; border-radius:4px; background:#1B1F23E6;
+  font:500 11px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace; letter-spacing:.06em; color:#C9CDD4;
+  font-variant-numeric:tabular-nums }
+.factory-status #factoryDay { color:#8A919B }
+.factory-live { display:inline-flex; align-items:center; gap:6px; color:#5FD3A6 }
+.factory-live i { width:6px; height:6px; border-radius:50%; background:#5FD3A6; box-shadow:0 0 6px #5FD3A6 }
+.factory-live span[data-state="offline"] { color:#FF4438 }
+.factory-scenes { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:6px;
+  padding:5px; border:1px solid #2C3137; border-radius:4px; background:#1B1F23E6 }
+.factory-scene-list { display:flex; gap:4px }
+.factory-scene, .factory-arrow { font:500 10px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace; letter-spacing:.08em;
+  text-transform:uppercase; color:#8A919B; background:transparent; border:1px solid transparent; border-radius:3px; padding:6px 10px }
+.factory-scene:hover, .factory-arrow:hover { color:#C9CDD4; border-color:#3A3E45 }
+.factory-scene[aria-pressed="true"] { color:#F26B21; border-color:#F26B21; background:#F26B2114 }
+.factory-scene:focus-visible, .factory-arrow:focus-visible, .factory-inspector-close:focus-visible,
+.factory-list tbody tr:focus-visible { outline:2px solid #F26B21; outline-offset:2px }
+.factory-spec { position:absolute; width:200px; padding:8px 10px; border:1px solid #F26B21; border-radius:4px;
+  background:#1B1F23F2; color:#C9CDD4; font:11px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  font-variant-numeric:tabular-nums }
+.factory-spec strong { display:block; margin-bottom:5px; color:#F26B21; font-size:10px; letter-spacing:.1em }
+.factory-spec-row { display:flex; justify-content:space-between; gap:10px }
+.factory-spec-row span { color:#8A919B }
+.factory-spec-row b { font-weight:500 }
+.factory-inspector { position:absolute; top:0; right:0; bottom:0; width:300px; padding:16px 16px 22px;
+  border-left:1px solid #2C3137; background:#1A1D21F2; color:#C9CDD4; overflow-y:auto;
+  font:11px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace }
+.factory-inspector header { display:flex; align-items:center; justify-content:space-between; gap:10px }
+.factory-inspector h2 { margin:0; color:#F26B21; font-size:11px; letter-spacing:.1em }
+.factory-inspector h3 { margin:18px 0 8px; color:#8A919B; font-size:10px; font-weight:500; letter-spacing:.1em }
+.factory-inspector-zone { margin:3px 0 0; color:#8A919B; font-size:10px; letter-spacing:.08em }
+.factory-inspector-close { border:1px solid #2C3137; border-radius:3px; background:transparent; color:#8A919B; padding:2px 7px }
+.factory-readout { display:grid; grid-template-columns:1fr auto; gap:6px 12px; margin:14px 0 0; font-variant-numeric:tabular-nums }
+.factory-readout dt { color:#8A919B }
+.factory-readout dd { margin:0; text-align:right }
+.factory-inspector canvas { display:block; width:100%; border:1px solid #2C3137; border-radius:3px }
+.factory-log { display:grid; gap:7px; margin:0; padding:0; list-style:none }
+.factory-log li { padding-left:10px; border-left:1px solid #3A3E45; color:#8A919B }
+.factory-minimap { position:absolute; right:16px; bottom:16px; padding:5px; border:1px solid #2C3137;
+  border-radius:3px; background:#1B1F23E6 }
+.factory-minimap canvas { display:block }
+.factory-list { position:absolute; top:56px; left:18px; min-width:340px; border-collapse:collapse; background:#1B1F23F2;
+  border:1px solid #2C3137; font:11px/1.6 ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-variant-numeric:tabular-nums }
+.factory-list caption { padding:8px 10px; color:#8A919B; text-align:left; font-size:10px; letter-spacing:.06em }
+.factory-list th, .factory-list td { padding:5px 10px; text-align:left; border-top:1px solid #2C3137 }
+.factory-list thead th { color:#8A919B; font-weight:500; font-size:10px; letter-spacing:.08em }
+.factory-list tbody th { color:#F26B21; font-weight:500 }
+.factory-list tbody tr { cursor:pointer }
+.factory-list tbody tr:hover { background:#F26B2114 }
+.factory-hint { position:absolute; left:18px; bottom:56px; margin:0; color:#5A6169;
+  font:10px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace }
+.factory-canvas.is-fullbleed { position:fixed; inset:0; z-index:60; background:#17191D }
+@media (max-width:1100px) { .factory-inspector { width:250px } .factory-minimap { display:none } }
+@media (max-width:760px) {
+  .factory-inspector { position:absolute; top:auto; left:0; right:0; bottom:0; width:auto; max-height:46%;
+    border-left:0; border-top:1px solid #2C3137 }
+  .factory-hint { display:none }
+  .factory-scenes { bottom:8px; max-width:calc(100% - 24px); overflow-x:auto }
+}
+@media (prefers-reduced-motion:reduce) {
+  .factory-scene, .factory-arrow, .factory-canvas { transition:none !important; animation:none !important }
+}
+`;
+
+function injectFactoryStyles() {
+  if (document.getElementById('factory-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'factory-styles';
+  style.textContent = FACTORY_STYLES;
+  document.head.append(style);
+}
+
+
+
+// ------------------------------------------------------------------ routing --
+
+/** Route ownership: the route decides, and the room never mounts twice. */
+function showFactoryRoute() {
+  const workspace = document.getElementById('workspace');
+  const shell = document.getElementById('appShell');
+  if (!workspace) return;
+  injectFactoryStyles();
+  shell?.classList.add('factory-route');
+  if (location.hash !== '#factory') history.replaceState(null, '', '#factory');
+  document.title = 'SAIL — Factory';
+  mountFactory(workspace);
+}
+
+function hideFactoryRoute() {
+  document.getElementById('appShell')?.classList.remove('factory-route');
+  unmountFactory();
+}
+
+window.addEventListener('sail:page', event => {
+  if (event.detail === 'factory') showFactoryRoute();
+  else hideFactoryRoute();
+});
+
+window.sailFactory = {
+  show: () => {
+    if (typeof window.sailNavigate === 'function') window.sailNavigate('factory');
+    else showFactoryRoute();
+  },
+  hide: hideFactoryRoute,
+  state: FACTORY,
+  isoPoint, screenToTile, depth, visibleStations, detailForZoom, hitTest, fitCamera,
+  clockText, dayText,
+};
+
+if (typeof module !== 'undefined') {
+  module.exports = {
+    FACTORY, isoPoint, screenToTile, depth, visibleStations, detailForZoom,
+    clockText, dayText, hitTest, fitCamera, showFactoryRoute, hideFactoryRoute,
+  };
+}
