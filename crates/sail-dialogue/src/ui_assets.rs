@@ -124,6 +124,11 @@ assets![
         "web/subsystem-pages.js",
         JS
     ),
+    (
+        "/briefing.js",
+        "web/briefing.js",
+        JS
+    ),
     ("/ui.js", "web/ui.js", JS),
     (
         "/icons.svg",
