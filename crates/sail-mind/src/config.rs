@@ -442,9 +442,11 @@ impl LocalModelConfig {
         if !self.cache_type_v.is_empty() {
             args.extend(["-ctv".into(), self.cache_type_v.clone()]);
         }
-        if self.flash_attn {
-            args.extend(["-fa".into(), "on".into()]);
-        }
+        // Omission means auto in llama.cpp, so false must explicitly disable it.
+        args.extend([
+            "-fa".into(),
+            if self.flash_attn { "on" } else { "off" }.into(),
+        ]);
         if self.cache_reuse > 0 {
             args.extend(["--cache-reuse".into(), self.cache_reuse.to_string()]);
         }
