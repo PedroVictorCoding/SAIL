@@ -23,6 +23,8 @@ use uuid::Uuid;
 
 /// Longest reminder text accepted, in characters.
 pub const MAX_TEXT_CHARS: usize = 2_000;
+/// Longest same-origin link accepted, in bytes.
+pub const MAX_LINK_CHARS: usize = 2_048;
 /// Longest IANA time-zone name accepted, in bytes.
 pub const MAX_TIMEZONE_CHARS: usize = 64;
 /// Active reminders returned by one list call.
@@ -128,6 +130,10 @@ pub struct Reminder {
     pub delivered_at: Option<DateTime<Utc>>,
     pub cancelled_at: Option<DateTime<Utc>>,
     pub snooze_count: u32,
+    /// Optional same-origin destination the learner can open from the reminder.
+    /// Relative paths (`/…`) and same-document fragments (`#…`) only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 impl Reminder {
@@ -150,6 +156,7 @@ pub struct NewReminder {
     pub due_at: DateTime<Utc>,
     pub timezone: String,
     pub utc_offset_minutes: i32,
+    pub link: Option<String>,
 }
 
 impl NewReminder {
@@ -176,7 +183,18 @@ impl NewReminder {
             due_at,
             timezone,
             utc_offset_minutes,
+            link: None,
         })
+    }
+
+    /// Attach a same-origin destination to the reminder. Relative paths and fragments only;
+    /// absolute URLs are rejected so a reminder cannot become an open redirect.
+    pub fn with_link(mut self, link: Option<impl Into<String>>) -> Result<Self> {
+        self.link = match link {
+            Some(link) => Some(validate_link(&link.into())?),
+            None => None,
+        };
+        Ok(self)
     }
 }
 
@@ -270,6 +288,36 @@ fn validate_utc_offset(minutes: i32) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Only same-origin destinations are accepted: an absolute path (`/learn`, not `//host`) or a
+/// same-document fragment (`#arena`). This keeps a reminder's link from becoming an open
+/// redirect or a `javascript:`/`data:` URL.
+fn validate_link(link: &str) -> Result<String> {
+    let link = link.trim().to_owned();
+    if link.is_empty() {
+        return Err(PulseError::Invalid("reminder link is empty".into()));
+    }
+    if link.len() > MAX_LINK_CHARS {
+        return Err(PulseError::Invalid(format!(
+            "reminder link is longer than {MAX_LINK_CHARS} bytes"
+        )));
+    }
+    let same_origin = link.starts_with('/') && !link.starts_with("//") || link.starts_with('#');
+    if !same_origin {
+        return Err(PulseError::Invalid(
+            "reminder link must be a same-origin path or fragment".into(),
+        ));
+    }
+    if link
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\\'))
+    {
+        return Err(PulseError::Invalid(
+            "reminder link contains a disallowed character".into(),
+        ));
+    }
+    Ok(link)
 }
 
 fn format_ts(at: DateTime<Utc>) -> String {
@@ -373,6 +421,14 @@ impl Pulse {
                  updated_at TEXT NOT NULL
              );",
         )?;
+        // Existing stores predate `link`; SQLite has no `ADD COLUMN IF NOT EXISTS`.
+        let columns = conn
+            .prepare("PRAGMA table_info(reminders)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if !columns.iter().any(|name| name == "link") {
+            conn.execute("ALTER TABLE reminders ADD COLUMN link TEXT", [])?;
+        }
         let now = format_ts(Utc::now());
         conn.execute(
             "INSERT OR IGNORE INTO settings
@@ -430,13 +486,14 @@ impl Pulse {
             delivered_at: None,
             cancelled_at: None,
             snooze_count: 0,
+            link: new.link,
         };
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO reminders
              (id, text, due_at, timezone, utc_offset_minutes, status, created_at, updated_at,
-              fired_at, delivered_at, cancelled_at, snooze_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL, NULL, 0)",
+              fired_at, delivered_at, cancelled_at, snooze_count, link)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL, NULL, 0, ?9)",
             params![
                 reminder.id.clone(),
                 reminder.text.clone(),
@@ -446,6 +503,7 @@ impl Pulse {
                 reminder.status.as_str(),
                 format_ts(reminder.created_at),
                 format_ts(reminder.updated_at),
+                reminder.link.clone(),
             ],
         )?;
         Ok(reminder)
@@ -746,6 +804,7 @@ fn reminder_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Reminde
             delivered_at: parse_ts(delivered_at)?,
             cancelled_at: parse_ts(cancelled_at)?,
             snooze_count: row.get::<_, i64>("snooze_count")? as u32,
+            link: row.get::<_, Option<String>>("link")?,
         })
     })();
     Ok(result)

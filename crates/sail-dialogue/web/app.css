@@ -2867,6 +2867,64 @@ a.nav-item { text-decoration:none; color:var(--muted) }
   color: var(--lh-amber);
 }
 
+/* --- Opt-in spaced practice (#257) --- */
+.lh-review-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--lh-border);
+  background: var(--lh-card);
+}
+
+.lh-review-copy {
+  min-width: 0;
+}
+
+.lh-review-copy .lh-eyebrow {
+  display: block;
+  margin: 0 0 2px;
+}
+
+.lh-review-copy p {
+  margin: 0;
+  color: var(--lh-muted);
+  font-size: 12px;
+}
+
+.lh-review-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lh-review-actions select {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--lh-border-strong);
+  border-radius: 8px;
+  background: var(--lh-recessed);
+  color: var(--lh-fg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.lh-review-actions #learnReviewActiveText {
+  color: var(--lh-amber);
+  font-family: var(--lh-font-mono);
+  font-size: 11px;
+}
+
+@media (max-width: 700px) {
+  .lh-review-strip {
+    align-items: flex-start;
+    padding: 8px 14px;
+  }
+}
+
 /* --- Conversation Transcript & Inline Cards --- */
 .lh-session-body {
   flex: 1;
