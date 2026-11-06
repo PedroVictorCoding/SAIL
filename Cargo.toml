@@ -13,6 +13,7 @@ members = [
     "crates/sail-flow",
     "crates/sail-guardian",
     "crates/sail-runner",
+    "crates/sail-sandbox",
     "crates/sail-continuity",
     "crates/sail-pulse",
     "crates/sail-tracker",
