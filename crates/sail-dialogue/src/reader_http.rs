@@ -3,6 +3,11 @@
 //! Every route needs the owner bearer token. Books arrive as raw bytes with their name in
 //! `X-Filename` and are parsed off the async runtime. Responses carry only plain-text blocks,
 //! never book HTML. Nothing here reaches Mind or any model: reading is deterministic.
+//!
+//! `/speech` reads text aloud with the host's Kokoro worker (the one Dialogue uses), which on
+//! this host is about ten times faster than Kokoro in a browser. The text is spoken literally.
+//! Requests never open a voice turn, so narration does not cancel background work, and only one
+//! is served at a time, so conversation speech waits for at most one sentence.
 use axum::{
     Json, Router,
     body::Bytes,
@@ -20,14 +25,127 @@ use std::sync::Arc;
 struct ReaderState {
     library: Arc<Library>,
     authority: Option<ApprovalAuthority>,
+    speech: Option<Arc<dyn Narrator>>,
+    speaking: tokio::sync::Semaphore,
+}
+
+/// Speaks text literally with a local voice. Implemented by the host voice services; tests
+/// substitute a fake.
+#[async_trait::async_trait]
+pub trait Narrator: Send + Sync {
+    async fn speak(
+        &self,
+        text: &str,
+        voice: &str,
+        language: &str,
+        speed: f32,
+    ) -> Result<(Vec<i16>, u32), String>;
+}
+
+#[async_trait::async_trait]
+impl Narrator for sail_mind::VoiceModelServices {
+    async fn speak(
+        &self,
+        text: &str,
+        voice: &str,
+        language: &str,
+        speed: f32,
+    ) -> Result<(Vec<i16>, u32), String> {
+        self.synthesize_reading(text, voice, language, speed)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The voices in the host's Kokoro v1.0 voice file (`models/voice/voices-v1.0.bin`).
+pub const VOICES: [&str; 54] = [
+    "af_alloy",
+    "af_aoede",
+    "af_bella",
+    "af_heart",
+    "af_jessica",
+    "af_kore",
+    "af_nicole",
+    "af_nova",
+    "af_river",
+    "af_sarah",
+    "af_sky",
+    "am_adam",
+    "am_echo",
+    "am_eric",
+    "am_fenrir",
+    "am_liam",
+    "am_michael",
+    "am_onyx",
+    "am_puck",
+    "am_santa",
+    "bf_alice",
+    "bf_emma",
+    "bf_isabella",
+    "bf_lily",
+    "bm_daniel",
+    "bm_fable",
+    "bm_george",
+    "bm_lewis",
+    "ef_dora",
+    "em_alex",
+    "em_santa",
+    "ff_siwis",
+    "hf_alpha",
+    "hf_beta",
+    "hm_omega",
+    "hm_psi",
+    "if_sara",
+    "im_nicola",
+    "jf_alpha",
+    "jf_gongitsune",
+    "jf_nezumi",
+    "jf_tebukuro",
+    "jm_kumo",
+    "pf_dora",
+    "pm_alex",
+    "pm_santa",
+    "zf_xiaobei",
+    "zf_xiaoni",
+    "zf_xiaoxiao",
+    "zf_xiaoyi",
+    "zm_yunjian",
+    "zm_yunxi",
+    "zm_yunxia",
+    "zm_yunyang",
+];
+pub const MAX_SPEECH_CHARS: usize = 600;
+pub const MIN_SPEED: f32 = 0.7;
+pub const MAX_SPEED: f32 = 1.5;
+
+/// Kokoro's language follows the voice's first letter.
+fn voice_language(voice: &str) -> &'static str {
+    match voice.as_bytes().first() {
+        Some(b'b') => "en-gb",
+        Some(b'e') => "es",
+        Some(b'f') => "fr-fr",
+        Some(b'h') => "hi",
+        Some(b'i') => "it",
+        Some(b'j') => "ja",
+        Some(b'p') => "pt-br",
+        Some(b'z') => "cmn",
+        _ => "en-us",
+    }
 }
 
 type Failure = (StatusCode, Json<Value>);
 
 /// The reader routes, or `None` (logged) when the library cannot be opened.
-pub fn routes(authority: Option<ApprovalAuthority>) -> Option<Router> {
+pub fn routes(
+    authority: Option<ApprovalAuthority>,
+    speech: sail_mind::VoiceModelServices,
+) -> Option<Router> {
     match sail_bridge::reader::global() {
-        Ok(library) => Some(router(library, authority)),
+        Ok(library) => Some(router_with_speech(
+            library,
+            authority,
+            Some(Arc::new(speech)),
+        )),
         Err(error) => {
             tracing::warn!(%error, "Reader library unavailable; reader disabled");
             None
@@ -36,7 +154,16 @@ pub fn routes(authority: Option<ApprovalAuthority>) -> Option<Router> {
 }
 
 pub fn router(library: Arc<Library>, authority: Option<ApprovalAuthority>) -> Router {
+    router_with_speech(library, authority, None)
+}
+
+pub fn router_with_speech(
+    library: Arc<Library>,
+    authority: Option<ApprovalAuthority>,
+    speech: Option<Arc<dyn Narrator>>,
+) -> Router {
     Router::new()
+        .route("/speech", get(speech_info).post(speak))
         .route("/library", get(library_list))
         .route("/import", post(import))
         .route("/books/:id", get(book).delete(remove))
@@ -54,7 +181,12 @@ pub fn router(library: Arc<Library>, authority: Option<ApprovalAuthority>) -> Ro
                 response
             },
         ))
-        .with_state(Arc::new(ReaderState { library, authority }))
+        .with_state(Arc::new(ReaderState {
+            library,
+            authority,
+            speech,
+            speaking: tokio::sync::Semaphore::new(1),
+        }))
 }
 
 fn authorize(state: &ReaderState, headers: &HeaderMap) -> Result<(), Failure> {
@@ -232,6 +364,111 @@ async fn save_position(
     Ok(Json(json!({ "position": position })))
 }
 
+async fn speech_info(
+    State(state): State<Arc<ReaderState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, Failure> {
+    authorize(&state, &headers)?;
+    let mut info = json!({
+        "available": state.speech.is_some(),
+        "backend": "host",
+        "voices": VOICES.as_slice(),
+        "default_voice": "af_heart",
+        "speed": { "min": MIN_SPEED, "max": MAX_SPEED, "default": 1.0 },
+        "max_chars": MAX_SPEECH_CHARS,
+    });
+    if state.speech.is_none() {
+        info["reason"] = json!("The host voice is not running.");
+    }
+    Ok(Json(info))
+}
+
+#[derive(Deserialize)]
+struct SpeechBody {
+    text: String,
+    voice: String,
+    #[serde(default = "default_speed")]
+    speed: f32,
+}
+
+fn default_speed() -> f32 {
+    1.0
+}
+
+async fn speak(
+    State(state): State<Arc<ReaderState>>,
+    headers: HeaderMap,
+    body: Result<Json<SpeechBody>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Failure> {
+    authorize(&state, &headers)?;
+    let bad = |message: &str| (StatusCode::BAD_REQUEST, Json(json!({ "error": message })));
+    let Json(body) = body.map_err(|_| bad("Send { text, voice, speed }."))?;
+    let chars = body.text.chars().count();
+    if body.text.trim().is_empty() || chars > MAX_SPEECH_CHARS {
+        return Err(bad("Send 1 to 600 characters of text."));
+    }
+    if !VOICES.contains(&body.voice.as_str()) {
+        return Err(bad("Unknown voice."));
+    }
+    if !(MIN_SPEED..=MAX_SPEED).contains(&body.speed) {
+        return Err(bad("Speed must be between 0.7 and 1.5."));
+    }
+    let speech = state.speech.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "The host voice is not running."})),
+        )
+    })?;
+    let _turn = state.speaking.try_acquire().map_err(|_| {
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"error": "The host voice is reading another sentence."})),
+        )
+    })?;
+    let started = std::time::Instant::now();
+    let (pcm, rate) = speech
+        .speak(
+            &body.text,
+            &body.voice,
+            voice_language(&body.voice),
+            body.speed,
+        )
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, chars, "Reader host speech failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "The host voice could not read this sentence."})),
+            )
+        })?;
+    let elapsed = started.elapsed().as_millis();
+    tracing::debug!(
+        chars,
+        elapsed_ms = elapsed,
+        samples = pcm.len(),
+        "Reader host speech"
+    );
+    let bytes: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/octet-stream".to_string(),
+            ),
+            (
+                axum::http::HeaderName::from_static("x-sample-rate"),
+                rate.to_string(),
+            ),
+            (
+                axum::http::HeaderName::from_static("x-synthesis-ms"),
+                elapsed.to_string(),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
 async fn remove(
     State(state): State<Arc<ReaderState>>,
     headers: HeaderMap,
@@ -368,6 +605,123 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    struct SlowNarrator(std::sync::Mutex<Vec<(String, String, String, f32)>>);
+
+    #[async_trait::async_trait]
+    impl Narrator for SlowNarrator {
+        async fn speak(
+            &self,
+            text: &str,
+            voice: &str,
+            language: &str,
+            speed: f32,
+        ) -> Result<(Vec<i16>, u32), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((text.into(), voice.into(), language.into(), speed));
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            if text == "fail" {
+                return Err("worker died".into());
+            }
+            Ok((vec![1, -2, 300], 24_000))
+        }
+    }
+
+    #[tokio::test]
+    async fn host_speech_reads_text_literally_one_at_a_time() {
+        let dir = std::env::temp_dir().join(format!("sail-reader-speech-{}", uuid::Uuid::new_v4()));
+        let narrator = Arc::new(SlowNarrator(Default::default()));
+        let app = router_with_speech(
+            Arc::new(Library::open(&dir).unwrap()),
+            ApprovalAuthority::new(TOKEN).ok(),
+            Some(narrator.clone()),
+        );
+        let (status, info) =
+            call(&app, request("GET", "/speech").body(Body::empty()).unwrap()).await;
+        assert_eq!(
+            (status, info["available"].as_bool()),
+            (StatusCode::OK, Some(true))
+        );
+        assert_eq!(info["voices"].as_array().unwrap().len(), 54);
+        let say = |body: Value| {
+            request("POST", "/speech")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let response = app
+            .clone()
+            .oneshot(say(
+                json!({"text":"Hello there.","voice":"bf_emma","speed":1.25}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-sample-rate"], "24000");
+        assert!(response.headers().contains_key("x-synthesis-ms"));
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], &[1, 0, 0xfe, 0xff, 0x2c, 0x01]);
+        assert_eq!(
+            narrator.0.lock().unwrap()[0],
+            (
+                "Hello there.".into(),
+                "bf_emma".into(),
+                "en-gb".into(),
+                1.25
+            )
+        );
+
+        // A second request while one is being read is refused, not queued.
+        let first = tokio::spawn(
+            app.clone()
+                .oneshot(say(json!({"text":"One.","voice":"af_heart"}))),
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let (status, _) = call(&app, say(json!({"text":"Two.","voice":"af_heart"}))).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(first.await.unwrap().unwrap().status(), StatusCode::OK);
+
+        for (body, expected) in [
+            (
+                json!({"text":"","voice":"af_heart"}),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                json!({"text":"x".repeat(601),"voice":"af_heart"}),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                json!({"text":"Hi.","voice":"../../etc"}),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                json!({"text":"Hi.","voice":"af_heart","speed":3.0}),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                json!({"text":"fail","voice":"af_heart"}),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            assert_eq!(call(&app, say(body.clone())).await.0, expected, "{body}");
+        }
+
+        let (app_without, dir2) = self::app();
+        let (_, info) = call(
+            &app_without,
+            request("GET", "/speech").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(info["available"], false);
+        let (status, _) = call(&app_without, say(json!({"text":"Hi.","voice":"af_heart"}))).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(dir2);
     }
 
     #[tokio::test]

@@ -144,7 +144,7 @@ pub async fn run_dialogue_server_with_plans(
     let (learn_engine, learn_routes) =
         learn_services(&inference, &arena, authority(), pulse.clone());
     let tracker_routes = tracker_routes(authority());
-    let reader_routes = crate::reader_http::routes(authority());
+    let reader_routes = crate::reader_http::routes(authority(), services.clone());
     let system_routes = crate::system_http::router(authority());
     let spotify_routes = crate::spotify_http::router(authority());
     let briefing_dir = sail_common::storage::resolve().path.join("briefing");

@@ -37,6 +37,118 @@ const SailReaderAudio = (() => {
     });
     return result;
   }
+  // Serial transport shared across generations: an aborted request must settle before
+  // another POST starts. Book text only reaches the authenticated reader endpoint.
+  class HostEngine {
+    constructor({ fetcher, getToken, speed = 1, delay, now = () => performance.now() }) {
+      Object.assign(this, { fetcher, getToken, speed, now });
+      this.delay = delay || ((signal) => new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 300);
+        signal.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(new Error('Canceled'));
+        }, { once: true });
+      }));
+      this.tail = Promise.resolve();
+      this.controller = new AbortController();
+      this.backend = 'host';
+    }
+    async load() {}
+    cancel() {
+      this.controller.abort();
+      this.controller = new AbortController();
+    }
+    speak(text, voice) {
+      const signal = this.controller.signal, speed = this.speed;
+      const run = async () => {
+        const started = this.now();
+        for (;;) {
+          if (signal.aborted) throw new Error('Canceled');
+          const token = await this.getToken();
+          const response = await this.fetcher('/api/reader/speech', {
+            method: 'POST', cache: 'no-store', signal,
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, voice, speed })
+          });
+          if (response.status === 429) {
+            await this.delay(signal);
+            continue;
+          }
+          if (!response.ok) {
+            const error = new Error('SAIL host voice unavailable.');
+            error.status = response.status;
+            throw error;
+          }
+          const bytes = await response.arrayBuffer();
+          if (signal.aborted) throw new Error('Canceled');
+          const sampleRate = Number(response.headers.get('X-Sample-Rate'));
+          if (bytes.byteLength % 2 || !bytes.byteLength || !(sampleRate > 0))
+            throw new Error('Invalid host audio.');
+          const view = new DataView(bytes), audio = new Float32Array(bytes.byteLength / 2);
+          for (let i = 0; i < audio.length; i++) audio[i] = view.getInt16(i * 2, true) / 32768;
+          return { audio, sampling_rate: sampleRate, sampleRate, backend: 'host',
+            synthesisMs: Number(response.headers.get('X-Synthesis-Ms')) || this.now() - started };
+        }
+      };
+      const request = this.tail.then(run);
+      this.tail = request.catch(() => {});
+      return request;
+    }
+  }
+  class VoiceRouter {
+    constructor({ host, device, capabilities, preference, onChange = () => {}, now = () => performance.now() }) {
+      Object.assign(this, { host, device, capabilities, onChange, now });
+      this.backend = capabilities.available && preference !== 'device' ? 'host' : 'device';
+      this.slow = 0;
+      this.tail = Promise.resolve();
+      this.epoch = 0;
+    }
+    cancel() { this.epoch++; this.host.cancel(); }
+    async load() {
+      if (this.backend === 'device') await this.device.load();
+    }
+    async select(backend, message = '') {
+      if (backend === 'host' && !this.capabilities.available) throw new Error('Host voice unavailable.');
+      const epoch = this.epoch;
+      if (backend === 'device') await this.device.load();
+      if (epoch !== this.epoch) throw new Error('Canceled');
+      this.backend = backend;
+      this.slow = 0;
+      this.switchPending = false;
+      this.onChange(backend, message);
+    }
+    speak(text, voice) {
+      const epoch = this.epoch;
+      const run = async () => {
+        if (epoch !== this.epoch) throw new Error('Canceled');
+        const started = this.now();
+        if (this.backend === 'host') {
+          try {
+            const voices = this.capabilities.voices;
+            const selected = !voices || voices.includes(voice)
+              ? voice : this.capabilities.default_voice || voices[0];
+            return await this.host.speak(text, selected);
+          }
+          catch (error) {
+            if (epoch !== this.epoch) throw error;
+            if (error.status && error.status !== 503) throw error;
+            this.capabilities.available = false;
+            await this.select('device', 'SAIL host voice unavailable; using this device.');
+            if (epoch !== this.epoch) throw new Error('Canceled');
+          }
+        }
+        const pcm = await this.device.speak(text, voice);
+        if (epoch === this.epoch) {
+          this.slow = this.now() - started > pcm.audio.length / pcm.sampling_rate * 1000 ? this.slow + 1 : 0;
+          if (this.slow >= 2 && this.capabilities.available) this.switchPending = true;
+        }
+        return pcm;
+      };
+      const request = this.tail.then(run);
+      this.tail = request.catch(() => {});
+      return request;
+    }
+  }
   class Narrator {
     constructor({ tts, clock, onState = () => {
     }, onSegment = () => {
@@ -158,6 +270,12 @@ const SailReaderAudio = (() => {
         this.setState('completed');
         return;
       }
+      if (this.tts.switchPending) {
+        await this.tts.select('host',
+          'Switched to the SAIL host voice: this device was slower than real time');
+        if (generation !== this.generation || ticket !== this.ticket) return;
+        return this.seek(this.index, this.state !== 'paused');
+      }
       this.fill();
       const pcm = this.cache.get(this.index) || await this.pending.get(this.index);
       if (generation !== this.generation || ticket !== this.ticket || this.state === 'paused')
@@ -202,6 +320,10 @@ const SailReaderAudio = (() => {
         return this.play();
       this.setState('paused');
     }
+    setSpeed(speed) {
+      this.tts.host.speed = speed;
+      return this.seek(this.index, this.state !== 'paused');
+    }
     setVoice(voice) {
       const autoplay = this.state !== 'paused';
       this.voice = voice;
@@ -212,6 +334,7 @@ const SailReaderAudio = (() => {
     }
     cancel() {
       this.generation++;
+      this.tts.cancel?.();
       this.continuation = null;
       this.clock.stop();
       this.playback = null;
@@ -277,7 +400,7 @@ const SailReaderAudio = (() => {
       return source;
     }
   }
-  return { segment, Narrator, AudioClock };
+  return { segment, Narrator, AudioClock, HostEngine, VoiceRouter };
 })();
 if (typeof module !== 'undefined')
   module.exports = SailReaderAudio;

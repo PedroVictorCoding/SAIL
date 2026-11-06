@@ -646,15 +646,48 @@ const SailReader = (() => {
       range.surroundContents(mark);
       state.highlight = mark;
     }
+    let voiceRouter, deviceVoices = [];
+    const stored = (key, fallback) => {
+      try { return localStorage.getItem(`sail.reader.${key}`) || fallback; }
+      catch (_) { return fallback; }
+    };
+    const persist = (key, value) => {
+      try { localStorage.setItem(`sail.reader.${key}`, value); } catch (_) {}
+    };
+    const speeds = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
+    let speed = Number(stored('speed', '1'));
+    if (!speeds.includes(speed)) speed = 1;
+    $('speed').value = String(speed);
+    function syncVoiceControls(message = '') {
+      const host = voiceRouter.backend === 'host';
+      $('backend').value = host ? 'host' : 'device';
+      $('backend').querySelector('option[value="host"]').disabled = !voiceRouter.capabilities.available;
+      $('speed-control').hidden = !host;
+      const voices = host ? voiceRouter.capabilities.voices : deviceVoices;
+      if (!voices?.length) throw new Error('No voice available.');
+      const preferred = state.narrator?.voice || stored('voice', 'af_heart');
+      $('voice').replaceChildren(...voices.map(v => {
+        const option = el('option', v);
+        option.value = v;
+        return option;
+      }));
+      $('voice').value = voices.includes(preferred) ? preferred
+        : host && voices.includes(voiceRouter.capabilities.default_voice)
+          ? voiceRouter.capabilities.default_voice : voices[0];
+      if (state.narrator) state.narrator.voice = $('voice').value;
+      if (message) $('narration-note').textContent = message;
+      persist('backend', voiceRouter.backend);
+    }
     function audioState(value) {
+      const backend = voiceRouter?.backend === 'host' ? 'SAIL host' : 'this device (WebAssembly)';
       $('audio-status').textContent = ({
-        tts_loading: 'Loading on-device voice…',
+        tts_loading: `Loading voice · ${backend}…`,
         buffering: state.narrator?.hasPlayed ? 'Waiting for the voice…' : 'Preparing audio…',
-        playing: 'Playing · WebAssembly (CPU)',
-        paused: 'Paused · WebAssembly (CPU)',
+        playing: `Playing · ${backend}`,
+        paused: `Paused · ${backend}`,
         completed: 'Finished',
         seeking: 'Seeking…',
-        error: 'On-device read-aloud unavailable. Stop and try again.',
+        error: 'Read-aloud unavailable. Stop and try again.',
         canceled: 'Stopped'
       })[value] || 'Text ready';
       if (value === 'error')
@@ -691,33 +724,32 @@ const SailReader = (() => {
       narrator.index = index;
     }
     async function loadReaderVoice() {
-      const book = state.book;
-      const loaded = await SailClientSpeech.loadTts();
-      if (book !== state.book) return;
-      $('voice').replaceChildren(...loaded.voices.map(v => {
-        const option = el('option', v);
-        option.value = v;
-        return option;
-      }));
-      let preferred;
-      try {
-        preferred = localStorage.getItem('sail.reader.voice');
-      }
-      catch (_) {
-      }
-      const voice = loaded.voices.includes(preferred)
-        ? preferred
-        : loaded.voices.includes('af_heart')
-          ? 'af_heart'
-          : loaded.voices[0];
-      if (!voice)
-        throw new Error('No local voice available.');
-      $('voice').value = loaded.voices.includes(state.narrator?.voice) ? state.narrator.voice : voice;
-      if (state.narrator)
-        state.narrator.voice = $('voice').value;
-      $('voice-note').textContent = `Book language: ${state.book.language
-        || 'not specified'}. Choose a matching voice; pronunciation is not automatically verified.`;
-
+      await voiceRouter.load();
+      syncVoiceControls();
+      $('voice-note').textContent = `Book language: ${state.book.language || 'not specified'}. `
+        + 'Choose a matching voice; pronunciation is not automatically verified.';
+    }
+    async function chooseEngine() {
+      let capabilities;
+      try { capabilities = await api.request('/speech'); }
+      catch (_) { capabilities = { available: false }; }
+      const device = {
+        load: async () => {
+          const loaded = await SailClientSpeech.loadTts();
+          deviceVoices = loaded.voices;
+        },
+        speak: (text, voice) => SailClientSpeech.speak(text,
+          deviceVoices.includes(voice) ? voice : deviceVoices[0])
+      };
+      voiceRouter = new SailReaderAudio.VoiceRouter({
+        host: new SailReaderAudio.HostEngine({
+          fetcher: fetch.bind(window), getToken: () => api.getToken(), speed
+        }),
+        device, capabilities, preference: stored('backend', 'host'),
+        onChange: (_, message) => syncVoiceControls(message)
+      });
+      $('backend').querySelector('option[value="host"]').disabled = !capabilities.available;
+      await loadReaderVoice();
     }
     async function readAloud() {
       if (!state.section)
@@ -727,8 +759,8 @@ const SailReader = (() => {
         return state.narrator.play();
       }
       const Context = window.AudioContext || window.webkitAudioContext;
-      if (!Context || typeof Worker === 'undefined' || typeof WebAssembly === 'undefined') {
-        status('On-device read-aloud is unavailable in this browser.', true);
+      if (!Context) {
+        status('Read-aloud is unavailable in this browser.', true);
         $('read-aloud').disabled = true;
         return;
       }
@@ -740,20 +772,20 @@ const SailReader = (() => {
         $('audio').hidden = false;
         document.body.classList.add('narrating');
         audioState('tts_loading');
-        await loadReaderVoice();
+        await chooseEngine();
         if (serial !== state.audioSerial || state.book !== book || state.section !== section) return;
         fitReadingSurface();
         measure(anchor);
         state.narrator = new SailReaderAudio.Narrator({
-          tts: {
-            load: loadReaderVoice, speak: (text, voice) => SailClientSpeech.speak(text, voice)
-          },
+          tts: voiceRouter,
+          prefetch: 2,
           clock: new SailReaderAudio.AudioClock(state.context, () => {
             state.narrator?.cancel();
             audioState('error');
           }),
           onState: audioState,
           onSlow: () => {
+            if (voiceRouter.backend !== 'device') return;
             $('narration-note').textContent = 'This device speaks slower than real time, '
               + 'so narration will pause between sentences.';
           },
@@ -780,6 +812,7 @@ const SailReader = (() => {
             markDirty();
           },
         });
+        state.narrator.voice = $('voice').value;
         setupNarration(anchor);
         $('audio').hidden = false;
         document.body.classList.add('narrating');
@@ -789,7 +822,7 @@ const SailReader = (() => {
         await state.narrator.play();
       }
       catch (_) {
-        status('On-device read-aloud is unavailable. Check that local voice assets are installed.', true);
+        status('Read-aloud is unavailable. Check the SAIL host or local voice assets.', true);
         audioState('error');
         $('read-aloud').disabled = true;
       }
@@ -999,6 +1032,22 @@ const SailReader = (() => {
         if (n)
           n.seek(n.index + delta, n.state !== 'paused');
       };
+    $('backend').onchange = async event => {
+      if (!state.narrator) return;
+      const narrator = state.narrator, autoplay = narrator.state !== 'paused';
+      narrator.pause();
+      narrator.cancel();
+      try {
+        await voiceRouter.select(event.target.value);
+        await narrator.seek(narrator.index, autoplay);
+      }
+      catch (_) { audioState('error'); }
+    };
+    $('speed').onchange = event => {
+      speed = Number(event.target.value);
+      persist('speed', String(speed));
+      state.narrator?.setSpeed(speed);
+    };
     $('voice').onchange = event => {
       try {
         localStorage.setItem('sail.reader.voice', event.target.value);

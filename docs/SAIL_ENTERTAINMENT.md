@@ -89,7 +89,7 @@ when the narration reaches them. **Reading and read-aloud never call Mind, Agent
   "Resume there / Keep here". The same anchor reopens correctly on any layout (spread or phone, any font size).
 - **API** (`crates/sail-dialogue/src/reader_http.rs`, owner token on every route, `no-store`), under `/api/reader`:
   `GET /library`, `POST /import` (raw bytes plus `X-Filename`), `GET|DELETE /books/:id`,
-  `GET /books/:id/sections/:index`, `GET|PUT /books/:id/position`.
+  `GET /books/:id/sections/:index`, `GET|PUT /books/:id/position`, `GET|POST /speech`.
 - **Web reader** (`web/reader.{html,js,css}`): library with Continue Reading, typographic covers, search, import
   (button or drag-and-drop) and removal. The reader uses CSS columns, two-page spreads when wide and one column
   on phones. Pages turn by edge tap, arrow keys or swipe. It also has a TOC drawer and font size, spacing, width
@@ -102,14 +102,25 @@ when the narration reaches them. **Reading and read-aloud never call Mind, Agent
   **Follow narration** is pressed. Seeking, skipping or changing the voice bumps a generation counter, so late
   audio is dropped. Narration continues across sections and ends with "Finished". The current sentence is
   highlighted; no word-level timing is claimed.
+- **Host voice (default when available, 2026-11-06):** `POST /api/reader/speech` with `{text, voice, speed}` returns
+  16-bit PCM from the host's Kokoro worker, the one Dialogue uses (native ONNX, 4 threads). It speaks 1–600
+  characters literally, with one of the 54 host voices, at 0.7–1.5×. Measured here, the host needs 0.31 s per
+  second of audio, against about 3 s for Kokoro in the browser: narration went from 5–25 s pauses at most
+  sentences to none in 70 s of playback.
+  - It calls `VoiceModelServices::synthesize_reading`, which never opens a voice turn, so narration doesn't
+    cancel background inference or builds. Book text is not logged.
+  - Only one reader request is served at a time (a second gets 429 and the reader retries), so conversation
+    speech waits for at most one sentence.
+  - The controller has "Voice runs on: SAIL host / This device" and a speed menu (0.8–1.5×; host only, since the
+    browser's speed isn't verified). If this device is slower than real time for two sentences in a row, the
+    reader switches to the host and says so. If the host fails, it falls back to this device.
 - **Verified live (2026-11-06)** with three Gutenberg EPUBs and one Gutenberg TXT, the real API and real Kokoro in
   headless Chromium:
   - pages turned automatically exactly at the next spread's first sentence;
   - the position persisted across a reload, a font change and a phone layout;
   - there were no off-origin requests and no non-reader API calls.
-- **Limits:** on-device TTS only, and Read Aloud is disabled when it cannot load (no host fallback yet). Speed
-  control is not offered until verified. On slow devices narration pauses between sentences, and the reader
-  says so. Background or lock-screen playback and Android WebView are untested. Bookmarks, highlights, notes,
+- **Limits:** with the host voice, reading aloud needs a connection to SAIL; offline it uses this device's voice,
+  which pauses between sentences on slow devices (and the reader says so). Background or lock-screen playback and Android WebView are untested. Bookmarks, highlights, notes,
   collections, cover images, in-book search and Relay handoff are the next phases of #333.
 
 ### Library composition (ambient-glass design)
