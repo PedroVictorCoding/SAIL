@@ -112,6 +112,15 @@ when the narration reaches them. **Reading and read-aloud never call Mind, Agent
   says so. Background or lock-screen playback and Android WebView are untested. Bookmarks, highlights, notes,
   collections, cover images, in-book search and Relay handoff are the next phases of #333.
 
+### Entertainment workspace
+
+The main left sidebar opens **Entertainment** in the same center workspace as Tracker,
+with a thin **Reader / Music player / Movies** bar. Reader opens by default; Music player
+and Movies identify themselves as later updates. The existing Spotify adapter is unchanged.
+The Reader frame stays mounted across tab changes, retaining the open book. Switching
+away pauses narration and checkpoints the position; returning requires explicit playback.
+The standalone `/reader` link remains available.
+
 ## 8. Next steps
 1. Audit the relevant implementation and the linked roadmap issue; update this spec with confirmed module/file paths and contracts.
 2. Build the MVP vertical slice with real tool/model/provider integrations.
