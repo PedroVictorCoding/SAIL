@@ -347,7 +347,7 @@ test('real backend response fixture matches navigation, input and evidence proje
     throw Error(`Unexpected fixture request: ${url}`);
   });
   await controller.catalog();
-  assert.equal(controller.courses.filter(course => course.status === 'ready').length, 1);
+  assert.equal(controller.courses.filter(course => course.status === 'ready').length, 2);
   await controller.course('rust-systems');
   assert.equal(controller.error, '');
   assert.equal(controller.next.kind, samples['GET /next'].kind);
@@ -428,7 +428,7 @@ test('browser: diagnostic, lesson, hints, reveal, retry, runner outage, gate, re
       if (endpoint === '/courses') {
         result = {courses: [course, {id: 'logic', title: 'Philosophy & Logic', status: 'planned'}, {id: 'physics', title: 'Physics, Math & Engineering', status: 'planned'}]};
       } else if (endpoint === '/courses/rust') {
-        result = {course, diagnostic: {id: 'cold', state: diagnosticDone ? 'done' : 'not_started'}, objectives: [],
+        result = {course, diagnostic: {id: 'cold', session_id: diagnosticDone ? 'cold' : null, state: diagnosticDone ? 'done' : 'not_started'}, objectives: [],
           chapters: [{id: 'ownership', title: 'Ownership', lessons: [{id: 'moves', title: 'Move and borrow', minutes: 5, state: complete ? 'completed' : 'in_progress', certified: false, prerequisites: []}]}]};
       } else if (endpoint === '/next?course=rust') {
         result = diagnosticDone ? {kind: 'lesson', lesson_id: 'moves', reasons: ['Continue the current lesson.']} : {kind: 'diagnostic', reasons: ['Start with a cold diagnostic.']};

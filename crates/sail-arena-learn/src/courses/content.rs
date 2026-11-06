@@ -441,11 +441,14 @@ pub struct Track {
 }
 
 const RUST_SYSTEMS: &str = include_str!("../../courses/rust-systems.json");
+const PHILOSOPHY_LOGIC: &str = include_str!("../../courses/philosophy-logic.json");
 
 /// The first-party catalog, in display order.
 pub fn catalog() -> Vec<Track> {
     let rust: CoursePackage =
         serde_json::from_str(RUST_SYSTEMS).expect("embedded rust-systems course parses");
+    let logic: CoursePackage =
+        serde_json::from_str(PHILOSOPHY_LOGIC).expect("embedded philosophy-logic course parses");
     vec![
         Track {
             id: "rust-systems",
@@ -458,8 +461,8 @@ pub fn catalog() -> Vec<Track> {
             id: "philosophy-logic",
             title: "Philosophy & Logic",
             domain: Domain::Philosophy,
-            summary: "Arguments, validity and counterexamples. Lessons are being written.",
-            package: None,
+            summary: "Validity, soundness and formal fallacies, judged by logical form only.",
+            package: Some(logic),
         },
         Track {
             id: "physics-engineering",

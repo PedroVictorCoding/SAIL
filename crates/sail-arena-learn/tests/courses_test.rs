@@ -127,7 +127,8 @@ fn catalog_lists_planned_tracks_without_fake_lessons() {
     let courses = c["courses"].as_array().unwrap();
     assert_eq!(courses.len(), 3);
     assert_eq!(courses[0]["status"], "ready");
-    for planned in &courses[1..] {
+    assert_eq!(courses[1]["status"], "ready");
+    for planned in &courses[2..] {
         assert_eq!(planned["status"], "planned");
         assert_eq!(planned["lesson_count"], 0);
     }

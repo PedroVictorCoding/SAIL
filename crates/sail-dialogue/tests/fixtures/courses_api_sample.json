@@ -28,13 +28,24 @@
         "id": "philosophy-logic",
         "title": "Philosophy & Logic",
         "domain": "philosophy",
-        "status": "planned",
-        "summary": "Arguments, validity and counterexamples. Lessons are being written.",
-        "version": null,
-        "lesson_count": 0,
-        "minutes": 0,
-        "progress": null,
-        "next": null
+        "status": "ready",
+        "summary": "Deductive validity, formal fallacies, and sound reasoning evaluated by pure logical form.",
+        "version": "2026.11.1",
+        "lesson_count": 2,
+        "minutes": 11,
+        "progress": {
+          "lessons_completed": 0,
+          "objectives": 4,
+          "provisional": 0,
+          "retained": 0,
+          "due": 0
+        },
+        "next": {
+          "kind": "diagnostic",
+          "reasons": [
+            "A short cold check finds where to start. Nothing counts as known without a real answer."
+          ]
+        }
       },
       {
         "id": "physics-engineering",
@@ -141,7 +152,7 @@
     }
   },
   "POST /diagnostics": {
-    "id": "diag-cea8d9cc811549678b8389202123f38e",
+    "id": "diag-1040e31628ac49f1830bb9f0a7d73b50",
     "step": {
       "id": "d-move",
       "kind": "predict",
@@ -181,14 +192,14 @@
   },
   "POST /diagnostics/:id/attempt": {
     "result": "correct",
-    "evidence_id": "ev-38b33ee8832249f08effecb2daaaad52",
+    "evidence_id": "ev-c34099b998ab42228461ece956a47799",
     "skill_ids": [
       "rust.move"
     ],
     "validator_kind": "choice",
     "assistance_state": "independent",
     "provisional_vs_retained": "provisional",
-    "review_due_at": "2026-11-07T22:40:29Z",
+    "review_due_at": "2026-11-07T22:48:17Z",
     "gate_decision": "continue",
     "gate_reasons": [],
     "revision": 2,
@@ -441,14 +452,14 @@
   },
   "POST /lessons/:id/attempt (incorrect)": {
     "result": "incorrect",
-    "evidence_id": "ev-f50f4559bf9c4387bcc74b4795b451d7",
+    "evidence_id": "ev-58932d95c9114847a97df565279dad15",
     "skill_ids": [
       "rust.move"
     ],
     "validator_kind": "choice",
     "assistance_state": "independent",
     "provisional_vs_retained": "provisional",
-    "review_due_at": "2026-11-07T22:40:29Z",
+    "review_due_at": "2026-11-07T22:48:17Z",
     "gate_decision": "retry",
     "gate_reasons": [],
     "revision": 4,
@@ -474,14 +485,14 @@
   },
   "POST /lessons/:id/attempt (correct, hinted)": {
     "result": "correct",
-    "evidence_id": "ev-e67319d4b1654ea6bde7175ee681e6a5",
+    "evidence_id": "ev-1f1a3169d5de462e87eac75d621af945",
     "skill_ids": [
       "rust.move"
     ],
     "validator_kind": "choice",
     "assistance_state": "hinted",
     "provisional_vs_retained": "provisional",
-    "review_due_at": "2026-11-07T22:40:29Z",
+    "review_due_at": "2026-11-07T22:48:17Z",
     "gate_decision": "continue",
     "gate_reasons": [
       "You used help, so this counts as assisted. A fresh problem will check it later."
@@ -511,7 +522,7 @@
   },
   "POST /lessons/:id/attempt (rust_edit, sandbox unavailable)": {
     "result": "unavailable",
-    "evidence_id": "ev-ae935988f640496baad587997e1bb967",
+    "evidence_id": "ev-086fde7965604535b56d348dc5d23cfa",
     "skill_ids": [
       "rust.borrow-shared"
     ],
@@ -552,10 +563,10 @@
         "independent_passes": 1,
         "assisted_passes": 1,
         "failures": 1,
-        "last_independent_success": "2026-11-06T22:40:29Z",
+        "last_independent_success": "2026-11-06T22:48:17Z",
         "last_delayed_success": null,
-        "retention_due_at": "2026-11-07T22:40:29Z",
-        "why": "Passed independently, but not yet after a delay. The first retention check is 2026-11-07T22:40:29Z.",
+        "retention_due_at": "2026-11-07T22:48:17Z",
+        "why": "Passed independently, but not yet after a delay. The first retention check is 2026-11-07T22:48:17Z.",
         "not_assessed": false,
         "revision": 6
       },

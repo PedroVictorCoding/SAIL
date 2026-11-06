@@ -70,7 +70,7 @@ async fn courses_api_contract() {
     let (_, course) = call(&app, "GET", "/courses/rust-systems", None, true).await;
     assert_eq!(course["chapters"][0]["lessons"][0]["state"], "not_started");
     sample.insert("GET /courses/rust-systems".into(), course);
-    let (status, planned) = call(&app, "GET", "/courses/philosophy-logic", None, true).await;
+    let (status, planned) = call(&app, "GET", "/courses/physics-engineering", None, true).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(planned["chapters"], json!([]));
 

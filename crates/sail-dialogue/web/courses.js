@@ -468,8 +468,9 @@
         view.append(button(next.kind === 'review' ? 'Start due review' : next.kind === 'diagnostic' ? 'Find my starting point' : 'Continue lesson', () => controller.nextActivity(), 'courses-primary'));
       }
       view.append(list(next?.reasons));
-      if (detail.diagnostic?.state === 'done') {
-        view.append(button('Diagnostic report', () => controller.diagnosticReport(detail.diagnostic.id)));
+      // The report is keyed by the runtime session, not the check's definition id.
+      if (detail.diagnostic?.state === 'done' && detail.diagnostic.session_id) {
+        view.append(button('Diagnostic report', () => controller.diagnosticReport(detail.diagnostic.session_id)));
       }
       view.append(paragraph('Study freely: every lesson stays readable. Certification is checked separately by the server.'));
       for (const chapter of detail.chapters || []) {
