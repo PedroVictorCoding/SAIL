@@ -52,6 +52,7 @@ WS_STUB = "class W{constructor(){this.readyState=0;setTimeout(()=>{this.readySta
 def route(r):
     path = "/" + r.request.url.split("://", 1)[1].split("/", 1)[1].split("?")[0]
     if path == "/icons.svg": return r.fulfill(body=ICONS.read_bytes(), content_type="image/svg+xml")
+    if path == "/api/briefing/refresh": return r.fulfill(json={"briefing": BRIEFING})
     if path == "/api/briefing/latest": return r.fulfill(json={"briefing": BRIEFING})
     if path.startswith("/api/"): return r.fulfill(status=404, json={})
     f = WEB / ALIASES.get(path, path.lstrip("/"))
@@ -111,6 +112,23 @@ with sync_playwright() as p:
         assert any(over for _, over, _ in focus), f"fixture has an overflowing card: {focus}"
         pg.screenshot(path=str(SHOTS / f"away-cards-{width}.png"))
 
+        # A missing history result clears the previous choice and cannot play it.
+        staged = BRIEFING["staged_music"]
+        BRIEFING["staged_music"] = None
+        pg.locator("#briefingRefreshBtn").click()
+        pg.wait_for_function("document.getElementById('briefingMusicTitle').textContent === 'No music staged'")
+        assert pg.locator("#briefingPlayMusicBtn").is_disabled()
+        assert pg.locator("#briefingMusicArtist").inner_text() == ""
+        assert pg.evaluate("document.getElementById('briefingPlayMusicBtn').onclick === null")
+        assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        pg.locator("#briefingMusicCard").scroll_into_view_if_needed()
+        pg.screenshot(path=str(SHOTS / f"away-cards-{width}-no-history.png"))
+        # A subsequent successful refresh restores the real Spotify action.
+        BRIEFING["staged_music"] = staged
+        pg.locator("#briefingRefreshBtn").click()
+        pg.wait_for_function("!document.getElementById('briefingPlayMusicBtn').disabled")
+        assert pg.locator("#briefingMusicTitle").inner_text() == staged["name"]
+
         # Actions still work: Continue Lesson navigates.
         pg.evaluate("window.__nav=[]; window.sailNavigate=(id)=>__nav.push(id)")
         pg.locator("#briefingStartLearnBtn").scroll_into_view_if_needed(); pg.locator("#briefingStartLearnBtn").click()
@@ -125,5 +143,5 @@ with sync_playwright() as p:
     ctx.close(); b.close()
 
 assert not errors, errors
-print("Away cards: a grid of five lit cards with no sideways scroll, keyboard-scrollable "
-      "overflowing body, working actions, forced colours at 1440 and 390px passed (fixture briefing)")
+print("Away cards: a grid of five lit cards with no sideways scroll, rail without scroll, keyboard-scrollable "
+      "overflowing body, working actions, unavailable/recovered music, forced colours at 1440 and 390px passed (fixture briefing)")

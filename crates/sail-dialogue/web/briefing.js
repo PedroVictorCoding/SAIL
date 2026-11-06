@@ -132,8 +132,25 @@
       document.getElementById('briefingMusicRationale').textContent = m.rationale;
       const playBtn = document.getElementById('briefingPlayMusicBtn');
       if (playBtn) {
+        playBtn.disabled = false;
+        playBtn.classList.remove('playing');
         playBtn.textContent = m.is_spotify ? '▶ Play on Spotify' : '▶ Play Ambient Audio';
         playBtn.onclick = () => playStagedMusic(m.uri, playBtn);
+      }
+    }
+
+    if (musicCard && !briefing.staged_music) {
+      document.getElementById('briefingMusicSlot').textContent = 'Listening history';
+      document.getElementById('briefingMusicTitle').textContent = 'No music staged';
+      document.getElementById('briefingMusicArtist').textContent = '';
+      document.getElementById('briefingMusicRationale').textContent =
+        'Connect or reconnect Spotify to allow recent listening history, then refresh. No track is staged when history is empty or unavailable.';
+      const playBtn = document.getElementById('briefingPlayMusicBtn');
+      if (playBtn) {
+        playBtn.disabled = true;
+        playBtn.onclick = null;
+        playBtn.classList.remove('playing');
+        playBtn.textContent = 'Playback unavailable';
       }
     }
 
