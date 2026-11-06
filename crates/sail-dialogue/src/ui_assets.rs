@@ -66,125 +66,41 @@ const CSS: &str = "text/css; charset=utf-8";
 assets![
     ("/", "web/index.html", HTML),
     ("/tracker", "web/tracker.html", HTML),
-    (
-        "/tracker.js",
-        "web/tracker.js",
-        JS
-    ),
+    ("/tracker.js", "web/tracker.js", JS),
     ("/tracker.css", "web/tracker.css", CSS),
-    (
-        "/toolsmap.js",
-        "web/toolsmap.js",
-        JS
-    ),
-    (
-        "/toolsmap.css",
-        "web/toolsmap.css",
-        CSS
-    ),
-    (
-        "/card-modal.js",
-        "web/card-modal.js",
-        JS
-    ),
-    (
-        "/markdown.js",
-        "web/markdown.js",
-        JS
-    ),
-    (
-        "/voice.js",
-        "web/voice.js",
-        JS
-    ),
-    (
-        "/forge.js",
-        "web/forge.js",
-        JS
-    ),
-    (
-        "/approvals.js",
-        "web/approvals.js",
-        JS
-    ),
+    ("/toolsmap.js", "web/toolsmap.js", JS),
+    ("/toolsmap.css", "web/toolsmap.css", CSS),
+    ("/card-modal.js", "web/card-modal.js", JS),
+    ("/markdown.js", "web/markdown.js", JS),
+    ("/voice.js", "web/voice.js", JS),
+    ("/forge.js", "web/forge.js", JS),
+    ("/approvals.js", "web/approvals.js", JS),
     ("/app.css", "web/app.css", CSS),
     ("/tokens.css", "web/tokens.css", CSS),
-    (
-        "/learn.js",
-        "web/learn.js",
-        JS
-    ),
-    (
-        "/memory.js",
-        "web/memory.js",
-        JS
-    ),
-    (
-        "/subsystem-pages.js",
-        "web/subsystem-pages.js",
-        JS
-    ),
-    (
-        "/briefing.js",
-        "web/briefing.js",
-        JS
-    ),
+    ("/learn.js", "web/learn.js", JS),
+    ("/memory.js", "web/memory.js", JS),
+    ("/subsystem-pages.js", "web/subsystem-pages.js", JS),
+    ("/briefing.js", "web/briefing.js", JS),
     ("/ui.js", "web/ui.js", JS),
     (
         "/icons.svg",
         "../../assets/source/icons/sail-icons.svg",
         "image/svg+xml; charset=utf-8"
     ),
-    (
-        "/client-speech.js",
-        "web/client-speech.js",
-        JS
-    ),
+    ("/client-speech.js", "web/client-speech.js", JS),
     (
         "/client-speech-worker.js",
         "web/client-speech-worker.js",
         JS
     ),
-    (
-        "/capture.js",
-        "web/capture.js",
-        JS
-    ),
-    (
-        "/mermaid.js",
-        "web/mermaid.js",
-        JS
-    ),
-    (
-        "/plans.js",
-        "web/plans.js",
-        JS
-    ),
-    (
-        "/reminders.js",
-        "web/reminders.js",
-        JS
-    ),
-    (
-        "/terminal.js",
-        "web/terminal.js",
-        JS
-    ),
-    (
-        "/vendor/xterm.js",
-        "web/vendor/xterm/xterm.js",
-        JS
-    ),
-    (
-        "/vendor/addon-fit.js",
-        "web/vendor/xterm/addon-fit.js",
-        JS
-    ),
-    (
-        "/vendor/xterm.css",
-        "web/vendor/xterm/xterm.css",
-        CSS
-    ),
+    ("/capture.js", "web/capture.js", JS),
+    ("/mermaid.js", "web/mermaid.js", JS),
+    ("/plans.js", "web/plans.js", JS),
+    ("/reminders.js", "web/reminders.js", JS),
+    ("/terminal.js", "web/terminal.js", JS),
+    ("/vendor/xterm.js", "web/vendor/xterm/xterm.js", JS),
+    ("/vendor/addon-fit.js", "web/vendor/xterm/addon-fit.js", JS),
+    ("/vendor/xterm.css", "web/vendor/xterm/xterm.css", CSS),
 ];
 
 /// The client injected into pages in dev mode.
