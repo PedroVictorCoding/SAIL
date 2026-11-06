@@ -239,6 +239,8 @@ async function refreshOwnerApprovals() {
   const output = document.getElementById('ownerApprovals'); output.textContent = 'Checking pending approvals…';
   try {
     const data = await ownerApprovalRequest('approvals'); output.replaceChildren();
+    // Authoritative pending list: resyncs the approval indicator after a reconnect.
+    window.SailAmbient?.dispatch({ type:'approvals', pending:data.pending.map(request => request.session_id) });
     if (!data.pending.length) { output.textContent = 'No pending approvals.'; return; }
     for (const request of data.pending) {
       const card = document.createElement('article'); card.className = 'artifact-card';

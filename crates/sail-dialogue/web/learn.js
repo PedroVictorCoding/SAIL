@@ -2084,6 +2084,7 @@
     dictation.cancel();
     if (state.streamAbort) state.streamAbort.abort();
     state.sessionId = null;
+    window.SailAmbient?.dispatch({type: 'learn', session: null});
     state.view = null;
     state.openQuestionId = null;
     state.openProblemId = null;
@@ -2130,6 +2131,7 @@
     dictation.cancel();
     state.openQuestionId = null;
     state.sessionId = id;
+    window.SailAmbient?.dispatch({type: 'learn', session: id});
     state.lastAutoTurnSeq = null;
     try {
       applyView(await api(`/sessions/${encodeURIComponent(id)}`));

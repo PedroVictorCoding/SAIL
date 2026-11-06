@@ -19,7 +19,7 @@
   --sail-transition-fast: 140ms;
   --sail-transition-state: 420ms;
   --sail-ease: cubic-bezier(.22, 1, .36, 1);
-  --sail-light-a: #78889d; /* injected from verified state */
+  --sail-light-a: #496f9d; /* written by ambient-state.js from verified state */
   --sail-light-b: #384257;
   --sail-light-c: #0e121a;
   --sail-illumination: .15;
@@ -45,7 +45,7 @@
   --good: #00b894;
   --warning: #e5be79;
   --listening: #19b5bc;
-  --thinking: #6c5ce7;
+  --thinking: #8567ff;
   --speaking: #ff7a45;
   --executing: #2d7ff9;
   --recording: #e84118;
@@ -95,13 +95,21 @@
   text-rendering: optimizeLegibility;
 }
 
-@property --ambient-one { syntax: '<color>'; inherits: true; initial-value: #FF8A32; }
-@property --ambient-two { syntax: '<color>'; inherits: true; initial-value: #A99AE3; }
-@property --ambient-three { syntax: '<color>'; inherits: true; initial-value: #7DCBB2; }
+/* The light is written only by ambient-state.js (DESIGN.md §3). Registering the
+   channels lets a state change crossfade instead of flashing. Initial values are the
+   `idle` light; --ambient-* are legacy aliases set to the same values. */
+@property --sail-light-a { syntax: '<color>'; inherits: true; initial-value: #496f9d; }
+@property --sail-light-b { syntax: '<color>'; inherits: true; initial-value: #384257; }
+@property --sail-light-c { syntax: '<color>'; inherits: true; initial-value: #0e121a; }
+@property --ambient-one { syntax: '<color>'; inherits: true; initial-value: #496f9d; }
+@property --ambient-two { syntax: '<color>'; inherits: true; initial-value: #384257; }
+@property --ambient-three { syntax: '<color>'; inherits: true; initial-value: #0e121a; }
 
 :root {
-  transition: --ambient-one 720ms var(--ease-out), --ambient-two 720ms var(--ease-out), --ambient-three 720ms var(--ease-out);
+  transition: --sail-light-a var(--sail-transition-state) var(--sail-ease), --sail-light-b var(--sail-transition-state) var(--sail-ease), --sail-light-c var(--sail-transition-state) var(--sail-ease),
+    --ambient-one var(--sail-transition-state) var(--sail-ease), --ambient-two var(--sail-transition-state) var(--sail-ease), --ambient-three var(--sail-transition-state) var(--sail-ease);
 }
+@media (prefers-reduced-motion: reduce) { :root { transition: none; } }
 
 /* Ambient Glass & Living Light primitives (DESIGN.md / docs/SAIL_UI_DESIGN_GUIDE.md) */
 .sail-glass {
@@ -124,8 +132,13 @@
   transition: opacity var(--sail-transition-state, 420ms) ease,
               transform var(--sail-transition-state, 420ms) ease;
 }
+/* Consented recording: a measured steady pulse on the REC dot, independent of the
+   ambient light. The label is always shown; the pulse stops under reduced motion. */
+.rec-indicator span { font-weight: 600; letter-spacing: .04em; }
+[data-sail-recording="true"] .rec-indicator i { animation: sail-rec-pulse 2s ease-in-out infinite; }
+@keyframes sail-rec-pulse { 50% { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) {
-  .sail-light, .sail-glass { animation: none !important; transition-duration: 0ms !important; }
+  .sail-light, .sail-glass, .rec-indicator i { animation: none !important; transition-duration: 0ms !important; }
 }
 @media (forced-colors: active) {
   .sail-glass { background: Canvas; border: 1px solid CanvasText; }

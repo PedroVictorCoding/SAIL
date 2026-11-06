@@ -13,6 +13,7 @@
   <div class="top-actions" id="topIndicators" hidden>
     <span class="privacy-indicator" id="learningIndicator" role="status" hidden>Learning enabled</span>
     <span class="privacy-indicator" id="micLiveIndicator" hidden><i></i><span>Mic on</span></span>
+    <span class="privacy-indicator rec-indicator" id="recIndicator" role="status" hidden><i></i><span>REC · listening context</span></span>
     <span class="loading-indicator" id="speechLoadIndicator" hidden><span class="loading-short" aria-hidden="true">Voice</span><span id="speechLoadLabel">Loading voice models</span><progress id="speechLoadBar" max="100" aria-labelledby="speechLoadLabel" aria-describedby="speechLoadValue"></progress><span id="speechLoadValue" aria-live="off"></span></span>
     <span class="loading-indicator" id="modelLoadIndicator" hidden><span class="loading-short" aria-hidden="true">Model</span><span id="modelLoadLabel">Loading model</span><progress id="modelLoadBar" max="100" aria-labelledby="modelLoadLabel" aria-describedby="modelLoadValue"></progress><span id="modelLoadValue" aria-live="off"></span></span>
     <span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span>
@@ -1267,6 +1268,7 @@
 <script src="/card-modal.js" defer></script>
 <script src="/client-speech.js" defer></script>
 <script src="/markdown.js" defer></script>
+<script src="/ambient-state.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/forge.js" defer></script>
 <script src="/approvals.js" defer></script>

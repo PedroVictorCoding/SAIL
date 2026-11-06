@@ -76,6 +76,7 @@ assets![
     ("/toolsmap.css", "web/toolsmap.css", CSS),
     ("/card-modal.js", "web/card-modal.js", JS),
     ("/markdown.js", "web/markdown.js", JS),
+    ("/ambient-state.js", "web/ambient-state.js", JS),
     ("/voice.js", "web/voice.js", JS),
     ("/forge.js", "web/forge.js", JS),
     ("/approvals.js", "web/approvals.js", JS),

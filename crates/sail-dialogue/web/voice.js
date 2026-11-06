@@ -13,24 +13,10 @@ const activeTools = new Map();
 const lastToolCalls = new Map();
 const pendingApprovalActions = new Map();
 const tiers = ['Balanced', 'HighPerformance', 'LowPower']; let tierIdx = 0;
-const ambientPalettes = {
-  idle:{ primary:'#496f9d', secondary:'#384257', tertiary:'#0e121a', glow:'rgba(73,111,157,.32)' },
-  listening:{ primary:'#19b5bc', secondary:'#104f55', tertiary:'#0a2a2f', glow:'rgba(25,181,188,.38)' },
-  understanding:{ primary:'#5b82d7', secondary:'#4834d4', tertiary:'#2c1b4d', glow:'rgba(91,130,215,.35)' },
-  thinking:{ primary:'#6c5ce7', secondary:'#4834d4', tertiary:'#2c1b4d', glow:'rgba(108,92,231,.38)' },
-  tool_execution:{ primary:'#2d7ff9', secondary:'#1e40af', tertiary:'#172554', glow:'rgba(45,127,249,.36)' },
-  searching:{ primary:'#19b5bc', secondary:'#2d7ff9', tertiary:'#141820', glow:'rgba(25,181,188,.34)' },
-  speaking:{ primary:'#ff7a45', secondary:'#ffbe76', tertiary:'#78350f', glow:'rgba(255,122,69,.42)' },
-  creating:{ primary:'#6c5ce7', secondary:'#a29bfe', tertiary:'#1e293b', glow:'rgba(108,92,231,.38)' },
-  learning:{ primary:'#00b894', secondary:'#065f46', tertiary:'#022c22', glow:'rgba(0,184,148,.36)' },
-  recording:{ primary:'#e84118', secondary:'#991b1b', tertiary:'#450a0a', glow:'rgba(232,65,24,.40)' },
-  success:{ primary:'#00b894', secondary:'#55efc4', tertiary:'#141820', glow:'rgba(0,184,148,.34)' },
-  approval:{ primary:'#e5be79', secondary:'#b28900', tertiary:'#1e1b18', glow:'rgba(229,190,121,.34)' },
-  error:{ primary:'#e17055', secondary:'#834c72', tertiary:'#3b1d24', glow:'rgba(225,112,85,.34)' },
-  offline:{ primary:'#566078', secondary:'#334155', tertiary:'#0f172a', glow:'rgba(86,96,120,.24)' },
-};
-const statePalette = state => ambientPalettes[state] || ambientPalettes.idle;
-const paletteState = state => ({ transcribing:'understanding', seeing:'searching', watching:'searching', disconnected:'offline', approval_required:'approval', interrupted:'idle', working:'tool_execution', learning:'learning', recording:'recording' })[state] || state;
+// Shell light comes only from the ambient state contract (ambient-state.js, DESIGN.md §3).
+// `wire` tags events handled inside a /ws/voice message with that socket and turn epoch.
+let wsGeneration = 0, wire = null;
+const ambient = event => window.SailAmbient?.dispatch({ ...wire, ...event });
 const orbCanvas = document.getElementById('orbCanvas'), ctx = orbCanvas.getContext('2d');
 const statusBadge = document.getElementById('statusBadge'), transcriptBox = document.getElementById('transcript');
 const micBtn = document.getElementById('micBtn'), muteBtn = document.getElementById('muteBtn'), tierBtn = document.getElementById('tierBtn');
@@ -43,6 +29,7 @@ const playingSources = new Set();
 let errorTimer, errorStateTimer;
 function showError(error) {
   errorBox.textContent = String(error); errorBox.hidden = false; clearTimeout(errorTimer); errorTimer = setTimeout(() => { errorBox.hidden = true; }, 8000);
+  ambient({ type:'error', message:String(error), socket:undefined, epoch:undefined });
   const priorState = orbState; updateState('error'); clearTimeout(errorStateTimer);
   errorStateTimer = setTimeout(() => { if (orbState === 'error') updateState(priorState === 'error' ? 'idle' : priorState); }, 1700);
 }
@@ -96,7 +83,9 @@ function sendAction(action, fields = {}) {
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws/voice`);
+  const generation = ++wsGeneration;
   ws.onopen = () => {
+    ambient({ type:'connect', socket:generation });
     setConnection('Connected · local session', true);
     micBtn.disabled = false; document.getElementById('liveContextBtn').disabled = false;
     if (orbState === 'disconnected') updateState('idle');
@@ -104,6 +93,8 @@ function connectWs() {
   };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
+    if (generation !== wsGeneration) return;
+    ambient({ type:'disconnect', socket:generation });
     liveContextReplyPending = false; liveContextEnabled = false; renderLiveContext(); document.getElementById('liveContextBtn').disabled = true;
     learningSession = null; learningEnabled = true; renderLearning();
     pendingApprovalActions.clear(); lastToolCalls.clear();
@@ -112,18 +103,25 @@ function connectWs() {
   };
   ws.onmessage = (event) => {
     let data;
+    if (generation !== wsGeneration) return;
     try { data = JSON.parse(event.data); } catch { showError('Invalid server message'); return; }
+    wire = { socket:generation, epoch:Number.isFinite(data.epoch) ? data.epoch : undefined };
+    try { handleVoiceMessage(data); } finally { wire = null; }
+  };
+}
+function handleVoiceMessage(data) {
     switch (data.type) {
       case 'snapshot_request':
         requestVisualCapture(data); break;
       case 'session':
         learningSession = data.session_id; learningEnabled = data.learning !== false; renderLearning();
+        ambient({ type:'snapshot', session:data.session_id, epoch:0, listenOnly:false });
         cancelVisualCapture();
         document.getElementById('conversation').replaceChildren(); responseNode = null; chatFollow.resume();
         applyControl(data.control); announceClientSpeech(); break;
       case 'live_context_state':
         discardListeningCapture(); liveContextReplyPending = false;
-        liveContextEnabled = data.enabled === true; renderLiveContext(); break;
+        liveContextEnabled = data.enabled === true; renderLiveContext(); ambient({ type:'listen_only', enabled:liveContextEnabled }); break;
       case 'live_context_observed':
         transcriptBox.textContent = `Context · ${data.text}`; break;
       case 'learning_state':
@@ -142,7 +140,7 @@ function connectWs() {
         document.getElementById('telRms').textContent = `RMS: ${data.rms.toFixed(3)}`; break;
       case 'transcript': transcriptBox.textContent = `${data.is_final ? 'You said' : 'Listening'} · ${data.text}`; document.getElementById('liveTranscript').textContent = data.text; break;
       case 'capture_limit':
-        stopMic(); setCaptureHeld(true); updateState('holding'); transcriptBox.textContent = data.message; break;
+        stopMic(); setCaptureHeld(true); updateState('holding'); transcriptBox.textContent = data.message; ambient({ type:'warning', message:data.message }); break;
       case 'turn_committed':
         setCaptureHeld(false); turnInProgress = true; updateState('transcribing'); break;
       case 'turn_started':
@@ -199,11 +197,13 @@ function connectWs() {
         const event = data.event;
         if (event.approval_session) {
           pendingApprovalActions.set(event.approval_session, { automatic:true });
+          ambient({ type:'approval', session:event.approval_session });
           renderApprovalCard({session_id:event.approval_session,tool:event.tool,rationale:'Review the exact operation with your owner credentials before continuing.'});
           updateState('approval_required');
           transcriptBox.textContent = 'Approval needed · Review and approve on Canvas or Settings.';
         }
         updateToolActivity(event.tool, !['completed','failed','cancelled'].includes(event.state));
+        ambient({ type:'tool', tool:normalizeToolName(event.tool), state:event.state });
         if (event.state === 'executing') updateState('working');
         if (['completed','failed','cancelled'].includes(event.state)) updateState(turnInProgress ? 'thinking' : 'idle');
         break;
@@ -223,10 +223,12 @@ function connectWs() {
       case 'canvas': renderArtifact(data.artifact); break;
       case 'plan': window.renderPlanCard?.(data.plan); break;
       case 'approval_required':
+        ambient({ type:'approval', session:data.session_id });
         renderApprovalCard(data);
         updateState('approval_required');
         break;
       case 'approval_resolved':
+        ambient({ type:'approval', session:data.session_id, pending:false });
         handleApprovalResolved(data);
         break;
       case 'forge_event':
@@ -252,11 +254,11 @@ function connectWs() {
       case 'error':
         liveContextReplyPending = false; showError(data.message); break;
     }
-  };
 }
 function applyControl(control) {
   if (control.is_muted !== isMuted) discardListeningCapture();
   isMuted = control.is_muted;
+  ambient({ type:'capture', active:isRecording && !isMuted });
   muteBtn.textContent = isMuted ? 'Unmute' : 'Mute'; muteBtn.setAttribute('aria-pressed', String(isMuted)); muteBtn.className = isMuted ? 'quiet-button muted' : 'quiet-button';
   const micIndicator = document.getElementById('micLiveIndicator');
   micIndicator.hidden = !isRecording; micIndicator.querySelector('span').textContent = isMuted ? 'Mic muted' : 'Mic on';
@@ -752,15 +754,10 @@ function updateState(state) {
   };
   statusBadge.textContent = labels[state] || 'Ready';
   const shell = document.getElementById('appShell');
-  if (shell) {
-    shell.dataset.state = state;
-    shell.dataset.sailState = state;
-  }
-  const palette = statePalette(paletteState(state));
-  ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, [palette.primary,palette.secondary,palette.tertiary][index]));
-  document.documentElement.style.setProperty('--sail-light-a', palette.primary);
-  document.documentElement.style.setProperty('--sail-light-b', palette.secondary);
-  document.documentElement.style.setProperty('--sail-light-c', palette.tertiary);
+  // #appShell[data-state] is the fine voice phase (Orb, wave); <html data-sail-state> and
+  // the light come from the ambient contract.
+  if (shell) shell.dataset.state = state;
+  ambient({ type:'phase', phase:state });
   document.getElementById('sessionState').textContent = detailedLabels[state] || labels[state] || 'Ready';
   if (changed && reduceMotion.matches && !document.hidden) renderVisuals();
   syncActivityPill();
@@ -864,14 +861,15 @@ async function startMic() {
       }
     };
     micSource.connect(processor); processor.connect(audioCtx.destination);
-    isRecording = true; micBtn.setAttribute('aria-label', 'Stop microphone'); micBtn.title = 'Stop microphone'; micBtn.classList.add('active'); document.getElementById('micStatus').textContent = 'On'; document.getElementById('sessionMic').textContent = isMuted ? 'Muted' : 'On'; document.getElementById('micLiveIndicator').hidden = false; document.getElementById('muteDockBtn').hidden = false; document.getElementById('endTurnBtn').hidden = false; updateState('listening');
-  } catch (error) { stopMic(); showError(error.name === 'NotAllowedError' ? 'Microphone permission denied. Allow microphone access in browser settings.' : `Microphone: ${error.message}`); }
+    isRecording = true; micBtn.setAttribute('aria-label', 'Stop microphone'); micBtn.title = 'Stop microphone'; micBtn.classList.add('active'); document.getElementById('micStatus').textContent = 'On'; document.getElementById('sessionMic').textContent = isMuted ? 'Muted' : 'On'; document.getElementById('micLiveIndicator').hidden = false; document.getElementById('muteDockBtn').hidden = false; document.getElementById('endTurnBtn').hidden = false;
+    ambient({ type:'mic_denied', denied:false }); ambient({ type:'capture', active:!isMuted }); updateState('listening');
+  } catch (error) { stopMic(); if (error.name === 'NotAllowedError') ambient({ type:'mic_denied' }); showError(error.name === 'NotAllowedError' ? 'Microphone permission denied. Allow microphone access in browser settings.' : `Microphone: ${error.message}`); }
   finally { micBtn.disabled = false; }
 }
 function stopMic(discardClientCapture = true) {
   if (pendingCaptureFlush) { const pending = pendingCaptureFlush; pendingCaptureFlush = null; pending.reject(); }
   if (discardClientCapture) { discardListeningCapture(); sendAction('speech_cancel'); }
-  isRecording = false; micStream?.getTracks().forEach(track => track.stop());
+  isRecording = false; ambient({ type:'capture', active:false }); micStream?.getTracks().forEach(track => track.stop());
   if (processor) { processor.port.onmessage = null; processor.disconnect(); processor = null; }
   micSource?.disconnect(); micSource = null; micStream = null;
   micBtn.setAttribute('aria-label', 'Start microphone'); micBtn.title = 'Start microphone'; micBtn.classList.remove('active'); document.getElementById('micStatus').textContent = 'Off'; document.getElementById('sessionMic').textContent = 'Off'; document.getElementById('micLiveIndicator').hidden = true; document.getElementById('muteDockBtn').hidden = true; document.getElementById('endTurnBtn').hidden = true;
@@ -1029,6 +1027,11 @@ window.addEventListener('sail:orb-telemetry', event => {
   const clamp = value => Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
   updateState(data.state); currentAmplitude = clamp(data.rms); wavePhase = Number.isFinite(data.phase) ? data.phase : 0;
   if (Array.isArray(data.spectrum) && data.spectrum.length === 8) spectrum8 = data.spectrum.map(clamp);
+});
+// Consented capture stays visible whatever the shell colour is (DESIGN.md §3).
+window.SailAmbient?.subscribe(view => {
+  const rec = document.getElementById('recIndicator');
+  if (rec) rec.hidden = !view.indicators.recording;
 });
 window.sailUi = Object.freeze({
   setOrbTelemetry: data => window.dispatchEvent(new CustomEvent('sail:orb-telemetry', { detail:data })),
