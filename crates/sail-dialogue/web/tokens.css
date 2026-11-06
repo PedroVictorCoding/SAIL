@@ -35,7 +35,7 @@
 
   --text: var(--sail-text);
   --muted: var(--sail-text-muted);
-  --accent: #ff7a45;
+  --accent: var(--sail-light-a, #496f9d);
   --focus: var(--sail-focus-ring);
 
   --stroke: var(--sail-glass-border);
