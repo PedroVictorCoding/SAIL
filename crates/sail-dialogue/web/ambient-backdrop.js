@@ -20,8 +20,9 @@
   const BASE = '#030407';
   const SPEED = Object.freeze({ subtle: 0.05, expressive: 0.12 });
   const MAX_PIXELS = Object.freeze({ subtle: 640 * 400, expressive: 1280 * 800 });
-  const TWEEN_MS = 1200;
-  const COOLDOWN_MS = 2500;
+  // Slow and calm: a light fades over 4 s, and a new one waits until the fade has finished.
+  const TWEEN_MS = 4000;
+  const COOLDOWN_MS = 4000;
 
   // ---- pure helpers (unit-tested) -------------------------------------------------
 
@@ -235,11 +236,27 @@
 
   // Home: follow the ambient state contract. The store writes `--sail-light-*` and
   // `data-sail-state` on <html>; watch those and re-light.
+  // One light per turn: it changes when a turn starts (the owner starts talking, or a typed
+  // request starts thinking) and holds through listening, thinking and tools until the reply.
+  // The backdrop only reads the state; the store still owns it.
+  const TURN_STATES = new Set(['listening', 'recording', 'thinking', 'executing']);
   function followAmbientState(backdrop) {
     const html = document.documentElement;
-    const relight = () => backdrop.setLights(cssLights(html));
-    new MutationObserver(relight).observe(html, { attributes: true, attributeFilter: ['style', 'data-sail-state'] });
+    let turnLight = null;
+    const relight = () => {
+      const lights = cssLights(html);
+      if (TURN_STATES.has(html.dataset.sailState)) {
+        turnLight = turnLight || lights;
+        backdrop.setLights(turnLight);
+        return;
+      }
+      turnLight = null;
+      backdrop.setLights(lights);
+    };
+    const observer = new MutationObserver(relight);
+    observer.observe(html, { attributes: true, attributeFilter: ['style', 'data-sail-state'] });
     relight();
+    return () => observer.disconnect();
   }
 
   function paletteFromImage(img) {
@@ -263,7 +280,7 @@
   }
 
   return {
-    MODES, STORAGE_KEY, COOLDOWN_MS, visualsMode, parseColor, palette, paletteFromPixels, paletteFromImage, mount,
+    MODES, STORAGE_KEY, COOLDOWN_MS, TWEEN_MS, followAmbientState, visualsMode, parseColor, palette, paletteFromPixels, paletteFromImage, mount,
     get current() { return current; },
   };
 });

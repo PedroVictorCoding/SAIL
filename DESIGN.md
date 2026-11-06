@@ -131,19 +131,25 @@ non-animated theme. Below 1180px the contextual column moves under the content; 
 all regions stack with full-width actions. The same rules apply to Arena Learn lesson and
 practice surfaces: truthful state, stable text, no ambient motion while the learner reads.
 
-**Glow tiles and pills.** Library stat tiles and the shell's status pills (learning,
-connection, mic, REC, loading) share one material: a near-black surface with its hue
+**Glow tiles.** Library stat tiles use one material: a near-black surface with its hue
 pooled as light along the bottom edge plus a soft halo of the same hue, and white text in
-the dark upper part. Each hue maps to one real measurement or state. Above phone width the
+the dark upper part. Each hue maps to one real measurement or state. The shell's status
+pills (learning, connection, mic, REC, loading) are plain dark glass with no glow. Their
+state shows in the coloured dot. Above phone width the
 Library frame is exactly the viewport and its columns scroll independently.
 
 **Glow cards everywhere (weak).** Every other card surface uses the same material at lower
-strength: the Tools Map stage, node labels, side card, Dialogue column, Live Activity,
-workspace and briefing cards, and the Library's saved places. The hue names the subsystem
+strength: the Tools Map stage, node labels, side card, Dialogue column, workspace and
+briefing cards, and the Library's saved places. Live Activity stays a plain panel. The hue names the subsystem
 (for example Dialogue blue, Forge orange, Arena pink), and the stage keeps the ambient state
 light. No glow card has a top highlight: light only comes from below. Glow backgrounds never
 repeat, because a repeating bottom bloom shows up as a coloured line along the top border.
 Reading, code and lesson surfaces inside a card stay flat.
+
+**Calm state light.** The backdrop keeps one light per turn. It changes when a turn starts
+(the owner starts talking, or a typed request starts thinking), holds through listening,
+thinking and tools, and changes again only when the reply arrives. Each change fades over
+4 s, and the glow cards follow the same light.
 
 ### Timelines and daily phases
 Use a vertical timeline / anchored events for Life, Pulse, Calendar and Health schedules. The gradient tint can reflect task class or phase when real data exists. **Do not infer medical recommendations from a designer reference.** Calendar remains source-truth from #335.

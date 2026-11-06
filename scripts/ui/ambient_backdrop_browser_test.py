@@ -1,8 +1,9 @@
 """Ambient backdrop (Paper Shaders + liquid glass) in a real browser, fixture transport.
 
 Home: the shader mounts behind the Tools Map, follows the ambient state contract
-(idle -> speaking -> idle from /ws/voice events) and never sets state itself; each
-light change holds for a cooldown and quick flips are coalesced to the latest state.
+(idle -> speaking -> idle from /ws/voice events) and never sets state itself; a turn keeps
+one light from its start until the reply, each light fades slowly and holds for a cooldown,
+and quick flips are coalesced to the latest state.
 Settings: `sail.ambientVisuals=off`, forced colours and reduced transparency mount
 nothing; reduced motion keeps a still frame; no WebGL2 falls back to CSS light.
 Glow cards: every card surface carries a weak glow in its own hue, with no top line or highlight.
@@ -48,6 +49,8 @@ def route(r):
         return r.fulfill(body=ICONS.read_bytes(), content_type="image/svg+xml")
     if path.startswith("/api/"):
         if path == "/api/guardian/token": return r.fulfill(json={"token": "t" * 32})
+        # A healthy host, so the model-status poll doesn't raise an error state mid-turn.
+        if path == "/api/health": return r.fulfill(json={"llm": {"ready": True}, "speech": {}})
         if path.endswith("/library"): return r.fulfill(json={"books": BOOKS})
         if path.endswith("/cover"): return r.fulfill(body=COVER, content_type="image/jpeg")
         if path.endswith("/position"): return r.fulfill(json={"position": POS})
@@ -110,13 +113,15 @@ with sync_playwright() as p:
     # Weak glow cards everywhere: each surface carries its own hue pooled along the bottom,
     # never repeats its background (a repeat wrapped the bloom into the top border as a
     # coloured line) and has no inset top highlight.
-    glow = pg.evaluate("""() => ['.tm-label[data-station=forge]', '.tm-chat', '.tm-activity', '.tm-stage', '.connection-pill'].map(sel => {
+    glow = pg.evaluate("""() => ['.tm-label[data-station=forge]', '.tm-chat', '.tm-stage'].map(sel => {
       const s = getComputedStyle(document.querySelector(sel));
       return [sel, s.backgroundImage.includes('radial-gradient'), s.backgroundRepeat, s.boxShadow.includes('inset')];
     })""")
     for sel, radial, repeat, inset in glow:
         assert radial and repeat.startswith("no-repeat") and not inset, (sel, radial, repeat, inset)
-    hues = pg.evaluate("['.tm-chat', '.tm-activity', '.tm-label[data-station=forge]'].map(s => getComputedStyle(document.querySelector(s)).getPropertyValue('--glow').trim())")
+    plain = pg.evaluate("['.tm-activity', '#connection'].map(s => getComputedStyle(document.querySelector(s)).backgroundImage)")
+    assert all("radial-gradient" not in b for b in plain), f"Live Activity and the status pills have no glow: {plain}"
+    hues = pg.evaluate("['.tm-chat', '.tm-label[data-station=flow]', '.tm-label[data-station=forge]'].map(s => getComputedStyle(document.querySelector(s)).getPropertyValue('--glow').trim())")
     assert len(set(hues)) == 3, f"each surface has its own hue: {hues}"
     # Cooldown: the first change shows at once; a burst right after it is held and
     # coalesced, so executing is never painted and speaking appears once.
@@ -128,11 +133,10 @@ with sync_playwright() as p:
         const conn = document.getElementById('connection');
         const indStyle = getComputedStyle(ind);
         const connStyle = getComputedStyle(conn);
-        return !ind.hidden && indStyle.color === 'rgb(255, 255, 255)' && indStyle.backgroundImage.includes('radial-gradient')
-            && connStyle.color === 'rgb(255, 255, 255)' && connStyle.backgroundImage.includes('radial-gradient')
-            && indStyle.boxShadow.includes('rgb(') && connStyle.boxShadow.includes('rgb(')
+        return !ind.hidden && indStyle.color === 'rgb(255, 255, 255)' && !indStyle.backgroundImage.includes('gradient')
+            && connStyle.color === 'rgb(255, 255, 255)' && !connStyle.backgroundImage.includes('gradient')
             && indStyle.borderRadius === '999px' && connStyle.borderRadius === '999px';
-    }"""), "fixed indicators are glow pills: white text, bottom light and a halo"
+    }"""), "fixed indicators are plain dark pills: white text, no glow"
     pg.evaluate("__push({type:'turn_started',turn_id:1,epoch:1,transcript:'hi',state:'thinking'})")
     assert lit() == want("thinking"), "first change is immediate"
     pg.evaluate("__push({type:'tool_event',epoch:1,event:{tool:'fs_read',state:'executing'}})")
@@ -147,6 +151,21 @@ with sync_playwright() as p:
     changes = sum(1 for a, b in zip(seen, seen[1:]) if a != b)
     assert changes == 1, f"one light change after the hold, saw {changes}"
     pg.screenshot(path=str(SHOTS / "backdrop-home-speaking.png"))
+    # One light per turn, checked directly: a recording backdrop follows the state attribute
+    # through talking -> thinking -> tools -> reply -> idle; the light changes only at the
+    # turn's start, at the reply and back at idle.
+    turn = pg.evaluate("""async () => {
+      const html = document.documentElement, seen = [], tick = () => new Promise(r => setTimeout(r, 0));
+      const light = s => SailAmbient.STATES[s].light, saved = [html.dataset.sailState, html.getAttribute('style')];
+      const set = async s => { html.dataset.sailState = s; light(s).forEach((c, i) => html.style.setProperty('--sail-light-' + 'abc'[i], c)); await tick(); };
+      const stop = SailBackdrop.followAmbientState({ setLights: l => seen.push(l.join()) });
+      for (const s of ['idle', 'listening', 'thinking', 'executing', 'thinking', 'speaking', 'idle']) await set(s);
+      stop(); html.dataset.sailState = saved[0]; html.setAttribute('style', saved[1] || '');
+      const shown = seen.slice(1).filter((l, i, all) => i === 0 || l !== all[i - 1]);  // after the initial call
+      return { shown, want: ['idle', 'listening', 'speaking', 'idle'].map(s => light(s).join()) };
+    }""")
+    assert turn["shown"] == turn["want"], f"talking holds one light until the reply: {turn}"
+    assert pg.evaluate("SailBackdrop.TWEEN_MS") >= 4000, "light changes fade slowly"
     pg.evaluate("__push({type:'turn_finished',epoch:1,state:'idle'})")
     settle("idle")
     assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth")
