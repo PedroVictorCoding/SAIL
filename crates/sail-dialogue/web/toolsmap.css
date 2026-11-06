@@ -457,3 +457,18 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 @media (forced-colors: active) {
   .tm-media-tabs [aria-selected="true"] { border: 2px solid Highlight; }
 }
+
+/* Return briefing ("While You Were Away"), mounted on the map stage by toolsmap.js.
+   A contextual glass sheet over the map; it scrolls inside and stays clear of the
+   bottom map controls. Dismissing it reveals the map. */
+.tm-stage .return-briefing-deck.tm-briefing {
+  position: absolute; z-index: 4; top: 14px; left: 14px; right: 14px;
+  max-height: calc(100% - 84px); overflow: auto; margin: 0;
+  padding: 16px 20px; border-radius: 14px;
+  background: linear-gradient(145deg, #19202c, #0d1119);
+  backdrop-filter: none;
+}
+.tm-stage .return-briefing-deck.tm-briefing[hidden] { display: none; }
+@media (max-width: 760px) {
+  .tm-stage .return-briefing-deck.tm-briefing { top: 8px; left: 8px; right: 8px; padding: 12px; }
+}
