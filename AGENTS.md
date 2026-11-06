@@ -17,20 +17,33 @@ UI changes by every coding assistant. Apply them within the requested scope.
 
 ## Mandatory branch and pull-request workflow
 
-1. **Inspect the workspace first.** Check the current branch, remotes, and working
-   tree. Identify the repository's default branch rather than assuming its name.
-   Preserve existing user changes and work belonging to other tasks. Never silently
-   include, stash, reset, or discard that work. Use an isolated worktree when a
-   branch switch or implementation could interfere with it.
-2. **Create a new task branch before editing.** Fetch the current remote state and
-   create a fresh topic branch from the latest default branch, normally
-   `origin/main`. Use `agent/<context-driven-name>` for every agent task branch, for example
-   `agent/mind-local-inference-routing` or `agent/update-usage-guide`.
-   Continue the same branch for follow-ups to that active task; do not reuse a
-   branch from an unrelated, completed, or merged task.
+1. **Never change the workspace you were opened in.** The owner keeps their
+   checkout (and editor) on the default branch at all times. In that checkout do
+   not run `git checkout`/`git switch` to another branch, create commits, stash,
+   reset, rebase, or edit tracked files. Read-only commands (`status`, `log`,
+   `diff`, `fetch`, `worktree add/list`) are fine. This applies even when the
+   checkout happens to be clean and even for one-line or documentation changes.
+2. **Do every task in its own worktree on a fresh branch.** Fetch the remote,
+   then create the branch and worktree in one step from the latest default
+   branch, outside the owner's checkout:
+
+   ```sh
+   git fetch origin
+   git worktree add -b agent/<context-driven-name> \
+     /home/main/sail-worktrees/<context-driven-name> origin/main
+   ```
+
+   Run all edits, builds, tests, commits, and pushes from that worktree. Use
+   `agent/<context-driven-name>` for every agent task branch, for example
+   `agent/mind-local-inference-routing` or `agent/update-usage-guide`. Continue
+   the same branch and worktree for follow-ups to that active task; do not reuse
+   a branch from an unrelated, completed, or merged task. Inspect remotes and
+   existing work first, and preserve work belonging to other tasks: never
+   silently include, stash, reset, or discard it. When the task's PR is merged
+   and the worktree is clean, remove it with `git worktree remove`.
 3. **Never commit or push directly to the default branch.** Do not develop on
    `main`, `master`, or a protected/release branch. If a session starts there,
-   create the task branch before changing files. This requirement also applies
+   create the task worktree (step 2) before changing files. This requirement also applies
    to small fixes, documentation-only changes, and instructions to “commit and
    push”: push the task branch and open/update its pull request.
 4. **Keep the commit scoped.** Stage explicit task files, review the staged diff,
