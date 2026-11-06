@@ -86,6 +86,8 @@
     }
   }
 
+  // Closing marks the briefing read (the Tools Map returns to the map); it stays
+  // available in the "While You Were Away" view.
   async function dismissBriefing() {
     const deck = document.getElementById('returnBriefingDeck');
     if (deck) deck.hidden = true;
@@ -103,7 +105,8 @@
     const deck = document.getElementById('returnBriefingDeck');
     if (!deck) return;
 
-    if (!briefing || briefing.dismissed) {
+    announce({ fresh: !!briefing && !briefing.dismissed });
+    if (!briefing) {
       deck.hidden = true;
       document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'false');
       return;
@@ -199,6 +202,10 @@
     }
   }
 
+  function announce(detail) {
+    window.dispatchEvent(new CustomEvent('sail:briefing', { detail }));
+  }
+
   // Open a SAIL page (Arena, Reminders) through the shared router the Tools Map follows.
   function openPage(id) {
     if (window.sailNavigate) window.sailNavigate(id);
@@ -213,6 +220,8 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
+
+  window.sailBriefing = { refresh: () => refreshBriefing(document.getElementById('briefingRefreshBtn')) };
 
   window.addEventListener('DOMContentLoaded', async () => {
     // Bind deck controls
