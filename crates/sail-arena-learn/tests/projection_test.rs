@@ -215,3 +215,159 @@ fn the_view_exposes_a_context_meter_without_a_cost_estimate() {
     assert!(json.contains("context_fraction"));
     assert!(!json.to_lowercase().contains("cost"));
 }
+
+/// A long lesson whose latest learner answer replies to a question asked before the cut.
+fn compacted_log() -> (Vec<Envelope>, u64) {
+    use sail_arena_learn::core::messages::{compact_digest, compaction_cut};
+    use sail_arena_learn::core::view::CONTEXT_BUDGET_TOKENS;
+
+    let mut events = vec![LearningEvent::SessionCreated { goal: "g".into() }];
+    for i in 0..200 {
+        events.push(LearningEvent::LearnerMessage {
+            text: format!("question {i} ").repeat(20),
+        });
+        let id = format!("c{i}");
+        events.push(LearningEvent::AssistantMessage {
+            role: AgentRole::Teacher,
+            text: String::new(),
+            tool_calls: vec![call(&id)],
+        });
+        events.push(LearningEvent::ToolResult {
+            call_id: id,
+            content: "x".repeat(400),
+            ok: true,
+        });
+    }
+    events.push(LearningEvent::AssistantMessage {
+        role: AgentRole::Teacher,
+        text: String::new(),
+        tool_calls: vec![ToolCallRecord {
+            id: "q".into(),
+            name: "recall".into(),
+            arguments: "{}".into(),
+        }],
+    });
+    events.push(LearningEvent::QuestionAsked {
+        call_id: "q".into(),
+        spec: serde_json::from_value(serde_json::json!({
+            "kind": "free_recall",
+            "prompt": "Why does ice float?",
+        }))
+        .unwrap(),
+        follow_up_of: None,
+    });
+    let mut log = log(events);
+    let push = |log: &mut Vec<Envelope>, event| {
+        let seq = log.len() as u64 + 1;
+        log.push(Envelope {
+            session: "s".into(),
+            seq,
+            at_ms: 0,
+            key: format!("k{seq}"),
+            version: SCHEMA_VERSION,
+            event,
+        });
+    };
+    push(
+        &mut log,
+        LearningEvent::Answered {
+            call_id: "q".into(),
+            answer: serde_json::from_value(serde_json::json!({ "text": "less dense" })).unwrap(),
+            grade: sail_arena_learn::core::question::Grade::NeedsJudgment,
+        },
+    );
+    // The turn that compacts already holds the learner's answer.
+    let cut = compaction_cut(&log, CONTEXT_BUDGET_TOKENS).expect("history is over budget");
+    let digest = compact_digest(&log, cut);
+    push(
+        &mut log,
+        LearningEvent::ContextCompacted {
+            up_to_seq: cut,
+            digest,
+        },
+    );
+    (log, cut)
+}
+
+#[test]
+fn compaction_keeps_the_recent_history_after_the_digest() {
+    let (log, cut) = compacted_log();
+    let messages = to_llm_messages("system", &log);
+    assert!(messages[1].content.text().unwrap().contains("digest"));
+    // The newest learner message after the cut is still in the prompt, as is the answer.
+    let texts: Vec<String> = messages
+        .iter()
+        .filter_map(|m| m.content.text().map(str::to_string))
+        .collect();
+    assert!(texts.iter().any(|t| t.starts_with("question 199 ")));
+    assert!(
+        texts.iter().any(|t| t.contains("less dense")),
+        "the learner's latest answer must reach the model"
+    );
+    // Nothing from before the cut is replayed besides the digest.
+    let first_kept = log.iter().find(|e| e.seq == cut + 1).unwrap();
+    assert!(first_kept.event.is_input());
+    assert!(!texts.iter().any(|t| t.starts_with("question 0 ")));
+    assert!(
+        messages.len() > 10,
+        "kept history was dropped: {}",
+        messages.len()
+    );
+    let mut calls = std::collections::HashSet::new();
+    for message in &messages {
+        for call in &message.tool_calls {
+            calls.insert(call.id.clone());
+        }
+        if let Some(id) = &message.tool_call_id {
+            assert!(calls.contains(id), "orphan tool result {id}");
+        }
+    }
+}
+
+#[test]
+fn the_context_meter_falls_after_compaction() {
+    use sail_arena_learn::core::messages::compaction_cut;
+    use sail_arena_learn::core::view::CONTEXT_BUDGET_TOKENS;
+
+    let (log, _) = compacted_log();
+    let before = project_view("s", &log[..log.len() - 1]);
+    assert_eq!(before.context_fraction, 1.0);
+    let after = project_view("s", &log);
+    assert!(
+        after.context_fraction < 0.9,
+        "meter stuck at {} after compaction",
+        after.context_fraction
+    );
+    assert!(
+        after.context_fraction > 0.2,
+        "kept history must still count"
+    );
+    // The kept history plus digest fits, so the next turn does not re-cut at once.
+    assert!(compaction_cut(&log, CONTEXT_BUDGET_TOKENS).is_none());
+}
+
+#[test]
+fn an_answer_to_a_question_asked_before_the_cut_still_reaches_the_model() {
+    let (mut log, _) = compacted_log();
+    // Re-cut exactly before the answer: the question's call is now behind the digest.
+    let answer_seq = log
+        .iter()
+        .find(|e| matches!(e.event, LearningEvent::Answered { .. }))
+        .unwrap()
+        .seq;
+    if let LearningEvent::ContextCompacted { up_to_seq, .. } = &mut log.last_mut().unwrap().event {
+        *up_to_seq = answer_seq - 1;
+    }
+    let messages = to_llm_messages("system", &log);
+    let texts: Vec<String> = messages
+        .iter()
+        .filter_map(|m| m.content.text().map(str::to_string))
+        .collect();
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.contains("asked before the digest") && t.contains("less dense")),
+        "{texts:?}"
+    );
+    assert!(messages.iter().all(|m| m.tool_call_id.is_none()));
+}

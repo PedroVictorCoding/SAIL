@@ -78,6 +78,31 @@
   }
 
   /** Snaps any 0..100 value to the nearest LearnHarness confidence stop. */
+  // Context meter (#254): share of the history budget the next prompt replays. Local
+  // models only, so it never shows a cost estimate.
+  function learnContextMeter(view) {
+    const fraction = Number(view && view.context_fraction);
+    const percent = Number.isFinite(fraction) ? Math.max(0, Math.min(100, Math.round(fraction * 100))) : 0;
+    return {
+      percent,
+      label: `Context ${percent}% used`,
+      warn: percent >= 85 ? 'Context nearly full; older parts will be summarised.' : '',
+    };
+  }
+
+  // Practice outcomes are session evidence, not mastery (#244).
+  function learnPracticeText(outcome) {
+    switch (outcome) {
+      case 'solved': return 'Solved.';
+      case 'solved_with_hints': return 'Solved with hints.';
+      case 'not_solved': return 'Not solved yet.';
+      case 'moved_on': return 'Moved on.';
+      case 'surrendered': return 'Solution shown.';
+      case 'dismissed': return 'Dismissed.';
+      default: return String(outcome || '').replace(/_/g, ' ');
+    }
+  }
+
   function learnSnapConfidence(value) {
     const num = Number(value);
     if (!Number.isFinite(num)) return 50;
@@ -335,6 +360,8 @@
       learnRelativeTime,
       learnFilterSessions,
       learnLayoutPlanDag,
+      learnContextMeter,
+      learnPracticeText,
     };
   }
   if (!root || !root.document) return;
@@ -1265,7 +1292,7 @@
       cEyebrow.textContent = 'CONCLUDED';
       const badge = document.createElement('span');
       badge.className = `lh-verdict-badge ${probObj.outcome}`;
-      badge.textContent = probObj.outcome.replace(/_/g, ' ');
+      badge.textContent = learnPracticeText(probObj.outcome);
       cHead.append(cEyebrow, badge);
       cCard.appendChild(cHead);
 
@@ -1724,15 +1751,22 @@
 
     if (!view) return;
     const totalTokens = (view.input_tokens || 0) + (view.output_tokens || 0);
-    const budget = view.context_budget_tokens || 24000;
     const turns = Array.isArray(view.turns) ? view.turns : [];
-    const pct = Math.min(100, Math.round((view.context_fraction || 0) * 100));
+    const meter = learnContextMeter(view);
+    const pct = meter.percent;
 
     if (ctxText) {
-      ctxText.textContent = `${totalTokens.toLocaleString()} / ${(budget / 1000).toFixed(0)}k tokens · ${turns.length} turn${turns.length === 1 ? '' : 's'}`;
+      // Session totals are cumulative; the meter is what the next prompt replays.
+      ctxText.textContent = `${meter.label} · ${totalTokens.toLocaleString()} tokens · ${turns.length} turn${turns.length === 1 ? '' : 's'}`;
+      if (ctxText.parentElement) ctxText.parentElement.classList.toggle('warn', !!meter.warn);
     }
     if (meterFill) {
       meterFill.style.width = `${pct}%`;
+      const bar = meterFill.parentElement;
+      if (bar) {
+        bar.setAttribute('aria-valuenow', String(pct));
+        bar.setAttribute('aria-valuetext', meter.warn ? `${meter.label}. ${meter.warn}` : meter.label);
+      }
     }
     if (roleBadge) {
       const roleLabel = view.mode === 'assess' ? 'Prober' : view.mode === 'practice' ? 'Practitioner' : 'Teacher';

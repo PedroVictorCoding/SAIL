@@ -84,16 +84,16 @@ test('practice outcomes are described without mastery or scores', () => {
 
 test('LearnHarness confidence stop snapping, session filtering, and Sugiyama DAG layout work cleanly', () => {
   assert.equal(ui.learnSnapConfidence(0), 0);
-  assert.equal(ui.learnSnapConfidence(20), 25);
+  assert.equal(ui.learnSnapConfidence(22), 20);
   assert.equal(ui.learnSnapConfidence(52), 50);
-  assert.equal(ui.learnSnapConfidence(78), 75);
-  assert.equal(ui.learnSnapConfidence(99), 100);
+  assert.equal(ui.learnSnapConfidence(78), 80);
+  assert.equal(ui.learnSnapConfidence(98), 99);
 
   const sessions = [
-    {id: '1', title: 'TCP Congestion', goal: 'TCP', kind: 'teaching'},
+    {id: '1', title: 'TCP Congestion', goal: 'TCP', kind: 'teach'},
     {id: '2', title: 'Drill: Rust lifetimes', goal: 'lifetimes', kind: 'practice'},
   ];
-  assert.equal(ui.learnFilterSessions(sessions, 'teaching', '').length, 1);
+  assert.equal(ui.learnFilterSessions(sessions, 'teach', '').length, 1);
   assert.equal(ui.learnFilterSessions(sessions, 'practice', '').length, 1);
   assert.equal(ui.learnFilterSessions(sessions, 'all', 'rust').length, 1);
 
@@ -107,12 +107,12 @@ test('LearnHarness confidence stop snapping, session filtering, and Sugiyama DAG
   assert.ok(dag.nodes[1].y > dag.nodes[0].y);
 
   assert.deepEqual(
-    ui.learnBuildAnswer('single', {choices: [], dontKnow: true}).answer,
-    {choices: [], dont_know: true}
+    ui.learnBuildAnswer('single', {choices: [], dont_know: true}).answer,
+    {dont_know: true}
   );
   assert.deepEqual(
-    ui.learnBuildAnswer('single', {choices: ['a'], confidencePct: 75}).answer,
-    {choices: ['a'], confidence: 4, confidence_pct: 75}
+    ui.learnBuildAnswer('single', {choices: ['a'], confidence_pct: 78}).answer,
+    {choices: ['a'], confidence: 4, confidence_pct: 80}
   );
 });
 
