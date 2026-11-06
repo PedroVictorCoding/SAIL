@@ -250,6 +250,21 @@ with sync_playwright() as p:
     # Tools Map is the unified workspace and hosts the Dialogue panel.
     assert page.is_visible('#toolsMap')
     assert page.evaluate("document.getElementById('homeView').closest('#toolsMap') !== null")
+
+    # The Live Activity bottom bar comes collapsed by default and can be toggled.
+    assert page.locator('#toolsMap').get_attribute('data-activity-collapsed') == 'true'
+    assert page.locator('#tmActivitySection').evaluate("el => el.classList.contains('collapsed')") is True
+    assert page.locator('#tmActivityToggle').get_attribute('aria-expanded') == 'false'
+    assert page.evaluate("window.sailToolsMap.isActivityCollapsed()") is True
+    page.locator('#tmActivityToggle').click()
+    assert page.locator('#toolsMap').get_attribute('data-activity-collapsed') == 'false'
+    assert page.locator('#tmActivitySection').evaluate("el => el.classList.contains('collapsed')") is False
+    assert page.locator('#tmActivityToggle').get_attribute('aria-expanded') == 'true'
+    assert page.evaluate("window.sailToolsMap.isActivityCollapsed()") is False
+    page.locator('#tmActivityToggle').click()
+    assert page.locator('#toolsMap').get_attribute('data-activity-collapsed') == 'true'
+    assert page.locator('#tmActivityToggle').get_attribute('aria-expanded') == 'false'
+    assert page.evaluate("window.sailToolsMap.isActivityCollapsed()") is True
     page.locator('.tm-nav-item[data-nav="tracker"]').click()
     page.wait_for_selector('#tmTracker')
     page.goto(base + '#classic')
