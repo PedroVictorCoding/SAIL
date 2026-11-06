@@ -10,6 +10,23 @@
 // without cross-origin isolation (the SDK loads from sdk.scdn.co) and is embedded in SAIL
 // as a credentialless iframe. Nothing here reaches Mind or any model.
 (function () {
+  // Pure helpers shared with the Now Playing card and the Node tests. They are defined before
+  // any DOM access so requiring this file in Node does not start the player.
+  function remoteTrack(now) {
+    return {source: 'spotify', remote: true, id: now.uri, title: now.name, artist: now.by,
+      album: now.album, duration_ms: now.duration_ms, art: now.image, device: now.device,
+      context: now.context};
+  }
+  function remotePosition(now, at, clock = Date.now()) {
+    if (!now) return 0;
+    const base = Math.max(0, Number(now.progress_ms) || 0);
+    const pos = now.is_playing ? base + (clock - at) : base;
+    return Math.min(Number(now.duration_ms) || pos, pos);
+  }
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {remoteTrack, remotePosition};
+    return;
+  }
   try { if (window.top !== window.self) document.documentElement.dataset.embedded = 'true'; } catch (_) { document.documentElement.dataset.embedded = 'true'; }
   const $ = id => document.getElementById(id);
   const SDK_URL = 'https://sdk.scdn.co/spotify-player.js';
@@ -51,6 +68,9 @@
     playlists: [], results: null, listTracks: null, listTitle: '', listContext: null,
     queue: [], index: -1, playing: false, position: 0, duration: 0, volume: 0.8,
   };
+  // The sidebar card and this page share the global Spotify player. When this page has no
+  // queue of its own, it adopts whatever is playing elsewhere (phone, desktop, SAIL Player).
+  const remote = {now: null, at: 0, poll: 0, tick: 0};
   try { state.volume = Math.min(1, Math.max(0, +(localStorage.getItem('sail.music.volume') ?? 0.8))); } catch (_) {}
 
   function status(text = '', error = false) {
@@ -219,23 +239,31 @@
       }
     },
     async toggle() {
-      if (!this.engine) { const first = visibleTracks(); if (first.length) await this.start(first); return; }
+      if (!this.engine) {
+        if (remote.now) return remoteControl(remote.now.is_playing ? 'pause' : 'resume');
+        const first = visibleTracks(); if (first.length) await this.start(first); return;
+      }
       try { if (state.playing) await this.engine.pause(); else await this.engine.resume(); }
       catch (e) { status(e.message, true); }
     },
     async next() {
+      if (!this.engine && remote.now) return remoteControl('next');
       const item = this.current();
       if (this.engine === spotify && item?.context && spotify.last?.track_window?.next_tracks?.length) { await spotify.player.nextTrack(); return; }
       if (state.index < state.queue.length - 1) { state.index++; await this.load(); }
       else { await Promise.resolve(this.engine?.stop()); this.setPlaying(false); status('End of the queue.'); }
     },
     async previous() {
+      if (!this.engine && remote.now) return remoteControl('previous');
       const item = this.current();
       if (this.engine === spotify && item?.context && state.position <= 3000 && spotify.last?.track_window?.previous_tracks?.length) { await spotify.player.previousTrack(); return; }
       if (state.position > 3000 || state.index === 0) { this.seek(0); return; }
       state.index--; await this.load();
     },
-    seek(ms) { this.engine?.seek(ms); this.progress(ms, state.duration); },
+    seek(ms) {
+      if (!this.engine && remote.now) { status('Seek in the Spotify app that is playing.', false); return; }
+      this.engine?.seek(ms); this.progress(ms, state.duration);
+    },
     // A song inside a whole-playlist item: show it, keep the playlist as the source line.
     showContextTrack(item, track) {
       const artists = (track.artists || []).map(a => a.name).join(', ');
@@ -262,6 +290,7 @@
     },
     setPlaying(playing) {
       state.playing = playing;
+      postState(true);
       const t = $('toggle');
       t.textContent = playing ? '⏸' : '▶';
       t.setAttribute('aria-label', playing ? 'Pause' : 'Play');
@@ -390,10 +419,87 @@
     }
   }
 
+  function notifyParentSpotify() {
+    if (window.top === window.self) return;
+    try { window.top.postMessage({type: 'sail-spotify'}, location.origin); } catch (_) {}
+  }
+  let lastStatePost = 0;
+  function postState(force = false) {
+    if (window.top === window.self) return;
+    const now = Date.now();
+    if (!force && now - lastStatePost < 500) return;
+    lastStatePost = now;
+    const item = player.current() || (remote.now ? remoteTrack(remote.now) : null);
+    const data = item ? {title: item.title, artist: item.artist || '', album: item.album || '',
+      art: item.art || '', source: item.source, playing: !!state.playing,
+      remote: !!item.remote, device: item.device || ''} : null;
+    try { window.top.postMessage({type: 'sail-music-state', state: data}, location.origin); } catch (_) {}
+  }
+  function renderRemoteNow() {
+    const now = remote.now;
+    const title = now.name || 'Spotify';
+    $('nowTitle').textContent = title;
+    $('nowArtist').textContent = [now.by, now.album].filter(Boolean).join(' · ');
+    const badge = $('nowSource');
+    badge.hidden = false; badge.dataset.source = 'spotify'; badge.textContent = 'Spotify';
+    const art = $('nowArt');
+    art.replaceChildren();
+    if (now.image) {
+      const img = new Image();
+      img.className = 'mp-art-inner'; img.alt = ''; img.crossOrigin = 'anonymous';
+      img.referrerPolicy = 'no-referrer'; img.src = now.image; art.append(img);
+    } else {
+      art.append(artNode({source: 'spotify', title, art: ''}, 'mp-art-inner'));
+    }
+    const duration = Number(now.duration_ms) || 0;
+    const seek = $('seek');
+    seek.max = String(duration);
+    seek.value = String(remotePosition(remote.now, remote.at));
+    // The Spotify Web API can pause/resume/next, but this page has no remote seek endpoint;
+    // seeking stays in the Spotify app that owns playback.
+    seek.disabled = true;
+    seek.title = 'Seek in the Spotify app that is playing';
+    $('elapsed').textContent = fmt(remotePosition(remote.now, remote.at));
+    $('total').textContent = fmt(duration);
+    state.playing = !!now.is_playing;
+    state.duration = duration;
+    $('toggle').textContent = state.playing ? '⏸' : '▶';
+    $('toggle').setAttribute('aria-label', state.playing ? 'Pause' : 'Play');
+    document.documentElement.dataset.playing = String(state.playing);
+    document.querySelectorAll('.mp-row').forEach(r => r.classList.remove('is-current'));
+    clearInterval(remote.tick);
+    if (state.playing) {
+      remote.tick = setInterval(() => {
+        if (player.current() || !remote.now) return clearInterval(remote.tick);
+        const pos = remotePosition(remote.now, remote.at);
+        state.position = pos;
+        $('seek').value = String(pos);
+        $('elapsed').textContent = fmt(pos);
+      }, 1000);
+    }
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({title, artist: now.by || '', album: now.album || '',
+          artwork: now.image ? [{src: now.image}] : []});
+        navigator.mediaSession.playbackState = state.playing ? 'playing' : 'paused';
+      } catch (_) {}
+    }
+    postState();
+  }
   function renderNow() {
     const item = player.current();
+    if (!item && remote.now) { renderRemoteNow(); return; }
+    clearInterval(remote.tick);
     $('nowTitle').textContent = item ? item.title : 'Nothing playing';
     $('nowArtist').textContent = item ? [item.artist, item.album].filter(Boolean).join(' · ') : 'Choose a song from uploads or Spotify';
+    const duration = item ? (Number(item.duration_ms) || 0) : 0;
+    const seek = $('seek');
+    seek.max = String(duration);
+    seek.value = '0';
+    seek.disabled = !duration;
+    seek.title = '';
+    $('elapsed').textContent = fmt(0);
+    $('total').textContent = fmt(duration);
     const badge = $('nowSource');
     badge.hidden = !item;
     if (item) { badge.dataset.source = item.source; badge.textContent = item.source === 'spotify' ? 'Spotify' : 'Upload'; }
@@ -421,6 +527,7 @@
         } catch (_) {}
       });
     }
+    postState();
   }
 
   function renderQueue() {
@@ -499,12 +606,36 @@
     try {
       const s = await (await fetch('/api/spotify/status', {cache: 'no-store'})).json();
       state.spotify = {configured: !!s.configured, connected: !!s.connected, can_stream: !!s.can_stream};
-    } catch (_) { state.spotify = {configured: false, connected: false, can_stream: false}; }
+      remote.now = s.now_playing || null;
+      remote.at = Date.now();
+    } catch (_) { state.spotify = {configured: false, connected: false, can_stream: false}; remote.now = null; }
     renderSpotifyState();
+    if (!player.current()) renderNow();
     if (state.spotify.connected) {
       try { state.playlists = (await api.request('/api/spotify/player/playlists')).playlists; } catch (_) { state.playlists = []; }
       renderPlaylists();
     }
+  }
+
+  async function refreshRemote() {
+    if (document.hidden || player.current() || !state.spotify.connected) return;
+    try {
+      const s = await (await fetch('/api/spotify/status', {cache: 'no-store'})).json();
+      state.spotify = {...state.spotify, configured: !!s.configured, connected: !!s.connected, can_stream: !!s.can_stream};
+      remote.now = s.now_playing || null;
+      remote.at = Date.now();
+      renderNow();
+    } catch (_) {}
+  }
+
+  async function remoteControl(action) {
+    try {
+      const data = await api.request('/api/spotify/control', {method: 'POST', body: {action}});
+      remote.now = data.now_playing || null;
+      remote.at = Date.now();
+      renderNow();
+      notifyParentSpotify();
+    } catch (e) { status(e.message, true); }
   }
 
   let searchSerial = 0, searchTimer = 0;
@@ -577,7 +708,17 @@
       on('nexttrack', () => player.next()); on('previoustrack', () => player.previous());
       on('seekto', d => player.seek(d.seekTime * 1000));
     }
-    window.addEventListener('focus', () => { if (!state.spotify.can_stream) loadSpotify(); });
+    window.addEventListener('focus', () => loadSpotify());
+    clearInterval(remote.poll);
+    remote.poll = setInterval(refreshRemote, 5000);
+    window.addEventListener('message', (e) => {
+      if (e.origin !== location.origin || !e.data) return;
+      if (e.data.type === 'sail-music-refresh') loadSpotify();
+      if (e.data.type !== 'sail-music-control') return;
+      if (e.data.action === 'toggle') player.toggle();
+      else if (e.data.action === 'next') player.next();
+      else if (e.data.action === 'previous') player.previous();
+    });
   }
 
   wire();

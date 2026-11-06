@@ -900,3 +900,35 @@ html[data-sail-visuals=off] .tm-halo { animation: none; }
 @media (forced-colors: active) {
   .tm-sheen { display: none; }
 }
+
+/* ------------------------------------------------------------ short windows */
+/* Keep the whole rail inside the viewport instead of clipping the Now Playing card. The
+   navigation compresses on short windows and the card stays reachable at the bottom. */
+@media (max-height: 860px) {
+  .tm-root { grid-template-rows: 56px minmax(0, 1fr) 104px; }
+  .tm-root[data-activity-collapsed="true"] { grid-template-rows: 56px minmax(0, 1fr) 38px; }
+  .tm-side { padding: 12px 8px 8px; gap: 5px; }
+  .tm-brand { padding: 0 6px 8px; }
+  .tm-brand strong { font-size: 18px; }
+  .tm-version { display: none; }
+  .tm-nav { gap: 0; }
+  .tm-nav-item { min-height: 31px; font-size: 12.5px; gap: 9px; padding: 0 9px; }
+  .tm-nav-2 { margin-top: 6px; padding-top: 6px; }
+  .tm-np {
+    position: sticky; bottom: 0; z-index: 1;
+    margin-top: 6px; padding: 8px; gap: 5px;
+    background: var(--tm-panel-2);
+  }
+  .tm-np-art { width: 34px; height: 34px; border-radius: 7px; }
+  .tm-np-name { font-size: 12px; }
+  .tm-np-by, .tm-np-label, .tm-np-note { font-size: 10.5px; }
+  .tm-np-btn { min-width: 30px; min-height: 27px; }
+}
+@media (max-height: 700px) {
+  .tm-side { padding-top: 8px; }
+  .tm-brand { display: none; }
+  .tm-nav-item { min-height: 28px; }
+  .tm-np { padding: 6px; }
+  .tm-np-art { display: none; }
+  .tm-np-ctl { gap: 2px; }
+}

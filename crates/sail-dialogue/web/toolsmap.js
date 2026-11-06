@@ -65,7 +65,7 @@
   for (const s of STATIONS) { s.gx = (s.u + s.v) / 2; s.gy = (s.v - s.u) / 2; }
 
   const state = {
-    on: false, built: false, selected: null, popup: null, tracker: false, pending: null, trigger: null, tab: 'chat', info: 'overview', chatScroll: null, mode: 'map',
+    on: false, built: false, selected: null, popup: null, tracker: false, pending: null, trigger: null, tab: 'chat', info: 'overview', chatScroll: null, mode: 'map', music: null,
     live: true, paused: false, speed: 1, k: 1, tx: 0, ty: 0,
     metrics: null, mind: null, health: null, guardian: null, approvals: 0, plans: [], reminders: [],
     activityCollapsed: (() => { try { return localStorage.getItem('sail_tm_activity_collapsed') !== 'false'; } catch (_) { return true; } })(),
@@ -822,6 +822,29 @@
   // conversation; this card shows what is playing and offers the basic controls.
   function renderNowPlaying() {
     const box = $('#tmNowPlaying'); if (!box) return;
+    const music = state.music;
+    if (music && music.title) {
+      box.hidden = false;
+      const focused = box.contains(document.activeElement) ? document.activeElement.dataset.key : null;
+      const btn = (key, label, glyph) => el('button', {class: 'tm-np-btn', type: 'button', 'data-key': key,
+        'aria-label': label, title: label, onclick: () => musicControl(key)}, glyph);
+      const by = [music.artist, music.album, music.device ? `on ${music.device}` : ''].filter(Boolean).join(' · ');
+      box.replaceChildren(
+        el('div', {class: 'tm-np-row'},
+          music.art ? el('img', {class: 'tm-np-art', src: music.art, alt: '', width: 44, height: 44,
+            crossorigin: 'anonymous', referrerpolicy: 'no-referrer'}) : el('span', {class: 'tm-np-art', 'aria-hidden': 'true'}),
+          el('div', {class: 'tm-np-text'},
+            el('p', {class: 'tm-np-label', text: music.playing ? 'Now Playing' : 'Paused'}),
+            el('p', {class: 'tm-np-name', text: music.title, title: music.title}),
+            el('p', {class: 'tm-np-by', text: by, title: by}))),
+        el('div', {class: 'tm-np-ctl', role: 'group', 'aria-label': 'Playback'},
+          btn('previous', 'Previous', '⏮'),
+          music.playing ? btn('pause', 'Pause', '❚❚') : btn('resume', 'Play', '▶'),
+          btn('next', 'Next', '⏭')));
+      if (focused) box.querySelector(`[data-key="${focused}"]`)?.focus({preventScroll: true})
+        || (['pause', 'resume'].includes(focused) && box.querySelector('[data-key="pause"],[data-key="resume"]')?.focus({preventScroll: true}));
+      return;
+    }
     const sp = state.spotify;
     box.hidden = !sp;
     if (!sp) return;
@@ -856,6 +879,15 @@
     if (focused) box.querySelector(`[data-key="${focused}"]`)?.focus({preventScroll: true})
       || (['pause', 'resume'].includes(focused) && box.querySelector('[data-key="pause"],[data-key="resume"]')?.focus({preventScroll: true}));
   }
+  function musicControl(action) {
+    const frame = document.getElementById('tmMusic');
+    if (frame?.contentWindow) {
+      const mapped = action === 'pause' || action === 'resume' ? 'toggle' : action;
+      frame.contentWindow.postMessage({type: 'sail-music-control', action: mapped}, location.origin);
+      return;
+    }
+    spotifyControl(action === 'resume' ? 'resume' : action === 'pause' ? 'pause' : action);
+  }
   async function spotifyPost(path, body) {
     const t = await token();
     const r = await fetch(`/api/spotify/${path}`, {method: 'POST', cache: 'no-store',
@@ -873,6 +905,7 @@
       log('dialogue', `Spotify: ${e.message}`);
     }
     renderNowPlaying();
+    document.getElementById('tmMusic')?.contentWindow?.postMessage({type: 'sail-music-refresh'}, location.origin);
   }
   async function connectSpotify() {
     // Open the tab first so the browser treats it as a user action, then point it at Spotify.
@@ -928,7 +961,15 @@
     }
   }
   window.addEventListener('message', (e) => {
-    if (e.origin === location.origin && e.data?.type === 'sail-spotify' && state.live) poll();
+    if (e.origin !== location.origin) return;
+    if (e.data?.type === 'sail-music-state') {
+      const frame = document.getElementById('tmMusic');
+      if (!frame || e.source !== frame.contentWindow) return;
+      state.music = e.data.state || null;
+      renderNowPlaying();
+      return;
+    }
+    if (e.data?.type === 'sail-spotify' && state.live) poll();
   });
 
   function renderActivity() {
@@ -1132,7 +1173,9 @@
           // The music player is served without cross-origin isolation (Spotify's player
           // loads from Spotify), so it is embedded credentialless; set before src.
           if ('credentialless' in HTMLIFrameElement.prototype) {
-            panel.append(el('iframe', {credentialless: true, class: 'tm-tracker-frame', id: 'tmMusic', src: '/music', title: 'Music player', allow: 'autoplay; encrypted-media'}));
+            const frame = el('iframe', {credentialless: true, class: 'tm-tracker-frame', id: 'tmMusic', src: '/music', title: 'Music player', allow: 'autoplay; encrypted-media'});
+            frame.addEventListener('load', () => { state.music = null; renderNowPlaying(); });
+            panel.append(frame);
           } else {
             panel.tabIndex = 0;
             panel.append(el('div', {class: 'tm-media-empty'}, el('h2', {text: labels[id]}),
