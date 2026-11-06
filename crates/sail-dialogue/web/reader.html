@@ -6,6 +6,7 @@
     <title>
       Reader · SAIL
     </title>
+    <link rel="stylesheet" href="/tokens.css">
     <link rel="stylesheet" href="/reader.css">
   </head>
   <body>
@@ -47,37 +48,39 @@
       </button>
     </div>
     <main id="library">
-      <div class="library-heading">
-        <div>
-          <p class="eyebrow">
-            YOUR READING SPACE
-          </p>
-          <h1>
-            My books
-          </h1>
-        </div>
-        <label class="import-button">
-          Import book
-          <input id="import" type="file" accept=".epub,.txt" aria-label="Import EPUB or text book">
+      <aside class="library-sidebar" aria-label="Library navigation">
+        <p class="eyebrow">YOUR READING SPACE</p>
+        <h1>Library</h1>
+        <label class="search">
+          Search title or author
+          <input id="search" type="search" placeholder="Find a book">
         </label>
+        <h2 class="section-label">Your books</h2>
+        <nav id="book-list" aria-label="Your books"></nav>
+        <div class="library-import">
+          <label class="import-button">
+            + Import book
+            <input id="import" type="file" accept=".epub,.txt" aria-label="Import EPUB or text book">
+          </label>
+          <p class="muted">DRM-free EPUB or text.<br>Your original file stays where it is.</p>
+        </div>
+      </aside>
+      <div class="library-content">
+        <section id="continue" aria-label="Featured book"></section>
+        <section id="library-summary" class="library-summary" aria-label="Library overview"></section>
+        <div class="library-heading">
+          <h2>On your shelf</h2>
+          <span id="book-count" class="muted"></span>
+        </div>
+        <div id="shelf" class="shelf"></div>
+        <p id="empty" hidden>Your library is empty. Import a book to begin, or drop an EPUB or text file here.</p>
       </div>
-      <p class="muted">
-        DRM-free EPUB and UTF-8 text. Your original file stays where it is.
-      </p>
-      <label class="search">
-        Search title or author
-        <input id="search" type="search" placeholder="Find a book">
-      </label>
-      <section id="continue" aria-label="Continue reading">
-      </section>
-      <h2>
-        All books
-      </h2>
-      <div id="shelf" class="shelf">
-      </div>
-      <p id="empty" hidden>
-        Your library is empty. Import a book to begin, or drop an EPUB or text file here.
-      </p>
+      <aside class="library-activity" aria-label="Reading activity">
+        <p class="eyebrow">YOUR JOURNEY</p>
+        <h2>Reading activity</h2>
+        <p class="muted activity-intro">Saved places, ready when you are.</p>
+        <div id="reading-activity"></div>
+      </aside>
     </main>
     <section id="reader" aria-label="Book reader" hidden>
       <aside id="toc" class="drawer" hidden aria-label="Table of contents">

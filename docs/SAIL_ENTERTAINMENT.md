@@ -112,6 +112,30 @@ when the narration reaches them. **Reading and read-aloud never call Mind, Agent
   says so. Background or lock-screen playback and Android WebView are untested. Bookmarks, highlights, notes,
   collections, cover images, in-book search and Relay handoff are the next phases of #333.
 
+### Library composition (ambient-glass design)
+
+The Library uses the design system introduced in #339: a book navigator on the left,
+featured reading and shelf in the center, and saved reading places on the right.
+Below 1180px the activity moves beneath the shelf; on phones the regions stack.
+Shared `--sail-*` tokens supply the dark material, typography colors, radii and focus.
+The featured book has a static, localized cool tint; there is no new activity reducer,
+blur, continuous animation, external artwork or runtime dependency.
+
+Progress is the API's saved percentage **by text**, and the collection count and
+finished count derive from actual library records. Activity shows saved-position
+timestamps, not a synthetic event log. Reading time, streaks, badges and social
+rankings remain absent because the backend does not measure them. Search, imports,
+removal and reader/narration behavior keep their existing endpoints and permissions.
+The reader's light/dark preference remains independent of the dark Library.
+
+Browser regression: `node crates/sail-dialogue/tests/library_browser_test.cjs`
+requires an existing Playwright installation (`PLAYWRIGHT_MODULE` can select its
+module path). It uses intercepted fixture responses, checks desktop/mobile widths,
+search, keyboard navigation, resume, raw import, removal, empty/error states, and
+forced-color/reduced-motion rendering. Fixture books are never shipped as library data.
+Actual Android/WebView, battery profiling and assistive-technology testing remain
+separate device checks.
+
 ### Entertainment workspace
 
 The main left sidebar opens **Entertainment** in the same center workspace as Tracker,
