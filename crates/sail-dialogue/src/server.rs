@@ -72,11 +72,7 @@ fn learn_services(
                 Err(error) => warn!(%error, "Arena Learn graph unavailable; knowledge is disabled"),
             }
             let engine = Arc::new(engine);
-            let router = crate::learn_http::router_with_pulse(
-                engine.clone(),
-                authority,
-                pulse,
-            );
+            let router = crate::learn_http::router_with_pulse(engine.clone(), authority, pulse);
             (Some(engine), Some(router))
         }
         Err(error) => {
@@ -145,8 +141,10 @@ pub async fn run_dialogue_server_with_plans(
     };
     let live_context_authority = authority();
     let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
-    let (learn_engine, learn_routes) = learn_services(&inference, &arena, authority(), pulse.clone());
+    let (learn_engine, learn_routes) =
+        learn_services(&inference, &arena, authority(), pulse.clone());
     let tracker_routes = tracker_routes(authority());
+    let reader_routes = crate::reader_http::routes(authority());
     let system_routes = crate::system_http::router(authority());
     let spotify_routes = crate::spotify_http::router(authority());
     let briefing_dir = sail_common::storage::resolve().path.join("briefing");
@@ -207,6 +205,9 @@ pub async fn run_dialogue_server_with_plans(
     }
     if let Some(routes) = tracker_routes {
         app = app.nest_service("/api/tracker", routes);
+    }
+    if let Some(routes) = reader_routes {
+        app = app.nest_service("/api/reader", routes);
     }
     let app = app.layer(axum::middleware::map_response(cross_origin_isolation));
     match (

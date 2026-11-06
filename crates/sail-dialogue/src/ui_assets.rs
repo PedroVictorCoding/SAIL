@@ -66,6 +66,10 @@ const CSS: &str = "text/css; charset=utf-8";
 assets![
     ("/", "web/index.html", HTML),
     ("/tracker", "web/tracker.html", HTML),
+    ("/reader", "web/reader.html", HTML),
+    ("/reader.js", "web/reader.js", JS),
+    ("/reader.css", "web/reader.css", CSS),
+    ("/reader-audio.js", "web/reader-audio.js", JS),
     (
         "/tracker.js",
         "web/tracker.js",

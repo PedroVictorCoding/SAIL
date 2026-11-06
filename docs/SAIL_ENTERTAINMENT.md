@@ -65,6 +65,53 @@ SAIL plays the owner's own Spotify music as soon as it is asked for, and says wh
 - **Setup:** Set up Spotify → create an app at developer.spotify.com → add the Redirect URI shown (`https://<SAIL address>/api/spotify/callback`) → paste the Client ID → Save and connect. `SAIL_SPOTIFY_CLIENT_ID` and `SAIL_SPOTIFY_REDIRECT_URI` override the saved values.
 - **Limits:** playback control needs Spotify Premium and an available Spotify Connect device (phone, desktop app or speaker). SAIL uses the active device, otherwise one whose name contains "SAIL", otherwise the first available. The SAIL host has no sound card, so it cannot be a player itself yet.
 
+## 7b. Implemented: SAIL Reader, first slice (2026-11-06, issue #333)
+
+A local book library at `/reader` with a paginated reader and on-device read-aloud whose pages turn
+when the narration reaches them. **Reading and read-aloud never call Mind, Agents or any language model.**
+
+- **Formats:** DRM-free EPUB 2/3 and UTF-8 `.txt`, up to 50 MB. DRM or encrypted EPUBs (`rights.xml`, or
+  `encryption.xml` with anything other than font obfuscation) are refused with a plain message. PDF is later.
+- **Import safety** (`crates/sail-bridge/src/reader/zip.rs`): a strict ZIP reader on `flate2`. It refuses ZIP64,
+  encryption, absolute or `..` paths, backslashes, duplicates, more than 4,000 entries, entries over 32 MB,
+  more than 256 MB unpacked and ratios over 200×. Every CRC is checked, and inflation stops at the declared size.
+- **Canonical text** (`reader/epub.rs`, `reader/mod.rs`): each spine document is flattened once into plain-text
+  blocks (`h1`–`h6`, `p`, `quote`, `li`, `pre`, `hr`; `\n` marks a line break). No book HTML reaches the browser,
+  and the client renders with `textContent`. Scripts, styles, media, forms, hidden elements and footnote bodies or
+  markers are dropped, so footnotes don't interrupt narration. Drop-cap images keep their letter. The TOC comes
+  from the EPUB 3 nav document, else the NCX, else the headings. Entries point to `(section, block)`, because
+  chapters often share one file. Text files split at "Chapter …/Part …" lines, else every 150 paragraphs.
+- **Storage:** `<data root>/reader/library.json` (metadata and positions) and `books/<id>/{content.json,source.*}`,
+  all written atomically with mode 0600. The id comes from the SHA-256 of the file, so a re-import finds the
+  existing book. Removing a book deletes SAIL's copy only; the owner's original file is never touched.
+- **Positions** are text anchors `{section, block, char}` (char = UTF-16 offset), never page numbers. Saves use
+  revisions (`expected_revision`); a stale save gets 409 with the current position, and the reader offers
+  "Resume there / Keep here". The same anchor reopens correctly on any layout (spread or phone, any font size).
+- **API** (`crates/sail-dialogue/src/reader_http.rs`, owner token on every route, `no-store`), under `/api/reader`:
+  `GET /library`, `POST /import` (raw bytes plus `X-Filename`), `GET|DELETE /books/:id`,
+  `GET /books/:id/sections/:index`, `GET|PUT /books/:id/position`.
+- **Web reader** (`web/reader.{html,js,css}`): library with Continue Reading, typographic covers, search, import
+  (button or drag-and-drop) and removal. The reader uses CSS columns, two-page spreads when wide and one column
+  on phones. Pages turn by edge tap, arrow keys or swipe. It also has a TOC drawer and font size, spacing, width
+  and theme settings.
+- **Read-aloud** (`web/reader-audio.js`, `client-speech.js` `loadTts()`, worker role `tts`): the existing Kokoro
+  (q8, WebAssembly, served from `/voice-assets`) is loaded **without** VAD or Whisper. A worker Dialogue already
+  loaded is reused, so one device never runs two copies. Text is split into sentences, and also at page
+  boundaries, with 1–3 segments synthesized ahead and a Web Audio clock. A page turns when a segment *starts
+  playing*, never when it is synthesized, and never while paused. Paging by hand suspends following until
+  **Follow narration** is pressed. Seeking, skipping or changing the voice bumps a generation counter, so late
+  audio is dropped. Narration continues across sections and ends with "Finished". The current sentence is
+  highlighted; no word-level timing is claimed.
+- **Verified live (2026-11-06)** with three Gutenberg EPUBs and one Gutenberg TXT, the real API and real Kokoro in
+  headless Chromium:
+  - pages turned automatically exactly at the next spread's first sentence;
+  - the position persisted across a reload, a font change and a phone layout;
+  - there were no off-origin requests and no non-reader API calls.
+- **Limits:** on-device TTS only, and Read Aloud is disabled when it cannot load (no host fallback yet). Speed
+  control is not offered until verified. On slow devices narration pauses between sentences, and the reader
+  says so. Background or lock-screen playback and Android WebView are untested. Bookmarks, highlights, notes,
+  collections, cover images, in-book search and Relay handoff are the next phases of #333.
+
 ## 8. Next steps
 1. Audit the relevant implementation and the linked roadmap issue; update this spec with confirmed module/file paths and contracts.
 2. Build the MVP vertical slice with real tool/model/provider integrations.
