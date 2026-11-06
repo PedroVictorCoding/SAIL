@@ -408,3 +408,4 @@ Focus: Statistical mechanics, macroscopic states, microstates, Shannon entropy, 
 | `eng.ctrl.pid_tuning` | Physics | 3.3 | 4 unseen variants | 1 unassisted pass @ 1d, 3d, 7d, 14d |
 | `phys.thermo.entropy_statmech` | Physics | 4.1 | 3 unseen variants | 1 unassisted pass @ 1d, 3d, 7d |
 | `phys.info.shannon_landauer` | Physics | 4.2 | 3 unseen variants | 1 unassisted pass @ 1d, 3d, 7d |
+
