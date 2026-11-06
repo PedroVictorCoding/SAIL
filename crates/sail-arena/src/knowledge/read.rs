@@ -68,7 +68,7 @@ fn with_aliases(conn: &Connection, mut e: Entity) -> KnowledgeResult<Entity> {
 const CLAIM_COLS: &str = "c.id, c.subject_id, c.predicate, c.object_entity_id, c.object_value,
     c.category, c.basis, c.status, c.inference_confidence, c.observed_at, c.valid_from,
     c.valid_until, c.last_verified_at, c.superseded_by, c.status_reason, c.retention,
-    c.expires_at, c.scope, c.sensitivity, c.created_at, c.updated_at";
+    c.expires_at, c.scope, c.sensitivity, c.created_at, c.updated_at, c.pinned";
 
 fn claim_from_row(r: &Row<'_>) -> rusqlite::Result<Claim> {
     let object = match r.get::<_, Option<i64>>(3)? {
@@ -105,7 +105,35 @@ fn claim_from_row(r: &Row<'_>) -> rusqlite::Result<Claim> {
         sensitivity: Sensitivity::from_i64(r.get(18)?),
         created_at: r.get(19)?,
         updated_at: r.get(20)?,
+        pinned: r.get(21)?,
     })
+}
+
+fn operation_from_row(r: &Row<'_>) -> rusqlite::Result<Operation> {
+    Ok(Operation {
+        id: r.get(0)?,
+        at: r.get(1)?,
+        actor: r.get(2)?,
+        op: r.get(3)?,
+        target_kind: r.get(4)?,
+        target_id: r.get(5)?,
+        reason: r.get(6)?,
+        detail: r
+            .get::<_, Option<String>>(7)?
+            .and_then(|d| serde_json::from_str(&d).ok()),
+    })
+}
+
+/// Escape `%`, `_` and `\` for a `LIKE ... ESCAPE '\'` pattern.
+fn like_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Joins and filters that make a claim visible only if the claim, its subject and (for
@@ -231,6 +259,26 @@ impl KnowledgeStore<'_> {
                     ),
                     claim_from_row,
                 )
+                .optional()?)
+        })
+    }
+
+    /// One visible claim with its subject's and object's names.
+    pub fn claim(&self, id: i64, access: &Access) -> KnowledgeResult<Option<ClaimSummary>> {
+        let a = access_params(access);
+        self.read(|conn| {
+            let sql = format!(
+                "SELECT {CLAIM_COLS}, s.name, o.name {} AND c.id=:claim",
+                claim_from_clause()
+            );
+            Ok(conn
+                .query_row(&sql, &*named(&a, &[(":claim", &id)]), |r| {
+                    Ok(ClaimSummary {
+                        claim: claim_from_row(r)?,
+                        subject_name: r.get(22)?,
+                        object_name: r.get(23)?,
+                    })
+                })
                 .optional()?)
         })
     }
@@ -507,22 +555,261 @@ impl KnowledgeStore<'_> {
                  FROM kn_operations ORDER BY id DESC LIMIT ?1",
             )?;
             let rows = stmt
-                .query_map([limit as i64], |r| {
-                    Ok(Operation {
-                        id: r.get(0)?,
-                        at: r.get(1)?,
-                        actor: r.get(2)?,
-                        op: r.get(3)?,
-                        target_kind: r.get(4)?,
-                        target_id: r.get(5)?,
-                        reason: r.get(6)?,
-                        detail: r
-                            .get::<_, Option<String>>(7)?
-                            .and_then(|d| serde_json::from_str(&d).ok()),
-                    })
-                })?
+                .query_map([limit as i64], operation_from_row)?
                 .collect::<Result<_, _>>()?;
             Ok(rows)
         })
+    }
+
+    /// Changes to one record, newest first: why it is remembered and how it changed.
+    pub fn operations_for(
+        &self,
+        target_kind: &str,
+        target_id: i64,
+        limit: usize,
+    ) -> KnowledgeResult<Vec<Operation>> {
+        self.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, at, actor, op, target_kind, target_id, reason, detail
+                 FROM kn_operations WHERE target_kind=?1 AND target_id=?2 ORDER BY id DESC LIMIT ?3",
+            )?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![target_kind, target_id, limit as i64],
+                    operation_from_row,
+                )?
+                .collect::<Result<_, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// Active entities whose name or alias contains `query`: exact matches first, then
+    /// prefixes, then most recently updated.
+    pub fn search_entities(
+        &self,
+        query: &str,
+        access: &Access,
+        limit: usize,
+    ) -> KnowledgeResult<Vec<Entity>> {
+        let key = name_key(query);
+        if key.is_empty() {
+            return Ok(Vec::new());
+        }
+        let a = access_params(access);
+        let contains = format!("%{}%", like_escape(&key));
+        let prefix = format!("{}%", like_escape(&key));
+        let limit = limit as i64;
+        self.read(|conn| {
+            let sql = format!(
+                "SELECT {ENTITY_COLS} FROM kn_entities e
+                 WHERE e.status='active' AND {}
+                   AND (e.name_key LIKE :contains ESCAPE '\\'
+                        OR e.id IN (SELECT entity_id FROM kn_aliases WHERE alias_key LIKE :contains ESCAPE '\\'))
+                 ORDER BY e.name_key = :key DESC, e.name_key LIKE :prefix ESCAPE '\\' DESC,
+                          e.updated_at DESC, e.id
+                 LIMIT :limit",
+                visible("e")
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows: Vec<Entity> = stmt
+                .query_map(
+                    &*named(
+                        &a,
+                        &[
+                            (":contains", &contains),
+                            (":prefix", &prefix),
+                            (":key", &key),
+                            (":limit", &limit),
+                        ],
+                    ),
+                    entity_from_row,
+                )?
+                .collect::<Result<_, _>>()?;
+            rows.into_iter().map(|e| with_aliases(conn, e)).collect()
+        })
+    }
+
+    /// Active entities of the given kinds (any kind when empty), most recently updated first.
+    pub fn list_entities(
+        &self,
+        kinds: &[EntityKind],
+        access: &Access,
+        limit: usize,
+    ) -> KnowledgeResult<Vec<Entity>> {
+        let a = access_params(access);
+        let kinds = serde_json::to_string(&kinds.iter().map(|k| k.as_str()).collect::<Vec<_>>())
+            .unwrap_or_else(|_| "[]".into());
+        let limit = limit as i64;
+        self.read(|conn| {
+            let sql = format!(
+                "SELECT {ENTITY_COLS} FROM kn_entities e
+                 WHERE e.status='active' AND {}
+                   AND (json_array_length(:kinds) = 0 OR e.kind IN (SELECT value FROM json_each(:kinds)))
+                 ORDER BY e.updated_at DESC, e.id DESC LIMIT :limit",
+                visible("e")
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows: Vec<Entity> = stmt
+                .query_map(
+                    &*named(&a, &[(":kinds", &kinds), (":limit", &limit)]),
+                    entity_from_row,
+                )?
+                .collect::<Result<_, _>>()?;
+            rows.into_iter().map(|e| with_aliases(conn, e)).collect()
+        })
+    }
+
+    /// Entities merged into `entity` (their stubs), so a merge can be inspected or undone.
+    pub fn merged_into(&self, entity: i64, access: &Access) -> KnowledgeResult<Vec<Entity>> {
+        let a = access_params(access);
+        self.read(|conn| {
+            let sql = format!(
+                "SELECT {ENTITY_COLS} FROM kn_entities e
+                 WHERE e.status='merged' AND e.merged_into=:entity AND {} ORDER BY e.id",
+                visible("e")
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(&*named(&a, &[(":entity", &entity)]), entity_from_row)?
+                .collect::<Result<_, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// Visible claims matching `filter` across all entities, newest observation first.
+    pub fn list_claims(
+        &self,
+        filter: &ClaimFilter,
+        access: &Access,
+    ) -> KnowledgeResult<Vec<ClaimSummary>> {
+        let a = access_params(access);
+        let categories = serde_json::to_string(
+            &filter.categories.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".into());
+        let statuses = serde_json::to_string(
+            &filter.statuses.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".into());
+        let limit = filter.limit.max(1) as i64;
+        self.read(|conn| {
+            let sql = format!(
+                "SELECT {CLAIM_COLS}, s.name, o.name {}
+                   AND (json_array_length(:categories) = 0 OR c.category IN (SELECT value FROM json_each(:categories)))
+                   AND (json_array_length(:statuses) = 0
+                        AND c.status NOT IN ('superseded','invalidated')
+                        OR c.status IN (SELECT value FROM json_each(:statuses)))
+                 ORDER BY c.observed_at DESC, c.id DESC LIMIT :limit",
+                claim_from_clause()
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(
+                    &*named(
+                        &a,
+                        &[
+                            (":categories", &categories),
+                            (":statuses", &statuses),
+                            (":limit", &limit),
+                        ],
+                    ),
+                    |r| {
+                        Ok(ClaimSummary {
+                            claim: claim_from_row(r)?,
+                            subject_name: r.get(22)?,
+                            object_name: r.get(23)?,
+                        })
+                    },
+                )?
+                .collect::<Result<_, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// Totals of what the caller can see.
+    pub fn counts(&self, access: &Access) -> KnowledgeResult<KnowledgeCounts> {
+        let a = access_params(access);
+        self.read(|conn| {
+            let entities = conn.query_row(
+                &format!(
+                    "SELECT count(*) FROM kn_entities e WHERE e.status='active' AND {}",
+                    visible("e")
+                ),
+                &*named(&a, &[]),
+                |r| r.get(0),
+            )?;
+            let (active_claims, needs_review) = conn.query_row(
+                &format!(
+                    "SELECT count(*),
+                            count(CASE WHEN c.status IN ('inferred','unverified','disputed') THEN 1 END)
+                     {} AND c.status NOT IN ('superseded','invalidated')",
+                    claim_from_clause()
+                ),
+                &*named(&a, &[]),
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let procedures = conn.query_row(
+                &format!(
+                    "SELECT count(DISTINCT p.entity_id) FROM kn_procedures p
+                     JOIN kn_entities e ON e.id = p.entity_id WHERE {}",
+                    visible("e")
+                ),
+                &*named(&a, &[]),
+                |r| r.get(0),
+            )?;
+            let project_items = conn.query_row(
+                &format!(
+                    "SELECT count(*) FROM kn_project_items i JOIN kn_entities p ON p.id = i.project_id
+                     WHERE i.state <> 'superseded' AND {} AND {}",
+                    visible("i"),
+                    visible("p")
+                ),
+                &*named(&a, &[]),
+                |r| r.get(0),
+            )?;
+            Ok(KnowledgeCounts {
+                entities,
+                active_claims,
+                needs_review,
+                procedures,
+                project_items,
+            })
+        })
+    }
+
+    /// Everything the caller can see, as portable JSON: entities with aliases, claims with
+    /// their evidence receipts, project items and procedures. Transcripts are never included.
+    pub fn export(&self, access: &Access) -> KnowledgeResult<serde_json::Value> {
+        let entities = self.list_entities(&[], access, usize::MAX >> 1)?;
+        let mut out_entities = Vec::with_capacity(entities.len());
+        for entity in entities {
+            let claims = self.claims_about(entity.id, access, true)?;
+            let mut out_claims = Vec::with_capacity(claims.len());
+            for claim in claims {
+                let evidence = self.evidence(claim.id, access)?;
+                out_claims.push(serde_json::json!({"claim": claim, "evidence": evidence}));
+            }
+            let items = if entity.kind == EntityKind::Project {
+                self.project_items(entity.id, access)?
+            } else {
+                Vec::new()
+            };
+            let procedures = if entity.kind == EntityKind::Procedure {
+                self.procedure_versions(entity.id, access)?
+            } else {
+                Vec::new()
+            };
+            out_entities.push(serde_json::json!({
+                "entity": entity,
+                "claims": out_claims,
+                "project_items": items,
+                "procedures": procedures,
+            }));
+        }
+        Ok(serde_json::json!({
+            "format": "sail-knowledge-export",
+            "schema_version": crate::store::SCHEMA_VERSION,
+            "entities": out_entities,
+        }))
     }
 }

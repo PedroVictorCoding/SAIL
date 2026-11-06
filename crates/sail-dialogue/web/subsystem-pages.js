@@ -37,14 +37,14 @@ const subsystemPages = [
     "name": "Arena",
     "icon": "arena",
     "subtitle": "Knowledge and memory",
-    "description": "Connect memories, research collections, and semantic relationships.",
-    "card": null,
-    "panel": null,
+    "description": "See what SAIL knows, why it believes it, and correct or forget anything.",
+    "card": "memoryCard",
+    "panel": "memoryPanelOverview",
     "settings": null,
     "details": [
-      "Episodic memory",
-      "Associative knowledge graph",
-      "Research collections"
+      "Structured knowledge with evidence",
+      "Corrections, privacy, and forgetting",
+      "Knowledge graph and change history"
     ]
   },
   {

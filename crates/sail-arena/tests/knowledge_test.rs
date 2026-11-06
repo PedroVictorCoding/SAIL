@@ -994,3 +994,143 @@ fn deleting_an_entity_removes_its_claims_evidence_and_merged_aliases() {
     );
     assert_eq!(store.check_integrity().unwrap(), Vec::<String>::new());
 }
+
+/// Phase 4 gate (store side): user corrections persist and change what later reads return.
+#[test]
+fn user_corrections_supersede_and_persist() {
+    let (dir, path) = temp_db();
+    let (host, old) = {
+        let store = MemoryStore::open(&path).unwrap();
+        let kn = store.knowledge();
+        let (host, old) = kn
+            .write(agent(), |tx| {
+                let host = entity(tx, EntityKind::Environment, "SAIL host", "system");
+                let guess = evidence(tx, SourceKind::ModelInference, "probably 16 GB", T0, "system");
+                let old = tx.assert_claim(
+                    &NewClaim { inference_confidence: Some(0.5), ..fact(host, "ram", "16 GB", EpistemicStatus::Inferred, T0, "system") },
+                    &[(guess, Stance::Supports)],
+                )?;
+                Ok((host, old))
+            })
+            .unwrap();
+        let by_agent = kn.write(agent(), |tx| tx.correct_claim(old, "32 GB", "x"));
+        assert!(matches!(by_agent, Err(KnowledgeError::Invalid(_))), "only the user corrects");
+        let new = kn.write(Actor::User, |tx| tx.correct_claim(old, "32 GB", "owner knows the machine")).unwrap();
+        let unchanged = kn.write(Actor::User, |tx| tx.correct_claim(new, " 32 gb ", "same"));
+        assert!(matches!(unchanged, Err(KnowledgeError::Invalid(_))));
+        (host, old)
+    };
+    let store = MemoryStore::open(&path).unwrap();
+    let kn = store.knowledge();
+    let owner = Access::owner();
+    let current = kn.current(host, "ram", &owner, i64::MAX - 1).unwrap().unwrap();
+    assert_eq!(current.object, ClaimObject::Value("32 GB".into()));
+    assert_eq!(current.status, EpistemicStatus::UserReported);
+    let history = kn.history(host, "ram", &owner).unwrap();
+    assert_eq!(history[0].id, old);
+    assert_eq!(history[0].status, EpistemicStatus::Superseded);
+    assert_eq!(kn.evidence(current.id, &owner).unwrap()[0].evidence.source_kind, SourceKind::UserStatement);
+    assert!(kn.operations_for("claim", old, 10).unwrap().iter().any(|o| o.op == "supersede"));
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn owner_confirmation_upgrades_inferred_claims_only_for_the_user() {
+    let store = MemoryStore::open_in_memory().unwrap();
+    let kn = store.knowledge();
+    let claim = kn
+        .write(agent(), |tx| {
+            let me = entity(tx, EntityKind::Person, "Owner", "user");
+            let guess = evidence(tx, SourceKind::ModelInference, "uses Rust a lot", T0, "user");
+            tx.assert_claim(
+                &NewClaim { category: ClaimCategory::Preference, basis: Some(PreferenceBasis::Inferred), inference_confidence: Some(0.7), ..fact(me, "prefers_language", "Rust", EpistemicStatus::Inferred, T0, "user") },
+                &[(guess, Stance::Supports)],
+            )
+        })
+        .unwrap();
+    assert!(matches!(kn.write(agent(), |tx| tx.confirm_claim(claim)), Err(KnowledgeError::Invalid(_))));
+    assert_eq!(kn.counts(&Access::owner()).unwrap().needs_review, 1);
+    kn.write(Actor::User, |tx| tx.confirm_claim(claim)).unwrap();
+    let owner = Access::owner();
+    let support = kn.support(claim, &owner).unwrap();
+    assert_eq!((support.user_origins, support.inferences), (1, 1));
+    assert_eq!(kn.counts(&owner).unwrap().needs_review, 0);
+    let listed = kn.list_claims(&ClaimFilter { categories: vec![ClaimCategory::Preference], limit: 10, ..Default::default() }, &owner).unwrap();
+    assert_eq!((listed[0].claim.status, listed[0].subject_name.as_str()), (EpistemicStatus::UserReported, "Owner"));
+}
+
+#[test]
+fn separating_restores_what_a_merge_moved() {
+    let store = MemoryStore::open_in_memory().unwrap();
+    let kn = store.knowledge();
+    let owner = Access::owner();
+    let (sam, samuel, before) = kn
+        .write(agent(), |tx| {
+            let sam = entity(tx, EntityKind::Person, "Sam", "user");
+            let samuel = tx.create_entity(&NewEntity { kind: EntityKind::Person, name: "Samuel", aliases: &["Sammy"], scope: "user", sensitivity: Sensitivity::Normal })?;
+            let e = evidence(tx, SourceKind::UserStatement, "Samuel is a chemist", T0, "user");
+            let before = tx.assert_claim(&fact(samuel, "occupation", "chemist", EpistemicStatus::UserReported, T0, "user"), &[(e, Stance::Supports)])?;
+            tx.merge_entities(samuel, sam, "looked like one person")?;
+            // Learned after the merge; stays with the canonical entity.
+            let e2 = evidence(tx, SourceKind::UserStatement, "Sam lives in Porto", T0, "user");
+            tx.assert_claim(&fact(sam, "city", "Porto", EpistemicStatus::UserReported, T0, "user"), &[(e2, Stance::Supports)])?;
+            Ok((sam, samuel, before))
+        })
+        .unwrap();
+    assert_eq!(kn.merged_into(sam, &owner).unwrap()[0].id, samuel);
+    assert_eq!(kn.find_entities("Sammy", None, &owner).unwrap()[0].id, sam);
+    kn.write(Actor::User, |tx| tx.separate_entity(samuel, "two different people")).unwrap();
+    assert_eq!(kn.claims_about(samuel, &owner, false).unwrap().iter().map(|c| c.id).collect::<Vec<_>>(), vec![before]);
+    assert_eq!(kn.claims_about(sam, &owner, false).unwrap()[0].predicate, "city");
+    assert_eq!(kn.find_entities("Sammy", None, &owner).unwrap()[0].id, samuel);
+    assert!(kn.find_entities("Samuel", None, &owner).unwrap().iter().all(|e| e.id == samuel));
+    assert!(kn.merged_into(sam, &owner).unwrap().is_empty());
+    let again = kn.write(Actor::User, |tx| tx.separate_entity(samuel, "twice"));
+    assert!(matches!(again, Err(KnowledgeError::Invalid(_))));
+    // Deleting the restored claim tombstones it under its restored subject's name.
+    kn.write(Actor::User, |tx| tx.delete_claim(before, "forget")).unwrap();
+    let replay = kn.write(agent(), |tx| {
+        let e = evidence(tx, SourceKind::UserStatement, "Samuel is a chemist", T0, "user");
+        tx.assert_claim(&fact(samuel, "occupation", "chemist", EpistemicStatus::UserReported, T0, "user"), &[(e, Stance::Supports)])
+    });
+    assert_eq!(replay.unwrap_err(), KnowledgeError::Tombstoned);
+    assert!(store.check_integrity().unwrap().is_empty());
+}
+
+#[test]
+fn pinning_privacy_search_and_export_respect_scope() {
+    let store = MemoryStore::open_in_memory().unwrap();
+    let kn = store.knowledge();
+    let (sail, transient, forgotten) = kn
+        .write(agent(), |tx| {
+            let sail = entity(tx, EntityKind::Project, "SAIL", "project:sail");
+            entity(tx, EntityKind::Project, "Sailing club", "life");
+            let e = evidence(tx, SourceKind::ToolObservation, "df", T0, "project:sail");
+            let transient = tx.assert_claim(&NewClaim { retention: Retention::Transient { expires_at: T0 + HOUR }, ..fact(sail, "build_dir_usage", "40 GB", EpistemicStatus::Verified, T0, "project:sail") }, &[(e, Stance::Supports)])?;
+            let gone = entity(tx, EntityKind::Concept, "Sail cloth", "project:sail");
+            Ok((sail, transient, gone))
+        })
+        .unwrap();
+    kn.write(Actor::User, |tx| tx.set_pinned(transient, true)).unwrap();
+    let owner = Access::owner();
+    let pinned = kn.claims_about(sail, &owner, false).unwrap().remove(0);
+    assert!(pinned.pinned);
+    assert_eq!(pinned.retention, Retention::Durable);
+    assert!(kn.current(sail, "build_dir_usage", &owner, T0 + 2 * HOUR).unwrap().is_some(), "no longer expires");
+
+    kn.write(Actor::User, |tx| tx.delete_entity(forgotten, "forget")).unwrap();
+    let forge = Access::scoped(&["project:sail"], Sensitivity::Normal);
+    let names = |a: &Access| kn.search_entities("sail", a, 10).unwrap().into_iter().map(|e| e.name).collect::<Vec<_>>();
+    assert_eq!(names(&owner), vec!["SAIL", "Sailing club"], "exact match first; deleted entity gone");
+    assert_eq!(names(&forge), vec!["SAIL"]);
+    assert!(kn.search_entities("100%_", &owner, 10).unwrap().is_empty(), "LIKE wildcards are escaped");
+
+    kn.write(Actor::User, |tx| tx.set_entity_sensitivity(sail, Sensitivity::Private)).unwrap();
+    assert!(names(&forge).is_empty(), "marked private");
+    let export = kn.export(&owner).unwrap();
+    let text = export.to_string();
+    assert!(text.contains("build_dir_usage") && !text.contains("Sail cloth"));
+    assert_eq!(kn.export(&forge).unwrap()["entities"].as_array().unwrap().len(), 0);
+    assert_eq!(kn.list_entities(&[EntityKind::Project], &owner, 10).unwrap().len(), 2);
+}

@@ -60,25 +60,9 @@ pub async fn run_dialogue_server(
     )
     .await
 }
-pub async fn run_dialogue_server_with_services(
-    addr: SocketAddr,
-    bus: EventBus,
-    services: VoiceModelServices,
-    arena: Arc<sail_arena::ArenaSubsystem>,
-) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let inference = match services.inference() {
-        Some(service) => service,
-        None => sail_mind::MindService::from_env()?,
-    };
-    let services = services.with_inference(inference.clone());
-    let (owner_authority, active_token) = resolve_or_generate_owner_token();
-    let approval_routes = crate::approval_http::router_with_token(
-        owner_authority,
-        sail_guardian::global_broker().ok(),
-        active_token,
-    );
-    let app = Router::new()
-        .nest_service("/api/guardian", approval_routes)
+/// The browser UI's static files. Stateless, so any router can serve them.
+pub fn web_assets<S: Clone + Send + Sync + 'static>() -> Router<S> {
+    Router::new()
         .route(
             "/",
             get(|| async { Html(include_str!("../web/index.html")) }),
@@ -164,6 +148,44 @@ pub async fn run_dialogue_server_with_services(
                 )
             }),
         )
+        .route(
+            "/memory.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript; charset=utf-8")],
+                    include_str!("../web/memory.js"),
+                )
+            }),
+        )
+}
+
+pub async fn run_dialogue_server_with_services(
+    addr: SocketAddr,
+    bus: EventBus,
+    services: VoiceModelServices,
+    arena: Arc<sail_arena::ArenaSubsystem>,
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let inference = match services.inference() {
+        Some(service) => service,
+        None => sail_mind::MindService::from_env()?,
+    };
+    let services = services.with_inference(inference.clone());
+    let (owner_authority, active_token) = resolve_or_generate_owner_token();
+    let memory_routes = crate::memory_http::router(
+        arena.store().clone(),
+        active_token
+            .as_deref()
+            .and_then(|t| sail_guardian::authority::ApprovalAuthority::new(t).ok()),
+    );
+    let approval_routes = crate::approval_http::router_with_token(
+        owner_authority,
+        sail_guardian::global_broker().ok(),
+        active_token,
+    );
+    let app = Router::new()
+        .nest_service("/api/guardian", approval_routes)
+        .nest_service("/api/memory", memory_routes)
+        .merge(web_assets())
         .route("/api/health", get(health))
         .route("/api/mind/status", get(mind_status))
         .route("/ws/voice", get(ws_handler))

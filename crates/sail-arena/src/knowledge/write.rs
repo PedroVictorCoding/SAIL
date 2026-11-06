@@ -333,8 +333,37 @@ impl<'t> KnowledgeTx<'t> {
         Ok(())
     }
 
+    /// Recompute content fingerprints of every claim touching `entity`, after its claims
+    /// moved between entities.
+    fn refresh_fingerprints(&self, entity: i64) -> KnowledgeResult<()> {
+        let claims: Vec<(i64, i64, String, ClaimObject)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id,subject_id,predicate,object_entity_id,object_value FROM kn_claims
+                 WHERE subject_id=?1 OR object_entity_id=?1",
+            )?;
+            stmt.query_map([entity], |r| {
+                let object = match r.get::<_, Option<i64>>(3)? {
+                    Some(o) => ClaimObject::Entity(o),
+                    None => ClaimObject::Value(r.get(4)?),
+                };
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, object))
+            })?
+            .collect::<Result<_, _>>()?
+        };
+        for (id, subject, predicate, object) in claims {
+            let fp = self.claim_fingerprint(subject, &predicate, &object)?;
+            self.conn.execute(
+                "UPDATE kn_claims SET fingerprint=?2 WHERE id=?1",
+                params![id, &fp[..]],
+            )?;
+        }
+        Ok(())
+    }
+
     /// Merge `from` into `into` (same kind). `from` stays as a `merged` stub pointing at
     /// `into`, its names become aliases, and every claim, project item and procedure moves.
+    /// The log records exactly what moved, so [`separate_entity`](Self::separate_entity)
+    /// can undo the merge.
     pub fn merge_entities(&mut self, from: i64, into: i64, reason: &str) -> KnowledgeResult<()> {
         if from == into {
             return Err(invalid("cannot merge an entity into itself"));
@@ -354,6 +383,28 @@ impl<'t> KnowledgeTx<'t> {
                 "both entities have procedure versions; reconcile them first",
             ));
         }
+        let subject_claims = self.ids("SELECT id FROM kn_claims WHERE subject_id=?1", from)?;
+        let object_claims = self.ids("SELECT id FROM kn_claims WHERE object_entity_id=?1", from)?;
+        let items = self.ids("SELECT id FROM kn_project_items WHERE project_id=?1", from)?;
+        let procedures = self.ids("SELECT id FROM kn_procedures WHERE entity_id=?1", from)?;
+        let aliases: Vec<(String, String)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT alias_key, alias FROM kn_aliases WHERE entity_id=?1")?;
+            stmt.query_map([from], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?
+        };
+        // Names `into` did not already have; only these are removed again on separation.
+        let added_aliases: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT k FROM (SELECT name_key AS k FROM kn_entities WHERE id=?1
+                                UNION SELECT alias_key FROM kn_aliases WHERE entity_id=?1)
+                 WHERE k NOT IN (SELECT alias_key FROM kn_aliases WHERE entity_id=?2)
+                   AND k <> (SELECT name_key FROM kn_entities WHERE id=?2)",
+            )?;
+            stmt.query_map([from, into], |r| r.get(0))?
+                .collect::<Result<_, _>>()?
+        };
         self.conn.execute(
             "INSERT OR IGNORE INTO kn_aliases(entity_id,alias_key,alias)
              SELECT ?2, name_key, name FROM kn_entities WHERE id=?1
@@ -382,34 +433,135 @@ impl<'t> KnowledgeTx<'t> {
             "UPDATE kn_entities SET status='merged', merged_into=?2, updated_at=?3 WHERE id=?1",
             params![from, into, self.now],
         )?;
-        // Moved claims now describe `into`; refresh their content fingerprints.
-        let moved: Vec<(i64, i64, String, ClaimObject)> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT id,subject_id,predicate,object_entity_id,object_value FROM kn_claims
-                 WHERE subject_id=?1 OR object_entity_id=?1",
-            )?;
-            stmt.query_map([into], |r| {
-                let object = match r.get::<_, Option<i64>>(3)? {
-                    Some(o) => ClaimObject::Entity(o),
-                    None => ClaimObject::Value(r.get(4)?),
-                };
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, object))
-            })?
-            .collect::<Result<_, _>>()?
-        };
-        for (id, subject, predicate, object) in moved {
-            let fp = self.claim_fingerprint(subject, &predicate, &object)?;
-            self.conn.execute(
-                "UPDATE kn_claims SET fingerprint=?2 WHERE id=?1",
-                params![id, &fp[..]],
-            )?;
-        }
+        self.refresh_fingerprints(into)?;
         self.log(
             "merge",
             "entity",
             Some(into),
             Some(reason),
-            json!({"from": from}),
+            json!({
+                "from": from,
+                "subject_claims": subject_claims,
+                "object_claims": object_claims,
+                "project_items": items,
+                "procedures": procedures,
+                "aliases": aliases,
+                "added_aliases": added_aliases,
+            }),
+        )
+    }
+
+    /// Undo the most recent merge of `stub` into its canonical entity: the stub becomes
+    /// active again and gets back the claims, items, procedures and names that moved and
+    /// are still on the canonical entity. Later additions to the canonical entity stay.
+    pub fn separate_entity(&mut self, stub: i64, reason: &str) -> KnowledgeResult<i64> {
+        let into: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT merged_into FROM kn_entities WHERE id=?1",
+                [stub],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or(KnowledgeError::NotFound("entity", stub))?;
+        let Some(into) = into else {
+            return Err(invalid("this entity is not merged into another"));
+        };
+        self.active_entity(into)?;
+        let detail: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT detail FROM kn_operations
+                 WHERE op='merge' AND target_kind='entity' AND target_id=?1
+                   AND json_extract(detail,'$.from')=?2
+                 ORDER BY id DESC LIMIT 1",
+                [into, stub],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        let detail: serde_json::Value = detail
+            .and_then(|d| serde_json::from_str(&d).ok())
+            .filter(|d: &serde_json::Value| d.get("subject_claims").is_some())
+            .ok_or_else(|| invalid("this merge was recorded before it could be undone"))?;
+        let list = |key: &str| -> Vec<i64> {
+            detail[key]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
+                .unwrap_or_default()
+        };
+        self.conn.execute(
+            "UPDATE kn_entities SET status='active', merged_into=NULL, updated_at=?2 WHERE id=?1",
+            params![stub, self.now],
+        )?;
+        for id in list("subject_claims") {
+            self.conn.execute(
+                "UPDATE kn_claims SET subject_id=?2 WHERE id=?1 AND subject_id=?3",
+                params![id, stub, into],
+            )?;
+        }
+        for id in list("object_claims") {
+            self.conn.execute(
+                "UPDATE kn_claims SET object_entity_id=?2 WHERE id=?1 AND object_entity_id=?3",
+                params![id, stub, into],
+            )?;
+        }
+        for id in list("project_items") {
+            self.conn.execute(
+                "UPDATE kn_project_items SET project_id=?2 WHERE id=?1 AND project_id=?3",
+                params![id, stub, into],
+            )?;
+        }
+        for id in list("procedures") {
+            self.conn.execute(
+                "UPDATE kn_procedures SET entity_id=?2 WHERE id=?1 AND entity_id=?3",
+                params![id, stub, into],
+            )?;
+        }
+        for key in detail["added_aliases"].as_array().into_iter().flatten() {
+            if let Some(key) = key.as_str() {
+                self.conn.execute(
+                    "DELETE FROM kn_aliases WHERE entity_id=?1 AND alias_key=?2",
+                    params![into, key],
+                )?;
+            }
+        }
+        for pair in detail["aliases"].as_array().into_iter().flatten() {
+            if let (Some(key), Some(alias)) = (pair[0].as_str(), pair[1].as_str()) {
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO kn_aliases(entity_id,alias_key,alias) VALUES(?1,?2,?3)",
+                    params![stub, key, alias],
+                )?;
+            }
+        }
+        self.refresh_fingerprints(stub)?;
+        self.refresh_fingerprints(into)?;
+        self.log(
+            "separate",
+            "entity",
+            Some(stub),
+            Some(reason),
+            json!({"from": into}),
+        )?;
+        Ok(into)
+    }
+
+    pub fn set_entity_sensitivity(
+        &mut self,
+        entity: i64,
+        sensitivity: Sensitivity,
+    ) -> KnowledgeResult<()> {
+        self.entity_row(entity)?;
+        self.conn.execute(
+            "UPDATE kn_entities SET sensitivity=?2, updated_at=?3 WHERE id=?1",
+            params![entity, sensitivity as i64, self.now],
+        )?;
+        self.log(
+            "set_sensitivity",
+            "entity",
+            Some(entity),
+            None,
+            json!({"to": sensitivity}),
         )
     }
 
@@ -798,6 +950,151 @@ impl<'t> KnowledgeTx<'t> {
             Some(reason),
             json!({"fingerprint": hex(&row.fingerprint), "evidence_purged": purged, "generation": generation}),
         )
+    }
+
+    pub fn set_claim_sensitivity(
+        &mut self,
+        claim: i64,
+        sensitivity: Sensitivity,
+    ) -> KnowledgeResult<()> {
+        self.claim_row(claim)?;
+        self.conn.execute(
+            "UPDATE kn_claims SET sensitivity=?2, updated_at=?3 WHERE id=?1",
+            params![claim, sensitivity as i64, self.now],
+        )?;
+        self.log(
+            "set_sensitivity",
+            "claim",
+            Some(claim),
+            None,
+            json!({"to": sensitivity}),
+        )
+    }
+
+    /// Pin or unpin a claim. Pinning makes it durable (any expiry is cleared) and exempts
+    /// it from expiry and relevance decay.
+    pub fn set_pinned(&mut self, claim: i64, pinned: bool) -> KnowledgeResult<()> {
+        self.claim_row(claim)?;
+        if pinned {
+            self.conn.execute(
+                "UPDATE kn_claims SET pinned=1, retention='durable', expires_at=NULL, updated_at=?2 WHERE id=?1",
+                params![claim, self.now],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE kn_claims SET pinned=0, updated_at=?2 WHERE id=?1",
+                params![claim, self.now],
+            )?;
+        }
+        self.log(
+            if pinned { "pin" } else { "unpin" },
+            "claim",
+            Some(claim),
+            None,
+            serde_json::Value::Null,
+        )
+    }
+
+    fn user_statement(&mut self, scope: &str, text: &str) -> KnowledgeResult<i64> {
+        self.add_evidence(&NewEvidence {
+            source_kind: SourceKind::UserStatement,
+            source_ref: Some("memory-ui"),
+            observed_at: self.now,
+            content: &format!("{text}\n@{}", self.now),
+            receipt: Some(text),
+            derived_from: None,
+            verification: None,
+            scope,
+        })
+    }
+
+    /// The owner confirms a claim: their confirmation is recorded as evidence, and an
+    /// inferred, unverified or disputed claim becomes `user_reported`. A verified claim
+    /// stays verified.
+    pub fn confirm_claim(&mut self, claim: i64) -> KnowledgeResult<()> {
+        if self.actor != Actor::User {
+            return Err(invalid("only the user can confirm a claim"));
+        }
+        let row = self.claim_row(claim)?;
+        if !row.status.is_active() {
+            return Err(invalid("superseded or invalidated claims cannot be confirmed"));
+        }
+        let scope: String =
+            self.conn
+                .query_row("SELECT scope FROM kn_claims WHERE id=?1", [claim], |r| {
+                    r.get(0)
+                })?;
+        let ev = self.user_statement(&scope, "Confirmed by the owner in Memory")?;
+        self.link_evidence(claim, ev, Stance::Supports)?;
+        if row.status != EpistemicStatus::Verified {
+            self.set_status(
+                claim,
+                EpistemicStatus::UserReported,
+                Some("confirmed by the owner"),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The owner corrects a claim's value. The correction becomes a new `user_reported`
+    /// claim backed by the owner's statement, and the old claim is superseded by it, so the
+    /// history of what SAIL believed is kept. Returns the new claim's id.
+    pub fn correct_claim(&mut self, claim: i64, value: &str, reason: &str) -> KnowledgeResult<i64> {
+        if self.actor != Actor::User {
+            return Err(invalid("only the user can correct a claim"));
+        }
+        let row = self.claim_row(claim)?;
+        if !row.status.is_active() {
+            return Err(invalid("only current claims can be corrected"));
+        }
+        type Old = (ClaimCategory, Option<PreferenceBasis>, Option<i64>, String, i64);
+        let (category, basis, object_entity, scope, sensitivity): Old = self.conn.query_row(
+            "SELECT category, basis, object_entity_id, scope, sensitivity FROM kn_claims WHERE id=?1",
+            [claim],
+            |r| {
+                Ok((
+                    ClaimCategory::parse(&r.get::<_, String>(0)?).unwrap_or(ClaimCategory::Fact),
+                    r.get::<_, Option<String>>(1)?
+                        .and_then(|b| PreferenceBasis::parse(&b)),
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                ))
+            },
+        )?;
+        if object_entity.is_some() {
+            return Err(invalid(
+                "relationships are corrected by forgetting them and adding the right one",
+            ));
+        }
+        let value = value.trim();
+        let ev = self.user_statement(
+            &scope,
+            &format!("Correction: {} is {value}", row.predicate),
+        )?;
+        let new = self.assert_claim(
+            &NewClaim {
+                subject: row.subject,
+                predicate: &row.predicate,
+                object: ClaimObject::Value(value.to_string()),
+                category,
+                basis: basis.map(|_| PreferenceBasis::Explicit),
+                status: EpistemicStatus::UserReported,
+                inference_confidence: None,
+                observed_at: self.now.max(row.observed_at),
+                valid_from: None,
+                valid_until: None,
+                retention: Retention::Durable,
+                scope: &scope,
+                sensitivity: Sensitivity::from_i64(sensitivity),
+            },
+            &[(ev, Stance::Supports)],
+        )?;
+        if new == claim {
+            return Err(invalid("the corrected value is the same as the current one"));
+        }
+        self.supersede(claim, new, reason)?;
+        Ok(new)
     }
 
     // ---- procedures -----------------------------------------------------------------

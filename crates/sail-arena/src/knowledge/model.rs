@@ -347,8 +347,35 @@ pub struct Claim {
     pub retention: Retention,
     pub scope: String,
     pub sensitivity: Sensitivity,
+    /// Pinned by the user: durable and exempt from expiry and decay.
+    pub pinned: bool,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// A claim with the names needed to display it outside its entity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaimSummary {
+    pub claim: Claim,
+    pub subject_name: String,
+    pub object_name: Option<String>,
+}
+
+/// Which claims a listing returns. Empty lists mean "any".
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ClaimFilter {
+    pub categories: Vec<ClaimCategory>,
+    pub statuses: Vec<EpistemicStatus>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeCounts {
+    pub entities: i64,
+    pub active_claims: i64,
+    pub needs_review: i64,
+    pub procedures: i64,
+    pub project_items: i64,
 }
 
 /// Evidence behind a claim, broken into separate axes instead of one score.

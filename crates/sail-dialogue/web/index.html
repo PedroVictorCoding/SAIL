@@ -325,6 +325,92 @@
         </article>
       </section>
       </div>
+      <div class="page-only-cards" id="pageOnlyCards" hidden>
+        <article class="workspace-card memory-card" id="memoryCard" data-card="memoryCard" aria-labelledby="memoryCardHeading">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">◈</span><div><h3 id="memoryCardHeading">Memory</h3><p>What SAIL knows, and why</p></div></div>
+            <div class="card-heading-actions">
+              <div class="card-tabs" role="tablist" aria-label="Memory views">
+                <button type="button" role="tab" class="card-tab active" id="memoryTabOverview" data-tab-card="memoryCard" data-tab-panel="memoryPanelOverview" aria-controls="memoryPanelOverview" aria-selected="true"><span>Overview</span></button>
+                <button type="button" role="tab" class="card-tab" id="memoryTabEntity" data-tab-card="memoryCard" data-tab-panel="memoryPanelEntity" aria-controls="memoryPanelEntity" aria-selected="false"><span>Details</span></button>
+                <button type="button" role="tab" class="card-tab" id="memoryTabGraph" data-tab-card="memoryCard" data-tab-panel="memoryPanelGraph" aria-controls="memoryPanelGraph" aria-selected="false"><span>Graph</span></button>
+                <button type="button" role="tab" class="card-tab" id="memoryTabChanges" data-tab-card="memoryCard" data-tab-panel="memoryPanelChanges" aria-controls="memoryPanelChanges" aria-selected="false"><span>Changes</span></button>
+              </div>
+              <button class="card-action" id="memoryExportBtn" type="button" aria-label="Export memory as a file" title="Export memory">⤓</button>
+              <button class="card-action" id="memoryRefreshBtn" type="button" aria-label="Refresh memory" title="Refresh">↻</button>
+            </div>
+          </header>
+          <p class="memory-status" id="memoryStatus" role="status" aria-live="polite" hidden></p>
+          <div class="card-tab-panel active" id="memoryPanelOverview" role="tabpanel" aria-labelledby="memoryTabOverview">
+            <form class="memory-search" id="memorySearchForm" role="search">
+              <label class="memory-label" for="memorySearchInput">Find something SAIL knows</label>
+              <div class="memory-row">
+                <input class="memory-input" id="memorySearchInput" type="search" placeholder="A person, project, place…" autocomplete="off" maxlength="200">
+                <button class="quiet-button" type="submit">Search</button>
+              </div>
+            </form>
+            <div id="memorySearchResults" aria-live="polite"></div>
+            <dl class="memory-counts" id="memoryCounts"></dl>
+            <div class="memory-sections">
+              <section class="memory-section memory-section-wide" aria-labelledby="memoryReviewTitle">
+                <h4 id="memoryReviewTitle">Needs review</h4>
+                <p class="memory-hint">SAIL inferred these or could not verify them. Confirm what is right; reject what is not.</p>
+                <ul class="memory-list" id="memoryNeedsReview"></ul>
+              </section>
+              <section class="memory-section" aria-labelledby="memoryProjectsTitle"><h4 id="memoryProjectsTitle">Projects</h4><ul class="memory-list" id="memoryProjects"></ul></section>
+              <section class="memory-section" aria-labelledby="memoryPreferencesTitle"><h4 id="memoryPreferencesTitle">Preferences</h4><ul class="memory-list" id="memoryPreferences"></ul></section>
+              <section class="memory-section" aria-labelledby="memorySkillsTitle"><h4 id="memorySkillsTitle">Skills</h4><ul class="memory-list" id="memorySkills"></ul></section>
+              <section class="memory-section" aria-labelledby="memoryQuestionsTitle"><h4 id="memoryQuestionsTitle">Unresolved questions</h4><ul class="memory-list" id="memoryQuestions"></ul></section>
+              <section class="memory-section memory-section-wide" aria-labelledby="memoryRecentTitle"><h4 id="memoryRecentTitle">Recently updated</h4><ul class="memory-list memory-chips" id="memoryRecent"></ul></section>
+            </div>
+            <details class="memory-teach" id="memoryTeach">
+              <summary>Teach SAIL something</summary>
+              <form class="memory-form" id="memoryTeachForm">
+                <div class="memory-field"><label for="memoryTeachSubject">About</label><input class="memory-input" id="memoryTeachSubject" required maxlength="200" placeholder="e.g. SAIL host"></div>
+                <div class="memory-field"><label for="memoryTeachKind">Kind</label>
+                  <select class="memory-input" id="memoryTeachKind">
+                    <option value="other">Thing</option><option value="person">Person</option><option value="project">Project</option><option value="software">Software</option><option value="device">Device</option><option value="environment">Environment</option><option value="place">Place</option><option value="organization">Organization</option><option value="concept">Idea</option>
+                  </select></div>
+                <div class="memory-field"><label for="memoryTeachPredicate">Relation</label><input class="memory-input" id="memoryTeachPredicate" required maxlength="64" placeholder="e.g. root disk"></div>
+                <div class="memory-field"><label for="memoryTeachValue">Value</label><input class="memory-input" id="memoryTeachValue" required maxlength="2000" placeholder="e.g. 1 TB NVMe"></div>
+                <div class="memory-field"><label for="memoryTeachCategory">Type</label>
+                  <select class="memory-input" id="memoryTeachCategory"><option value="fact">Fact</option><option value="preference">Preference</option><option value="question">Open question</option></select></div>
+                <div class="memory-field"><label for="memoryTeachScope">Area</label>
+                  <select class="memory-input" id="memoryTeachScope"><option value="user">Personal</option><option value="life">Life</option><option value="system">SAIL system</option></select></div>
+                <label class="memory-check"><input type="checkbox" id="memoryTeachPrivate"> Private: hide from subsystems unless they are granted private access</label>
+                <p class="memory-error" id="memoryTeachError" role="alert" hidden></p>
+                <div class="memory-actions"><button class="quiet-button memory-primary" type="submit">Remember this</button></div>
+              </form>
+            </details>
+          </div>
+          <div class="card-tab-panel" id="memoryPanelEntity" role="tabpanel" aria-labelledby="memoryTabEntity" hidden>
+            <div id="memoryEntity"><p class="memory-empty">Choose something from the overview or search to see what SAIL believes about it.</p></div>
+          </div>
+          <div class="card-tab-panel" id="memoryPanelGraph" role="tabpanel" aria-labelledby="memoryTabGraph" hidden>
+            <div class="memory-row memory-graph-toolbar">
+              <label class="memory-check"><input type="checkbox" id="memoryGraphHistory"> Include past relationships</label>
+            </div>
+            <div class="memory-graph" id="memoryGraph"><p class="memory-empty">Choose something to see how it connects.</p></div>
+            <h4 class="memory-subhead" id="memoryGraphListTitle">Connections</h4>
+            <ul class="memory-list" id="memoryGraphList" aria-labelledby="memoryGraphListTitle"></ul>
+          </div>
+          <div class="card-tab-panel" id="memoryPanelChanges" role="tabpanel" aria-labelledby="memoryTabChanges" hidden>
+            <div class="memory-row">
+              <label class="memory-label" for="memoryChangesFilter">Show</label>
+              <select class="memory-input memory-select" id="memoryChangesFilter">
+                <option value="all">All changes</option>
+                <option value="learned">Learned</option>
+                <option value="review">Confirmations and status changes</option>
+                <option value="superseded">Replaced</option>
+                <option value="forgotten">Forgotten</option>
+                <option value="merges">Merges and separations</option>
+                <option value="privacy">Pinning and privacy</option>
+              </select>
+            </div>
+            <ol class="memory-changes" id="memoryChanges"></ol>
+          </div>
+        </article>
+      </div>
       <section class="subsystem-page" id="subsystemPage" aria-labelledby="subsystemTitle" hidden>
         <header class="subsystem-header">
           <a href="#home" class="subsystem-back">← Home</a>
@@ -746,6 +832,19 @@
   </form>
 </dialog>
 
+<dialog id="memoryDialog" class="capture-dialog memory-dialog" aria-labelledby="memoryDialogTitle">
+  <h2 id="memoryDialogTitle"></h2>
+  <p id="memoryDialogText"></p>
+  <form class="memory-form" id="memoryDialogForm" method="dialog">
+    <div id="memoryDialogFields"></div>
+    <p class="memory-error" id="memoryDialogError" role="alert" hidden></p>
+    <div class="capture-options">
+      <button class="quiet-button memory-primary" id="memoryDialogConfirm" type="submit">OK</button>
+      <button class="quiet-button" id="memoryDialogCancel" type="button">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="cardModal" class="capture-dialog card-modal" aria-labelledby="cardModalTitle">
   <header class="card-modal-header">
     <div class="card-modal-title">
@@ -763,6 +862,7 @@
 <script src="/mermaid.js" defer></script>
 <script src="/card-modal.js" defer></script>
 <script src="/voice.js" defer></script>
+<script src="/memory.js" defer></script>
 <script src="/subsystem-pages.js" defer></script>
 <script src="/ui.js" defer></script>
 </body>

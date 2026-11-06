@@ -153,3 +153,8 @@ CREATE TABLE kn_meta(
 ) STRICT, WITHOUT ROWID;
 INSERT INTO kn_meta(key, value) VALUES('deletion_generation', 0);
 ";
+
+/// Schema v3: user pinning. A pinned claim is durable and exempt from expiry and decay.
+pub(crate) const V3: &str = "
+ALTER TABLE kn_claims ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1));
+";

@@ -1,4 +1,5 @@
 pub mod approval_http;
+pub mod memory_http;
 pub mod control;
 mod execution;
 pub mod orb;
