@@ -1,10 +1,11 @@
 """While You Were Away cards in a real browser, fixture briefing.
 
-The five cards sit in one horizontal row that scrolls with no visible scrollbar; each
-card is lit from below by its own hue. Checks: hidden scrollbars take no space, a
-vertical wheel and arrow keys scroll the row, edge fades track the scroll position,
-an overflowing card body is keyboard-scrollable, actions keep working, no page
-overflow at 1440 and 390px, forced colours drop the glow, zero page errors.
+The five cards sit in a grid that fills the stage (several columns and rows on desktop,
+one column on phones); each card is lit from below by its own hue. Checks: grid layout,
+the left rail fits the window without scrolling,
+with no sideways scroll, every card above the mode bar on desktop, an overflowing card
+body is keyboard-scrollable, actions keep working, no page overflow at 1440 and 390px,
+forced colours drop the glow, zero page errors.
 
 Run with: .venv-voice/bin/python scripts/ui/away_cards_browser_test.py [shot-dir]
 """
@@ -74,21 +75,34 @@ with sync_playwright() as p:
         pg.wait_for_timeout(400)
 
         info = pg.evaluate("""() => { const r = document.querySelector('#returnBriefingDeck .briefing-cards-grid'); const cs = getComputedStyle(r);
-          const cards = [...r.querySelectorAll('.briefing-card')];
-          return { ox: cs.overflowX, sb: cs.scrollbarWidth, gap: r.offsetHeight - r.clientHeight, scrolls: r.scrollWidth > r.clientWidth,
+          const cards = [...r.querySelectorAll('.briefing-card')], rect = c => c.getBoundingClientRect();
+          return { display: cs.display, scrollsX: r.scrollWidth > r.clientWidth + 1,
                    hues: cards.map(c => getComputedStyle(c).getPropertyValue('--card-a').trim()),
-                   tops: (t => Math.max(...t) - Math.min(...t) <= 3 ? 1 : 2)(cards.map(c => c.getBoundingClientRect().top)), // hover lifts 2px
-                   heights: [...new Set(cards.map(c => Math.round(c.getBoundingClientRect().height)))].length,
-                   tab: r.tabIndex, label: r.getAttribute('aria-label') }; }""")
-        assert info["ox"] == "auto" and info["sb"] == "none" and info["gap"] == 0, info
-        assert info["scrolls"], "five cards overflow the row, so it scrolls"
+                   rows: new Set(cards.map(c => Math.round(rect(c).top / 8))).size,
+                   cols: new Set(cards.map(c => Math.round(rect(c).left))).size,
+                   widths: new Set(cards.map(c => Math.round(rect(c).width))).size }; }""")
+        assert info["display"] == "grid" and not info["scrollsX"], info
         assert len(set(info["hues"])) == 5, f"each card has its own light: {info['hues']}"
-        assert info["tops"] == 1 and info["heights"] == 1, ("one row of equal cards", width, pg.evaluate("[...document.querySelectorAll('#returnBriefingDeck .briefing-card')].map(c=>{const r=c.getBoundingClientRect();return [Math.round(r.top),Math.round(r.height),Math.round(r.width)]})"))
-        assert info["tab"] == 0 and info["label"], "row is keyboard reachable"
-        assert pg.evaluate("document.querySelector('#returnBriefingDeck .briefing-cards-grid').dataset.atStart") == "true"
+        if width > 400:
+            assert info["rows"] >= 2 and info["cols"] >= 2, ("cards form a grid, not one row", info)
+        else:
+            assert info["cols"] == 1, ("one column on phones", info)
+        assert info["widths"] == 1, ("equal-width cards", info)
         assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"page overflow at {width}"
+        if width > 400:
+            # The left rail fits the window with no scrolling, here and in a short window, with
+            # Now Playing shown at its real size (Spotify isn't in the fixture).
+            pg.evaluate("""() => { const np = document.getElementById('tmNowPlaying'); np.hidden = false;
+              np.innerHTML = '<div class=tm-np-row><span class=tm-np-art></span><div class=tm-np-text><p class=tm-np-label>Now Playing</p>'
+                + '<p class=tm-np-name>A song</p><p class=tm-np-by>An artist</p></div></div><div class=tm-np-ctl><button class=tm-np-btn>1</button></div>'; }""")
+            for h in (height, 720):
+                pg.set_viewport_size({"width": width, "height": h}); pg.wait_for_timeout(200)
+                over = pg.evaluate("(s => s.scrollHeight - s.clientHeight)(document.querySelector('.tm-side'))")
+                assert over <= 0, f"rail scrolls by {over}px at {width}x{h}"
+            pg.set_viewport_size({"width": width, "height": height}); pg.wait_for_timeout(200)
         # A whole card (light and action included) fits above the mode bar.
-        fit = pg.evaluate("""() => { const c = document.querySelector('#briefingLearnCard').getBoundingClientRect();
+        fit = pg.evaluate("""() => { const cards = [...document.querySelectorAll('#returnBriefingDeck .briefing-card')];
+          const c = (innerWidth > 400 ? cards[cards.length - 1] : cards[0]).getBoundingClientRect();
           const bar = document.querySelector('.tm-ctl-mid')?.getBoundingClientRect(); return [c.bottom, bar ? bar.top : innerHeight]; }""")
         assert fit[0] <= fit[1] + 1, f"card bottom {fit[0]} below mode bar {fit[1]} at {width}"
         # An overflowing body is scrollable by keyboard; short ones add no tab stop.
@@ -98,19 +112,6 @@ with sync_playwright() as p:
         assert any(over for _, over, _ in focus), f"fixture has an overflowing card: {focus}"
         pg.screenshot(path=str(SHOTS / f"away-cards-{width}.png"))
 
-        # Vertical wheel over the row (not over a scrollable body) scrolls it sideways.
-        box = pg.locator("#briefingLearnCard .briefing-card-top").bounding_box()
-        pg.mouse.move(box["x"] + 10, box["y"] + 5); pg.mouse.wheel(0, 400); pg.wait_for_timeout(500)
-        moved = pg.evaluate("document.querySelector('#returnBriefingDeck .briefing-cards-grid').scrollLeft")
-        assert moved > 0, "wheel scrolls the row"
-        assert pg.evaluate("document.querySelector('#returnBriefingDeck .briefing-cards-grid').dataset.atStart") == "false"
-        # Arrow keys on the focused row.
-        pg.evaluate("const r=document.querySelector('#returnBriefingDeck .briefing-cards-grid'); r.style.scrollBehavior='auto'; r.scrollLeft=0; r.focus()")
-        pg.keyboard.press("ArrowRight"); pg.wait_for_timeout(300)
-        assert pg.evaluate("document.querySelector('#returnBriefingDeck .briefing-cards-grid').scrollLeft") > 0, "arrow keys scroll the row"
-        pg.evaluate("const r=document.querySelector('#returnBriefingDeck .briefing-cards-grid'); r.scrollLeft=r.scrollWidth")
-        pg.wait_for_function("document.querySelector('#returnBriefingDeck .briefing-cards-grid').dataset.atEnd==='true'")
-        pg.screenshot(path=str(SHOTS / f"away-cards-{width}-end.png"))
         # A missing history result clears the previous choice and cannot play it.
         staged = BRIEFING["staged_music"]
         BRIEFING["staged_music"] = None
@@ -142,5 +143,5 @@ with sync_playwright() as p:
     ctx.close(); b.close()
 
 assert not errors, errors
-print("Away cards: one hidden-scrollbar row of five lit cards, wheel/arrow/edge-fade scrolling, keyboard-scrollable "
+print("Away cards: a grid of five lit cards with no sideways scroll, rail without scroll, keyboard-scrollable "
       "overflowing body, working actions, unavailable/recovered music, forced colours at 1440 and 390px passed (fixture briefing)")
