@@ -175,17 +175,16 @@ with sync_playwright() as p:
     page.locator('.tm-label[data-station="memory"]').click()
     page.locator('.tm-label[data-station="memory"]').click()
     page.wait_for_function("document.querySelector('#tmInspector .tm-insp-head h3')?.textContent === 'Memory'")
-    assert page.evaluate('location.hash') == '#arena'
+    assert page.evaluate('location.hash') == '#memory'
     page.locator('.tm-nav-item[data-nav="home"]').click()
     page.wait_for_selector('#tmPane', state='hidden')
     assert page.evaluate("document.activeElement.dataset.station") == 'memory'
 
-    # Systems without a page still show in the centre, without changing the route.
-    page.locator('.tm-label[data-station="entertainment"]').click()
-    page.locator('.tm-label[data-station="entertainment"]').click()
-    assert page.is_visible('#tmPane') and page.is_visible('#tmPaneTitle')
-    assert page.is_hidden('#subsystemPage')
-    assert page.evaluate('location.hash') == '#home'
+    # Entertainment loads in the centre with the embedded reader.
+    page.locator('.tm-nav-item[data-nav="entertainment"]').click()
+    page.wait_for_function("document.title === 'SAIL — Entertainment'")
+    assert page.is_visible('#tmPane')
+    assert page.locator('.tm-nav-item[data-nav="entertainment"]').get_attribute('aria-current') == 'page'
     page.locator('.tm-nav-item[data-nav="home"]').click()
     page.wait_for_selector('#tmPane', state='hidden')
 
@@ -248,17 +247,15 @@ with sync_playwright() as p:
     assert page.locator('#tmTab-chat').get_attribute('aria-selected') == 'true'
     page.screenshot(path=str(SHOT))
 
-    # The classic dashboard stays available and gets its Dialogue panel back.
-    page.locator('.tm-sidecard-actions button', has_text='Classic view').click()
-    page.wait_for_function("location.hash === '#classic'")
-    page.wait_for_selector('#toolsMap', state='hidden')
-    assert page.is_visible('#homePage')
-    assert page.evaluate("document.getElementById('homeView').parentElement.classList.contains('dashboard-layout')")
-    page.locator('#trackerNav').click()
+    # Tools Map is the unified workspace and hosts the Dialogue panel.
+    assert page.is_visible('#toolsMap')
+    assert page.evaluate("document.getElementById('homeView').closest('#toolsMap') !== null")
+    page.locator('.tm-nav-item[data-nav="tracker"]').click()
     page.wait_for_selector('#tmTracker')
     page.goto(base + '#classic')
-    page.wait_for_selector('#homePage')
-    page.evaluate("document.getElementById('settingsOpen').click()")
+    page.wait_for_function("location.hash === '#home'")
+    assert page.is_visible('#toolsMap')
+    page.locator('.tm-bell[aria-label="Settings"]').click()
     page.click('[data-settings-tab="general"]')
     page.click('#openFactorySettings')
     page.wait_for_selector('#toolsMap')

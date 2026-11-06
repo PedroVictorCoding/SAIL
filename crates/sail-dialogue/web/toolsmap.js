@@ -197,15 +197,14 @@
         navItem('entertainment', 'Entertainment', 'entertainment'), navItem('guardian', 'Guardian', 'guardian')),
       el('ul', {class: 'tm-nav tm-nav-2'},
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: (e) => openStation('forge', e.currentTarget, 'tasks')}, icon('tasks'), 'Tasks')),
-        el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: () => document.getElementById('terminalRailBtn')?.click()}, icon('terminal'), 'Terminal')),
+        el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', id: 'terminalRailBtn', onclick: () => window.sailTerminal ? window.sailTerminal.focusTerminal() : document.getElementById('terminalCard')?.classList.toggle('terminal-fullscreen')}, icon('terminal'), 'Terminal')),
         navItem('tracker', 'Tracker', 'sense')),
       el('section', {class: 'tm-np', id: 'tmNowPlaying', 'aria-label': 'Now playing', hidden: true}),
       el('div', {class: 'tm-sidecard'},
         el('p', {class: 'tm-sidecard-title'}, el('span', {class: 'tm-status', id: 'tmCoreDot'}), el('span', {id: 'tmCoreState', text: 'Connecting…'})),
         el('p', {class: 'tm-sidecard-sub', id: 'tmUptime', text: ''}),
         el('div', {class: 'tm-sidecard-actions'},
-          el('button', {class: 'tm-btn', type: 'button', onclick: openSettings}, icon('settings'), 'Settings'),
-          el('button', {class: 'tm-btn', type: 'button', onclick: () => window.sailNavigate?.('classic')}, 'Classic view'))));
+          el('button', {class: 'tm-btn', type: 'button', onclick: openSettings}, icon('settings'), 'Settings'))));
 
     const top = el('header', {class: 'tm-top'},
       el('div', {class: 'tm-crumbs'},
@@ -216,6 +215,7 @@
         el('label', {class: 'tm-sr', for: 'tmAskInput', text: 'Ask SAIL or run a command'}),
         el('input', {id: 'tmAskInput', type: 'search', placeholder: 'Ask SAIL or run a command…', autocomplete: 'off', maxlength: '2000'}),
         el('kbd', {text: 'Ctrl K'})),
+      el('div', {class: 'tm-indicators', id: 'tmTopIndicators'}),
       el('ul', {class: 'tm-meters', id: 'tmMeters', 'aria-label': 'Host resources'}),
       el('button', {class: 'tm-bell', type: 'button', id: 'tmBell', 'aria-label': 'Approvals', onclick: (e) => openStation('guardian', e.currentTarget)},
         icon('guardian'), el('span', {class: 'tm-badge', id: 'tmBellCount', hidden: true})),
@@ -228,6 +228,7 @@
         world = el('div', {class: 'tm-world'})),
       el('div', {class: 'tm-ctl tm-ctl-left'},
         el('button', {class: 'tm-btn', type: 'button', id: 'tmLive', 'aria-pressed': 'true', onclick: toggleLive}, el('span', {class: 'tm-status on', 'aria-hidden': 'true'}), 'Live'),
+        el('button', {class: 'tm-btn', type: 'button', id: 'tmBriefingBtn', 'aria-label': 'Session briefing deck', 'aria-pressed': 'false', onclick: toggleBriefing}, icon('discovery'), 'Briefing'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', id: 'tmPause', 'aria-pressed': 'false', 'aria-label': 'Pause animation', onclick: togglePause}, '❚❚'),
         el('label', {class: 'tm-sr', for: 'tmSpeed', text: 'Animation speed'}),
         el('select', {class: 'tm-btn', id: 'tmSpeed', onchange: (e) => { state.speed = Number(e.target.value); }},
@@ -282,6 +283,13 @@
     syncTabs();
     const page = document.getElementById('subsystemPage');
     if (page) paneMain.prepend(page);
+    const briefingDeck = document.getElementById('returnBriefingDeck');
+    if (briefingDeck) stage.append(briefingDeck);
+    const indicators = document.getElementById('topIndicators');
+    if (indicators) {
+      indicators.hidden = false;
+      top.querySelector('#tmTopIndicators')?.append(indicators);
+    }
     buildWorld();
     bindViewport();
     document.addEventListener('keydown', (e) => {
@@ -290,7 +298,9 @@
     });
   }
   function navItem(target, label, ic) {
-    return el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', 'data-nav': target, onclick: (e) => navTo(target, e.currentTarget)}, icon(ic), label));
+    const attrs = {class: 'tm-nav-item', type: 'button', 'data-nav': target, onclick: (e) => navTo(target, e.currentTarget)};
+    if (target === 'home') attrs.id = 'homeNav';
+    return el('li', {}, el('button', attrs, icon(ic), label));
   }
   function modeBtn(mode, label) {
     return el('button', {class: 'tm-seg', type: 'button', 'data-mode': mode, 'aria-pressed': state.mode === mode ? 'true' : 'false', onclick: () => setMode(mode)},
@@ -1075,10 +1085,17 @@
   }
 
   // ------------------------------------------------------------------ Dialogue column
-  function showChat(on) {
+  function showChat() {
     const panel = document.getElementById('homeView'); if (!panel) return;
-    if (!chatMarker) { chatMarker = document.createComment('homeView classic position'); panel.before(chatMarker); }
-    if (on) chatSlot.append(panel); else chatMarker.after(panel);
+    chatSlot.append(panel);
+  }
+  function toggleBriefing() {
+    const deck = document.getElementById('returnBriefingDeck');
+    if (!deck) return;
+    deck.hidden = !deck.hidden;
+    const btn = document.getElementById('tmBriefingBtn');
+    if (btn) btn.setAttribute('aria-pressed', String(!deck.hidden));
+    if (!deck.hidden) deck.focus?.();
   }
   function toggleLive() {
     state.live = !state.live;
@@ -1100,44 +1117,41 @@
     if (!text) return;
     const match = STATIONS.find((s) => s.name.toLowerCase() === text.toLowerCase().replace(/^(open|go to|show)\s+/, ''));
     if (match) { input.value = ''; openStation(match.id, input); return; }
-    const classic = document.getElementById('textInput'), form = document.getElementById('textForm');
-    if (classic && form) {
+    const composerInput = document.getElementById('textInput'), form = document.getElementById('textForm');
+    if (composerInput && form) {
       setTab('chat');
-      classic.value = text;
+      composerInput.value = text;
       form.requestSubmit();
       log('dialogue', `You asked: ${text.length > 80 ? `${text.slice(0, 80)}…` : text}`);
       input.value = '';
-      classic.focus();
+      composerInput.focus();
     }
   }
-  function openSettings() { (document.getElementById('settingsOpen') || document.getElementById('settingsRail'))?.click(); }
+  function openSettings() {
+    if (window.openSheet && window.contextSheet) window.openSheet(window.contextSheet);
+    else (document.getElementById('settingsOpen') || document.getElementById('settingsRail'))?.click();
+  }
 
   // ------------------------------------------------------------------ routing
-  function apply(on) {
-    if (on === state.on) return;
-    state.on = on;
-    if (on) {
-      build();
-      root.hidden = false;
-      document.documentElement.classList.add('tm-active');
-      showChat(true);
-      // The classic layout stays mounted underneath; keep it out of the tab order.
-      for (const n of document.querySelectorAll('.dashboard-header, .dashboard-layout')) n.inert = true;
-      setMode(state.mode);
-      requestAnimationFrame(() => { if (state.on) { fit(); select(state.selected); } });
-      lastFrame = 0; requestAnimationFrame(frame);
-      if (state.live) startPolling();
-    } else {
-      stopPolling();
-      if (root) { hidePane(); root.hidden = true; }
-      showChat(false);
-      for (const n of document.querySelectorAll('.dashboard-header, .dashboard-layout')) n.inert = false;
-      document.documentElement.classList.remove('tm-active');
-    }
+  function apply() {
+    if (state.on) return;
+    state.on = true;
+    build();
+    root.hidden = false;
+    document.documentElement.classList.add('tm-active');
+    showChat();
+    setMode(state.mode);
+    requestAnimationFrame(() => { if (state.on) { fit(); select(state.selected); } });
+    lastFrame = 0; requestAnimationFrame(frame);
+    if (state.live) startPolling();
   }
   function route(page) {
-    apply(page !== 'classic');
-    if (!state.on) return;
+    apply();
+    if (page === 'classic') {
+      if (window.sailNavigate) window.sailNavigate('home');
+      else location.hash = '#home';
+      return;
+    }
     if (page === 'home') { state.pending = null; hidePane(); return; }
     if (page === 'entertainment') {
       state.pending = null; showEntertainment();
@@ -1156,7 +1170,7 @@
     showStation(pending || shown || PAGE_STATION[page] || 'core', true);
   }
   const show = () => window.sailNavigate?.('home');
-  const hide = () => window.sailNavigate?.('classic');
+  const hide = () => window.sailNavigate?.('home');
   window.sailToolsMap = {show, hide, open: (id) => openStation(id)};
   window.sailFactory = window.sailToolsMap;
   window.addEventListener('sail:page', (event) => route(event.detail));

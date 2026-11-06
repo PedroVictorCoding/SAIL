@@ -55,10 +55,10 @@ function renderSpaces(filter = '') {
   }
 }
 renderSpaces();
-document.getElementById('spacesOpen').addEventListener('click', () => { location.hash = '#spaces'; openSheet(spacesSheet); });
-document.getElementById('spacesTop').addEventListener('click', () => { location.hash = '#spaces'; openSheet(spacesSheet); });
-document.getElementById('settingsOpen').addEventListener('click', () => openSheet(contextSheet));
-document.getElementById('settingsRail').addEventListener('click', () => openSheet(contextSheet));
+document.getElementById('spacesOpen')?.addEventListener('click', () => { location.hash = '#spaces'; openSheet(spacesSheet); });
+document.getElementById('spacesTop')?.addEventListener('click', () => { location.hash = '#spaces'; openSheet(spacesSheet); });
+document.getElementById('settingsOpen')?.addEventListener('click', () => openSheet(contextSheet));
+document.getElementById('settingsRail')?.addEventListener('click', () => openSheet(contextSheet));
 
 // VS Code Style Settings Tab Navigation & Search
 function initVscodeSettings() {
@@ -169,8 +169,10 @@ document.getElementById('canvasClearBtn').addEventListener('click', () => {
 });
 function updateLocalClock() {
   const now = new Date(); const hour = now.getHours();
-  document.getElementById('welcomeGreeting').textContent = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-  document.getElementById('localDateTime').textContent = new Intl.DateTimeFormat(undefined, { weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }).format(now);
+  const greeting = document.getElementById('welcomeGreeting');
+  if (greeting) greeting.textContent = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const timeEl = document.getElementById('localDateTime');
+  if (timeEl) timeEl.textContent = new Intl.DateTimeFormat(undefined, { weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }).format(now);
 }
 updateLocalClock(); setInterval(updateLocalClock, 60_000);
 document.querySelectorAll('.close-sheet').forEach(button => button.addEventListener('click', closeSheet));

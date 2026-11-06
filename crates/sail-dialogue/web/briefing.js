@@ -89,6 +89,7 @@
   async function dismissBriefing() {
     const deck = document.getElementById('returnBriefingDeck');
     if (deck) deck.hidden = true;
+    document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'false');
     try {
       await fetch('/api/briefing/actions/dismiss', {
         method: 'POST',
@@ -104,10 +105,12 @@
 
     if (!briefing || briefing.dismissed) {
       deck.hidden = true;
+      document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'false');
       return;
     }
 
     deck.hidden = false;
+    document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'true');
 
     // Greeting & headline
     const headlineEl = document.getElementById('briefingHeadline');
