@@ -18,7 +18,7 @@ call a model**.
   recorded, and either one makes that answer *assisted*.
 - **Evidence and review:** per-objective evidence states, a 1/3/7/14/30-day review schedule,
   a bounded due queue (5 items) and a server-side certified-advance gate.
-- **API:** `/api/learn/{courses,next,lessons,diagnostics,reviews,skills}`. See
+- **API:** `/api/learn/{courses,next,lessons,diagnostics,reviews,skills}`. `POST /diagnostics` resumes an open check, and `GET /diagnostics/:id` reads its current item without side effects. See
   `crates/sail-dialogue/src/learn_courses_http.rs`.
 
 ## Code layout

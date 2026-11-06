@@ -38,6 +38,7 @@ pub fn router(engine: Arc<CourseEngine>, authority: Option<ApprovalAuthority>) -
         .route("/lessons/:id/reveal", post(lesson_reveal))
         .route("/lessons/:id/advance", post(advance))
         .route("/diagnostics", post(diagnostic_start))
+        .route("/diagnostics/:id", get(diagnostic_view))
         .route("/diagnostics/:id/attempt", post(diagnostic_attempt))
         .route("/diagnostics/:id/report", get(diagnostic_report))
         .route("/reviews/due", get(reviews_due))
@@ -187,6 +188,15 @@ async fn diagnostic_attempt(
 ) -> Reply {
     authorize(&s, &h)?;
     reply(s.engine.diagnostic_attempt(&id, req).await)
+}
+
+async fn diagnostic_view(
+    State(s): State<Arc<CoursesState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Reply {
+    authorize(&s, &h)?;
+    reply(s.engine.diagnostic_view(&id))
 }
 
 async fn diagnostic_report(

@@ -152,7 +152,7 @@
     }
   },
   "POST /diagnostics": {
-    "id": "diag-1040e31628ac49f1830bb9f0a7d73b50",
+    "id": "diag-c7f60869e4854c33a88121a21943a855",
     "step": {
       "id": "d-move",
       "kind": "predict",
@@ -192,14 +192,14 @@
   },
   "POST /diagnostics/:id/attempt": {
     "result": "correct",
-    "evidence_id": "ev-c34099b998ab42228461ece956a47799",
+    "evidence_id": "ev-abfc5e3057b6447ca0819cfc59933ba6",
     "skill_ids": [
       "rust.move"
     ],
     "validator_kind": "choice",
     "assistance_state": "independent",
     "provisional_vs_retained": "provisional",
-    "review_due_at": "2026-11-07T22:48:17Z",
+    "review_due_at": "2026-11-07T22:54:56Z",
     "gate_decision": "continue",
     "gate_reasons": [],
     "revision": 2,
@@ -211,6 +211,41 @@
     "next_step_id": "d-copy",
     "policy_version": "courses-evidence-1",
     "next": {
+      "id": "d-copy",
+      "kind": "choice",
+      "title": "After a copy",
+      "body": [
+        {
+          "kind": "p",
+          "text": "`a` has type `char`. After `let b = a;`, can `a` still be used?"
+        }
+      ],
+      "objective_ids": [
+        "rust.copy"
+      ],
+      "hint_count": 0,
+      "confidence": true,
+      "options": [
+        {
+          "id": "yes",
+          "text": "Yes, char is Copy."
+        },
+        {
+          "id": "no",
+          "text": "No, `a` has moved into `b`."
+        },
+        {
+          "id": "unsure",
+          "text": "I'm not sure."
+        }
+      ]
+    },
+    "done": false
+  },
+  "GET /diagnostics/:id": {
+    "id": "diag-c7f60869e4854c33a88121a21943a855",
+    "course_id": "rust-systems",
+    "step": {
       "id": "d-copy",
       "kind": "choice",
       "title": "After a copy",
@@ -452,14 +487,14 @@
   },
   "POST /lessons/:id/attempt (incorrect)": {
     "result": "incorrect",
-    "evidence_id": "ev-58932d95c9114847a97df565279dad15",
+    "evidence_id": "ev-7d3e09844cdb44fa9070cfac35d36b18",
     "skill_ids": [
       "rust.move"
     ],
     "validator_kind": "choice",
     "assistance_state": "independent",
     "provisional_vs_retained": "provisional",
-    "review_due_at": "2026-11-07T22:48:17Z",
+    "review_due_at": "2026-11-07T22:54:56Z",
     "gate_decision": "retry",
     "gate_reasons": [],
     "revision": 4,
@@ -485,14 +520,14 @@
   },
   "POST /lessons/:id/attempt (correct, hinted)": {
     "result": "correct",
-    "evidence_id": "ev-1f1a3169d5de462e87eac75d621af945",
+    "evidence_id": "ev-3a6d7b2309bb41a1bab94f7e8365dcf9",
     "skill_ids": [
       "rust.move"
     ],
     "validator_kind": "choice",
     "assistance_state": "hinted",
     "provisional_vs_retained": "provisional",
-    "review_due_at": "2026-11-07T22:48:17Z",
+    "review_due_at": "2026-11-07T22:54:56Z",
     "gate_decision": "continue",
     "gate_reasons": [
       "You used help, so this counts as assisted. A fresh problem will check it later."
@@ -522,7 +557,7 @@
   },
   "POST /lessons/:id/attempt (rust_edit, sandbox unavailable)": {
     "result": "unavailable",
-    "evidence_id": "ev-086fde7965604535b56d348dc5d23cfa",
+    "evidence_id": "ev-f55d049c4d6244b1a4531c6a54433a89",
     "skill_ids": [
       "rust.borrow-shared"
     ],
@@ -563,10 +598,10 @@
         "independent_passes": 1,
         "assisted_passes": 1,
         "failures": 1,
-        "last_independent_success": "2026-11-06T22:48:17Z",
+        "last_independent_success": "2026-11-06T22:54:56Z",
         "last_delayed_success": null,
-        "retention_due_at": "2026-11-07T22:48:17Z",
-        "why": "Passed independently, but not yet after a delay. The first retention check is 2026-11-07T22:48:17Z.",
+        "retention_due_at": "2026-11-07T22:54:56Z",
+        "why": "Passed independently, but not yet after a delay. The first retention check is 2026-11-07T22:54:56Z.",
         "not_assessed": false,
         "revision": 6
       },
