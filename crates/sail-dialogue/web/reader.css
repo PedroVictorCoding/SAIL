@@ -878,3 +878,38 @@ html.sail-backdrop-on #library .reading-progress progress::-moz-progress-bar { b
 #metadata-editor .metadata-editor-actions { position: sticky; bottom: -28px; z-index: 1; padding: 16px 0; background: var(--sail-surface); border-top: 1px solid var(--sail-glass-border); }
 @media (max-width: 600px) { #metadata-editor .metadata-editor-actions { bottom: -20px; } }
 @media (forced-colors: active) { #metadata-editor .metadata-editor-actions { background: Canvas; border-color: CanvasText; } }
+
+/* Library fills the whole canvas. The toolbar only carried a Library button here, so
+   it is hidden while the Library is open (the reader keeps it); status is a floating
+   toast. Embedded in SAIL's pane: edge to edge, the pane draws the frame. Standalone:
+   a small margin and a home link in the sidebar. */
+body:has(#library:not([hidden])) .toolbar { display: none; }
+body:has(#library:not([hidden])) #status {
+  position: fixed; z-index: 20; top: 12px; left: 50%; transform: translateX(-50%);
+  max-width: min(560px, calc(100% - 24px)); min-height: 0; margin: 0; pointer-events: none;
+}
+body:has(#library:not([hidden])) #status:not(:empty) {
+  padding: 8px 14px; border-radius: 12px; color: var(--sail-text, #f2f5fa);
+  background: rgb(8 10 14 / .82); border: 1px solid rgb(255 255 255 / .14);
+  box-shadow: 0 10px 30px rgb(0 0 0 / .4); backdrop-filter: blur(12px);
+}
+#library, html.sail-backdrop-on #library {
+  max-width: none; width: auto; margin: 12px; min-height: calc(100dvh - 24px);
+}
+html[data-embedded=true] #library {
+  margin: 0; min-height: 100dvh; border: 0; border-radius: 0; box-shadow: none;
+}
+.library-home {
+  display: inline-flex; align-self: flex-start; align-items: center; min-height: 32px; margin: -6px 0 14px;
+  color: var(--library-muted); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-decoration: none;
+}
+.library-home:hover { color: var(--library-text); }
+html[data-embedded=true] .library-home { display: none; }
+@media (max-width: 1180px) { #library, html.sail-backdrop-on #library { margin: 12px; } html[data-embedded=true] #library { margin: 0; } }
+@media (max-width: 700px) {
+  #library, html.sail-backdrop-on #library { margin: 8px; min-height: calc(100dvh - 16px); }
+  html[data-embedded=true] #library { margin: 0; min-height: 100dvh; border-radius: 0; }
+}
+/* Typographic covers break between words, not inside them. */
+#library .cover strong { overflow-wrap: normal; word-break: normal; hyphens: auto; }
+#library .continue-card > .cover strong { font-size: clamp(17px, 1.5vw, 21px); }

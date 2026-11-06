@@ -6,7 +6,7 @@ light change holds for a cooldown and quick flips are coalesced to the latest st
 Settings: `sail.ambientVisuals=off`, forced colours and reduced transparency mount
 nothing; reduced motion keeps a still frame; no WebGL2 falls back to CSS light.
 Library: lit by the featured cover, colour tiles carry real measurements only, a
-liquid-glass lens tracks the toolbar, and the light switches off while a book is open.
+the liquid-glass lens works for a floating control, and the light switches off while a book is open.
 
 Run with: .venv-voice/bin/python scripts/ui/ambient_backdrop_browser_test.py [shot-dir]
 """
@@ -164,9 +164,16 @@ with sync_playwright() as p:
         assert light != pg.evaluate("SailBackdrop.palette(['#f2a65a','#d9467a','#2a1440'],'expressive')[2]"), "cover, not default, lights the Library"
         assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"overflow {width}"
         if width > 400:
+            # The Library uses no lens (it fills the canvas); the lens capability still
+            # works for a floating control placed over the light.
+            assert pg.evaluate("document.querySelectorAll('.sail-lens').length") == 0
+            pg.evaluate("""() => { const d = document.createElement('div'); d.id = 'lensProbe';
+              Object.assign(d.style, {position: 'fixed', right: '20px', bottom: '20px', width: '180px', height: '56px', borderRadius: '20px'});
+              document.body.append(d); SailBackdrop.current.addLens(d); }""")
             pg.wait_for_function("document.querySelector('.sail-backdrop').classList.contains('sail-backdrop--glass')", timeout=15000)
             assert pg.evaluate("document.querySelectorAll('.sail-lens').length") == 1
             assert pg.evaluate("!!document.querySelector('.sail-lens canvas')"), "liquid glass rendered into the lens"
+            pg.evaluate("document.getElementById('lensProbe').remove()")
         pg.screenshot(path=str(SHOTS / f"backdrop-library-{width}.png"), full_page=True)
         pg.get_by_role("button", name="Continue reading →", exact=True).click()
         pg.locator("#pages p").first.wait_for()
