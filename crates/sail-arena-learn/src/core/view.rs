@@ -162,8 +162,17 @@ pub struct SessionView {
     pub(crate) problem_specs: Vec<(String, ProblemSpec)>,
 }
 
-/// Prompt budget used for the meter. The request window keeps the actual request smaller.
-pub const CONTEXT_BUDGET_TOKENS: u64 = 24_000;
+/// Mind's default model window (`SAIL_CONTEXT_TOKENS`, 16k).
+pub const MODEL_CONTEXT_TOKENS: u64 = 16_384;
+/// Room the request needs beside the history: the system prompt with session state and
+/// lesson plan, the tool schemas, the chat template, and the reply.
+pub const PROMPT_RESERVE_TOKENS: u64 = 7_168;
+/// History budget for the meter and for compaction (#252). It sits below the model window,
+/// so a long lesson is compacted into a digest before the request would overflow. Earlier
+/// it was 24k, above the 16k window, so 16k–24k sessions lost their oldest history to the
+/// overflow fallback without a digest. A window that Mind shrinks under RAM pressure is
+/// still covered by the turn's shrink-and-retry.
+pub const CONTEXT_BUDGET_TOKENS: u64 = MODEL_CONTEXT_TOKENS - PROMPT_RESERVE_TOKENS;
 
 fn approx_tokens(text: &str) -> u64 {
     (text.len() as u64).div_ceil(4)

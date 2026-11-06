@@ -170,4 +170,65 @@ mod tests {
         assert!(common.contains("portuguese") && common.contains("pt-pt"));
         assert!(common.contains("data") && common.contains("never changes these rules"));
     }
+
+    /// The parts of a request that compaction cannot shrink (system prompt with a maximal
+    /// plan and picked propositions, plus the role's tool schemas and the reply) must fit
+    /// the reserve, or a compacted lesson would still overflow the default window.
+    #[test]
+    fn the_fixed_request_fits_the_prompt_reserve() {
+        use crate::core::MAX_GRAPH_CONTEXT_BYTES;
+        use crate::core::graph::GraphContextProp;
+        use crate::core::plan::{MAX_NODES, PlanNode};
+        use crate::core::view::{PROMPT_RESERVE_TOKENS, PlanView, ProbeSummary};
+
+        let ids: Vec<String> = (0..MAX_NODES).map(|i| format!("step-{i:02}")).collect();
+        let mut view = SessionView::empty("s");
+        view.goal = "g".repeat(300);
+        view.plan = Some(PlanView {
+            revision: 3,
+            goal: ids[MAX_NODES - 1].clone(),
+            nodes: ids
+                .iter()
+                .map(|id| PlanNode {
+                    id: id.clone(),
+                    title: "A typical lesson step title of some length".into(),
+                })
+                .collect(),
+            edges: ids
+                .windows(2)
+                .map(|w| [w[0].clone(), w[1].clone()])
+                .collect(),
+            order: ids.clone(),
+            mermaid: String::new(),
+        });
+        view.progress.visited = ids[..MAX_NODES / 2].to_vec();
+        view.progress.upcoming = ids[MAX_NODES / 2..].to_vec();
+        view.probe = Some(ProbeSummary {
+            summary: "s".repeat(300),
+            known: vec!["k".repeat(100); 5],
+            gaps: vec!["g".repeat(100); 5],
+        });
+        view.graph_context = vec![GraphContextProp {
+            name: "p".into(),
+            statement: "x".repeat(MAX_GRAPH_CONTEXT_BYTES - 1),
+        }];
+        let reply = u64::from(sail_protocol::ResourceLimits::default().max_output_tokens);
+        for role in [
+            AgentRole::Prober,
+            AgentRole::Teacher,
+            AgentRole::Practitioner,
+        ] {
+            let bytes = system(role, &view, None).len()
+                + serde_json::to_string(&crate::agent::tools::definitions(role))
+                    .unwrap()
+                    .len();
+            // Three bytes per token is conservative for English prose and JSON; 256 tokens
+            // cover the chat template.
+            let tokens = (bytes as u64).div_ceil(3) + 256 + reply;
+            assert!(
+                tokens <= PROMPT_RESERVE_TOKENS,
+                "{role:?}: fixed request needs ~{tokens} tokens, reserve is {PROMPT_RESERVE_TOKENS}"
+            );
+        }
+    }
 }
