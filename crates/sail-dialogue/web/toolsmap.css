@@ -700,7 +700,6 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-briefing .briefing-deck-header { gap: 12px; flex-wrap: nowrap; align-items: flex-start; }
 .tm-briefing .briefing-deck-meta { min-width: 0; }
 .tm-briefing .briefing-deck-actions { flex: none; }
-.tm-briefing .briefing-cards-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); align-items: start; }
 .tm-briefing .briefing-card {
   min-width: 0; overflow-wrap: anywhere;
   background: var(--tm-panel);
@@ -733,33 +732,24 @@ html.sail-backdrop-on .tm-root {
   --tm-blur: 26px;
 }
 
-/* While You Were Away: luminous cards. Near-black cards in one horizontal row, each lit
-   from below by its own hue (music warm, learning violet, events amber, radar cyan,
-   continuity green); the glow spills past the card. Scrollbars are hidden; edge fades
-   show there is more, and the row and any overflowing card body take keyboard focus. */
+/* While You Were Away: luminous cards. Near-black cards in a grid that fills the stage
+   (three across on a typical window, one on phones), each lit from below by its own hue
+   (music warm, learning violet, events amber, radar cyan, continuity green); the glow
+   spills past the card. A card whose text overflows scrolls it inside the card. */
 .tm-briefing .briefing-cards-grid {
-  display: flex; gap: 22px; align-items: stretch;
-  margin: 18px -22px 0; padding: 18px 22px 56px;
-  overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain;
-  scroll-snap-type: x mandatory; scroll-padding-inline: 22px; scroll-behavior: smooth;
-  scrollbar-width: none;
-  flex: 1 1 auto; min-height: 380px;
-  --fade-start: 0px; --fade-end: 56px;
-  mask-image: linear-gradient(90deg, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+  display: grid; gap: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  grid-auto-rows: minmax(250px, 1fr);
+  margin: 18px 0 0; padding: 8px 0 40px;
+  flex: 1 1 auto; min-height: 0;
 }
-.tm-briefing .briefing-cards-grid[data-at-start="false"] { --fade-start: 56px; }
-.tm-briefing .briefing-cards-grid[data-at-end="true"] { --fade-end: 0px; }
-.tm-briefing .briefing-cards-grid::-webkit-scrollbar,
 .tm-briefing .briefing-card-body::-webkit-scrollbar { display: none; }
-.tm-briefing .briefing-cards-grid:focus-visible { outline: none; }
-.tm-briefing .briefing-cards-grid:focus-visible .briefing-card:first-child { outline: 2px solid var(--sail-focus-ring, #ffd69f); outline-offset: 3px; }
 
 .tm-briefing .briefing-card {
   --card-a: #ff7a45; --card-b: #ff2d6f;
-  position: relative; isolation: isolate; flex: 0 0 272px;
-  max-height: 430px;
+  position: relative; isolation: isolate; min-width: 0; min-height: 0;
   display: flex; flex-direction: column; justify-content: flex-start; gap: 10px;
-  padding: 18px 18px 16px; overflow: hidden; scroll-snap-align: start;
+  padding: 18px 18px 16px; overflow: hidden;
   background: #07080b;
   border: 1px solid rgb(255 255 255 / .08); border-radius: 22px;
   box-shadow:
@@ -769,9 +759,9 @@ html.sail-backdrop-on .tm-root {
   backdrop-filter: none; -webkit-backdrop-filter: none;
   transition: box-shadow 260ms var(--sail-ease, ease), transform 260ms var(--sail-ease, ease);
 }
-/* The deck lays out header + row; the row takes the remaining height and the cards
-   fill it (capped), so they fit the stage at any size. The deck scrolls vertically only
-   when the stage is shorter than one card, also without a visible scrollbar. */
+/* The deck lays out header + grid; the grid takes the remaining height and its rows share
+   it, so the cards fill the stage. The deck scrolls vertically only when the stage is too
+   short for the rows, without a visible scrollbar. */
 .tm-root[data-mode="away"] .tm-stage .return-briefing-deck.tm-briefing:not([hidden]) {
   display: flex; flex-direction: column; scrollbar-width: none;
 }
@@ -829,13 +819,10 @@ html.sail-backdrop-on .tm-root {
 .tm-briefing .briefing-continuity-card .briefing-card-body { max-height: 64%; }
 
 @media (max-width: 860px) {
-  .tm-briefing .briefing-cards-grid { margin-inline: -12px; padding-inline: 12px; scroll-padding-inline: 12px; gap: 14px; }
-  .tm-briefing .briefing-cards-grid { min-height: 290px; margin-top: 10px; padding-top: 12px; padding-bottom: 30px; }
+  .tm-briefing .briefing-cards-grid { grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(260px, auto); gap: 14px; margin-top: 10px; padding-top: 4px; padding-bottom: 30px; }
   .tm-briefing .briefing-headline { font-size: 16px; line-height: 1.3; }
-  .tm-briefing .briefing-card { flex-basis: min(78vw, 300px); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .tm-briefing .briefing-cards-grid { scroll-behavior: auto; }
   .tm-briefing .briefing-card, .tm-briefing .briefing-card::before { transition: none; }
   .tm-briefing .briefing-card:hover, .tm-briefing .briefing-card:hover::before { transform: none; }
 }
@@ -845,7 +832,7 @@ html.sail-backdrop-on .tm-root {
 @media (forced-colors: active) {
   .tm-briefing .briefing-card::before, .tm-briefing .briefing-category-tag::before { display: none; }
   .tm-briefing .briefing-card { border: 1px solid CanvasText; box-shadow: none; }
-  .tm-briefing .briefing-cards-grid, .tm-briefing .briefing-card-body { mask-image: none; }
+  .tm-briefing .briefing-card-body { mask-image: none; }
 }
 
 /* Map light response: the blocks catch a little of the ambient light. Faces mix in the
@@ -904,6 +891,14 @@ html[data-sail-visuals=off] .tm-halo { animation: none; }
 /* ------------------------------------------------------------ short windows */
 /* Keep the whole rail inside the viewport instead of clipping the Now Playing card. The
    navigation compresses on short windows and the card stays reachable at the bottom. */
+/* The rail always fits the window: brand, Now Playing and the status card keep their
+   size, and the two navigation lists share what's left. Each button shrinks smoothly
+   from 38px to 26px, so there is no scrolling at any usual window height (the scroll
+   below is only a last resort for very short windows). */
+.tm-side > * { flex-shrink: 0; }
+.tm-side > .tm-nav { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; }
+.tm-nav > li { display: flex; flex: 0 1 38px; min-height: 26px; }
+.tm-nav > li > .tm-nav-item { min-height: 0; }
 @media (max-height: 860px) {
   .tm-root { grid-template-rows: 56px minmax(0, 1fr) 104px; }
   .tm-root[data-activity-collapsed="true"] { grid-template-rows: 56px minmax(0, 1fr) 38px; }
@@ -912,7 +907,7 @@ html[data-sail-visuals=off] .tm-halo { animation: none; }
   .tm-brand strong { font-size: 18px; }
   .tm-version { display: none; }
   .tm-nav { gap: 0; }
-  .tm-nav-item { min-height: 31px; font-size: 12.5px; gap: 9px; padding: 0 9px; }
+  .tm-nav-item { font-size: 12.5px; gap: 9px; padding: 0 9px; }
   .tm-nav-2 { margin-top: 6px; padding-top: 6px; }
   .tm-np {
     position: sticky; bottom: 0; z-index: 1;
@@ -927,7 +922,6 @@ html[data-sail-visuals=off] .tm-halo { animation: none; }
 @media (max-height: 700px) {
   .tm-side { padding-top: 8px; }
   .tm-brand { display: none; }
-  .tm-nav-item { min-height: 28px; }
   .tm-np { padding: 6px; }
   .tm-np-art { display: none; }
   .tm-np-ctl { gap: 2px; }

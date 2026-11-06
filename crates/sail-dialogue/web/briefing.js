@@ -223,43 +223,16 @@
 
   window.sailBriefing = { refresh: () => refreshBriefing(document.getElementById('briefingRefreshBtn')) };
 
-  // The card row scrolls sideways with a hidden scrollbar: a vertical wheel scrolls it,
-  // the row is focusable for arrow keys, edge fades show what is off-screen, and a card
-  // whose text overflows becomes focusable so its body can be scrolled by keyboard.
+  // The cards sit in a grid. A card whose text overflows becomes focusable so its body can
+  // be scrolled by keyboard.
   function setupCardRow() {
     const row = document.querySelector('#returnBriefingDeck .briefing-cards-grid');
     if (!row) return;
-    row.tabIndex = 0;
-    row.setAttribute('role', 'region');
-    row.setAttribute('aria-label', 'Briefing cards, scroll sideways');
-    const edges = () => {
-      row.dataset.atStart = String(row.scrollLeft <= 2);
-      row.dataset.atEnd = String(row.scrollLeft + row.clientWidth >= row.scrollWidth - 2);
-    };
-    row.addEventListener('scroll', edges, { passive: true });
-    row.addEventListener('wheel', (event) => {
-      if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
-      if (event.target.closest('.briefing-card-body') && overflows(event.target.closest('.briefing-card-body'))) return;
-      if (row.scrollWidth <= row.clientWidth) return;
-      event.preventDefault();
-      row.scrollBy({ left: event.deltaY, behavior: 'auto' });
-    }, { passive: false });
-    row.addEventListener('keydown', (event) => {
-      if (event.target !== row) return;
-      const card = row.querySelector('.briefing-card');
-      const step = card ? card.getBoundingClientRect().width + parseFloat(getComputedStyle(row).columnGap || 0) : row.clientWidth * 0.8;
-      const moves = { ArrowRight: step, ArrowLeft: -step, PageDown: row.clientWidth, PageUp: -row.clientWidth };
-      if (event.key in moves) row.scrollBy({ left: moves[event.key] });
-      else if (event.key === 'Home') row.scrollTo({ left: 0 });
-      else if (event.key === 'End') row.scrollTo({ left: row.scrollWidth });
-      else return;
-      event.preventDefault(); event.stopPropagation();
-    });
     const bodies = () => row.querySelectorAll('.briefing-card-body').forEach((body) => {
       if (overflows(body)) { body.tabIndex = 0; body.setAttribute('role', 'region'); body.setAttribute('aria-label', `${body.closest('.briefing-card')?.querySelector('.briefing-category-tag')?.textContent || 'Card'} details`); }
       else { body.removeAttribute('tabindex'); body.removeAttribute('role'); body.removeAttribute('aria-label'); }
     });
-    const update = () => { edges(); bodies(); };
+    const update = bodies;
     if (typeof ResizeObserver === 'function') new ResizeObserver(update).observe(row);
     new MutationObserver(() => requestAnimationFrame(update)).observe(row, { subtree: true, childList: true, characterData: true });
     update();
