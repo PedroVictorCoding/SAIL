@@ -167,18 +167,61 @@ const SailReader = (() => {
         const description = `${book.title} ${book.authors.join(' ')}`;
         return description.toLocaleLowerCase().includes(query);
       });
-      const recent = state.books.find(book => book.position && book.position.percent < 100);
+      $('book-list').replaceChildren();
+      $('reading-activity').replaceChildren();
+      $('library-summary').replaceChildren();
+      $('book-count').textContent = `${books.length} of ${state.books.length} books`;
+      for (const book of books) {
+        const entry = button('', () => openBook(book));
+        entry.className = 'book-list-entry';
+        entry.append(el('span', book.format.toUpperCase(), 'book-format'), el('span', book.title));
+        $('book-list').append(entry);
+      }
+      const recent = state.books.find(book => book.position && book.position.percent < 100)
+        || state.books[0];
       if (recent && !query) {
         const card = el('div', undefined, 'continue-card'), info = el('div');
-        const progress = `${recent.authors.join(', ')} · ${recent.position.percent.toFixed(1)}% by text`;
+        const progress = recent.position?.percent;
         info.append(
-          el('p', 'CONTINUE READING', 'eyebrow'),
+          el('p', progress === undefined ? 'YOUR NEXT CHAPTER' : 'CONTINUE READING', 'eyebrow'),
           el('h2', recent.title),
-          el('p', progress, 'muted')
+          el('p', recent.authors.join(', ') || 'Unknown author', 'muted'),
+          button(progress === undefined ? 'Start reading →' : 'Continue reading →', () => openBook(recent))
         );
-        card.append(info, button('Continue reading', () => openBook(recent)));
+        card.append(cover(recent), info);
         $('continue').append(card);
+        const panel = el('div', undefined, 'reading-progress');
+        panel.append(el('p', 'READING PROGRESS', 'eyebrow'),
+          el('strong', progress === undefined ? 'Not started' : `${progress.toFixed(1)}%`),
+          el('p', 'Measured by text, across all chapters.', 'muted'));
+        const meter = el('progress');
+        meter.max = 100;
+        meter.value = progress ?? 0;
+        meter.setAttribute('aria-label', `Reading progress for ${recent.title}`);
+        panel.append(meter);
+        $('library-summary').append(panel);
       }
+      const collection = el('div', undefined, 'collection-summary');
+      const finished = state.books.filter(book => book.position?.percent >= 100).length;
+      collection.append(el('p', 'YOUR COLLECTION', 'eyebrow'),
+        el('strong', String(state.books.length)), el('p', `books · ${finished} finished`, 'muted'));
+      $('library-summary').append(collection);
+      const activity = state.books.filter(book => book.position).sort((a, b) =>
+        Date.parse(b.position.saved_at) - Date.parse(a.position.saved_at)).slice(0, 6);
+      for (const book of activity) {
+        const item = el('article', undefined, 'activity-entry');
+        const time = el('time');
+        time.dateTime = book.position.saved_at;
+        const saved = new Date(book.position.saved_at);
+        time.textContent = Number.isNaN(saved.getTime()) ? 'Saved position' : saved.toLocaleString(undefined, {
+          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+        });
+        item.append(el('p', 'SAVED PLACE', 'eyebrow'), button(book.title, () => openBook(book)),
+          el('p', `${book.position.percent.toFixed(1)}% by text`, 'muted'), time);
+        $('reading-activity').append(item);
+      }
+      if (!activity.length)
+        $('reading-activity').append(el('p', 'Your saved reading places will appear here once you start a book.', 'muted'));
       for (const book of books) {
         const item = el('article', undefined, 'book');
         item.append(cover(book), el('p', `${book.format.toUpperCase()} · ${book.position
