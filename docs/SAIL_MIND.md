@@ -72,6 +72,10 @@ status fields, verification and remaining browser/VRAM/eviction limitations.
 
 ## 7a. GPU offload for MoE models (#34)
 
+For a wedged AMD driver or Vulkan device-loss failure, see
+[RX 5500 Vulkan recovery](GPU_RECOVERY.md). Flash Attention disabling is explicit
+(`-fa off`); it must not fall back to llama.cpp's automatic mode.
+
 The host has an AMD RX 5500 with little VRAM. The resident model, Qwen3.6-35B-A3B, is a mixture-of-experts with about 3B parameters active per token. Most of their weights are experts, and only a few run for each token. The useful split is therefore **every layer's attention and KV cache on the GPU, expert weights in system RAM**, not "the first N whole layers on the GPU". The latter fills VRAM with rarely used experts.
 
 | Setting | Meaning |

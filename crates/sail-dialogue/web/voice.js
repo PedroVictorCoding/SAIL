@@ -1,5 +1,6 @@
 'use strict';
-let learningSession = null, learningEnabled = false, learningBusy = false;
+let liveContextEnabled = false, liveContextReplyPending = false;
+let learningSession = null, learningEnabled = true, learningBusy = false;
 let ws, audioCtx, micStream, processor, micSource;
 let workletLoaded=false;
 const playbackTimers=new Set();
@@ -46,7 +47,7 @@ function showError(error) {
 function normalizeToolName(name) { return String(name || '').replaceAll('_', ':'); }
 function toolCard(tool) {
   const name = normalizeToolName(tool);
-  if (name.startsWith('vision:')) return document.getElementById('canvasCard');
+  if (name.startsWith('vision:') || name === 'visual:snapshot') return document.getElementById('canvasCard');
   if (name === 'os:status') return document.getElementById('systemCard');
   if (name.startsWith('proc:') || name.startsWith('fs:') || name.startsWith('github:')) return document.getElementById('toolsCard');
   if (name.startsWith('forge:')) return document.getElementById('forgeCard');
@@ -72,16 +73,22 @@ function syncActivityPill() {
     'fs:read':'Reading workspace file',
     'fs:write':'Writing workspace file',
     'vision:frame':'Analyzing image',
+    'visual:snapshot':'Looking',
     'forge:enqueue':'Dispatching Forge task',
     'forge:status':'Checking Forge job',
     'forge:list':'Listing Forge tasks',
     'github:issues':'Checking GitHub repo',
     'web:read':'Reading web page',
+    'web:speak':'Reading web page aloud',
   };
   document.getElementById('activityText').textContent = activeTools.size ? labels[[...activeTools.keys()].at(-1)] || 'Using a local tool' : stateLabels[orbState] || '';
 }
 function sendAction(action, fields = {}) {
   if (!ws || ws.readyState !== WebSocket.OPEN) { showError('Connection unavailable. Wait for reconnection.'); return false; }
+  if (['text', 'set_live_context', 'toggle_mute', 'reset', 'interrupt'].includes(action)) {
+    discardListeningCapture();
+    liveContextReplyPending = liveContextEnabled && action === 'text';
+  }
   ws.send(JSON.stringify({ action, ...fields })); return true;
 }
 function connectWs() {
@@ -89,13 +96,14 @@ function connectWs() {
   ws = new WebSocket(`${proto}//${location.host}/ws/voice`);
   ws.onopen = () => {
     setConnection('Connected · local session', true);
-    micBtn.disabled = false;
+    micBtn.disabled = false; document.getElementById('liveContextBtn').disabled = false;
     if (orbState === 'disconnected') updateState('idle');
     sendAction('forge:list');
   };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
-    learningSession = null; learningEnabled = false; renderLearning();
+    liveContextReplyPending = false; liveContextEnabled = false; renderLiveContext(); document.getElementById('liveContextBtn').disabled = true;
+    learningSession = null; learningEnabled = true; renderLearning();
     pendingApprovalActions.clear(); lastToolCalls.clear();
     cancelVisualCapture(); captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
@@ -104,15 +112,20 @@ function connectWs() {
     let data;
     try { data = JSON.parse(event.data); } catch { showError('Invalid server message'); return; }
     switch (data.type) {
-      case 'capture_required':
-        setCaptureHeld(false); turnInProgress = false; stopPlayback(); requestVisualCapture(data); break;
+      case 'snapshot_request':
+        requestVisualCapture(data); break;
       case 'session':
-        learningSession = data.session_id; learningEnabled = data.learning === true; renderLearning();
+        learningSession = data.session_id; learningEnabled = data.learning !== false; renderLearning();
         cancelVisualCapture();
-        document.getElementById('conversation').replaceChildren(); responseNode = null;
+        document.getElementById('conversation').replaceChildren(); responseNode = null; chatFollow.resume();
         applyControl(data.control); announceClientSpeech(); break;
+      case 'live_context_state':
+        discardListeningCapture(); liveContextReplyPending = false;
+        liveContextEnabled = data.enabled === true; renderLiveContext(); break;
+      case 'live_context_observed':
+        transcriptBox.textContent = `Context · ${data.text}`; break;
       case 'learning_state':
-        learningEnabled = data.enabled === true; renderLearning(); break;
+        learningEnabled = data.enabled !== false; renderLearning(); break;
       case 'telemetry':
         document.getElementById('sessionConfidence').textContent = `${(data.confidence * 100).toFixed(0)}%`;
         document.getElementById('sessionRms').textContent = Number(data.rms).toFixed(3);
@@ -147,7 +160,7 @@ function connectWs() {
       case 'response_delta':
         responseText += data.text;
         if (!responseNode) responseNode = appendConversation('SAIL', '');
-        responseNode.lastChild.textContent = responseText;
+        setMessageText(responseNode, responseText);
         if (!turnTokenCount) updateState('generating');
         if (data.token_count !== undefined) {
           turnTokenCount = data.token_count;
@@ -164,9 +177,10 @@ function connectWs() {
       case 'speech_text': queueClientSpeech(data); break;
       case 'client_speech': clientSpeechActive = { stt:data.stt === true, tts:data.tts === true }; renderSpeechPlacement(); break;
       case 'turn_finished':
+        liveContextReplyPending = false;
         setCaptureHeld(false);
         turnInProgress = false;
-        document.getElementById('assistantAnnounce').textContent = responseText;
+        document.getElementById('assistantAnnounce').textContent = responseNode?.lastChild?.innerText || responseText;
         turnFinished = true;
         if (!pendingAudio && !playingSources.size) finishPlayback();
         if (data.latency_ms) setConnection(`Connected · local turn ${(data.latency_ms / 1000).toFixed(1)}s`, true);
@@ -197,7 +211,7 @@ function connectWs() {
         if (!responseNode) responseNode = appendConversation('SAIL', '');
         if (data.text) {
           responseText += data.text + ' ';
-          responseNode.lastChild.textContent = responseText;
+          setMessageText(responseNode, responseText);
         }
         updateState('speaking');
         break;
@@ -205,6 +219,7 @@ function connectWs() {
       case 'tool_completed': updateToolActivity(data.tool, false); break;
       case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); logToolActivity(data.result); break;
       case 'canvas': renderArtifact(data.artifact); break;
+      case 'plan': window.renderPlanCard?.(data.plan); break;
       case 'approval_required':
         renderApprovalCard(data);
         updateState('approval_required');
@@ -232,11 +247,13 @@ function connectWs() {
       case 'safety_review_completed':
         handleSafetyReviewCompleted(data);
         break;
-      case 'error': showError(data.message); break;
+      case 'error':
+        liveContextReplyPending = false; showError(data.message); break;
     }
   };
 }
 function applyControl(control) {
+  if (control.is_muted !== isMuted) discardListeningCapture();
   isMuted = control.is_muted;
   muteBtn.textContent = isMuted ? 'Unmute' : 'Mute'; muteBtn.setAttribute('aria-pressed', String(isMuted)); muteBtn.className = isMuted ? 'quiet-button muted' : 'quiet-button';
   const micIndicator = document.getElementById('micLiveIndicator');
@@ -273,8 +290,43 @@ function setTurnDetection() {
 function appendConversation(role, text) {
   const node = document.createElement('article'); node.className = `message message-${role.toLowerCase()}`;
   const label = document.createElement('span'); label.className = 'message-label'; label.textContent = role;
-  const content = document.createElement('span'); content.textContent = text;
-  node.append(label, content); document.getElementById('conversation').append(node); node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return node;
+  const content = document.createElement('div'); content.className = 'message-body';
+  node.append(label, content); setMessageText(node, text);
+  if (role === 'You') chatFollow.resume();
+  document.getElementById('conversation').append(node); return node;
+}
+// Keeps the conversation pinned to the newest text while replies stream in, until the
+// owner scrolls away from the bottom; scrolling back to the bottom resumes following.
+const chatFollow = (() => {
+  const box = document.getElementById('conversation');
+  let follow = true, queued = false;
+  const atBottom = () => box.scrollHeight - box.scrollTop - box.clientHeight <= 4;
+  const stick = () => {
+    queued = false;
+    // Hidden (e.g. behind another tab in the Dialogue column): nothing to scroll yet.
+    if (follow && box.clientHeight) box.scrollTop = box.scrollHeight;
+  };
+  const schedule = () => { if (follow && !queued) { queued = true; requestAnimationFrame(stick); } };
+  // Upward intent stops following at once, before a pending stick can pull the view back.
+  const leave = () => { if (box.scrollHeight > box.clientHeight) follow = false; };
+  box.addEventListener('wheel', (e) => { if (e.deltaY < 0) leave(); }, { passive: true });
+  box.addEventListener('keydown', (e) => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key)) leave(); });
+  let touchY = null;
+  box.addEventListener('touchstart', (e) => { touchY = e.touches[0]?.clientY ?? null; }, { passive: true });
+  box.addEventListener('touchmove', (e) => { const y = e.touches[0]?.clientY; if (touchY !== null && y > touchY) leave(); touchY = y; }, { passive: true });
+  // Scrollbar drags and everything else: follow exactly when the view is at the bottom.
+  box.addEventListener('scroll', () => { if (box.clientHeight) follow = atBottom(); }, { passive: true });
+  // Streamed tokens, Markdown/diagram renders and cards all grow the log.
+  new MutationObserver(schedule).observe(box, { childList: true, subtree: true, characterData: true });
+  new ResizeObserver(schedule).observe(box);
+  return { resume() { follow = true; schedule(); } };
+})();
+// Assistant replies are Markdown; user turns (mostly speech transcripts) stay plain text.
+function setMessageText(node, text) {
+  const content = node.lastChild;
+  if (node.classList.contains('message-sail') && window.SailMarkdown) {
+    content.classList.add('markdown'); window.SailMarkdown.renderInto(content, text);
+  } else content.textContent = text;
 }
 function renderToolResult(result) {
   const approval = result?.output?.approval_session;
@@ -321,6 +373,7 @@ function renderToolResult(result) {
   else if (output?.issue && output?.title) summary.textContent = `GitHub Issue #${output.number || output.issue.number}: ${output.title} (${output.state || 'OPEN'})`;
   else if (Array.isArray(output?.issues)) summary.textContent = `${output.count} GitHub issues retrieved (sorted by priority)`;
   else if (result?.tool === 'web:read' && output?.url) summary.textContent = `Fetched ${output.bytes || output.content?.length || 0} bytes from ${output.url}`;
+  else if ((result?.tool === 'web:speak' || result?.tool === 'web_speak') && output?.url) summary.textContent = `Streamed ${output.paragraphs?.length || 0} paragraphs from ${output.title || output.url} directly to voice`;
   else if (result?.tool === 'forge:enqueue' && output?.job_id) summary.textContent = `Forge job enqueued: ${output.job_id} (Issue #${output.issue_number || '—'})`;
   else if (result?.tool === 'forge:status' && output?.job_id) summary.textContent = `Forge job ${output.job_id}: ${output.state || 'active'} (${output.diff_stat || output.current_step || '—'})`;
   else if (output?.job_id) summary.textContent = `Forge job ${output.job_id}: ${output.state || 'active'}`;
@@ -532,7 +585,7 @@ function queueAudio(data) {
 // actually playing, not packets received early.
 function schedulePlayback(context, buffer, generation, telemetry) {
   const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination);
-  const when = Math.max(context.currentTime + 0.015, nextAudioTime); nextAudioTime = when + buffer.duration;
+  const when = nextAudioTime > context.currentTime ? nextAudioTime : context.currentTime + 0.06; nextAudioTime = when + buffer.duration;
   playingSources.add(source);
   const timer = setTimeout(() => {
     playbackTimers.delete(timer);
@@ -546,7 +599,7 @@ function schedulePlayback(context, buffer, generation, telemetry) {
 
 // ---- Speech on this device (client-speech.js) ----
 let clientSpeechActive = { stt:false, tts:false };
-let clientFrames = Promise.resolve(), clientCapturing = false, clientCaptureSerial = 0;
+let clientFrames = Promise.resolve(), clientCapturing = false, clientCaptureSerial = 0, clientFrameGeneration = 0;
 const selectedVoice = () => document.getElementById('voiceSelect')?.value || 'af_heart';
 // Tell the server what this browser runs. TTS only for voices the browser engine has
 // (kokoro-js speaks English); other voices keep host synthesis.
@@ -574,6 +627,37 @@ function renderSpeechLoad() {
     bar.value = percent; value.textContent = `${percent}%`;
   } else { bar.removeAttribute('value'); value.textContent = ''; }
 }
+// Loading bar for the resident model (Qwen): how much of its weights is in memory, then an
+// indeterminate bar while it initializes; hidden once it is ready. Polled quickly only
+// while a model is starting.
+async function refreshModelLoad() {
+  let starting = false;
+  try {
+    const response = await fetch('/api/mind/status', { cache:'no-store' });
+    if (response.ok) starting = renderModelLoad(await response.json());
+  } catch (_) {}
+  setTimeout(refreshModelLoad, starting ? 1000 : 5000);
+}
+function renderModelLoad(status) {
+  const indicator = document.getElementById('modelLoadIndicator'); if (!indicator) return false;
+  const model = (status.models || []).find(m => m.state === 'starting');
+  indicator.hidden = !model; if (!model) return false;
+  const bar = document.getElementById('modelLoadBar'), value = document.getElementById('modelLoadValue');
+  const label = document.getElementById('modelLoadLabel');
+  const load = model.load;
+  // The last few percent of a GGUF may never be read; past 95% the wait is initialization.
+  const percent = load && load.total_bytes > 0 ? Math.floor(load.loaded_bytes * 100 / load.total_bytes) : 100;
+  if (percent < 95) {
+    label.textContent = `Loading ${model.model}`;
+    bar.value = percent; value.textContent = `${percent}%`;
+  } else {
+    // Weights are in memory (or this runtime is not the one loading): still initializing.
+    label.textContent = `Starting ${model.model}`;
+    bar.removeAttribute('value'); value.textContent = '';
+  }
+  return true;
+}
+refreshModelLoad();
 function renderSpeechPlacement() {
   renderSpeechLoad();
   const status = document.getElementById('speechPlacementStatus'); if (!status) return;
@@ -587,11 +671,14 @@ async function loadClientSpeech() {
   await SailClientSpeech.load(renderSpeechPlacement);
   announceClientSpeech(); renderSpeechPlacement();
 }
-async function handleClientFrame(frame) {
-  if (!clientSpeechActive.stt || !isRecording || isMuted) return;
+async function handleClientFrame(frame, generation = clientFrameGeneration) {
+  if (generation !== clientFrameGeneration) return;
+  if (!clientSpeechActive.stt || !isRecording || isMuted || listeningReplyBusy()) return;
+  const serial = clientCaptureSerial;
   let result;
   try { result = await SailClientSpeech.frame(frame); }
   catch (error) { failClientSpeech(error); return; }
+  if (serial !== clientCaptureSerial || !isRecording || isMuted || listeningReplyBusy()) return;
   let rms = 0; for (const v of frame) rms += (v / 32768) ** 2; rms = Math.sqrt(rms / frame.length);
   if (!playingSources.size) {
     currentAmplitude = rms; wavePhase = (wavePhase + 0.12) % (Math.PI * 2); spectrum8 = Array(8).fill(Math.min(1, rms * 4));
@@ -603,7 +690,7 @@ async function handleClientFrame(frame) {
   document.getElementById('telVad').textContent = `VAD inference on this device: ${result.inferenceMs.toFixed(2)}ms`;
   if (result.event === 'start') {
     // Barge-in, as the host VAD does: stop playback and let the server preempt background work.
-    clientCapturing = true; clientCaptureSerial++; stopPlayback(); sendAction('speech_start');
+    clientCapturing = true; clientCaptureSerial++; stopPlayback(); sendAction('speech_start', { capture_id:clientCaptureSerial });
   } else if (result.event === 'end') {
     // Not awaited: the VAD keeps running during transcription so barge-in still works.
     void commitClientCapture();
@@ -620,9 +707,9 @@ async function commitClientCapture() {
   setCaptureHeld(false); updateState('transcribing');
   try {
     const { text } = await SailClientSpeech.transcribe(samples);
-    if (serial !== clientCaptureSerial) return;
-    if (text) sendAction('voice_text', { text }); else { sendAction('speech_cancel'); updateState(isRecording ? 'listening' : 'idle'); }
-  } catch (error) { sendAction('speech_cancel'); failClientSpeech(error); }
+    if (serial !== clientCaptureSerial || listeningReplyBusy()) return;
+    if (text) sendAction('voice_text', { text, capture_id:serial }); else { sendAction('speech_cancel'); updateState(isRecording ? 'listening' : 'idle'); }
+  } catch (error) { if (serial === clientCaptureSerial) { sendAction('speech_cancel'); failClientSpeech(error); } }
 }
 // Synthesize a reply fragment here and queue it behind earlier audio, in order.
 function queueClientSpeech(data) {
@@ -664,9 +751,7 @@ function updateState(state) {
   statusBadge.textContent = labels[state] || 'Ready'; document.getElementById('appShell').dataset.state = state;
   const palette = statePalette(paletteState(state));
   ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, [palette.primary,palette.secondary,palette.tertiary][index]));
-  document.getElementById('sessionState').textContent = labels[state] || 'Ready';
-  const liveState = document.getElementById('sessionLiveState');
-  if (liveState) liveState.textContent = detailedLabels[state] || labels[state] || state || 'Ready';
+  document.getElementById('sessionState').textContent = detailedLabels[state] || labels[state] || 'Ready';
   if (changed && reduceMotion.matches && !document.hidden) renderVisuals();
   syncActivityPill();
   document.getElementById('interruptBtn').hidden = !['thinking','speaking','working','transcribing','generating'].includes(state);
@@ -760,10 +845,10 @@ async function startMic() {
       }
       if (!(data instanceof ArrayBuffer)) return;
       if (clientSpeechActive.stt) {
-        if (isRecording && !isMuted) { const frame = new Int16Array(data); clientFrames = clientFrames.then(() => handleClientFrame(frame)); }
+        if (isRecording && !isMuted && !listeningReplyBusy()) { const frame = new Int16Array(data); const generation = clientFrameGeneration; clientFrames = clientFrames.then(() => handleClientFrame(frame, generation)); }
         return;
       }
-      if (isRecording && !isMuted && ws?.readyState === WebSocket.OPEN) {
+      if (isRecording && !isMuted && !listeningReplyBusy() && ws?.readyState === WebSocket.OPEN) {
         if (ws.bufferedAmount > 64000) { showError('Audio connection is too slow; microphone stopped.'); stopMic(); return; }
         ws.send(data);
       }
@@ -775,7 +860,7 @@ async function startMic() {
 }
 function stopMic(discardClientCapture = true) {
   if (pendingCaptureFlush) { const pending = pendingCaptureFlush; pendingCaptureFlush = null; pending.reject(); }
-  if (discardClientCapture && clientSpeechActive.stt && clientCapturing) { clientCapturing = false; clientCaptureSerial++; SailClientSpeech.resetCapture(); sendAction('speech_cancel'); }
+  if (discardClientCapture) { discardListeningCapture(); sendAction('speech_cancel'); }
   isRecording = false; micStream?.getTracks().forEach(track => track.stop());
   if (processor) { processor.port.onmessage = null; processor.disconnect(); processor = null; }
   micSource?.disconnect(); micSource = null; micStream = null;
@@ -938,6 +1023,36 @@ window.addEventListener('sail:orb-telemetry', event => {
 window.sailUi = Object.freeze({
   setOrbTelemetry: data => window.dispatchEvent(new CustomEvent('sail:orb-telemetry', { detail:data })),
   resumeOrbAnimation: () => { orbFrozen = false; },
+});
+
+
+function listeningReplyBusy() {
+  return liveContextEnabled && (liveContextReplyPending || pendingAudio > 0 || playingSources.size > 0);
+}
+function discardListeningCapture() {
+  if (typeof transcriptBox !== 'undefined' && transcriptBox.textContent.startsWith('Context ·')) transcriptBox.textContent = '';
+  clientCaptureSerial++; clientFrameGeneration++; clientCapturing = false;
+  if (typeof SailClientSpeech !== 'undefined') SailClientSpeech.resetCapture();
+}
+function renderLiveContext() {
+  const button = document.getElementById('liveContextBtn');
+  button.setAttribute('aria-pressed', String(liveContextEnabled));
+  button.textContent = liveContextEnabled ? 'Disable and clear context' : 'Enable listening context';
+  document.getElementById('liveContextStatus').textContent = liveContextEnabled
+    ? 'Listening context enabled · start microphone to capture; type to ask'
+    : 'Listening context off';
+}
+document.getElementById('liveContextBtn').addEventListener('click', async () => {
+  const button = document.getElementById('liveContextBtn');
+  button.disabled = true;
+  const connection = ws;
+  try {
+    const owner_token = liveContextEnabled ? undefined : await getOrFetchOwnerToken();
+    if (ws !== connection || ws.readyState !== WebSocket.OPEN) return;
+    stopPlayback();
+    sendAction('set_live_context', {enabled: !liveContextEnabled, owner_token});
+  } catch (error) { showError(error.message); }
+  finally { button.disabled = !ws || ws.readyState !== WebSocket.OPEN; }
 });
 
 function renderLearning() {

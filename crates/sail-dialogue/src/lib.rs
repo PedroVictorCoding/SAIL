@@ -1,19 +1,37 @@
 pub mod approval_http;
+pub mod briefing;
+pub mod briefing_http;
+pub mod connection_controller;
 pub mod control;
+pub mod conversation_controller;
+#[cfg(test)]
+mod conversation_controller_tests;
+pub mod dictation_http;
 mod execution;
+pub mod learn_http;
+pub mod live_context;
 pub mod memory_http;
+pub mod music_fastpath;
 pub mod orb;
 pub mod pipeline;
+pub mod plans;
+pub mod prompt;
+pub mod pulse_http;
+pub mod reader_http;
 pub mod server;
 mod speech;
+pub mod spotify_http;
 pub mod staged_ack;
 pub mod stt;
+pub mod system_http;
 pub mod terminal;
 mod tool_policy;
+pub mod tracker_http;
 pub mod tts;
 pub mod turn_coordinator;
+pub mod ui_assets;
 pub mod vad;
-mod visual_capture;
+pub mod visual_snapshot;
 pub mod vlm;
 pub mod web_assets;
 
@@ -51,6 +69,8 @@ pub struct DialogueSubsystem {
     server_addr: Option<SocketAddr>,
     services: sail_mind::VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
+    plans: Option<Arc<plans::Plans>>,
+    pulse: Option<Arc<sail_pulse::Pulse>>,
 }
 
 impl DialogueSubsystem {
@@ -64,7 +84,9 @@ impl DialogueSubsystem {
                     .expect("Invalid SAIL_VOICE_BIND"),
             ),
             services: sail_mind::VoiceModelServices::new(),
-            arena: Arc::new(sail_arena::ArenaSubsystem::new()),
+            arena: Arc::new(sail_arena::ArenaSubsystem::open_default()),
+            plans: None,
+            pulse: None,
         }
     }
 
@@ -74,6 +96,16 @@ impl DialogueSubsystem {
     }
     pub fn with_arena(mut self, arena: Arc<sail_arena::ArenaSubsystem>) -> Self {
         self.arena = arena;
+        self
+    }
+    /// Agent task plans: "Plan: …" turns and the plan card.
+    pub fn with_plans(mut self, plans: Arc<plans::Plans>) -> Self {
+        self.plans = Some(plans);
+        self
+    }
+    /// Local reminders and the server-owned scheduler (`docs/SAIL_PULSE.md`).
+    pub fn with_pulse(mut self, pulse: Arc<sail_pulse::Pulse>) -> Self {
+        self.pulse = Some(pulse);
         self
     }
     pub fn with_addr(mut self, addr: SocketAddr) -> Self {
@@ -117,10 +149,13 @@ impl Subsystem for DialogueSubsystem {
                 let bus_clone = bus.clone();
                 let services = self.services.clone();
                 let arena = self.arena.clone();
+                let plans = self.plans.clone();
+                let pulse = self.pulse.clone();
                 tokio::spawn(async move {
-                    if let Err(err) =
-                        server::run_dialogue_server_with_services(addr, bus_clone, services, arena)
-                            .await
+                    if let Err(err) = server::run_dialogue_server_with_plans(
+                        addr, bus_clone, services, arena, plans, pulse,
+                    )
+                    .await
                     {
                         tracing::error!(error = %err, "Dialogue Orb server encountered error");
                     }

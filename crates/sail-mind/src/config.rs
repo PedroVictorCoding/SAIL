@@ -62,6 +62,10 @@ pub struct LocalModelConfig {
     pub endpoint: String,
     pub projector: Option<PathBuf>,
     pub managed: bool,
+    /// Keep a managed llama-server running after SAIL exits so the next run adopts the
+    /// already-loaded model instead of reloading it. Set by `SAIL_LLAMA_PERSIST=1`
+    /// (`run.sh` enables it by default); stop it with `./run.sh --stop`.
+    pub persist: bool,
     pub compute: ComputeBackend,
     pub device: String,
     pub gpu_layers: u32,
@@ -119,6 +123,9 @@ impl Default for LocalModelConfig {
             endpoint,
             projector: std::env::var("SAIL_MMPROJ").map(PathBuf::from).ok(),
             managed,
+            persist: std::env::var("SAIL_LLAMA_PERSIST")
+                .map(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+                .unwrap_or(false),
             compute: ComputeBackend::Cpu,
             device: "Vulkan0".into(),
             gpu_layers: 8,
@@ -302,6 +309,8 @@ impl LocalModelConfig {
             endpoint,
             projector: None,
             managed,
+            // Profile benchmarks launch short-lived servers; never leave them running.
+            persist: false,
             compute: profile.backend,
             device: profile.device.clone(),
             gpu_layers: profile.gpu_layers,
@@ -340,6 +349,44 @@ impl LocalModelConfig {
             gpu_layers: self.gpu_layers,
             device: self.device.clone(),
         }
+    }
+    /// Estimated memory required per context token in bytes for the KV cache.
+    pub fn kv_cache_bytes_per_token(&self) -> u64 {
+        let bytes_per_elem = |t: &str| match t.to_ascii_lowercase().as_str() {
+            "q4_0" | "q4_1" => 1u64,
+            "q8_0" => 2u64,
+            "f32" => 4u64,
+            _ => 2u64, // f16 / bf16 default
+        };
+        let k_bytes = bytes_per_elem(&self.cache_type_k);
+        let v_bytes = bytes_per_elem(&self.cache_type_v);
+        // KV cache stores key and value tensors for each attention layer across KV heads and head dimensions.
+        // For Qwen 3.6 35B A3B (40 layers, 2 KV heads, dim 128 = 10,240 elements per K/V tensor per token),
+        // q4_0 takes ~11.5 KiB total, f16 takes ~40 KiB total.
+        // For larger dense architectures (up to 16 KV heads, 48 layers, dim 128 = ~98k elements),
+        // q4_0 takes ~55 KiB, f16 takes ~192 KiB.
+        // Using 32 KiB per byte-per-element (i.e. 64 KiB for q4_0/q4_0, 128 KiB for f16/f16) provides
+        // a safe, conservative upper bound that fits 16k context comfortably within 32 GB hosts.
+        (k_bytes.saturating_add(v_bytes)).saturating_mul(32 * 1024)
+    }
+
+    /// Estimated RAM bytes needed to host model weights, projector, working buffers,
+    /// and parallel KV cache slots during startup admission.
+    pub fn estimated_ram_bytes(&self, parallel: usize) -> std::io::Result<u64> {
+        let weights = std::fs::metadata(&self.model_path)?.len();
+        let projector = self
+            .projector
+            .as_ref()
+            .map(|p| std::fs::metadata(p).map(|m| m.len()))
+            .transpose()?
+            .unwrap_or(0);
+        let kv_bytes = (self.context_tokens as u64)
+            .saturating_mul(parallel.max(1) as u64)
+            .saturating_mul(self.kv_cache_bytes_per_token());
+        Ok(weights
+            .saturating_add(projector)
+            .saturating_add(512 * sail_common::resources::MIB)
+            .saturating_add(kv_bytes))
     }
     pub fn launch_args(&self, parallel: usize) -> Result<Vec<String>> {
         let url = self.validate()?;
@@ -395,9 +442,11 @@ impl LocalModelConfig {
         if !self.cache_type_v.is_empty() {
             args.extend(["-ctv".into(), self.cache_type_v.clone()]);
         }
-        if self.flash_attn {
-            args.extend(["-fa".into(), "on".into()]);
-        }
+        // Omission means auto in llama.cpp, so false must explicitly disable it.
+        args.extend([
+            "-fa".into(),
+            if self.flash_attn { "on" } else { "off" }.into(),
+        ]);
         if self.cache_reuse > 0 {
             args.extend(["--cache-reuse".into(), self.cache_reuse.to_string()]);
         }

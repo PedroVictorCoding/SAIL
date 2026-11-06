@@ -5,9 +5,12 @@ pub mod embedding;
 pub mod gemma;
 pub mod hardware;
 pub mod local;
+pub mod persist;
 pub mod profile;
+pub mod residency;
 pub mod service;
 mod validation;
+pub mod vision;
 pub use bench::{BenchmarkRunner, BenchmarkScenario};
 pub use config::{CpuMoe, LocalModelConfig};
 pub use hardware::HardwareProbe;
@@ -15,6 +18,8 @@ pub use profile::InferenceProfileManager;
 pub use sail_protocol as protocol;
 pub use service::MindService;
 pub use tokio_util::sync::CancellationToken;
+/// Mind's request checks, exported so callers can test that their requests are admissible.
+pub use validation::validate_request;
 pub mod voice;
 pub use voice::VoiceModelServices;
 

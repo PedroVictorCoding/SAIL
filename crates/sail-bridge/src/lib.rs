@@ -1,5 +1,7 @@
 pub mod aistudio;
 pub mod browser;
+pub mod reader;
+pub mod spotify;
 pub mod studio_audio;
 
 use async_trait::async_trait;

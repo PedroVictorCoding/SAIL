@@ -8,6 +8,8 @@ memory, [#52](https://github.com/PedroVictorCoding/SAIL/issues/52) conversation 
 [#100](https://github.com/PedroVictorCoding/SAIL/issues/100) Evidence Ledger,
 [#68](https://github.com/PedroVictorCoding/SAIL/issues/68) contradiction audit.
 
+The main consumer of this store is [Arena Learn](SAIL_ARENA_LEARN.md), Arena's learning product (#215).
+
 Long-term memory in SAIL is structured knowledge: entities, claims backed by evidence,
 procedures and project state. Conversations are temporary evidence. Once their knowledge
 has been consolidated, they can be released, and a content hash and a short receipt
@@ -239,13 +241,45 @@ scopes; no prompt or model chooses them, and no grant reads `Sensitive` records.
 | Maintenance | `voice`, `bus` | Private |
 
 Arena enforces a grant with `Access::from_grant`; an empty scope list sees nothing.
-`ArenaSubsystem::knowledge_context` runs the Phase 3 search under that access and returns
-complete JSON records within a byte budget, or nothing. Retrieval errors are logged and
-never block a turn.
+`ArenaSubsystem::knowledge_context` (and `knowledge_lookup`, which takes a fact limit)
+runs the Phase 3 search under that access and returns complete records within a byte
+budget, or nothing. Retrieval errors are logged and never block a turn.
 
-On every turn, Dialogue appends the result to its system prompt as labelled untrusted data
-(`SAIL_MEMORY_CONTEXT_BYTES`, default 1500, range 1–16000). Core's background
-maintenance now takes its access from the Maintenance grant.
+### Keeping memory context small
+
+Retrieval has to stay relevant and small, because everything it returns is sent to a
+local model on every turn.
+
+- **Query.** `compaction::retrieval_query` decides what each turn searches with. An
+  acknowledgement ("ok thanks", "valeu") searches nothing. A message with fewer than three
+  meaningful terms ("and her birthday?") is searched together with the previous user
+  message, which names what it refers to. Archive recall and knowledge search use the
+  same query.
+- **Matching.** Knowledge search drops English and Portuguese stopwords
+  (`store::knowledge_terms`) but keeps short names such as "Go" or "λ". A fact's score is
+  the share of query terms it matches, plus a small BM25 weight; a vector match adds only
+  when cosine similarity is at least 0.3. A fact must reach 60% of the best fact's score
+  (`retrieval::RELATIVE_FLOOR`). Archive excerpts must reach half of the best excerpt's
+  BM25 score.
+- **Graph expansion.** It adds the relationships that touch a matched entity and the facts
+  about the entity at their other end, capped at a quarter of the limit (at least 2). It no
+  longer adds every other fact about a matched entity.
+- **Format.** The model sees one line per fact, `entity | relation | value [status, date]`,
+  with line breaks and control characters removed and each field capped at 200
+  characters. That is about a third of the size of the JSON record. Ids, scores and
+  evidence stay in `MemoryReply.hits` for logs and the memory UI.
+- **Placement.** Dialogue's system prompt no longer changes between turns. The turn's memory
+  block (older-turn gists, recalled excerpts and remembered facts) opens the latest user
+  message between `vlm::MEMORY_CONTEXT_BEGIN` and `MEMORY_CONTEXT_END` markers, so the
+  model server can reuse its cached work on everything before it. Tool selection ranks
+  tools only on the user's own words, never on the memory block.
+- **Push a few, pull the rest.** Each turn includes up to `SAIL_MEMORY_CONTEXT_FACTS`
+  remembered facts (default 5, range 1–20) within `SAIL_MEMORY_CONTEXT_BYTES` (default
+  1500, range 1–16000). If more facts match, the block says so and Dialogue offers the
+  `memory_search` tool. It searches the same Dialogue grant and returns up to 20 facts
+  within 4000 bytes. A gist whose record is also recalled is shown once, as the excerpt.
+
+Core's background maintenance takes its access from the Maintenance grant.
 
 `crates/sail-dialogue/tests/memory_acceptance_test.rs` is the master vision §4.6 test,
 run on an on-disk store through the production Dialogue helper:
@@ -254,6 +288,12 @@ run on an on-disk store through the production Dialogue helper:
 - Forge sees only its repository's facts, and Dialogue does not see them.
 - A correction supersedes the old value.
 - Deletion holds after a restart, and re-running consolidation cannot resurrect it.
+
+`retrieval_is_relevant_compact_and_bounded` in the same file covers the rules above. It
+checks that an unrelated fact or a common-words query retrieves nothing. It checks that
+many matches show five facts plus the `memory_search` note, and that the tool returns the
+rest. It also checks that acknowledgements search nothing and that follow-ups use the
+previous turn.
 
 Not done yet:
 - **Forge integration.** Forge does not consume its grant yet.

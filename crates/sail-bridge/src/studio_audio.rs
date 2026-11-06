@@ -252,7 +252,6 @@ pub fn parse_wav_file(path: &Path) -> Result<PcmAudio, String> {
     })
 }
 
-#[allow(clippy::chunks_exact_to_as_chunks)]
 fn decode_pcm_bytes(
     bytes: &[u8],
     audio_format: u16,
@@ -262,8 +261,8 @@ fn decode_pcm_bytes(
         (1, 16) => {
             let num_samples = bytes.len() / 2;
             let mut out = Vec::with_capacity(num_samples);
-            for chunk in bytes.chunks_exact(2) {
-                let sample_i16 = i16::from_le_bytes(chunk.try_into().unwrap());
+            for chunk in bytes.as_chunks::<2>().0 {
+                let sample_i16 = i16::from_le_bytes(*chunk);
                 out.push(sample_i16 as f32 / 32768.0);
             }
             Ok(out)
@@ -271,7 +270,7 @@ fn decode_pcm_bytes(
         (1, 24) => {
             let num_samples = bytes.len() / 3;
             let mut out = Vec::with_capacity(num_samples);
-            for chunk in bytes.chunks_exact(3) {
+            for chunk in bytes.as_chunks::<3>().0 {
                 let b0 = chunk[0];
                 let b1 = chunk[1];
                 let b2 = chunk[2];
@@ -285,8 +284,8 @@ fn decode_pcm_bytes(
         (1, 32) => {
             let num_samples = bytes.len() / 4;
             let mut out = Vec::with_capacity(num_samples);
-            for chunk in bytes.chunks_exact(4) {
-                let sample_i32 = i32::from_le_bytes(chunk.try_into().unwrap());
+            for chunk in bytes.as_chunks::<4>().0 {
+                let sample_i32 = i32::from_le_bytes(*chunk);
                 out.push(sample_i32 as f32 / 2147483648.0);
             }
             Ok(out)
@@ -294,8 +293,8 @@ fn decode_pcm_bytes(
         (3, 32) => {
             let num_samples = bytes.len() / 4;
             let mut out = Vec::with_capacity(num_samples);
-            for chunk in bytes.chunks_exact(4) {
-                let sample_f32 = f32::from_le_bytes(chunk.try_into().unwrap());
+            for chunk in bytes.as_chunks::<4>().0 {
+                let sample_f32 = f32::from_le_bytes(*chunk);
                 out.push(sample_f32);
             }
             Ok(out)

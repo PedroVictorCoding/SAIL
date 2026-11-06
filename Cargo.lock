@@ -2354,14 +2354,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-arena-learn"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "rusqlite",
+ "sail-arena",
+ "sail-common",
+ "sail-guardian",
+ "sail-mind",
+ "sail-protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "sail-bridge"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "chrono",
+ "crc32fast",
+ "flate2",
  "futures-util",
+ "reqwest",
  "ring",
+ "roxmltree",
  "sail-agents",
  "sail-common",
  "sail-guardian",
@@ -2439,6 +2465,8 @@ dependencies = [
  "sail-guardian",
  "sail-mind",
  "sail-protocol",
+ "sail-pulse",
+ "sail-ui",
  "serde_json",
  "tokio",
  "tokio-util",
@@ -2465,15 +2493,19 @@ dependencies = [
  "rustls",
  "sail-agents",
  "sail-arena",
+ "sail-arena-learn",
  "sail-bridge",
  "sail-canvas",
  "sail-common",
+ "sail-continuity",
  "sail-flow",
  "sail-forge",
  "sail-guardian",
  "sail-mind",
  "sail-protocol",
+ "sail-pulse",
  "sail-runner",
+ "sail-tracker",
  "serde",
  "serde_json",
  "tokio",
@@ -2572,6 +2604,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "image",
+ "libc",
  "reqwest",
  "sail-common",
  "sail-protocol",
@@ -2594,6 +2627,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-pulse"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rusqlite",
+ "sail-common",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "sail-runner"
 version = "0.1.0"
 dependencies = [
@@ -2606,6 +2654,36 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+]
+
+[[package]]
+name = "sail-tracker"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "futures-util",
+ "reqwest",
+ "roxmltree",
+ "rusqlite",
+ "sail-common",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "sail-ui"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "sail-common",
+ "sail-protocol",
+ "serde",
+ "tracing",
 ]
 
 [[package]]

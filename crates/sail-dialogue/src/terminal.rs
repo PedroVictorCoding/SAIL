@@ -15,21 +15,39 @@ use tracing::{info, warn};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TerminalClientMessage {
     /// First message on the socket: the owner token Guardian approvals use.
-    Auth { token: String },
-    Input { data: String },
-    Resize { cols: u16, rows: u16 },
+    Auth {
+        token: String,
+    },
+    Input {
+        data: String,
+    },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
     Restart,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TerminalServerMessage {
-    Connected { shell: String, cwd: String },
-    Output { data: String },
-    Exit { code: Option<i32> },
+    Connected {
+        shell: String,
+        cwd: String,
+    },
+    Output {
+        data: String,
+    },
+    Exit {
+        code: Option<i32>,
+    },
     /// No shell was spawned: the socket did not prove it is the owner.
-    Locked { reason: String },
-    Error { message: String },
+    Locked {
+        reason: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// What a terminal socket must prove before a shell is spawned. The host shell is the widest
@@ -525,6 +543,8 @@ pub async fn handle_terminal_socket(
                                 if session.write(data.as_bytes()).await.is_err() { break; }
                             }
                             Ok(TerminalClientMessage::Resize { cols, rows }) => session.resize(cols, rows),
+                            // Already authenticated; a repeated token changes nothing.
+                            Ok(TerminalClientMessage::Auth { .. }) => {}
                             Ok(TerminalClientMessage::Restart) => {
                                 session.kill();
                                 match TerminalSession::spawn(initial_cwd.clone()) {

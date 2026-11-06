@@ -20,18 +20,25 @@ struct Worker {
 #[derive(Clone)]
 struct WorkerClient {
     mode: &'static str,
+    scheduler: Arc<sail_common::resources::ResourceScheduler>,
     worker: Arc<Mutex<Option<Worker>>>,
     capacity: Arc<Semaphore>,
 }
 impl WorkerClient {
-    fn new(mode: &'static str) -> Self {
+    fn new(mode: &'static str, scheduler: Arc<sail_common::resources::ResourceScheduler>) -> Self {
         Self {
             mode,
+            scheduler,
             worker: Arc::new(Mutex::new(None)),
             capacity: Arc::new(Semaphore::new(8)),
         }
     }
     async fn request(&self, request: Value) -> Result<Value> {
+        self.request_with(request, true).await
+    }
+    /// `voice_priority` false runs the request without opening a voice turn, so it does not
+    /// cancel background inference or builds (used for book narration, which runs for hours).
+    async fn request_with(&self, request: Value, voice_priority: bool) -> Result<Value> {
         let permit = self.capacity.clone().try_acquire_owned().map_err(|_| {
             warn!(engine = self.mode, "Speech worker queue is full");
             SailError::Inference(format!("{} worker queue full", self.mode))
@@ -49,7 +56,8 @@ impl WorkerClient {
             let _permit = permit;
             // Draining an accepted speech request retains voice priority even if its
             // original turn is aborted; the worker still consumes compute.
-            let _voice = (this.mode != "vad").then(|| sail_common::resources::global().voice_turn());
+            let _voice =
+                (this.mode != "vad" && voice_priority).then(|| this.scheduler.voice_turn());
             let mut slot = this.worker.lock().await;
             let started=Instant::now();
             if this.mode!="vad"{debug!(engine=this.mode,queue_wait_ms=queued.elapsed().as_millis(),"Acquired speech worker; sending request");}
@@ -59,7 +67,7 @@ impl WorkerClient {
                 let script =
                     std::env::var("SAIL_VOICE_WORKER").unwrap_or("scripts/voice/worker.py".into());
                 info!(engine=this.mode,%python,%script,"Starting persistent offline speech worker");
-                let lease = sail_common::resources::global().try_admit(
+                let lease = this.scheduler.try_admit(
                     sail_common::resources::ResourceClaim {
                         kind: sail_protocol::resources::WorkKind::Speech,
                         priority: sail_protocol::resources::WorkPriority::Voice,
@@ -167,10 +175,15 @@ impl Default for VoiceModelServices {
 }
 impl VoiceModelServices {
     pub fn new() -> Self {
+        Self::with_scheduler(sail_common::resources::global())
+    }
+    /// Inject a shared admission broker, e.g. with a deterministic host probe in tests.
+    /// Production defaults to Core's process-shared scheduler.
+    pub fn with_scheduler(scheduler: Arc<sail_common::resources::ResourceScheduler>) -> Self {
         Self {
-            vad: WorkerClient::new("vad"),
-            stt: WorkerClient::new("stt"),
-            tts: WorkerClient::new("tts"),
+            vad: WorkerClient::new("vad", scheduler.clone()),
+            stt: WorkerClient::new("stt", scheduler.clone()),
+            tts: WorkerClient::new("tts", scheduler),
             inference: None,
         }
     }
@@ -239,7 +252,10 @@ impl VoiceModelServices {
             .request(json!({"pcm":encode_pcm(samples),"partial":partial,"threads":threads}))
             .await?;
         info!(elapsed_ms=started.elapsed().as_millis(),partial,language=?result["language"],words=result["tokens"].as_array().map_or(0,Vec::len),"Whisper transcription completed");
-        debug!(transcript=?result["text"],"Recognized speech hypothesis");
+        debug!(
+            transcript_chars = result["text"].as_str().map_or(0, str::len),
+            "Recognized speech hypothesis"
+        );
         Ok(result)
     }
     pub async fn synthesize(
@@ -250,6 +266,32 @@ impl VoiceModelServices {
         speed: f32,
         threads: usize,
     ) -> Result<(Vec<i16>, u32)> {
+        self.synthesize_with(text, voice, language, speed, threads, true)
+            .await
+    }
+    /// Synthesis for reading a book aloud: the same Kokoro worker, but it never opens a voice
+    /// turn, so hours of narration do not keep cancelling background work. The worker serves
+    /// requests in order, so callers keep one reading request in flight at a time; then
+    /// conversation speech waits for at most one sentence.
+    pub async fn synthesize_reading(
+        &self,
+        text: &str,
+        voice: &str,
+        language: &str,
+        speed: f32,
+    ) -> Result<(Vec<i16>, u32)> {
+        self.synthesize_with(text, voice, language, speed, 4, false)
+            .await
+    }
+    async fn synthesize_with(
+        &self,
+        text: &str,
+        voice: &str,
+        language: &str,
+        speed: f32,
+        threads: usize,
+        voice_priority: bool,
+    ) -> Result<(Vec<i16>, u32)> {
         info!(
             voice,
             language,
@@ -258,9 +300,18 @@ impl VoiceModelServices {
             text_chars = text.chars().count(),
             "Requesting local Kokoro synthesis"
         );
-        debug!(text, "Text submitted to speech synthesis");
+        if voice_priority {
+            // Book text never reaches the logs.
+            debug!(text, "Text submitted to speech synthesis");
+        }
         let started = Instant::now();
-        let v = self.tts.request(json!({"text":text,"voice":voice,"language":language,"speed":speed,"threads":threads})).await?;
+        let v = self
+            .tts
+            .request_with(
+                json!({"text":text,"voice":voice,"language":language,"speed":speed,"threads":threads}),
+                voice_priority,
+            )
+            .await?;
         let bytes = STANDARD
             .decode(v["pcm"].as_str().unwrap_or_default())
             .map_err(|e| SailError::Inference(e.to_string()))?;

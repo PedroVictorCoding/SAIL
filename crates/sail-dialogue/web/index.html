@@ -15,11 +15,12 @@
     <div class="top-actions">
       <span class="privacy-indicator" id="learningIndicator" role="status" hidden>Learning enabled</span>
       <span class="privacy-indicator" id="micLiveIndicator" hidden><i></i><span>Mic on</span></span>
-      <span class="loading-indicator" id="speechLoadIndicator" hidden><span id="speechLoadLabel">Loading voice models</span><progress id="speechLoadBar" max="100" aria-labelledby="speechLoadLabel" aria-describedby="speechLoadValue"></progress><span id="speechLoadValue" aria-live="off"></span></span>
+      <span class="loading-indicator" id="speechLoadIndicator" hidden><span class="loading-short" aria-hidden="true">Voice</span><span id="speechLoadLabel">Loading voice models</span><progress id="speechLoadBar" max="100" aria-labelledby="speechLoadLabel" aria-describedby="speechLoadValue"></progress><span id="speechLoadValue" aria-live="off"></span></span>
+      <span class="loading-indicator" id="modelLoadIndicator" hidden><span class="loading-short" aria-hidden="true">Model</span><span id="modelLoadLabel">Loading model</span><progress id="modelLoadBar" max="100" aria-labelledby="modelLoadLabel" aria-describedby="modelLoadValue"></progress><span id="modelLoadValue" aria-live="off"></span></span>
       <span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span>
-      <button class="icon-button" id="terminalHeaderBtn" type="button" aria-label="Open Terminal" title="Terminal (Ctrl+`)"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#terminal"></use></svg></button>
-      <button class="icon-button mobile-spaces" id="spacesTop" type="button" aria-label="Open Spaces"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#spaces"></use></svg></button>
-      <button class="icon-button" id="settingsOpen" aria-label="Open settings" title="Settings"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#settings"></use></svg></button>
+      <button class="icon-button mobile-only" id="terminalHeaderBtn" type="button" aria-label="Open Terminal" title="Terminal (Ctrl+`)"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#terminal"></use></svg></button>
+      <button class="icon-button mobile-only" id="spacesTop" type="button" aria-label="Open Spaces"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#spaces"></use></svg></button>
+      <button class="icon-button mobile-only" id="settingsOpen" type="button" aria-label="Open settings" title="Settings"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#settings"></use></svg></button>
     </div>
   </header>
 
@@ -27,6 +28,7 @@
     <nav class="side-rail" aria-label="Main navigation">
       <a class="quiet-button nav-item selected" id="homeNav" href="#home" data-page="home" aria-current="page"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#home"></use></svg></span><span>Home</span></a>
       <button class="quiet-button nav-item" id="terminalRailBtn" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#terminal"></use></svg></span><span>Terminal</span></button>
+      <a class="quiet-button nav-item" id="trackerNav" href="#tracker"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#sense"></use></svg></span><span>Tracker</span></a>
       <button class="quiet-button nav-item" id="spacesOpen" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#spaces"></use></svg></span><span>Spaces</span></button>
       <div class="subsystem-nav" id="subsystemNav" aria-label="Subsystem pages"></div>
       <button class="quiet-button nav-item nav-settings" id="settingsRail" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#settings"></use></svg></span><span>Settings</span></button>
@@ -39,6 +41,98 @@
         <div class="welcome-art" aria-hidden="true"><svg viewBox="0 0 640 160" preserveAspectRatio="none"><defs><linearGradient id="horizonLine" x1="0" x2="1"><stop stop-color="#8174d4" stop-opacity="0"/><stop offset=".48" stop-color="#d080ac" stop-opacity=".32"/><stop offset=".72" stop-color="#e7a290" stop-opacity=".42"/><stop offset="1" stop-color="#6488ce" stop-opacity="0"/></linearGradient><radialGradient id="horizonSun"><stop stop-color="#f2b39d" stop-opacity=".75"/><stop offset="1" stop-color="#e58b9c" stop-opacity="0"/></radialGradient></defs><path d="M0 127 C70 130 90 101 148 114 S226 144 288 116 374 95 423 119 511 149 558 119 614 105 640 112" fill="none" stroke="url(#horizonLine)" stroke-width="2"/><path d="M0 145 C90 140 125 120 190 132 S280 155 350 130 450 118 503 135 585 147 640 131" fill="none" stroke="url(#horizonLine)" stroke-width="1"/><circle cx="476" cy="112" r="58" fill="url(#horizonSun)"/></svg></div>
       </article>
 
+      <!-- Return Briefing & Session Staging Deck ("While Away" Intelligence Layer) -->
+      <section class="return-briefing-deck" id="returnBriefingDeck" aria-label="Return Briefing Deck" hidden>
+        <header class="briefing-deck-header">
+          <div class="briefing-deck-meta">
+            <span class="briefing-badge">While You Were Away</span>
+            <h2 id="briefingHeadline" class="briefing-headline">SAIL prepared your return deck.</h2>
+            <time id="briefingLocalTime" class="briefing-time"></time>
+          </div>
+          <div class="briefing-deck-actions">
+            <button class="tactile-btn briefing-refresh-btn" id="briefingRefreshBtn" type="button" aria-label="Refresh briefing">↻ Refresh</button>
+            <button class="tactile-btn briefing-dismiss-btn" id="briefingDismissBtn" type="button" aria-label="Dismiss briefing">✕</button>
+          </div>
+        </header>
+
+        <div class="briefing-cards-grid">
+          <!-- 1. Staged Music Card -->
+          <article class="briefing-card briefing-music-card" id="briefingMusicCard">
+            <div class="briefing-card-top">
+              <span class="briefing-category-tag tag-music">Music Staging</span>
+              <span class="briefing-slot-badge" id="briefingMusicSlot">Focus Flow</span>
+            </div>
+            <div class="briefing-card-body">
+              <h3 id="briefingMusicTitle" class="briefing-item-title">Loading track…</h3>
+              <p id="briefingMusicArtist" class="briefing-item-sub"></p>
+              <p id="briefingMusicRationale" class="briefing-item-desc"></p>
+            </div>
+            <button class="tactile-btn tactile-action-btn music-action-btn" id="briefingPlayMusicBtn" type="button">▶ Play Staged Music</button>
+          </article>
+
+          <!-- 2. Adaptive Learning Card -->
+          <article class="briefing-card briefing-learn-card" id="briefingLearnCard">
+            <div class="briefing-card-top">
+              <span class="briefing-category-tag tag-learn">Adaptive Learning</span>
+              <span class="briefing-slot-badge" id="briefingLearnDomain">Arena Learn</span>
+            </div>
+            <div class="briefing-card-body">
+              <h3 id="briefingLearnTopic" class="briefing-item-title">Loading lesson…</h3>
+              <p id="briefingLearnEstimate" class="briefing-item-sub">~15 min lesson</p>
+              <p id="briefingLearnRationale" class="briefing-item-desc"></p>
+            </div>
+            <button class="tactile-btn tactile-action-btn learn-action-btn" id="briefingStartLearnBtn" type="button">✦ Continue Lesson</button>
+          </article>
+
+          <!-- 3. Vigilance Events Card -->
+          <article class="briefing-card briefing-events-card" id="briefingEventsCard">
+            <div class="briefing-card-top">
+              <span class="briefing-category-tag tag-events">Events & Vigilance</span>
+              <span class="briefing-slot-badge" id="briefingEventsCount">Schedule</span>
+            </div>
+            <div class="briefing-card-body">
+              <ul class="briefing-events-list" id="briefingEventsList">
+                <li class="briefing-event-item">Scanning schedule…</li>
+              </ul>
+            </div>
+            <button class="tactile-btn tactile-action-btn events-action-btn" id="briefingEventsBtn" type="button">View Reminders</button>
+          </article>
+
+          <!-- 4. News & Tech Radar Card -->
+          <article class="briefing-card briefing-news-card" id="briefingNewsCard">
+            <div class="briefing-card-top">
+              <span class="briefing-category-tag tag-news">Interest Radar</span>
+              <span class="briefing-slot-badge">Curated</span>
+            </div>
+            <div class="briefing-card-body">
+              <ul class="briefing-news-list" id="briefingNewsList">
+                <li class="briefing-news-item">Gathering radar updates…</li>
+              </ul>
+            </div>
+          </article>
+
+          <!-- 5. Continuity & Sentinel Card -->
+          <article class="briefing-card briefing-continuity-card" id="briefingContinuityCard">
+            <div class="briefing-card-top">
+              <span class="briefing-category-tag tag-continuity">Continuity & Host</span>
+              <span class="briefing-slot-badge">Healthy</span>
+            </div>
+            <div class="briefing-card-body">
+              <div class="briefing-continuity-block">
+                <span>Workspace:</span>
+                <strong id="briefingContinuityWorkspace">SAIL</strong>
+              </div>
+              <p id="briefingContinuityForge" class="briefing-item-sub">Background tasks idle.</p>
+              <p id="briefingContinuityAction" class="briefing-item-desc"></p>
+              <div class="briefing-sentinel-stats">
+                <div><span>Storage</span><small id="briefingSentinelStorage">—</small></div>
+                <div><span>Memory</span><small id="briefingSentinelMemory">—</small></div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
       <section class="workspace-grid" aria-label="Live system and session cards">
         <article class="workspace-card system-card" id="systemCard" data-card="systemCard">
           <header class="card-heading">
@@ -49,12 +143,11 @@
                 <button type="button" class="card-tab active" data-tab-card="systemCard" data-tab-panel="systemPanelMetrics"><span>Metrics</span></button>
                 <button type="button" class="card-tab" data-tab-card="systemCard" data-tab-panel="systemPanelGuardian"><span>Guardian</span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="systemCard" type="button" aria-label="Cycle system view" title="Cycle view (Status / Guardian)">⇋</button>
               <button class="card-action" id="checkSystemBtn" type="button" aria-label="Check local system status" title="Ping metrics now">↻</button>
             </div>
           </header>
           <div class="card-tab-panel active" id="systemPanelMetrics">
-            <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">Querying…</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">Querying…</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">Querying…</strong></div></div>
+            <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">—</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">—</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">—</strong></div></div>
             <p class="card-footnote" id="systemNote">Telemetry auto-updates continuously in real time.</p>
           </div>
           <div class="card-tab-panel" id="systemPanelGuardian" hidden>
@@ -77,7 +170,6 @@
                 <button type="button" class="card-tab active" data-tab-card="sessionCard" data-tab-panel="sessionPanelMain"><span>Session</span></button>
                 <button type="button" class="card-tab" data-tab-card="sessionCard" data-tab-panel="sessionPanelAudio"><span>Audio</span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="sessionCard" type="button" aria-label="Cycle session view" title="Cycle view (Session / Audio)">⇋</button>
               <span class="mini-state" id="sessionState">Ready</span>
             </div>
           </header>
@@ -85,7 +177,6 @@
             <div class="session-lines">
               <div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div>
               <div><span>Microphone</span><strong id="sessionMic">Off</strong></div>
-              <div><span>State</span><strong id="sessionLiveState">Ready</strong></div>
               <div><span>Generation speed</span><strong id="sessionTokensPerSec">—</strong></div>
               <div><span>Time to first token</span><strong id="sessionTtft">—</strong></div>
               <div><span>Live output</span><strong id="sessionGenStats">—</strong></div>
@@ -120,7 +211,6 @@
                 <button type="button" class="card-tab active" data-tab-card="modelsCard" data-tab-panel="modelsPanelMain"><span>Models</span></button>
                 <button type="button" class="card-tab" data-tab-card="modelsCard" data-tab-panel="modelsPanelGovernor"><span>Governor</span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="modelsCard" type="button" aria-label="Cycle model view" title="Cycle view (Models / Governor)">⇋</button>
               <button class="card-action" id="modelsRefreshBtn" type="button" aria-label="Check local model status" title="Ping model health now">↻</button>
             </div>
           </header>
@@ -154,7 +244,6 @@
                 <button type="button" class="card-tab" data-tab-card="toolsCard" data-tab-panel="toolsPanelActivity"><span>Activity</span></button>
                 <button type="button" class="card-tab" data-tab-card="toolsCard" data-tab-panel="toolsPanelSafetyReview" id="tabSafetyReviewBtn"><span>Safety <i class="safety-badge-dot" id="safetyBadgeDot" hidden></i></span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="toolsCard" type="button" aria-label="Cycle tools view" title="Cycle view (Tools / Activity / Safety)">⇋</button>
             </div>
           </header>
           <div class="card-tab-panel active" id="toolsPanelMain">
@@ -163,7 +252,6 @@
               <button type="button" class="tool-action" data-tool="fs:query"><span aria-hidden="true">▱</span>Workspace files</button>
               <button type="button" class="tool-action" id="chooseVisionBtn"><span aria-hidden="true">▧</span>Analyze an image</button>
               <button type="button" class="tool-action" id="listIssuesBtn" data-tool="github:issues"><span aria-hidden="true">⌥</span>GitHub issues</button>
-              <button type="button" class="tool-action" id="forgeQuickEnqueueToolBtn"><span aria-hidden="true">⚒</span>Enqueue Forge task</button>
             </div>
           </div>
           <div class="card-tab-panel" id="toolsPanelActivity" hidden>
@@ -198,13 +286,12 @@
                 <button type="button" class="card-tab" data-tab-card="canvasCard" data-tab-panel="canvasPanelCamera" title="Live Camera Feed (Adaptive Slow Mode)"><span>Camera</span></button>
                 <button type="button" class="card-tab" data-tab-card="canvasCard" data-tab-panel="canvasPanelDesktop" title="Live Desktop Screen Share (Adaptive Slow Mode)"><span>Desktop</span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="canvasCard" type="button" aria-label="Cycle canvas view" title="Cycle view (Canvas / Camera / Desktop)">⇋</button>
               <button class="card-action" id="canvasClearBtn" type="button" aria-label="Clear Canvas" title="Clear Canvas">×</button>
             </div>
           </header>
           <!-- Tab 1: Canvas Output -->
           <div class="card-tab-panel active" id="canvasPanelMain">
-            <div class="canvas-panel" id="canvasPanel" aria-label="Canvas output"><p class="canvas-empty" id="canvasEmptyState">Diagrams, images, structured results and Guardian approvals appear here.</p></div>
+            <div class="canvas-panel" id="canvasPanel" aria-label="Canvas output"><p class="canvas-empty" id="canvasEmptyState">Diagrams, images, structured results, plans and Guardian approvals appear here. Say “Plan: …” to plan a goal.</p></div>
           </div>
           <!-- Tab 2: Live Camera Feed (Adaptive slow frame mode) -->
           <div class="card-tab-panel" id="canvasPanelCamera" hidden>
@@ -270,7 +357,6 @@
                 <button type="button" class="card-tab active" data-tab-card="forgeCard" data-tab-panel="forgePanelMain"><span>Agent</span></button>
                 <button type="button" class="card-tab" data-tab-card="forgeCard" data-tab-panel="forgePanelStream"><span>Stream</span></button>
               </div>
-              <button class="card-action card-cycle-btn" data-cycle-card="forgeCard" type="button" aria-label="Cycle forge view" title="Cycle view (Agent / Stream)">⇋</button>
               <button class="card-action" id="forgeRefreshBtn" type="button" aria-label="Refresh Forge jobs" title="Ping Forge jobs now">↻</button>
             </div>
           </header>
@@ -323,6 +409,53 @@
           </div>
         </article>
 
+        <article class="workspace-card pulse-card" id="pulseCard" data-card="pulseCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">◷</span><div><h3 id="pulseCardHeading">Pulse</h3><p id="pulseCardSub">Local reminders and timing</p></div></div>
+            <div class="card-heading-actions">
+              <span class="card-live-badge" id="pulseLiveBadge" title="Server-owned reminder scheduler"><i class="live-dot"></i>Local</span>
+              <button class="card-action" id="pulseRefreshBtn" type="button" aria-label="Refresh reminders" title="Refresh reminders">↻</button>
+            </div>
+          </header>
+          <div class="pulse-layout">
+            <section class="pulse-compose" aria-labelledby="pulseComposeTitle">
+              <h4 id="pulseComposeTitle">New reminder</h4>
+              <form id="pulseForm">
+                <label for="pulseText">Remind me to</label>
+                <input id="pulseText" maxlength="2000" required placeholder="e.g. stretch and drink water" autocomplete="off">
+                <label for="pulseDue">When</label>
+                <input id="pulseDue" type="datetime-local" required>
+                <p class="pulse-tz" id="pulseTimezone">Times use your local time zone.</p>
+                <div class="pulse-presets" role="group" aria-label="Quick reminder times">
+                  <button type="button" data-pulse-preset="20">In 20 min</button>
+                  <button type="button" data-pulse-preset="60">In 1 hour</button>
+                  <button type="button" data-pulse-preset="1440">Tomorrow</button>
+                </div>
+                <button type="submit" class="pulse-primary" id="pulseCreateBtn">Create reminder</button>
+                <p class="pulse-status" id="pulseStatus" role="status"></p>
+              </form>
+            </section>
+            <section class="pulse-list-wrap" aria-labelledby="pulseListTitle">
+              <h4 id="pulseListTitle">Upcoming</h4>
+              <div id="pulseList" class="pulse-list" aria-live="polite"></div>
+              <details class="pulse-history"><summary>Recent</summary><div id="pulseHistory" class="pulse-list"></div></details>
+            </section>
+          </div>
+          <details class="pulse-settings">
+            <summary>Comfort settings</summary>
+            <form id="pulseSettingsForm">
+              <label class="pulse-check"><input type="checkbox" id="pulseQuietEnabled"> Quiet hours</label>
+              <div class="pulse-quiet-times"><label>From <input type="time" id="pulseQuietStart"></label><label>Until <input type="time" id="pulseQuietEnd"></label></div>
+              <label class="pulse-check"><input type="checkbox" id="pulseSpoken"> Speak reminders aloud (opt-in)</label>
+              <p class="pulse-note">Spoken reminders use your browser's local voice. Off by default.</p>
+              <label class="pulse-check"><input type="checkbox" id="pulseInApp"> Show in-app reminders</label>
+              <button type="submit" class="quiet-button" id="pulseSettingsSave">Save preferences</button>
+              <p class="pulse-status" id="pulseSettingsStatus" role="status"></p>
+            </form>
+          </details>
+        </article>
+
+
         <article class="workspace-card terminal-card" id="terminalCard" data-card="terminalCard">
           <header class="card-heading">
             <div class="card-title"><span class="card-icon" aria-hidden="true"></span><div><h3 id="terminalCardHeading">Terminal</h3><p id="terminalCardSub">Interactive developer shell</p></div></div>
@@ -339,7 +472,6 @@
               <button type="button" class="quick-cmd-btn" data-cmd="cargo check">cargo check</button>
               <button type="button" class="quick-cmd-btn" data-cmd="ls -la">ls -la</button>
               <button type="button" class="quick-cmd-btn" data-cmd="cargo test">cargo test</button>
-              <button type="button" class="quick-cmd-btn" data-cmd="clear">clear</button>
             </div>
             <div class="terminal-container" id="terminalContainer" role="region" aria-label="Interactive terminal"></div>
             <p class="card-footnote">Interactive PTY shell running in host workspace. Supports Tab completion, ANSI colors, and Ctrl+C.</p>
@@ -363,7 +495,332 @@
 
     <div id="memoryParking" hidden>
       <article class="workspace-card memory-card" id="memoryCard">
-        <div class="card-tab-panel active" id="memoryPanelMain">
+        <header class="card-heading learn-card-tabs">
+          <div class="card-title"><h2 class="sr-only">Arena</h2></div>
+          <div class="card-heading-actions">
+            <div class="card-tabs" role="tablist" aria-label="Arena tabs">
+              <button type="button" class="card-tab active" role="tab" aria-selected="true" data-tab-card="memoryCard" data-tab-panel="learnPanelMain" id="learnTab"><span>Learn</span></button>
+              <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelMain" id="memoryTab"><span>Memory</span></button>
+            </div>
+          </div>
+        </header>
+        <div class="card-tab-panel active lh-root" id="learnPanelMain" role="tabpanel" aria-labelledby="learnTab">
+          <div class="lh-shell" id="learnAppShell">
+            <!-- Left Collapsible Sidebar (sidebar.tsx) -->
+            <aside class="lh-sidebar" id="learnSidebar" aria-label="Learning sessions sidebar">
+              <div class="lh-sidebar-header">
+                <button type="button" class="lh-brand-btn" id="learnNew" title="Knowledge Graph Home">
+                  <span class="lh-brand-mark">LH</span>
+                  <span class="lh-brand-sub">Arena Learn</span>
+                </button>
+                <button type="button" class="lh-icon-btn" id="learnSidebarCloseBtn" aria-label="Collapse sidebar" title="Collapse sidebar">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M14 9l-3 3 3 3"/></svg>
+                </button>
+              </div>
+
+              <div class="lh-sidebar-create">
+                <button type="button" class="lh-create-btn" id="learnNewTeachBtn">
+                  <span class="lh-create-icon">＋</span>
+                  <span>TEACHING</span>
+                </button>
+                <button type="button" class="lh-create-btn" id="learnNewPracticeBtn">
+                  <span class="lh-create-icon">🏋</span>
+                  <span>PRACTICE</span>
+                </button>
+              </div>
+
+              <div class="lh-sidebar-section-head">
+                <span>SESSIONS</span>
+                <span class="lh-count-pill" id="learnSessionCount">0</span>
+              </div>
+
+              <div class="lh-sidebar-search-wrap">
+                <span class="lh-search-icon" aria-hidden="true">⌕</span>
+                <input type="search" class="lh-sidebar-search" id="learnSessionSearch" placeholder="Search…" aria-label="Search sessions" autocomplete="off">
+              </div>
+
+              <div class="lh-filter-tabs" role="tablist" aria-label="Filter sessions by kind">
+                <button type="button" class="lh-filter-tab" data-learn-filter="teach" role="tab" aria-selected="false">Teaching</button>
+                <button type="button" class="lh-filter-tab" data-learn-filter="practice" role="tab" aria-selected="false">Practice</button>
+                <button type="button" class="lh-filter-tab active" data-learn-filter="all" role="tab" aria-selected="true">All</button>
+              </div>
+
+              <div id="learnSessions" class="lh-session-list learn-sessions" role="list" aria-label="Learning sessions"></div>
+
+              <div class="lh-activity-section" id="learnActivitySection" hidden>
+                <div class="lh-sidebar-section-head">
+                  <span>BACKGROUND AGENTS</span>
+                </div>
+                <div id="learnActivityList" class="lh-activity-list"></div>
+              </div>
+
+              <div class="lh-sidebar-footer">
+                <button type="button" class="lh-footer-btn" id="learnSidebarImportBtn" title="Import Markdown or text notes into the Knowledge Graph">
+                  <span>↑ Import Notes</span>
+                </button>
+                <button type="button" class="lh-footer-btn" id="learnSidebarChainsBtn" title="Open Knowledge Chains Table">
+                  <span>⛓ Chains</span>
+                </button>
+              </div>
+            </aside>
+
+            <!-- Main Column -->
+            <div class="lh-main-col" id="learnMainColumn">
+              <!-- VIEW 1: Home / Knowledge Graph Surface (home.tsx + graph-view.tsx) -->
+              <section id="learnStart" class="lh-home-view" aria-label="Knowledge graph and new session">
+                <!-- Top-left sidebar open button when collapsed -->
+                <div class="lh-floating-top-left">
+                  <button type="button" class="lh-icon-btn lh-sidebar-open-btn" id="learnHomeSidebarOpenBtn" aria-label="Open sidebar" title="Open sidebar" hidden>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M13 9l3 3-3 3"/></svg>
+                  </button>
+                </div>
+
+                <!-- Top-right floating graph chrome -->
+                <div class="lh-graph-chrome">
+                  <button type="button" class="lh-chrome-btn" id="learnImportNotesBtn" title="Import Markdown or text notes">
+                    <span>↑ Import Notes</span>
+                  </button>
+                  <button type="button" class="lh-chrome-btn" id="learnChainsBtn" title="Inspect reasoning chains and propositions">
+                    <span>☰ Chains</span>
+                  </button>
+                  <div class="lh-chrome-search">
+                    <span aria-hidden="true">⌕</span>
+                    <input type="search" id="learnGraphSearch" placeholder="Search nodes…" aria-label="Search knowledge graph nodes" autocomplete="off">
+                  </div>
+                  <span class="lh-chrome-pill" id="learnGraphStatsPill">0 props · 0 chains</span>
+                  <div class="lh-settings-wrap">
+                    <button type="button" class="lh-icon-btn lh-chrome-icon-btn" id="learnGraphSettingsBtn" aria-label="Graph rendering settings" title="Graph rendering settings">⚙</button>
+                    <div class="lh-popover lh-graph-settings-popover" id="learnGraphSettingsPopover" hidden>
+                      <div class="lh-popover-title">Graph Render Settings</div>
+                      <label class="lh-slider-row"><span>Node size</span><input type="range" id="learnSetNodeSize" min="0.5" max="2.5" step="0.1" value="1"></label>
+                      <label class="lh-slider-row"><span>Edge width</span><input type="range" id="learnSetEdgeWidth" min="0.5" max="2.5" step="0.1" value="1"></label>
+                      <label class="lh-slider-row"><span>Arrow size</span><input type="range" id="learnSetArrowSize" min="0.5" max="2.5" step="0.1" value="1"></label>
+                      <label class="lh-slider-row"><span>Label size</span><input type="range" id="learnSetLabelSize" min="0.6" max="2.0" step="0.1" value="1"></label>
+                      <label class="lh-check-row"><input type="checkbox" id="learnSetClusterLabels" checked><span>Show cluster labels</span></label>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Full-bleed 2D Knowledge Graph Canvas -->
+                <div class="lh-graph-stage" id="learnGraphStage">
+                  <canvas id="learnGraphCanvas" class="lh-graph-canvas" aria-label="Knowledge Graph"></canvas>
+                  <div class="lh-graph-empty" id="learnGraphEmpty">
+                    <p class="lh-graph-empty-title">Knowledge Graph</p>
+                    <p class="lh-graph-empty-sub">Propositions and reasoning chains (`A ∧ B ⟹ C`) extracted from your teaching sessions and imported notes appear here.</p>
+                  </div>
+
+                  <!-- Node Detail Popover Card -->
+                  <div class="lh-node-card" id="learnNodeDetailCard" hidden>
+                    <div class="lh-node-card-head">
+                      <span class="lh-eyebrow">PROPOSITION</span>
+                      <button type="button" class="lh-icon-btn" id="learnNodeCardClose" aria-label="Close node details">×</button>
+                    </div>
+                    <h4 class="lh-node-card-title" id="learnNodeCardName"></h4>
+                    <p class="lh-node-card-statement" id="learnNodeCardStatement"></p>
+                    <div class="lh-node-card-meta" id="learnNodeCardMeta"></div>
+                    <div class="lh-node-card-actions">
+                      <button type="button" class="lh-btn-secondary" id="learnNodePracticeBtn">🏋 Practice this</button>
+                      <button type="button" class="lh-btn-danger" id="learnNodeDeleteBtn">Delete node</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Chain Table Overlay (chain-table.tsx) -->
+                <div class="lh-chain-overlay" id="learnChainTableOverlay" hidden>
+                  <header class="lh-topbar">
+                    <div class="lh-topbar-left">
+                      <span class="lh-chain-summary" id="learnChainCountLabel">0 chains · 0 nodes</span>
+                    </div>
+                    <div class="lh-topbar-right">
+                      <div class="lh-chrome-search">
+                        <span aria-hidden="true">⌕</span>
+                        <input type="search" id="learnChainSearchInput" placeholder="Search nodes or chains…" aria-label="Search chains">
+                      </div>
+                      <button type="button" class="lh-icon-btn" id="learnChainCloseBtn" aria-label="Close chains table">×</button>
+                    </div>
+                  </header>
+                  <div class="lh-chain-table-head">
+                    <button type="button" class="lh-sort-col" data-chain-sort="name">NAME</button>
+                    <button type="button" class="lh-sort-col" data-chain-sort="props">PROPS</button>
+                    <button type="button" class="lh-sort-col" data-chain-sort="created">CREATED</button>
+                  </div>
+                  <div class="lh-chain-table-body" id="learnChainTableBody"></div>
+                  <div class="lh-chain-selection-bar" id="learnChainSelectionBar" hidden>
+                    <span id="learnChainSelectedCount">0 selected</span>
+                    <div class="lh-chain-selection-actions">
+                      <button type="button" class="lh-btn-ghost" id="learnChainClearSelBtn">Clear</button>
+                      <button type="button" class="lh-btn-primary" id="learnChainPracticeSelBtn">🏋 Practice these</button>
+                      <button type="button" class="lh-btn-danger" id="learnChainDeleteSelBtn">Delete</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Import Notes Modal -->
+                <div class="lh-modal-backdrop" id="learnImportModal" hidden>
+                  <div class="lh-modal-card" role="dialog" aria-modal="true" aria-labelledby="learnImportModalTitle">
+                    <div class="lh-modal-head">
+                      <h3 id="learnImportModalTitle">Import Notes into Knowledge Graph</h3>
+                      <button type="button" class="lh-icon-btn" id="learnImportModalClose" aria-label="Close import modal">×</button>
+                    </div>
+                    <form id="learnImportForm" class="lh-import-form">
+                      <label class="lh-field-label" for="learnImportFileName">Note title or filename (`.md` / `.txt`)</label>
+                      <input type="text" id="learnImportFileName" class="lh-input" placeholder="e.g. tcp-congestion-notes.md" required>
+                      <label class="lh-field-label" for="learnImportContent">Markdown or plain text notes</label>
+                      <textarea id="learnImportContent" class="lh-textarea" rows="7" placeholder="# Topic&#10;- congestion window: Controls the number of bytes in flight before an ACK arrives.&#10;- packet loss: Occurs when router buffers fill up and drop incoming packets." required></textarea>
+                      <div class="lh-modal-actions">
+                        <input type="file" id="learnImportFilePicker" accept=".md,.txt,text/markdown,text/plain" hidden>
+                        <button type="button" class="lh-btn-secondary" id="learnImportPickFileBtn">Choose local file…</button>
+                        <button type="submit" class="lh-btn-primary">Extract &amp; Import</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+
+                <!-- Floating Bottom New-Session Composer Dock (home.tsx + new-session.tsx + stats-bar.tsx) -->
+                <div class="lh-home-dock-wrap">
+                  <div class="lh-home-dock">
+                    <div class="lh-node-picker-bar" id="learnPickedNodesBar">
+                      <button type="button" class="lh-pick-nodes-pill" id="learnPickNodesBtn">
+                        <span>◈</span>
+                        <span id="learnPickedNodesText">Pick nodes from graph</span>
+                      </button>
+                      <button type="button" class="lh-pick-nodes-clear" id="learnClearPickedNodesBtn" hidden title="Clear picked nodes">×</button>
+                    </div>
+
+                    <form id="learnStartForm" class="lh-composer-card learn-start">
+                      <label for="learnGoal" class="sr-only">What do you want to understand or practice?</label>
+                      <input id="learnGoal" class="lh-composer-input" maxlength="300" required placeholder="What do you want to learn?" autocomplete="off">
+                      <div class="lh-composer-actions">
+                        <button type="button" class="lh-icon-btn" id="learnAttachNotesBtn" title="Import notes to graph">📎</button>
+                        <button class="lh-submit-square learn-primary" id="learnStartSubmitBtn" type="submit" title="Start session (Enter)">↵</button>
+                      </div>
+                    </form>
+
+                    <div class="lh-stats-bar">
+                      <div class="lh-mode-segmented" role="group" aria-label="Session mode">
+                        <button type="button" class="lh-mode-seg active" id="learnModeSwitchTeach" data-home-mode="teach">TEACH</button>
+                        <button type="button" class="lh-mode-seg" id="learnModeSwitchPractice" data-home-mode="practice">🏋 PRACTICE</button>
+                      </div>
+                      <div class="lh-stats-center">
+                        <span class="lh-stats-hint">Local-first Socratic loop · Probe → Plan → Teach / Practice</span>
+                      </div>
+                      <div class="lh-stats-right">
+                        <span class="lh-model-pill">SAIL Mind · Local</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- VIEW 2: Active Teaching or Practice Session (chat.tsx + top-bar.tsx + docks) -->
+              <section id="learnSession" class="lh-session-view learn-session" aria-labelledby="learnGoalTitle" hidden>
+                <!-- TopBar (60px height, top-bar.tsx) -->
+                <header class="lh-topbar">
+                  <div class="lh-topbar-left">
+                    <button type="button" class="lh-icon-btn lh-sidebar-open-btn" id="learnSessionSidebarOpenBtn" aria-label="Open sidebar" title="Open sidebar" hidden>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M13 9l3 3-3 3"/></svg>
+                    </button>
+                    <div class="lh-title-group">
+                      <h3 id="learnGoalTitle" class="lh-session-title" title="Click to rename session"></h3>
+                      <input type="text" id="learnRenameInput" class="lh-rename-input" maxlength="300" hidden aria-label="Rename session">
+                      <span id="learnMode" class="lh-phase-chip learn-mode"></span>
+                    </div>
+                  </div>
+                  <div class="lh-topbar-right learn-controls">
+                    <span class="lh-coverage-pill" id="learnCoverageBadge" hidden>0/0 steps</span>
+                    <button type="button" class="lh-top-action-btn" id="learnPlanPopupBtn" hidden title="Open interactive Lesson Plan DAG">🗺 Plan</button>
+                    <button type="button" class="lh-top-action-btn" id="learnExportMdBtn" title="Export session as Markdown">⬇ .md</button>
+                    <button class="lh-top-action-btn" id="learnStop" type="button" hidden>■ Stop</button>
+                    <button class="lh-top-action-btn" id="learnPause" type="button" aria-pressed="false">Pause</button>
+                    <button type="button" class="lh-top-action-btn lh-danger-text" id="learnDeleteSessionBtn" title="Delete session">🗑</button>
+                  </div>
+                </header>
+
+                <!-- Status & Retry Banner -->
+                <div class="lh-status-banner learn-status-line">
+                  <p id="learnStatus" role="status" aria-live="polite"></p>
+                  <button class="lh-btn-secondary" id="learnRetry" type="button" hidden>Try again</button>
+                </div>
+
+                <!-- Scrollable Conversation Transcript + Hidden/Drawer Map for compatibility -->
+                <div class="lh-session-body learn-layout">
+                  <nav class="lh-map-drawer learn-map" id="learnMapAside" aria-label="Learning map" hidden>
+                    <h4>Learning map</h4>
+                    <p id="learnMapEmpty" class="learn-hint">The map appears once your starting point is clear.</p>
+                    <ol id="learnSteps"></ol>
+                    <p class="learn-hint">Covered means explained, not mastered.</p>
+                    <details id="learnMapDetails" hidden><summary>Show as diagram</summary><div id="learnDiagram" class="learn-diagram"></div></details>
+                  </nav>
+
+                  <div class="lh-chat-column learn-main">
+                    <div class="lh-transcript-scroll" id="learnTranscriptScroll">
+                      <ol id="learnTranscript" class="lh-transcript learn-transcript" aria-label="Lesson so far"></ol>
+                    </div>
+
+                    <!-- Persistent Bottom Dock Area (QuestionDock / PracticeDock / Composer + PlanMarginalia) -->
+                    <div class="lh-bottom-dock-area">
+                      <div class="lh-dock-center">
+                        <form id="learnDock" class="lh-dock-card learn-dock" aria-label="Current question or practice problem" hidden></form>
+
+                        <form id="learnMessageForm" class="lh-composer-card learn-message">
+                          <label for="learnMessageInput" class="sr-only">Message the tutor</label>
+                          <input id="learnMessageInput" class="lh-composer-input" maxlength="2000" placeholder="Ask a question, or say “explain differently”, “give an example”…" autocomplete="off">
+                          <div class="lh-composer-actions">
+                            <button class="lh-submit-square" id="learnMessageSend" type="submit" title="Send message">↵</button>
+                          </div>
+                        </form>
+
+                        <!-- Session StatsBar (stats-bar.tsx) -->
+                        <div class="lh-stats-bar lh-session-stats-bar">
+                          <div class="lh-stats-left">
+                            <button type="button" class="lh-stats-trigger" id="learnStatsBtn" title="View session context and token breakdown">
+                              <span id="learnContextText">Context 0% used · 0 tokens · 0 turns</span>
+                            </button>
+                            <div class="lh-popover lh-stats-popover" id="learnStatsPopover" hidden>
+                              <div class="lh-popover-title">Session Stats</div>
+                              <div class="lh-context-meter-bar" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="lh-context-meter-fill" id="learnContextMeterFill"></div></div>
+                              <div class="lh-stats-summary-grid" id="learnStatsSummaryGrid"></div>
+                              <div class="lh-stats-turns-list" id="learnStatsTurnsList"></div>
+                            </div>
+                          </div>
+                          <div class="lh-stats-center">
+                            <span class="lh-stats-hint" id="learnDockHintText">↵ submits · ⇧↵ newline</span>
+                          </div>
+                          <div class="lh-stats-right">
+                            <span class="lh-model-pill" id="learnRoleModelBadge">Prober · SAIL Mind</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- Right-flank Plan Marginalia mini-DAG on wide screens -->
+                      <aside class="lh-plan-marginalia" id="learnPlanMarginalia" aria-label="Plan progress" hidden></aside>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Full-Screen Interactive Plan DAG Popup Modal (plan-block.tsx) -->
+                <div class="lh-modal-backdrop" id="learnPlanModal" hidden>
+                  <div class="lh-modal-card lh-plan-modal-card" role="dialog" aria-modal="true" aria-labelledby="learnPlanModalTitle">
+                    <div class="lh-modal-head">
+                      <div>
+                        <span class="lh-eyebrow">LESSON PLAN DAG</span>
+                        <h3 id="learnPlanModalTitle">Teaching Order &amp; Dependencies</h3>
+                      </div>
+                      <button type="button" class="lh-icon-btn" id="learnPlanModalClose" aria-label="Close plan diagram">×</button>
+                    </div>
+                    <div class="lh-plan-modal-stage" id="learnPlanModalStage"></div>
+                    <div class="lh-plan-legend">
+                      <span><i class="lh-legend-dot visited"></i> Covered</span>
+                      <span><i class="lh-legend-dot current"></i> Current step</span>
+                      <span><i class="lh-legend-dot upcoming"></i> Upcoming</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+        <div class="card-tab-panel" id="memoryPanelMain" role="tabpanel" aria-labelledby="memoryTab" hidden>
           <header class="card-heading"><div class="card-title"><h2>Remembered knowledge</h2></div><div class="card-heading-actions"><button class="quiet-button" id="memoryRefresh" type="button">Refresh</button><button class="quiet-button" id="memoryExport" type="button">Export</button></div></header>
           <form id="memorySearch" class="memory-search"><label for="memoryQuery">Search memory</label><input id="memoryQuery" maxlength="1000" placeholder="Names, preferences, facts…"><button class="quiet-button" type="submit">Search</button></form>
           <p id="memoryStatus" role="status">Open Arena to load memory.</p>
@@ -385,6 +842,8 @@
         <video id="cameraPreview" autoplay muted playsinline aria-label="Live camera preview"></video>
         <button class="camera-capture" id="cameraCaptureBtn" type="button">Capture frame</button>
       </section>
+      <div class="reminder-alerts" id="reminderAlerts" aria-live="assertive" aria-label="Due reminders"></div>
+
       <div class="conversation" id="conversation" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions"></div>
       <div class="sr-only" id="assistantAnnounce" aria-live="polite" aria-atomic="true"></div>
       <div class="error-toast" id="error" role="alert" hidden></div>
@@ -432,28 +891,28 @@
     <nav class="vscode-settings-nav" aria-label="Settings categories">
       <div class="vscode-nav-section-label">Categories</div>
       <button type="button" class="vscode-nav-item active" data-settings-tab="general">
-        <span class="vscode-nav-icon">⚙</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#settings"></use></svg></span>
         <span class="vscode-nav-text">General</span>
       </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="voice">
-        <span class="vscode-nav-icon">🎙</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#dialogue"></use></svg></span>
         <span class="vscode-nav-text">Voice & Audio</span>
       </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="guardian">
-        <span class="vscode-nav-icon">🛡</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#guardian"></use></svg></span>
         <span class="vscode-nav-text">Guardian Security</span>
         <span class="vscode-nav-pill-badge" id="navGuardianBadge">Safe</span>
       </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="models">
-        <span class="vscode-nav-icon">🧠</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#mind"></use></svg></span>
         <span class="vscode-nav-text">Models & Inference</span>
       </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="forge">
-        <span class="vscode-nav-icon">⚒</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#forge"></use></svg></span>
         <span class="vscode-nav-text">Forge Coding Agent</span>
       </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="developer">
-        <span class="vscode-nav-icon">⚡</span>
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#terminal"></use></svg></span>
         <span class="vscode-nav-text">Developer & Telemetry</span>
       </button>
     </nav>
@@ -465,6 +924,17 @@
         <div class="vscode-category-header">
           <h3>General Preferences</h3>
           <p class="vscode-category-desc">Manage runtime session state, hardware compute profile, and environment.</p>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="workspace factory tools map isometric classic dashboard">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name" id="factoryMapLabel">Workspace</label>
+            <p class="vscode-setting-desc" id="factoryMapDesc">The Tools Map is your workspace: systems open in a large popup, with Dialogue beside the map. The classic card dashboard is still available.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <button class="quiet-button" type="button" id="openFactorySettings" aria-describedby="factoryMapDesc">Open Tools Map</button>
+            <a class="quiet-button" href="#classic" id="openClassicSettings">Classic dashboard</a>
+          </div>
         </div>
 
         <div class="vscode-setting-item" data-search-terms="compute profile hardware tier balanced performance speed hybrid gpu cpu">
@@ -487,15 +957,6 @@
           </div>
         </div>
 
-        <div class="vscode-setting-item" data-search-terms="spaces tools quick launch panel navigate">
-          <div class="vscode-setting-info">
-            <label class="vscode-setting-name">Workspace Spaces</label>
-            <p class="vscode-setting-desc">Browse integrated spaces for agents, tools, arena, and media.</p>
-          </div>
-          <div class="vscode-setting-control">
-            <button class="quiet-button" id="openSpacesFromSettingsBtn">Browse Spaces</button>
-          </div>
-        </div>
       </section>
 
       <!-- 2. Voice & Audio Category -->
@@ -561,11 +1022,22 @@
         <div class="vscode-setting-item" data-search-terms="memory learn learning conversation privacy">
           <div class="vscode-setting-info">
             <label for="learningBtn" class="vscode-setting-name">Learn from this conversation</label>
-            <p class="vscode-setting-desc" id="learningDescription">Off on every connection. When enabled, voice and text turns and large tool results enter local memory processing. Pending transcripts await scheduled cleanup (30-day default retention) and are not encrypted by SAIL. Turning off discards pending raw turns; saved knowledge can be corrected or forgotten in Arena. This does not authorize actions.</p>
+            <p class="vscode-setting-desc" id="learningDescription">Enabled by default on every connection. When enabled, voice and text turns and large tool results enter local memory processing. Pending transcripts await scheduled cleanup (30-day default retention) and are not encrypted by SAIL. Turning off discards pending raw turns; saved knowledge can be corrected or forgotten in Arena. This does not authorize actions.</p>
           </div>
           <div class="vscode-setting-control">
-            <button class="quiet-button" id="learningBtn" type="button" aria-pressed="false" aria-describedby="learningDescription" disabled>Enable learning</button>
-            <span id="learningStatus" role="status" aria-live="polite">Disconnected · learning off</span>
+            <button class="quiet-button" id="learningBtn" type="button" aria-pressed="true" aria-describedby="learningDescription" disabled>Disable learning</button>
+            <span id="learningStatus" role="status" aria-live="polite">Learning enabled for this conversation</span>
+          </div>
+        </div>
+
+        <div class="vscode-setting-item" id="liveContextSetting" data-search-terms="live conversation context listen privacy">
+          <div class="vscode-setting-info">
+            <label for="liveContextBtn" class="vscode-setting-name">Listen without replying</label>
+            <p id="liveContextDescription" class="vscode-setting-desc">With everyone’s consent, enable this and start the microphone. SAIL keeps up to 10 minutes of recent speech as temporary context; type a question to use it. Speakers stay unknown. No voiceprints or automatic actions. Disabling, muting, resetting or disconnecting clears this context.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <button class="quiet-button" id="liveContextBtn" type="button" aria-pressed="false" aria-describedby="liveContextDescription" disabled>Enable listening context</button>
+            <span id="liveContextStatus" role="status" aria-live="polite">Listening context off</span>
           </div>
         </div>
 
@@ -731,15 +1203,6 @@
           </div>
         </div>
 
-        <div class="vscode-setting-item" data-search-terms="forge quick dispatch enqueue task prompt">
-          <div class="vscode-setting-info">
-            <label class="vscode-setting-name">Dispatch New Forge Job</label>
-            <p class="vscode-setting-desc">Enqueue an issue or prompt for autonomous coding resolution.</p>
-          </div>
-          <div class="vscode-setting-control">
-            <button class="quiet-button" id="enqueueFromSettingsBtn">Enqueue Task</button>
-          </div>
-        </div>
       </section>
 
       <!-- 6. Developer & Telemetry Category -->
@@ -820,11 +1283,18 @@
 <script src="/mermaid.js" defer></script>
 <script src="/card-modal.js" defer></script>
 <script src="/client-speech.js" defer></script>
+<script src="/markdown.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/forge.js" defer></script>
 <script src="/approvals.js" defer></script>
+<script src="/plans.js" defer></script>
+<script src="/reminders.js" defer></script>
+<script src="/briefing.js" defer></script>
 <script src="/subsystem-pages.js" defer></script>
 <script src="/memory.js" defer></script>
+<script src="/learn.js" defer></script>
+<link rel="stylesheet" href="/toolsmap.css">
+<script src="/toolsmap.js" defer></script>
 <script src="/ui.js" defer></script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js" defer></script>

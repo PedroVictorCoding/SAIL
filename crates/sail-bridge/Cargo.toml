@@ -25,6 +25,11 @@ thiserror.workspace = true
 chrono.workspace = true
 url.workspace = true
 ring.workspace = true
+reqwest.workspace = true
+base64.workspace = true
+flate2 = "1"
+crc32fast = "1"
+roxmltree = "0.20"
 
 [dev-dependencies]
 axum.workspace = true

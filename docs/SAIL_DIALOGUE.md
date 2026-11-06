@@ -28,6 +28,9 @@ Mind, Core audio bus, Relay, Vision, Arena, Guardian; concurrent tools #42.
 - Handle partial failures, reconnects, cancellation and restarts without synthesizing successful outputs. Prefer local-first operation and persist only consented, minimized state.
 
 ## 5. UI and interaction mapping
+
+For compact shared model instructions, changing turn context and reproducible
+prompt-processing measurements, see [Dialogue prompt processing](VOICE_PREFILL.md).
 Persistent Orb and voice-session card; explicit mic and recording state, language and listening/cancel controls.
 
 Use the existing SAIL design: compact dark UI, contextual cards, ambient Orb, progressive disclosure, accessible keyboard/touch controls, and no permanent new tab unless justified by repeated user use. Show honest loading, empty, unavailable, permission-denied and reconnection states. Web and Android share one typed state model.
@@ -104,6 +107,14 @@ One complete local voice turn with measured STT/first-audio latency, barge-in, n
 - [Roadmap and subsystem taxonomy](https://github.com/PedroVictorCoding/SAIL/issues/15)
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
+
+## Live conversation context
+
+Voice settings provide opt-in, owner-authenticated listening without replies using
+the existing local VAD/STT. A bounded session-only buffer supplies anonymous speech
+as untrusted background to explicit typed questions. No pyannote or voiceprints are
+required. See [live conversation context](LIVE_CONVERSATION_CONTEXT.md) for consent,
+clearing/expiry, usage, verification and limitations.
 
 ## In-browser terminal implementation
 

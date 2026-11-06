@@ -1,122 +1,74 @@
-# SAIL UI Design Guide
-## Direction: dark tactile neumorphism
+# SAIL UI Design Guide — Ambient Glass / Living Light (2026-11)
 
-### Visual intent
+**Authoritative design requirements:** [DESIGN.md](../DESIGN.md). This guide replaces the previous dark tactile neumorphism aesthetic. Maintains the project identity: restrained, purposeful, legible and low-clutter.
 
-SAIL should feel like a carefully manufactured physical control panel: dark graphite surfaces, softly raised controls, recessed inputs, precise typography, and restrained orange illumination.
+## Visual references and exact interpretation
+See [Ambient Glass References](design/AMBIENT_GLASS_REFERENCES.md) for the eight owner-supplied inspiration images, their ordered filenames, intended use and implementation constraints. The images are owner-supplied inspiration only; code and branded assets must not be traced/copied from them.
 
-Use reference images 3 and 4 as the primary direction. Borrow the dashboard organisation of images 1 and 2 when useful, while retaining the darker material treatment.
+### New shared primitives
+- `AmbientBackdrop`: a near-black canvas with one (sometimes two) radial chromatic light layers, masked to the currently active region; never underneath dense reading text without an opaque scrim.
+- `GlassSurface`: semitransparent with thin bright edge and optional measured low-radius backdrop blur; opaque gradient fallback.
+- `LuminousCard`: dark card with subtle soft color near an edge and a real status/capability, no dummy values; used sparingly for actionable data.
+- `OrbReactive`: slow amplitude-sensitive breathing from observed speech/capture activity, accessible textual/status mirror and no active animation in reduced-motion.
+- `StatusCapsule`: rounded signal strip, real event label and one state-specific accent; e.g. READY, LISTENING, SPEAKING, RECORDING, WORKING, OFFLINE.
+- `TimelineSurface`: quiet rule, actual scheduled events and state tint for Life/Pulse, not a bright gradient chart for its own sake.
+- `ProgressMeter`: constrained luminous fill only for verified numeric progress, supports unknown/indeterminate without fake percent.
+- `GlassAction`: legible solid/transparent hybrid CTA with focus ring and tactile press, not invisible low-contrast ghost button.
 
-### Material and lighting
+## Typography and composition
+- Main information uses restrained sans-serif scale with deliberate contrast and breathing room; oversized headings only for destination identity, not every widget.
+- Main reading/learning/editor surfaces flat and opaque enough for extended sessions.
+- Primary information should be visible without hunting among decorative cards; use progressive disclosure rather than giant card grids.
+- The base backdrop is `#0a0c10`, text `#f2f5fa`, subtle surfaces `#141820`; color semantic mapping comes from DESIGN.md. References are colorful but should not make every screen a full rainbow.
+- No constant animated glows across the entire dashboard; one primary active luminous surface, smaller dim secondary signals.
 
-- Use graphite backgrounds with subtly lighter panels and controls.
-- Maintain one consistent light source from the upper left.
-- Raised surfaces receive a faint upper-left highlight and a soft lower-right shadow.
-- Recessed surfaces use inner shadows with the same light direction.
-- Use subtle gradients to suggest curvature.
-- Edge highlights should be visible at normal viewing size without resembling bright outlines.
-- Reserve strong glow for active controls and meaningful status.
+## CSS implementation pattern (illustrative, not a drop-in full theme)
+```css
+.sail-glass {
+  position: relative;
+  isolation: isolate;
+  background: linear-gradient(145deg, rgb(31 41 57 / .82), rgb(11 16 25 / .90));
+  border: 1px solid rgb(222 238 255 / .13);
+  border-radius: var(--sail-radius-card, 24px);
+  box-shadow: 0 16px 48px rgb(0 0 0 / .22), inset 0 1px rgb(255 255 255 / .09);
+}
+@supports (backdrop-filter: blur(12px)) {
+  .sail-glass[data-blur="allowed"] { backdrop-filter: blur(var(--sail-blur-supported, 12px)); }
+}
+.sail-light {
+  pointer-events: none; position: absolute; inset: -18%;
+  background: radial-gradient(ellipse at 70% 80%, var(--sail-light-a) 0, transparent 60%);
+  opacity: var(--sail-illumination, .15);
+  filter: blur(28px);
+  transform: translate3d(0, 0, 0);
+  transition: opacity var(--sail-transition-state, 420ms) ease,
+              transform var(--sail-transition-state, 420ms) ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sail-light, .sail-glass { animation: none !important; transition-duration: 0ms !important; }
+}
+@media (forced-colors: active) {
+  .sail-glass { background: Canvas; border: 1px solid CanvasText; }
+  .sail-light { display: none; }
+}
+```
+Prefer precomputed gradients with opacity cross-fading instead of animating several filter layers. `backdrop-filter` is optional. The reference aesthetic is an accent, not an excuse for slow pages.
 
-Avoid making every container appear raised. Depth should communicate interaction and hierarchy.
+## State integration
+Every main app/root surface sets `data-sail-state` from authenticated UI state (not from a generative model): `ready`, `listening`, `speaking`, `thinking`, `recording`, `executing`, `learning`, `completed`, `warning`, `error`, `disconnected`. CSS semantic vars map to color channels; Audio and Guardian privacy indicators remain literal.
+- Inbound mic frame/capture means listening; pending mic request means awaiting permission, not listening.
+- Audio PCM playback clock means speaking; synthesis buffered without playback means buffering/processing, not speaking.
+- Real `Mind` inference/task state means thinking; no arbitrary spinner when idle.
+- Recording stays marked until microphone/recording subsystem confirms stopped.
+- Prioritize foreground voice state over background work; other statuses persist in Activity.
 
-### Initial design tokens
+## Library selection / maintenance
+**Phase 1: CSS/Dioxus alone.** Phase 2 (only after measured need): assess `dioxus-motion` for Rust springs or `motion` vanilla JS for DOM effects. `dioxus-fx` selective CSS effects may be convenient but should not dictate UI. Every optional package needs pinned version/license, WebView smoke test and bundle diff; avoid runtime CDN. See DESIGN.md's researched library links.
 
-These are starting values to validate against an approved reference screen.
-
-| Token | Value |
-|---|---|
-| Page background | `#1C2023` |
-| Panel surface | `#24292D` |
-| Control surface | `#292F33` |
-| Recessed surface | `#191D20` |
-| Primary text | `#F0F2F3` |
-| Secondary text | `#B5BEC5` |
-| Accent | `#FF8A32` |
-| Focus indicator | `#FFC184` |
-| Spacing scale | `4, 8, 12, 16, 24, 32, 48px` |
-| Control radius | `12px` |
-| Card radius | `20px` |
-| Large panel radius | `28px` |
-
-Check contrast for actual text/background combinations. Small orange controls may need dark text or icons.
-
-### Depth system
-
-Use four named surface treatments:
-
-1. **Base:** page background; no shadow.
-2. **Panel:** subtle elevation for grouped content.
-3. **Raised control:** stronger, compact depth for clickable elements.
-4. **Inset:** recessed fields, tracks, and selected segments.
-
-Create shared tokens for these treatments. Do not invent a different shadow for each component.
-
-### Component behaviour
-
-**Buttons**
-- Rest: softly raised with a clear label or icon.
-- Hover: slightly stronger highlight.
-- Pressed: move down approximately 1px and reduce the outer shadow.
-- Selected: use a persistent visual state distinct from momentary pressing.
-- Focus: show a clear keyboard outline.
-- Disabled: preserve legibility while removing interactive emphasis.
-
-**Switches and segmented controls**
-- Place a raised thumb or selection inside a recessed track.
-- Use position, text or icons alongside colour to communicate state.
-- Preserve recognisable switch semantics.
-
-**Inputs**
-- Use recessed surfaces, readable labels, and visible boundaries.
-- Keep error messages and focus states explicit.
-
-**Cards**
-- Use restrained elevation and generous internal spacing.
-- Give interactive cards an identifiable action.
-- Avoid styling ordinary content cards exactly like buttons.
-
-**Navigation**
-- Keep inactive items quiet but readable.
-- Use one consistent selected treatment.
-- Keep icon size, alignment, and hit areas consistent.
-
-### Layout and typography
-
-- Use a restrained sans-serif typeface with a clear size hierarchy.
-- Prefer readable text over the extremely muted labels in the references.
-- Keep dashboard information aligned to a consistent grid.
-- Establish hierarchy through spacing and typography before adding shadows.
-- Keep dense tables and long text on relatively flat surfaces.
-- Adapt layouts for mobile without shrinking controls below comfortable touch sizes.
-
-### Motion
-
-- Use brief transitions, usually 120–200ms.
-- Physical controls should move subtly and predictably.
-- Use spring motion sparingly for moving thumbs or larger transitions.
-- Respect reduced-motion preferences.
-- Avoid continuous decorative animation.
-
-### Instructions for AI implementation
-
-Before changing a screen:
-
-1. Identify the relevant approved reference components.
-2. Reuse existing tokens, components, and interaction states.
-3. Explain any component that requires a new visual treatment.
-4. Preserve the established lighting, spacing, typography, and accent rules.
-5. Render the result and compare it visually with the approved reference.
-6. Verify hover, pressed, selected, focus, disabled, loading, and error states where applicable.
-7. Check desktop and mobile layouts.
-
-Do not introduce new colours, shadow recipes, radii, icon styles, or competing component systems without updating this guide.
-
-### Definition of done
-
-A screen is ready when:
-- Its materials and lighting match the approved reference.
-- Interactive controls are distinguishable from static content.
-- Text and focus indicators remain clear.
-- Components use shared tokens.
-- States work with mouse, keyboard, and touch.
-- Screenshots have been reviewed at realistic viewing sizes.
+## QA per feature
+- Web + Android narrow/wide comparisons, screenshot references and real accessibility contrast tests.
+- Real state transition trace ready → listen → process → speak → ready; off/permission denied/recording/error states.
+- Reduced-motion, reduced-transparency and forced-color fallback.
+- Real CPU/GPU frame time and battery profiling; no client model slowdown or dropped speech.
+- Focus rings, accessible labels, noncolor indicators, usable forms and input feedback.
+- No fake numbers, no social/leaderboard UI copied from owner image references.

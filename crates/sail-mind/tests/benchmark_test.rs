@@ -34,6 +34,7 @@ impl InferenceBackend for MockBenchmarkBackend {
             last_error: None,
             active_profile: None,
             hardware: None,
+            load: None,
         }
     }
     async fn infer(

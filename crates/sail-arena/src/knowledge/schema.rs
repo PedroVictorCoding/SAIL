@@ -217,3 +217,84 @@ CREATE TABLE kn_source_progress(
  PRIMARY KEY(record_id,extractor_version)
 ) STRICT, WITHOUT ROWID;
 ";
+
+/// V6: Arena Learn's learning graph (#248). Propositions are claims; chains record which
+/// premise propositions jointly entail a conclusion. Provenance rows are separate so a
+/// source can be removed without losing a proposition another source still supports.
+pub(crate) const V6: &str = "
+CREATE TABLE kn_learning_sources(
+ id INTEGER PRIMARY KEY,
+ kind TEXT NOT NULL CHECK(kind IN ('note','session')),
+ name TEXT NOT NULL,
+ content_hash BLOB NOT NULL,
+ topic TEXT NOT NULL,
+ scope TEXT NOT NULL,
+ sensitivity INTEGER NOT NULL CHECK(sensitivity BETWEEN 0 AND 2),
+ status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','deleted')),
+ created_at INTEGER NOT NULL,
+ UNIQUE(scope, content_hash)
+) STRICT;
+
+CREATE TABLE kn_learning_propositions(
+ id INTEGER PRIMARY KEY,
+ statement TEXT NOT NULL,
+ statement_key TEXT NOT NULL,
+ topic TEXT NOT NULL,
+ scope TEXT NOT NULL,
+ sensitivity INTEGER NOT NULL CHECK(sensitivity BETWEEN 0 AND 2),
+ status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','retracted')),
+ created_at INTEGER NOT NULL,
+ updated_at INTEGER NOT NULL,
+ UNIQUE(scope, statement_key)
+) STRICT;
+CREATE INDEX kn_learning_props_by_topic ON kn_learning_propositions(scope, topic);
+
+CREATE TABLE kn_learning_provenance(
+ prop_id INTEGER NOT NULL REFERENCES kn_learning_propositions(id) ON DELETE CASCADE,
+ provenance_key TEXT NOT NULL,
+ source_kind TEXT NOT NULL CHECK(source_kind IN ('session','note')),
+ session TEXT,
+ source_id INTEGER REFERENCES kn_learning_sources(id) ON DELETE CASCADE,
+ quote TEXT NOT NULL,
+ created_at INTEGER NOT NULL,
+ PRIMARY KEY(prop_id, provenance_key)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX kn_learning_prov_by_source ON kn_learning_provenance(source_id);
+
+CREATE TRIGGER kn_learning_prop_gc AFTER DELETE ON kn_learning_provenance BEGIN
+ DELETE FROM kn_learning_propositions
+  WHERE id=old.prop_id AND NOT EXISTS(
+    SELECT 1 FROM kn_learning_provenance WHERE prop_id=old.prop_id);
+END;
+
+CREATE TABLE kn_learning_chains(
+ id INTEGER PRIMARY KEY,
+ conclusion_id INTEGER NOT NULL REFERENCES kn_learning_propositions(id) ON DELETE CASCADE,
+ relation TEXT NOT NULL CHECK(relation IN ('entails','supports')),
+ topic TEXT NOT NULL,
+ scope TEXT NOT NULL,
+ sensitivity INTEGER NOT NULL CHECK(sensitivity BETWEEN 0 AND 2),
+ created_at INTEGER NOT NULL,
+ UNIQUE(conclusion_id, relation)
+) STRICT;
+
+CREATE TABLE kn_learning_chain_premises(
+ chain_id INTEGER NOT NULL REFERENCES kn_learning_chains(id) ON DELETE CASCADE,
+ premise_id INTEGER NOT NULL REFERENCES kn_learning_propositions(id) ON DELETE CASCADE,
+ PRIMARY KEY(chain_id, premise_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TRIGGER kn_learning_chain_gc AFTER DELETE ON kn_learning_chain_premises BEGIN
+ DELETE FROM kn_learning_chains
+  WHERE id=old.chain_id AND NOT EXISTS(
+    SELECT 1 FROM kn_learning_chain_premises WHERE chain_id=old.chain_id);
+END;
+
+CREATE TABLE kn_learning_coverage(
+ session TEXT NOT NULL,
+ extractor_version INTEGER NOT NULL,
+ covered_seq INTEGER NOT NULL,
+ updated_at INTEGER NOT NULL,
+ PRIMARY KEY(session, extractor_version)
+) STRICT, WITHOUT ROWID;
+";

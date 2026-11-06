@@ -1,11 +1,13 @@
-# SAIL Campus Learning — Adaptive Learning Experience and UI Specification
+# SAIL Arena Learn — Adaptive Learning Experience and UI Specification
 
-**Status:** Proposed; upstream-based architectural design, not implemented. **Owner:** Life/Campus with Arena, Agents, Mind, Canvas and Dialogue. **UI target:** Dioxus Web + Android. **Reference:** https://github.com/amosblomqvist/learnharness (AGPL-3.0; TypeScript/Next.js/Electron).
-**Links:** [Life](SAIL_LIFE.md), [Arena](SAIL_ARENA.md), [Canvas](SAIL_CANVAS.md), [Dialogue](SAIL_DIALOGUE.md), [Mind](SAIL_MIND.md), [Guardian](SAIL_GUARDIAN.md).
+**Status:** Proposed; implementation tracked in [#215](https://github.com/PedroVictorCoding/SAIL/issues/215). **Owner:** Arena (main product), with Agents, Mind, Canvas and Dialogue. **UI target:** the existing web UI in `crates/sail-dialogue/web` now, Dioxus Web + Android later (#38). **Reference:** https://github.com/amosblomqvist/learnharness (AGPL-3.0; TypeScript/Next.js/Electron).
+**Links:** [Arena](SAIL_ARENA.md), [Cognitive memory](SAIL_COGNITIVE_MEMORY.md), [Life](SAIL_LIFE.md), [Canvas](SAIL_CANVAS.md), [Dialogue](SAIL_DIALOGUE.md), [Mind](SAIL_MIND.md), [Guardian](SAIL_GUARDIAN.md).
 
 ## 1. Purpose and upstream verification
 
-Build a **SAIL Campus learning experience** inspired by LearnHarness's UI/pedagogical workflow, not a new top-level SAIL subsystem or a wholesale TypeScript/Electron port.
+Build **Arena Learn**, Arena's main product: a full Rust, clean-room reimplementation of LearnHarness's learning loop and UI workflow. It is not a wholesale TypeScript/Electron port, and no upstream source, prompts or assets are copied.
+
+> **Migration note (November 2026).** This spec was previously *SAIL Campus Learning*, owned by Life/Campus as a secondary feature. The owner decided that the learning experience is Arena's main product. Arena's knowledge store (claims, evidence, retrieval, correct/forget) is the substrate it builds on. Life keeps course logistics (#75–#77); "Campus" no longer names the learning product.
 
 Verified from upstream README and current architecture/teaching documentation (2026-11-02):
 - LearnHarness assesses (probe), plans a dependency path, teaches in small reasoning steps with comprehension checks and repairs, and runs separate practice sessions with varied transfer problems.
@@ -18,9 +20,11 @@ Source-derived learning theory is **not established scientific consensus**. In p
 
 ## 2. Architecture and boundary ownership
 
-Campus belongs within **Life** and is presented as an existing Campus Space; no new 22nd subsystem. The reusable mechanisms are:
+**Code layout.** `crates/sail-arena-learn` holds the domain core (events, plan, questions; no IO), the SQLite session store and the agent turn runner. It is a separate crate so that `sail-arena`, which Flow, Dialogue and Core depend on, gains no model dependency. The learning graph is stored in `sail-arena` under `learning:*` scopes, read and written with Guardian's `MemoryPurpose::Learn` grant. HTTP routes are `/api/learn/*` in `sail-dialogue`.
 
-- **Campus (Life):** courses, learning goals, study sessions, prerequisites, diagnostic coverage, learning plans, practice orchestration and assessment scheduling.
+Arena Learn belongs to **Arena** and is the first view of Arena's existing page; no new subsystem or top-level navigation entry. The reusable mechanisms are:
+
+- **Arena Learn:** learning goals, study sessions, prerequisites, diagnostic coverage, learning plans, practice orchestration and assessment scheduling.
 - **Arena:** evidence-attributed propositions, prerequisite and inference edges, retrieval of prior learning and user-controlled revision/deletion. Graph stores knowledge representations and their provenance; avoid unsupported “mastery scores”.
 - **Mind:** local model role routing (prober, planner/teacher, evaluator/practitioner); use small model where adequate, Qwen for harder reasoning. Never require hosted inference.
 - **Agents/Flow:** bounded source retrieval, task orchestration and background jobs; typed tools and durable Continuity lifecycle.
@@ -28,16 +32,16 @@ Campus belongs within **Life** and is presented as an existing Campus Space; no 
 - **Dialogue:** PT-PT/English narration, dictation and optional voice-first checks with barge-in.
 - **Guardian/Bridge:** authorize imported material and optional web lookup; never secretly upload source files or transcripts.
 - **Pulse:** voluntary spaced practice scheduling and quiet-hour-aware reminders.
-- **Studio:** user-editable notes/workbooks; Campus can reference Studio files but never silently change them.
+- **Studio:** user-editable notes/workbooks; Arena Learn can reference Studio files but never silently change them.
 
 ## 3. UI strategy — one learning workspace, multiple modes
 
-**Entry:** Spaces → Campus → Learning, or “Teach me X” from existing SAIL chat. Preserve existing SAIL shell, Orb, conversational right panel and dark minimal layout. No separate global navigation entry named LearnHarness.
+**Entry:** Arena → Learn (the Arena page's default view), or “Teach me X” from existing SAIL chat. Preserve existing SAIL shell, Orb, conversational right panel and dark minimal layout. No separate global navigation entry named LearnHarness.
 
 ### Desktop shell (conceptual)
 
 ```text
-┌──────── SAIL · Campus / Topic ────────────────────────────────────┐
+┌──────── SAIL · Arena / Learn    ────────────────────────────────────┐
 │ Goal: Understand TCP congestion control    Assess Learn Practice │
 ├─────────────────────────┬───────────────────────┬────────────────┤
 │ LEARNING MAP            │ LESSON / EXPLANATION  │ SAIL CONTEXT   │
@@ -128,6 +132,24 @@ Illustrative only: reuse existing Core IDs/bus and persist event origin, orderin
 - Ensure model-generated graph links, answers and scores are validated. Answers are not automatically facts; cite imported sources.
 - If model is offline, preserve draft and show unavailable/retry, never fabricate feedback.
 
+### Free-recall judgment (#243, implemented)
+
+- A `free_recall` question asked by `probe` or `quiz` must carry a `rubric`: the one to three
+  ideas a good answer contains. The engine stores it with the question and never puts it in the
+  learner's view. `ask_user_question` may ask an open question without a rubric; such answers are
+  not judged, and the tutor is told not to give a verdict.
+- At the start of the next turn, before the tutor runs, a separate judge call sees only the
+  question, the rubric and the answer (not the lesson transcript). It returns
+  `correct | partial | incorrect | unclear`. `partial` and `incorrect` must name the specific
+  missing or wrong relation. The verdict is stored as an `AnswerJudged` event, and the tutor then
+  sees it as part of the question's result.
+- `unclear` gives no verdict. The engine asks the judge's follow-up question on the same node
+  with the same rubric. It asks at most one follow-up per question; if the answer is still
+  unclear, the tutor explains the idea another way.
+- If the judge's output cannot be used, the call is retried once with the reason. After that the
+  answer is recorded as `could_not_judge`, and the tutor is told not to guess. If the model is
+  unavailable, nothing is recorded and the next turn retries the judgment.
+
 ## 6. Product integration use cases
 
 1. **Computer engineering:** import course PDF with consent → discover prerequisites (BGP, NAT, networking) → interactive diagnostic → explain one mechanism → test edge cases → graph record with PDF page provenance.
@@ -138,7 +160,7 @@ Illustrative only: reuse existing Core IDs/bus and persist event origin, orderin
 ## 7. Release milestones and verification
 
 ### L1 — Minimal UI vertical slice (P1)
-- Spaces → Campus launches a learning session from a topic.
+- Arena → Learn launches a learning session from a topic.
 - Real local model asks 2–4 meaningful diagnostic questions, stores answers and reasoning.
 - Present a compact dependency map (at least 3 concepts) and one lesson step with a dedicated question dock.
 - Persist and reconnect; accept answer exactly once; pause and resume.
@@ -171,3 +193,81 @@ Upstream:
 - [License](https://github.com/amosblomqvist/learnharness/blob/main/LICENSE)
 
 The UI strategy above is a SAIL proposal inspired by these public concepts; it is not a claim of faithful binary or source-level LearnHarness integration. Audit upstream assets and AGPL obligations before reuse.
+
+## 9. Implemented contracts and deliberate decisions (November 2026)
+
+These are the shipped contracts in `sail-arena-learn`, `sail-arena` and `sail-dialogue`, checked
+by tests. They refine, rather than replace, the milestones above.
+
+### 9.1 Practice (#244)
+
+- A practice session is a separate session kind (`mode: "practice"`, `Mode::Practice`), not
+  more quiz inside a lesson.
+- `problem` commits the statement and the full solution together. The solution is stored in
+  the event log but is absent from every learner-facing view until `conclude` reveals it.
+- Only one problem may be active. A second `problem` call returns a correctable error.
+- Hints are revealed one at a time, only when the learner asks (`POST /sessions/:id/hint`),
+  and each request is stored. Attempts are stored as practice evidence.
+- `conclude` records `solved`, `solved_with_hints` or `not_solved` and reveals the solution.
+  Practice outcomes never change plan progress, plan revisions or the learning graph.
+
+### 9.2 Role prompts (#245)
+
+Prompts are SAIL-authored. `arena/learn/prompts/<role>.md` (or `SAIL_LEARN_PROMPTS`) may
+override `common`, `prober`, `teacher`, `practitioner` and `judge` individually. An override
+that is invalid UTF-8, empty or over 16 KiB is ignored with a warning and the default is used.
+`GET /api/learn/prompts` returns the effective prompts to the owner.
+
+### 9.3 Model slots (#253)
+
+`SAIL_LEARN_MODEL_{PROBER,TEACHER,PRACTITIONER,JUDGE,EXTRACTOR}` map individual slots to a
+registered Mind model id. Unset slots use the resident model. A configured id is sent to Mind
+verbatim; an unregistered model is refused by Mind (`UnknownModel`) and the turn records the
+failure. There is no hosted-provider fallback. `TurnSettled` records tokens with the role.
+
+### 9.4 Context compaction and meter (#252, #254)
+
+When projected history exceeds the context budget, the turn appends a `ContextCompacted`
+event at an input-message boundary. Earlier events are replaced in the model request by a
+deterministic digest (goal, plan, visited/current/upcoming, last answers, last explanation).
+Full history remains in the store and the UI transcript. The cut is never inside a
+tool-call/result pair. The view exposes prompt/completion totals and a context fraction; the
+UI shows a compact meter and no cost estimate.
+
+The history budget is 9,216 tokens: Mind's default 16k window minus a 7k reserve for the
+system prompt (session state, a 40-node plan, picked propositions), the role's tool schemas,
+the chat template and the reply. A unit test checks the reserve against a maximal plan, so
+a compacted lesson fits the window. Propositions picked as session context are limited to
+4,000 bytes in total. They are sent with every turn, and a larger set is refused at session
+creation with a "pick fewer" error. If Mind shrinks the window under RAM pressure, the turn
+still halves its history window and retries.
+
+### 9.5 Diagrams, dictation and reminders (#255, #256, #257)
+
+- The teacher may call `show_diagram` (Mermaid source ≤ 8 KiB). The browser renders it with
+  Mermaid `securityLevel: 'strict'`; a render failure is a text fallback and is posted back,
+  becoming a tool-error note in the next prompt. HTML/script payloads are rejected.
+- The free-text and reasoning fields in the question dock have an explicit dictation button.
+  Audio is processed by the existing on-device speech pipeline; the transcript is inserted
+  for the learner to edit and is never submitted automatically.
+- After practice, the learner may opt into one Pulse reminder at 1, 3 or 7 days. It is off by
+  default and can be cancelled from the session view. Pulse owns quiet-hour timing.
+
+### 9.6 Learning graph, extraction, imports and retrieval (#248–#251)
+
+- `sail-arena` stores propositions and typed chains under `learning:<topic>` scopes, with
+  per-session and per-source provenance. Guardian's `MemoryPurpose::Learn` grant sees only
+  `learning:*`; Dialogue and Forge do not. Forget bumps the deletion generation and writes a
+  tombstone; deleting an imported source removes only propositions that source alone
+  supported. A chain whose premise is forgotten is removed rather than left dangling.
+- Post-lesson extraction runs after a turn once uncovered session text exceeds the threshold
+  (`SAIL_LEARN_EXTRACT_TOKENS`, default 4096, minimum 500). Each proposition must cite a
+  verbatim quote or it is rejected; merging is deterministic; a coverage ledger makes replay
+  safe.
+- `POST /api/learn/sources` imports `.md`/`.txt` notes up to 5 MiB with a content hash and
+  runs extraction in the background. Sources are listable and deletable.
+- **Parity decision (#293):** retrieval is an **explicit, gated agent tool**
+  (`search_knowledge`), not automatic prompt injection. This matches upstream LearnHarness's
+  documented gated graph-read tools. Results are bounded (`SAIL_LEARN_MEMORY_BYTES`, default
+  1500), labelled untrusted data, and never presented as mastery. Automatic injection remains
+  an explicit non-goal unless a future ADR reverses this decision.

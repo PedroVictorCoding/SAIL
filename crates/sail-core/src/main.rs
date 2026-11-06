@@ -22,6 +22,7 @@ use sail_forge::{
 };
 use sail_guardian::GuardianSubsystem;
 use sail_mind::MindSubsystem;
+use sail_ui::UiSubsystem;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -82,12 +83,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut flow = FlowSubsystem::new();
     let mut agents = AgentsSubsystem::new();
     let mut guardian = GuardianSubsystem::with_data_dir(&guardian_dir);
+    let mut ui = UiSubsystem::new();
 
     let review_broker = Arc::new(
         ReviewBroker::new(ReviewPolicyConfig::default()).with_credentials(guardian.credentials()),
     );
     // Durable record of accepted background work; recovered when Forge starts.
     let continuity = Arc::new(sail_continuity::Continuity::open_default());
+    // Pulse reminders are server-owned: the scheduler runs even when no browser is connected.
+    let pulse = Arc::new(sail_pulse::Pulse::open_default());
+    let _ = sail_pulse::install_global(pulse.clone());
+    let _pulse_scheduler = pulse.start_scheduler();
+    dialogue = dialogue.with_pulse(pulse.clone());
     let checkpoint_store = Arc::new(TaskCheckpointStore::default_store());
     let mut forge = ForgeOrchestrator::new(
         OrchestratorConfig::default(),
@@ -96,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         guardian.sandbox(),
     )
     .with_self_reviewer(Arc::new(LocalModelReviewer::new()))
-    .with_continuity(continuity);
+    .with_continuity(continuity.clone());
     if let Some(memory) = sail_forge::failure_memory::FailureMemory::from_env() {
         forge = forge.with_failure_memory(Arc::new(memory));
     }
@@ -138,6 +145,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         flow = flow.with_memory(maintenance);
     }
+    // Agent task plans share the Continuity store and run Dialogue's tools through Guardian.
+    let plans = match sail_dialogue::plans::Plans::with_mind(continuity, model_service.clone()) {
+        Ok(plans) => {
+            dialogue = dialogue.with_plans(plans.clone());
+            Some(plans)
+        }
+        Err(error) => {
+            error!(%error, "Agent task planning unavailable");
+            None
+        }
+    };
     let mut forge = ForgeSubsystem::new(orchestrator.clone());
     let nightly_config = NightlyConfig::from_env();
     if nightly_config.enabled {
@@ -163,6 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     agents.init(&bus).await?;
     guardian.init(&bus).await?;
     forge.init(&bus).await?;
+    ui.init(&bus).await?;
 
     arena.start().await?;
     let arena = Arc::new(arena);
@@ -179,6 +198,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     agents.start().await?;
     guardian.start().await?;
     forge.start().await?;
+    ui.start().await?;
+    // After Forge's start, whose recovery pass marks the previous boot's tasks interrupted.
+    if let Some(plans) = &plans {
+        match plans.resume() {
+            Ok(0) => {}
+            Ok(count) => info!(count, "Resumed agent task plans"),
+            Err(error) => error!(%error, "Could not resume agent task plans"),
+        }
+    }
 
     // Wrap in Arc for event dispatchers
     let mind_arc = Arc::new(mind);
@@ -191,6 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agents_arc = Arc::new(agents);
     let guardian_arc = Arc::new(guardian);
     let forge_arc = Arc::new(forge);
+    let ui_arc = Arc::new(ui);
 
     // Spawn event dispatcher loops for each subsystem
     spawn_subsystem_worker(SubsystemId::Mind, mind_arc, &bus);
@@ -203,6 +232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spawn_subsystem_worker(SubsystemId::Agents, agents_arc, &bus);
     spawn_subsystem_worker(SubsystemId::Guardian, guardian_arc, &bus);
     spawn_subsystem_worker(SubsystemId::Forge, forge_arc, &bus);
+    spawn_subsystem_worker(SubsystemId::Ui, ui_arc, &bus);
 
     info!(
         "All 10 SAIL subsystems (including SAIL Guardian & SAIL Forge) bootstrapped and listening on the event bus"
@@ -237,10 +267,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let _ = bus.publish(shutdown_event);
 
-    model_service.shutdown().await?;
-    info!("SAIL Core shutdown complete.");
-    Ok(())
+    // A second Ctrl+C always quits, even if a step below is stuck.
+    tokio::spawn(async {
+        if signal::ctrl_c().await.is_ok() {
+            eprintln!("Second Ctrl+C: exiting without waiting for shutdown to finish.");
+            std::process::exit(130);
+        }
+    });
+    info!("Stopping models (press Ctrl+C again to force quit)...");
+    // A model process wedged in the GPU driver can stop responding to signals; never let
+    // it hold the terminal.
+    match tokio::time::timeout(SHUTDOWN_GRACE, model_service.shutdown()).await {
+        Ok(Ok(())) => info!("SAIL Core shutdown complete."),
+        Ok(Err(error)) => error!(%error, "Model shutdown failed"),
+        Err(_) => error!(
+            "Model shutdown did not finish within {}s; exiting anyway. If the model server is stuck, run ./run.sh --stop",
+            SHUTDOWN_GRACE.as_secs()
+        ),
+    }
+    // Returning would drop the runtime, which waits for every running blocking task
+    // (tool commands, memory consolidation); exit instead. Logging writes synchronously.
+    std::process::exit(0)
 }
+
+/// How long Ctrl+C waits for the models to stop before SAIL exits anyway.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn spawn_subsystem_worker(
     subsystem_id: SubsystemId,

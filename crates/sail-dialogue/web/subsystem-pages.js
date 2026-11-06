@@ -3,9 +3,24 @@
 // Matches sail_common::SubsystemId; Agents and Forge are separate workspaces.
 const subsystemPages = [
   {
+    "id": "factory",
+    "name": "Factory",
+    "icon": "factory",
+    "subtitle": "Live tools map",
+    "description": "Your workspace: every system on one live map, with Dialogue beside it.",
+    "card": null,
+    "panel": null,
+    "settings": null,
+    "details": [
+      "Subsystems and their connections on one map",
+      "Select a station to inspect its status and tasks",
+      "Pan and zoom the map, or switch to the list view"
+    ]
+  },
+  {
     "id": "core",
     "name": "Core",
-    "icon": "home",
+    "icon": "core",
     "subtitle": "System coordination",
     "description": "The local runtime connects SAIL’s subsystems and coordinates their work.",
     "card": "systemCard",
@@ -36,12 +51,13 @@ const subsystemPages = [
     "id": "arena",
     "name": "Arena",
     "icon": "arena",
-    "subtitle": "Knowledge and memory",
-    "description": "Connect memories, research collections, and semantic relationships.",
+    "subtitle": "Learn and remember",
+    "description": "Learn something step by step, and review what SAIL remembers.",
     "card": "memoryCard",
-    "panel": "memoryPanelMain",
+    "panel": "learnPanelMain",
     "settings": null,
     "details": [
+      "Arena Learn: assessment, a lesson map and step-by-step teaching",
       "Episodic memory",
       "Associative knowledge graph",
       "Research collections"
@@ -104,7 +120,8 @@ const subsystemPages = [
     "details": [
       "Goal decomposition",
       "Tool proposals and authorization",
-      "Step verification"
+      "Step verification",
+      "Plan cards on Canvas, with approval, edit and cancel"
     ]
   },
   {
@@ -155,7 +172,7 @@ const subsystemPages = [
   {
     "id": "forge",
     "name": "Forge",
-    "icon": "agents",
+    "icon": "forge",
     "subtitle": "Autonomous coding",
     "description": "Queue coding tasks, follow their progress, and inspect patches and review outcomes.",
     "card": "forgeCard",
@@ -165,6 +182,21 @@ const subsystemPages = [
       "Coding queue and progress",
       "Isolated workspaces and verification",
       "Patch and review results"
+    ]
+  },
+  {
+    "id": "pulse",
+    "name": "Pulse",
+    "icon": "pulse",
+    "subtitle": "Reminders and timing",
+    "description": "Create local reminders, snooze or cancel them, and choose quiet hours and notification preferences.",
+    "card": "pulseCard",
+    "panel": null,
+    "settings": null,
+    "details": [
+      "One-time local reminders that survive restarts",
+      "Snooze, cancel and one-time delivery",
+      "Quiet hours and opt-in spoken reminders"
     ]
   }
 ];
@@ -197,20 +229,24 @@ function initializeSubsystemPages() {
   for (const item of subsystemPages) {
     document.getElementById('subsystemNav').append(pageLink(item, 'quiet-button nav-item'));
   }
+  // Routes: #home (also #factory) is the Tools Map workspace; a subsystem id (or #tracker)
+  // replaces the map in the workspace's centre (toolsmap.js); #classic is the card dashboard.
   function renderRoute(focus = true) {
     const id = location.hash.slice(1) || 'home';
     if (id === 'spaces') return; // Spaces overlays the current workspace.
-    const item = subsystemPages.find(entry => entry.id === id);
-    const route = item?.id || 'home';
-    if (!item && id !== 'home') history.replaceState(null, '', '#home');
+    const found = subsystemPages.find(entry => entry.id === id);
+    const item = found?.id === 'factory' ? null : found;
+    const route = item?.id || (id === 'classic' || id === 'tracker' || id === 'entertainment' ? id : 'home');
+    if (!found && route === 'home' && id !== 'home') history.replaceState(null, '', '#home');
     closeSheet();
     // Move original nodes so socket updates, form state, and listeners stay live.
     for (const [card, marker] of cardHomes) marker.after(card);
-    content.replaceChildren(); home.hidden = !!item; page.hidden = !item;
-    workspace.setAttribute('aria-label', `${item?.name || 'Home'} workspace`);
-    document.title = `SAIL — ${item?.name || 'Home'}`;
+    content.replaceChildren(); home.hidden = route !== 'classic'; page.hidden = !item;
+    workspace.setAttribute('aria-label', `${item?.name || (route === 'entertainment' ? 'Entertainment' : 'Home')} workspace`);
+    document.title = `SAIL — ${item?.name || {classic: 'Home', tracker: 'Tracker', entertainment: 'Entertainment'}[route] || 'Workspace'}`;
     document.querySelectorAll('[data-page]').forEach(link => {
-      const selected = link.dataset.page === route; link.classList.toggle('selected', selected);
+      const page = link.dataset.page === 'factory' ? 'home' : link.dataset.page;
+      const selected = page === (route === 'classic' ? 'home' : route); link.classList.toggle('selected', selected);
       if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     });
     if (item) {
@@ -228,7 +264,8 @@ function initializeSubsystemPages() {
     }
     currentPage = route; requestedPanel = null; workspace.scrollTop = 0;
     window.dispatchEvent(new CustomEvent('sail:page', {detail:route}));
-    if (focus) (item ? title : document.getElementById('welcomeGreeting')).focus({ preventScroll:true });
+    // The map restores focus to whatever opened a closed popup.
+    if (focus && (item || route === 'classic')) (item ? title : document.getElementById('welcomeGreeting')).focus({ preventScroll:true });
   }
   window.sailNavigate = (id, panel = null) => {
     requestedPanel = panel;

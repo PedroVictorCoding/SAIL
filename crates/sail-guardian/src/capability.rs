@@ -89,6 +89,7 @@ impl Capability {
                     | "forge:clear"
                     | "github:issues"
                     | "web:read"
+                    | "web:speak"
                     | "studio:audio_analyze" => RiskLevel::Low,
                     "proc:list" | "fs:query" | "fs:read" => RiskLevel::Medium,
                     "vision:frame" | "fs:write" | "forge:enqueue" => RiskLevel::High,
@@ -103,10 +104,18 @@ impl Capability {
                     if tool == "canvas:publish"
                         || tool == "github:issues"
                         || tool == "web:read"
+                        || tool == "web:speak"
                         || tool == "forge:status"
                         || tool == "forge:list"
                         || tool == "forge:cancel"
                         || tool == "forge:clear"
+                        || tool == "pulse:create"
+                        || tool == "pulse:list"
+                        || tool == "pulse:cancel"
+                        || tool == "pulse:snooze"
+                        || tool == "spotify:find"
+                        || tool == "spotify:play"
+                        || tool == "spotify:control"
                         || tool == "studio:audio_analyze" =>
                 {
                     RiskLevel::Low

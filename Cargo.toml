@@ -4,6 +4,7 @@ members = [
     "crates/sail-protocol",
     "crates/sail-mind",
     "crates/sail-arena",
+    "crates/sail-arena-learn",
     "crates/sail-bridge",
     "crates/sail-agents",
     "crates/sail-dialogue",
@@ -13,8 +14,11 @@ members = [
     "crates/sail-guardian",
     "crates/sail-runner",
     "crates/sail-continuity",
+    "crates/sail-pulse",
+    "crates/sail-tracker",
     "crates/sail-forge",
     "crates/sail-core",
+    "crates/sail-ui",
 ]
 resolver = "2"
 
@@ -52,6 +56,7 @@ sail-common = { path = "crates/sail-common" }
 sail-protocol = { path = "crates/sail-protocol" }
 sail-mind = { path = "crates/sail-mind" }
 sail-arena = { path = "crates/sail-arena" }
+sail-arena-learn = { path = "crates/sail-arena-learn" }
 sail-bridge = { path = "crates/sail-bridge" }
 sail-agents = { path = "crates/sail-agents" }
 sail-dialogue = { path = "crates/sail-dialogue" }
@@ -60,4 +65,7 @@ sail-discovery = { path = "crates/sail-discovery" }
 sail-flow = { path = "crates/sail-flow" }
 sail-guardian = { path = "crates/sail-guardian" }
 sail-continuity = { path = "crates/sail-continuity" }
+sail-pulse = { path = "crates/sail-pulse" }
+sail-tracker = { path = "crates/sail-tracker" }
 sail-forge = { path = "crates/sail-forge" }
+sail-ui = { path = "crates/sail-ui" }

@@ -1,6 +1,6 @@
 // SAIL's speech models running on this device: Silero VAD (role "vad") or Whisper base and
-// Kokoro (role "speech"). The same models as the host workers, loaded from SAIL's own
-// origin (/voice-assets, installed by scripts/voice/download_web.py). Nothing is fetched
+// Kokoro (role "speech"), or Kokoro alone (role "tts"). The same models as the host workers,
+// loaded from SAIL's own origin (/voice-assets, installed by scripts/voice/download_web.py). Nothing is fetched
 // from the internet: Hugging Face and CDN URLs inside the libraries are mapped to local
 // files, and any other request to those hosts is refused.
 const ROLE = new URL(self.location.href).searchParams.get('role');
@@ -55,10 +55,14 @@ let asr = null, tts = null, device = 'wasm';
 const WHISPER = 'hf/onnx-community/whisper-base/', KOKORO = 'hf/onnx-community/Kokoro-82M-v1.0-ONNX/';
 function filesFor(role, gpu) {
   if (role === 'vad') return ['hf/onnx-community/silero-vad/onnx/model.onnx'];
+  const kokoro = ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'onnx/model_quantized.onnx']
+    .map(f => KOKORO + f);
+  if (role === 'tts') return kokoro;
   return [
     ...['config.json', 'generation_config.json', 'preprocessor_config.json', 'tokenizer.json', 'tokenizer_config.json'].map(f => WHISPER + f),
     ...(gpu ? ['onnx/encoder_model.onnx', 'onnx/decoder_model_merged_q4.onnx'] : ['onnx/encoder_model_quantized.onnx', 'onnx/decoder_model_merged_quantized.onnx']).map(f => WHISPER + f),
-    ...['config.json', 'tokenizer.json', 'tokenizer_config.json', gpu ? 'onnx/model.onnx' : 'onnx/model_quantized.onnx'].map(f => KOKORO + f),
+    // Kokoro TTS uses quantized WASM on both GPU and CPU devices to avoid the WebGPU ConvTranspose vocoder distortion.
+    ...kokoro,
   ];
 }
 async function reportExpected(gpu) {
@@ -105,9 +109,25 @@ async function loadSpeech() {
     device, progress_callback: reportProgress,
     dtype: gpu ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : { encoder_model: 'q8', decoder_model_merged: 'q8' },
   });
+  return loadTts();
+}
+
+async function loadTts() {
+  if (ROLE === 'tts') {
+    device = 'wasm';
+    self.postMessage({ progress: { role: ROLE, device } });
+    await reportExpected(false);
+  }
   const { KokoroTTS, env: kokoroEnv } = await import(`${ASSETS}lib/kokoro.web.js`);
   kokoroEnv.wasmPaths = `${ASSETS}lib/`;
-  tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', { device, dtype: gpu ? 'fp32' : 'q8', progress_callback: reportProgress });
+  // Kokoro TTS runs on WASM with q8 quantization even when WebGPU is available for Whisper:
+  // ONNX Runtime Web's WebGPU ConvTranspose kernel corrupts vocoder upsampling into harsh,
+  // robotic, metallic noise, while WASM CPU SIMD produces pristine, natural human speech.
+  tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+    device: 'wasm',
+    dtype: 'q8',
+    progress_callback: reportProgress,
+  });
   return { device, voices: Object.keys(tts.voices) };
 }
 
@@ -143,7 +163,7 @@ async function speak(text, voice) {
 }
 
 const handlers = {
-  load: () => (ROLE === 'vad' ? loadVad() : loadSpeech()),
+  load: () => (ROLE === 'vad' ? loadVad() : ROLE === 'tts' ? loadTts() : loadSpeech()),
   vad: ({ samples }) => vadFrame(samples),
   reset: () => { resetVad(); return {}; },
   transcribe: ({ samples }) => transcribe(samples),

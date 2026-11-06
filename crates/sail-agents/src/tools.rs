@@ -174,9 +174,17 @@ fn schema_supported(schema: &Value, depth: usize) -> Result<(), String> {
         "minimum",
         "maximum",
         "enum",
+        "description",
     ];
     if object.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err("unsupported schema keyword".into());
+    }
+    // Guidance for the model only; validation ignores it.
+    if schema
+        .get("description")
+        .is_some_and(|d| d.as_str().is_none_or(|d| d.len() > 512))
+    {
+        return Err("description must be a string of at most 512 bytes".into());
     }
     if let Some(values) = schema.get("enum")
         && values
@@ -224,6 +232,14 @@ fn schema_supported(schema: &Value, depth: usize) -> Result<(), String> {
             for key in ["minimum", "maximum"] {
                 if schema.get(key).is_some_and(|n| n.as_i64().is_none()) {
                     return Err("integer bound required".into());
+                }
+            }
+        }
+        Some("number") => {
+            // Both bounds, so a model cannot pass huge or non-finite values.
+            for key in ["minimum", "maximum"] {
+                if schema[key].as_f64().is_none_or(|n| !n.is_finite()) {
+                    return Err("number bounds required".into());
                 }
             }
         }
@@ -279,6 +295,14 @@ fn validate(schema: &Value, value: &Value) -> Result<(), String> {
             }
             for value in items {
                 validate(&schema["items"], value)?;
+            }
+        }
+        "number" => {
+            let number = value.as_f64().ok_or("number expected")?;
+            if schema["minimum"].as_f64().is_some_and(|min| number < min)
+                || schema["maximum"].as_f64().is_some_and(|max| number > max)
+            {
+                return Err("number range".into());
             }
         }
         "boolean" => {
@@ -386,6 +410,10 @@ impl ToolScheduler {
             classes: Mutex::new(HashMap::new()),
             runs: Mutex::new(HashMap::new()),
         }
+    }
+    /// The registry this scheduler executes from.
+    pub fn registry(&self) -> Arc<ToolRegistry> {
+        self.registry.clone()
     }
     pub fn subscribe(&self) -> broadcast::Receiver<ToolEvent> {
         self.events.subscribe()

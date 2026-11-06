@@ -53,7 +53,14 @@ struct SessionLedger {
 pub struct ConversationContext {
     pub hot: Vec<HotTurn>,
     pub memory: WorkingContext,
+    /// What memory was searched with this turn (see `compaction::retrieval_query`), so
+    /// knowledge retrieval uses the same query; `None` when the turn needs no retrieval.
+    pub query: Option<String>,
 }
+
+/// An archived hit is recalled only if its relevance is at least this fraction of the best
+/// hit's, so one shared word does not pull a whole unrelated turn into the prompt.
+const RECALL_RELATIVE_FLOOR: f64 = 0.5;
 
 pub struct ArenaSubsystem {
     bus: Option<EventBus>,
@@ -93,9 +100,29 @@ impl ArenaSubsystem {
             return Self::new();
         }
         let path = default_store_path();
+        if std::env::var_os("SAIL_ARENA_DB").is_none()
+            && matches!(
+                sail_common::storage::resolve().source,
+                sail_common::storage::DataRootSource::DataDisk
+            )
+        {
+            for legacy in legacy_store_paths() {
+                if legacy != path {
+                    let _ = sail_common::storage::migrate_legacy(&legacy, &path);
+                }
+            }
+        }
         match MemoryStore::open(&path) {
             Ok(store) => {
                 info!(path = %path.display(), "SAIL Arena memory store opened");
+                if let Ok(generation) = store.knowledge().deletion_generation() {
+                    let _ = store.knowledge().consolidate(
+                        VOICE_SCOPE,
+                        &knowledge::Access::owner(),
+                        generation,
+                        256,
+                    );
+                }
                 Self::with_store(Arc::new(store))
             }
             Err(error) => {
@@ -130,6 +157,17 @@ pub fn default_store_path() -> PathBuf {
         return PathBuf::from(path);
     }
     sail_common::storage::data_path("arena").join("arena.db")
+}
+
+fn legacy_store_paths() -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from(".local/arena.db")];
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
+        paths.push(xdg.join("sail/arena/arena.db"));
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        paths.push(home.join(".local/share/sail/arena/arena.db"));
+    }
+    paths
 }
 
 impl Default for ArenaSubsystem {
@@ -208,10 +246,21 @@ impl ArenaSubsystem {
         access: &knowledge::Access,
         token_budget: usize,
     ) -> Option<sail_protocol::memory::MemoryReply> {
+        self.knowledge_lookup(text, access, 8, token_budget)
+    }
+
+    /// As `knowledge_context`, returning at most `limit` facts.
+    pub fn knowledge_lookup(
+        &self,
+        text: &str,
+        access: &knowledge::Access,
+        limit: usize,
+        token_budget: usize,
+    ) -> Option<sail_protocol::memory::MemoryReply> {
         let query = sail_protocol::memory::MemoryQuery {
             version: sail_protocol::memory::VERSION,
             text: compaction::clip(text, 4000),
-            limit: 8,
+            limit,
             token_budget,
             expand_graph: true,
         };
@@ -227,6 +276,77 @@ impl ArenaSubsystem {
                 None
             }
         }
+    }
+
+    /// Check whether a concept or webpage (`name` / `source_ref`) has already been added to memory.
+    pub fn has_learned_knowledge(&self, scope: &str, name: &str, source_ref: Option<&str>) -> bool {
+        self.store
+            .knowledge()
+            .has_learned_knowledge(scope, name, source_ref)
+            .unwrap_or(false)
+    }
+
+    /// Add learned knowledge to memory at most once (checks if it is already in memory first).
+    /// Returns `Some((claim_id, added))` where `added` is `true` if newly inserted and `false`
+    /// if it was already present in memory.
+    #[allow(clippy::too_many_arguments)]
+    pub fn learn_knowledge_once(
+        &self,
+        scope: &str,
+        name: &str,
+        extra_aliases: &[String],
+        kind: knowledge::EntityKind,
+        predicate: &str,
+        value: &str,
+        source_ref: Option<&str>,
+        direct: bool,
+    ) -> Option<(i64, bool)> {
+        match self.store.knowledge().learn_once(
+            scope,
+            name,
+            extra_aliases,
+            kind,
+            predicate,
+            value,
+            source_ref,
+            direct,
+        ) {
+            Ok((claim_id, added)) => {
+                if added {
+                    info!(
+                        scope,
+                        name, predicate, claim_id, "SAIL Arena added learned knowledge to memory"
+                    );
+                }
+                Some((claim_id, added))
+            }
+            Err(error) => {
+                warn!(%error, scope, name, "SAIL Arena could not record learned knowledge");
+                None
+            }
+        }
+    }
+
+    /// Extract learned concept/webpage knowledge from a completed conversation turn (`user` and
+    /// `assistant`) and add it to memory once if not already present.
+    pub fn learn_from_conversation_turn(
+        &self,
+        scope: &str,
+        user: &str,
+        assistant: &str,
+    ) -> Option<(i64, bool)> {
+        let body = format!("User: {user}\nSAIL: {assistant}");
+        let candidate = knowledge::consolidation::extract_learned_turn(&body)?;
+        self.learn_knowledge_once(
+            scope,
+            &candidate.name,
+            &[],
+            candidate.kind,
+            &candidate.predicate,
+            &candidate.value,
+            candidate.source_ref.as_deref(),
+            candidate.direct,
+        )
     }
 }
 
@@ -371,8 +491,12 @@ impl ArenaSubsystem {
             used += len;
             memory.breadcrumbs.push(crumb.clone());
         }
-        memory.recalled = self.recall_excerpts(session, query, &hot);
-        ConversationContext { hot, memory }
+        let previous = hot.last().map(|t| t.user.as_str());
+        let query = compaction::retrieval_query(query, previous);
+        if let Some(query) = &query {
+            memory.recalled = self.recall_excerpts(session, query, &hot);
+        }
+        ConversationContext { hot, memory, query }
     }
 
     fn recall_excerpts(&self, session: &str, query: &str, hot: &[HotTurn]) -> Vec<Recall> {
@@ -393,6 +517,12 @@ impl ArenaSubsystem {
                 return Vec::new();
             }
         };
+        // bm25 is negative and lower is better; keep hits close to the best one.
+        let best = hits.first().map(|h| h.score).unwrap_or(0.0);
+        let hits: Vec<_> = hits
+            .into_iter()
+            .filter(|h| best >= 0.0 || h.score <= best * RECALL_RELATIVE_FLOOR)
+            .collect();
         let terms = store::query_terms(query);
         let per_hit = self.budget.recall_chars / self.budget.recall_hits;
         let mut out = Vec::new();
