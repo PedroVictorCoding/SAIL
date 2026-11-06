@@ -8,6 +8,7 @@
 //! Layout, mirroring the boundaries the spec asks for:
 //! - [`core`]: contracts, validation and projections. Pure: no IO, no clock, no model.
 //! - [`store`]: SQLite adapter for the append-only session event log.
+//! - [`courses`]: Interactive Courses (#386), deterministic and model-free.
 //! - [`agent`]: role tools, argument healing, prompts and the turn runner over a [`core::ports::Model`].
 //!
 //! This crate is separate from `sail-arena` so the memory store used by Flow, Dialogue and
@@ -15,6 +16,7 @@
 
 pub mod agent;
 pub mod core;
+pub mod courses;
 pub mod store;
 
 pub use agent::{Engine, RoleModels, TurnError};

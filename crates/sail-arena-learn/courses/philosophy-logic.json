@@ -1,0 +1,506 @@
+{
+  "id": "philosophy-logic",
+  "version": "2026.11.1",
+  "title": "Philosophy & Logic",
+  "domain": "philosophy",
+  "summary": "Deductive validity, formal fallacies, and sound reasoning evaluated by pure logical form.",
+  "objectives": [
+    { "id": "logic.validity", "title": "Deductive validity depends only on formal argument structure", "prerequisites": [] },
+    { "id": "logic.soundness", "title": "Soundness requires both deductive validity and true premises", "prerequisites": ["logic.validity"] },
+    { "id": "logic.inference-rules", "title": "Modus ponens and modus tollens are valid deductive forms", "prerequisites": ["logic.validity"] },
+    { "id": "logic.formal-fallacies", "title": "Affirming the consequent and denying the antecedent are invalid forms", "prerequisites": ["logic.inference-rules"] }
+  ],
+  "chapters": [
+    { "id": "validity-inference", "title": "Validity and inference", "lessons": ["logic-valid-sound", "logic-inference-rules"] }
+  ],
+  "lessons": [
+    {
+      "id": "logic-valid-sound",
+      "title": "Validity vs. Soundness",
+      "minutes": 5,
+      "objective_ids": ["logic.validity", "logic.soundness"],
+      "prerequisites": [],
+      "steps": [
+        {
+          "id": "intro-validity",
+          "kind": "explain",
+          "title": "Form, not factual truth",
+          "objective_ids": ["logic.validity"],
+          "body": [
+            { "kind": "p", "text": "Deductive logic assesses arguments by their logical form, not whether their premises happen to be true in the real world." },
+            { "kind": "p", "text": "An argument is deductively valid if and only if: whenever all premises are true, the conclusion must necessarily be true. A valid argument can have completely false premises." },
+            { "kind": "p", "text": "An argument is sound only when it satisfies two requirements: (1) its logical form is valid, and (2) every premise is factually true." },
+            { "kind": "note", "text": "Always distinguish validity (structural truth preservation) from soundness (valid structure with factual premises)." }
+          ]
+        },
+        {
+          "id": "check-validity-form",
+          "kind": "choice",
+          "family": "val-cheese-moon",
+          "title": "Assessing deductive validity",
+          "objective_ids": ["logic.validity"],
+          "confidence": true,
+          "body": [
+            { "kind": "p", "text": "Evaluate the logical form of this argument alone, setting aside whether the claims are factually true:" },
+            { "kind": "code", "lang": "text", "text": "Premise 1: All moons are made of green cheese.\nPremise 2: Phobos is a moon.\nConclusion: Therefore, Phobos is made of green cheese." },
+            { "kind": "p", "text": "Is this argument deductively valid in its logical form?" }
+          ],
+          "options": [
+            { "id": "valid", "text": "Valid: if both premises were true, the conclusion would necessarily follow." },
+            { "id": "invalid", "text": "Invalid: the first premise is empirically false in the real world." }
+          ],
+          "key": { "choice": ["valid"] },
+          "misconceptions": {
+            "invalid": "Validity concerns formal structure, not factual truth. Because the conclusion follows inevitably from the premises, the argument is structurally valid even with false premises."
+          },
+          "hints": [
+            "Ask what happens in a hypothetical world where both premises are true.",
+            "Does the conclusion follow from the structure of the premises, regardless of empirical facts?",
+            "An argument can be structurally valid while being factually unsound."
+          ],
+          "correct": [
+            { "kind": "p", "text": "Correct. Deductive validity is purely structural. If the premises were true, the conclusion would necessarily follow. (The argument is unsound because premise 1 is false, but its deductive form is valid.)" }
+          ],
+          "solution": [
+            { "kind": "p", "text": "Answer: Valid. Form: All M are C; P is M; therefore P is C." }
+          ]
+        },
+        {
+          "id": "predict-soundness",
+          "kind": "predict",
+          "family": "sound-whales",
+          "title": "Evaluating validity and soundness",
+          "objective_ids": ["logic.soundness"],
+          "confidence": true,
+          "body": [
+            { "kind": "p", "text": "Read the argument and determine its deductive status:" },
+            { "kind": "code", "lang": "text", "text": "Premise 1: All mammals have lungs.\nPremise 2: Whales are mammals.\nConclusion: Therefore, whales have lungs." },
+            { "kind": "p", "text": "Which classification applies to this argument?" }
+          ],
+          "options": [
+            { "id": "valid-sound", "text": "Deductively valid and sound." },
+            { "id": "valid-unsound", "text": "Deductively valid, but unsound." },
+            { "id": "invalid", "text": "Invalid in logical form." }
+          ],
+          "key": { "choice": ["valid-sound"] },
+          "misconceptions": {
+            "valid-unsound": "Soundness requires valid form plus true premises. Since both premises are biologically true and the form is valid, the argument is sound.",
+            "invalid": "The structure preserves truth: if all M have L and W is M, W must have L. The form is valid."
+          },
+          "hints": [
+            "Check the logical form first: does the conclusion follow from the premises?",
+            "Check the premises second: are they factually true?",
+            "An argument that is both valid and has true premises is sound."
+          ],
+          "correct": [
+            { "kind": "p", "text": "Correct. The argument has valid logical form, and both premises are factually true, making it sound." }
+          ],
+          "solution": [
+            { "kind": "p", "text": "Answer: Deductively valid and sound." }
+          ]
+        },
+        {
+          "id": "order-soundness-criteria",
+          "kind": "order",
+          "family": "sound-evaluation-order",
+          "title": "Order of logical evaluation",
+          "objective_ids": ["logic.soundness"],
+          "confidence": true,
+          "body": [
+            { "kind": "p", "text": "Arrange the steps in the correct methodological order for evaluating whether an argument is sound." }
+          ],
+          "items": [
+            { "id": "form", "text": "1. Analyze formal structure and test whether the argument is deductively valid." },
+            { "id": "premises", "text": "2. Assess empirical evidence to verify whether all premises are factually true." },
+            { "id": "conclude", "text": "3. Conclude whether the argument meets the criteria for soundness." }
+          ],
+          "key": { "order": ["form", "premises", "conclude"] },
+          "hints": [
+            "If an argument is invalid in form, checking premise truth cannot make it sound.",
+            "Form is evaluated first before investigating empirical premise truth."
+          ],
+          "correct": [
+            { "kind": "p", "text": "Correct. In formal analysis, test deductive validity first. If invalid, the argument is automatically unsound. If valid, verify premise truth next to determine soundness." }
+          ],
+          "solution": [
+            { "kind": "p", "text": "1. Check form (validity) -> 2. Check premises -> 3. Determine soundness." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "logic-inference-rules",
+      "title": "Inference Rules and Formal Fallacies",
+      "minutes": 6,
+      "objective_ids": ["logic.inference-rules", "logic.formal-fallacies"],
+      "prerequisites": ["logic-valid-sound"],
+      "steps": [
+        {
+          "id": "intro-rules",
+          "kind": "explain",
+          "title": "Inference rules vs. formal fallacies",
+          "objective_ids": ["logic.inference-rules"],
+          "body": [
+            { "kind": "p", "text": "A conditional statement `P -> Q` establishes that whenever antecedent P is true, consequent Q must be true." },
+            { "kind": "p", "text": "Two foundational valid deductive rules:\n- Modus Ponens: From `P -> Q` and `P`, conclude `Q`.\n- Modus Tollens: From `P -> Q` and `~Q`, conclude `~P`." },
+            { "kind": "p", "text": "Two common invalid formal fallacies:\n- Affirming the Consequent: From `P -> Q` and `Q`, concluding `P` is INVALID.\n- Denying the Antecedent: From `P -> Q` and `~P`, concluding `~Q` is INVALID." },
+            { "kind": "note", "text": "Notice the symmetry: affirming the antecedent or denying the consequent is valid; affirming the consequent or denying the antecedent is a fallacy." }
+          ]
+        },
+        {
+          "id": "check-modus-ponens",
+          "kind": "choice",
+          "family": "rule-mp-form",
+          "title": "Evaluating Modus Ponens",
+          "objective_ids": ["logic.inference-rules"],
+          "confidence": true,
+          "body": [
+            { "kind": "p", "text": "Consider the formal structure below:" },
+            { "kind": "code", "lang": "text", "text": "Premise 1: P -> Q\nPremise 2: P\nConclusion: Q" },
+            { "kind": "p", "text": "Based purely on its logical form, what is this deductive pattern?" }
+          ],
+          "options": [
+            { "id": "mp", "text": "Modus Ponens (valid deductive form)." },
+            { "id": "ac", "text": "Affirming the Consequent (invalid fallacy)." },
+            { "id": "da", "text": "Denying the Antecedent (invalid fallacy)." }
+          ],
+          "key": { "choice": ["mp"] },
+          "misconceptions": {
+            "ac": "Premise 2 affirms P (the antecedent), not Q (the consequent).",
+            "da": "Neither premise negates anything here."
+          },
+          "hints": [
+            "Which part of the conditional `P -> Q` is affirmed in Premise 2?",
+            "Affirming the antecedent (P) leads validly to the consequent (Q)."
+          ],
+          "correct": [
+            { "kind": "p", "text": "Correct. Modus Ponens affirms the antecedent P to validly deduce consequent Q." }
+          ],
+          "solution": [
+            { "kind": "p", "text": "Answer: Modus Ponens (P -> Q, P |= Q)." }
+          ]
+        },
+        {
+          "id": "check-affirming-consequent",
+          "kind": "choice",
+          "family": "rule-ac-form",
+          "title": "Affirming the Consequent",
+          "objective_ids": ["logic.formal-fallacies"],
+          "confidence": true,
+          "body": [
+            { "kind": "p", "text": "Consider this formal argument structure:" },
+            { "kind": "code", "lang": "text", "text": "Premise 1: P -> Q\nPremise 2: Q\nConclusion: P" },
+            { "kind": "p", "text": "Based on logical form alone, is this argument valid or invalid?" }
+          ],
+          "options": [
+            { "id": "invalid", "text": "Invalid: Affirming the Consequent (a counterexample exists where P=false, Q=true)." },
+            { "id": "valid", "text": "Valid: Modus Ponens." }
+          ],
+          "key": { "choice": ["invalid"] },
+          "misconceptions": {
+            "valid": "Modus Ponens requires knowing P, not Q. Knowing Q does not guarantee that P occurred; Q could be true for an entirely different reason."
+          },
+          "hints": [
+            "Can Q be true even if P is false?",
+            "Look for a truth assignment where both premises are true but the conclusion is false.",
+            "If P is false and Q is true, `P -> Q` is true, Q is true, but P is false. This counterexample proves invalidity."
+          ],
+          "correct": [
+            { "kind": "p", "text": "Correct. This is the fallacy of Affirming the Consequent. The truth assignment { P: false, Q: true } satisfies both premises while falsifying the conclusion, proving the form is invalid." }
+          ],
+          "solution": [
+            { "kind": "p", "text": "Answer: Invalid. Counterexample: P=false, Q=true." }
+          ]
+        },
+        {
+          "id": "check-modus-tollens",
+          "kind": "choice",
+          "family": "rule-mt-form",
+          "title": "Evaluating Modus Tollens",
+          "objective_ids": ["logic.inference-rules"],
+          "confidence": true,
+          "body": [
+            { "kind": "p", "text": "Consider the formal structure below:" },
+            { "kind": "code", "lang": "text", "text": "Premise 1: P -> Q\nPremise 2: ~Q\nConclusion: ~P" },
+            { "kind": "p", "text": "Based purely on its logical form, what is this deductive pattern?" }
+          ],
+          "options": [
+            { "id": "mt", "text": "Modus Tollens (valid deductive form: denying the consequent)." },
+            { "id": "da", "text": "Denying the Antecedent (invalid fallacy)." },
+            { "id": "ac", "text": "Affirming the Consequent (invalid fallacy)." }
+          ],
+          "key": { "choice": ["mt"] },
+          "misconceptions": {
+            "da": "Premise 2 denies Q (the consequent), not P (the antecedent).",
+            "ac": "Premise 2 is a negation, not an affirmation."
+          },
+          "hints": [
+            "Premise 2 denies the consequent Q.",
+            "If P would require Q, and Q is false, what must P be?"
+          ],
+          "correct": [
+            { "kind": "p", "text": "Correct. Modus Tollens denies the consequent (~Q) to validly infer the negation of the antecedent (~P)." }
+          ],
+          "solution": [
+            { "kind": "p", "text": "Answer: Modus Tollens (P -> Q, ~Q |= ~P)." }
+          ]
+        },
+        {
+          "id": "check-denying-antecedent",
+          "kind": "choice",
+          "family": "rule-da-form",
+          "title": "Denying the Antecedent",
+          "objective_ids": ["logic.formal-fallacies"],
+          "confidence": true,
+          "body": [
+            { "kind": "p", "text": "Consider this formal argument structure:" },
+            { "kind": "code", "lang": "text", "text": "Premise 1: P -> Q\nPremise 2: ~P\nConclusion: ~Q" },
+            { "kind": "p", "text": "Based on logical form alone, is this argument valid or invalid?" }
+          ],
+          "options": [
+            { "id": "invalid", "text": "Invalid: Denying the Antecedent (a counterexample exists where P=false, Q=true)." },
+            { "id": "valid", "text": "Valid: Modus Tollens." }
+          ],
+          "key": { "choice": ["invalid"] },
+          "misconceptions": {
+            "valid": "Modus Tollens requires denying the consequent (~Q). Denying the antecedent (~P) is a formal fallacy."
+          },
+          "hints": [
+            "If P is false, does that force Q to be false?",
+            "Test assignment { P: false, Q: true }. Is `P -> Q` true? Is `~P` true? Is `~Q` true?"
+          ],
+          "correct": [
+            { "kind": "p", "text": "Correct. This is the fallacy of Denying the Antecedent. When P is false and Q is true, both premises are true but conclusion ~Q is false." }
+          ],
+          "solution": [
+            { "kind": "p", "text": "Answer: Invalid. Counterexample: P=false, Q=true." }
+          ]
+        },
+        {
+          "id": "fill-modus-tollens",
+          "kind": "fill",
+          "family": "fill-mt-deduction",
+          "title": "Complete the derivation",
+          "objective_ids": ["logic.inference-rules"],
+          "body": [
+            { "kind": "p", "text": "Complete the conclusion so that the inference rule is a valid Modus Tollens deduction:" }
+          ],
+          "template": "Premise 1: P -> Q\nPremise 2: ~Q\nConclusion: ____",
+          "placeholder": "conclusion formula",
+          "key": { "text": ["~P", "¬P"] },
+          "hints": [
+            "Modus Tollens concludes the negation of the antecedent.",
+            "Write the negation of variable P."
+          ],
+          "correct": [
+            { "kind": "p", "text": "Correct. From `P -> Q` and `~Q`, the valid conclusion is `~P`." }
+          ],
+          "solution": [
+            { "kind": "code", "lang": "text", "text": "Conclusion: ~P" }
+          ]
+        }
+      ]
+    }
+  ],
+  "diagnostic": {
+    "id": "logic-inference-probe",
+    "steps": [
+      {
+        "id": "d-validity",
+        "kind": "choice",
+        "family": "probe-validity-false-prem",
+        "title": "Validity with false premises",
+        "objective_ids": ["logic.validity"],
+        "confidence": true,
+        "body": [
+          { "kind": "p", "text": "Assessing deductive form alone: can an argument with false premises be deductively valid?" }
+        ],
+        "options": [
+          { "id": "yes", "text": "Yes: validity requires only that the conclusion follows necessarily if the premises were true." },
+          { "id": "no", "text": "No: any argument containing a false premise is automatically invalid." },
+          { "id": "unsure", "text": "I'm not sure." }
+        ],
+        "key": { "choice": ["yes"] }
+      },
+      {
+        "id": "d-soundness",
+        "kind": "choice",
+        "family": "probe-soundness-distinction",
+        "title": "The requirement for soundness",
+        "objective_ids": ["logic.soundness"],
+        "confidence": true,
+        "body": [
+          { "kind": "p", "text": "Which condition is required for an argument to be sound, in addition to having a valid logical form?" }
+        ],
+        "options": [
+          { "id": "true-premises", "text": "Every premise must be factually true." },
+          { "id": "no-conditionals", "text": "The argument must contain no conditional statements." },
+          { "id": "unsure", "text": "I'm not sure." }
+        ],
+        "key": { "choice": ["true-premises"] }
+      },
+      {
+        "id": "d-modus-ponens",
+        "kind": "choice",
+        "family": "probe-mp-validity",
+        "title": "Valid inference pattern",
+        "objective_ids": ["logic.inference-rules"],
+        "confidence": true,
+        "body": [
+          { "kind": "p", "text": "Evaluating argument form alone:" },
+          { "kind": "code", "lang": "text", "text": "Premise 1: A -> B\nPremise 2: A\nConclusion: B" },
+          { "kind": "p", "text": "Is this argument deductively valid or invalid?" }
+        ],
+        "options": [
+          { "id": "valid", "text": "Valid (Modus Ponens)." },
+          { "id": "invalid", "text": "Invalid." },
+          { "id": "unsure", "text": "I'm not sure." }
+        ],
+        "key": { "choice": ["valid"] }
+      },
+      {
+        "id": "d-affirming-consequent",
+        "kind": "choice",
+        "family": "probe-ac-fallacy",
+        "title": "Formal fallacy check",
+        "objective_ids": ["logic.formal-fallacies"],
+        "confidence": true,
+        "body": [
+          { "kind": "p", "text": "Evaluating argument form alone:" },
+          { "kind": "code", "lang": "text", "text": "Premise 1: A -> B\nPremise 2: B\nConclusion: A" },
+          { "kind": "p", "text": "Is this argument deductively valid or invalid?" }
+        ],
+        "options": [
+          { "id": "invalid", "text": "Invalid (Affirming the Consequent)." },
+          { "id": "valid", "text": "Valid." },
+          { "id": "unsure", "text": "I'm not sure." }
+        ],
+        "key": { "choice": ["invalid"] }
+      }
+    ]
+  },
+  "reviews": [
+    {
+      "id": "r-validity-syllogism",
+      "kind": "choice",
+      "family": "rev-hypothetical-syllogism",
+      "title": "Review: chained conditionals",
+      "objective_ids": ["logic.validity"],
+      "confidence": true,
+      "body": [
+        { "kind": "p", "text": "Evaluate the formal validity of this argument structure:" },
+        { "kind": "code", "lang": "text", "text": "Premise 1: P -> Q\nPremise 2: Q -> R\nConclusion: P -> R" },
+        { "kind": "p", "text": "Assessing purely by logical form: is Hypothetical Syllogism valid or invalid?" }
+      ],
+      "options": [
+        { "id": "valid", "text": "Valid: truth is preserved transitively across conditionals." },
+        { "id": "invalid", "text": "Invalid: counterexample exists." }
+      ],
+      "key": { "choice": ["valid"] },
+      "misconceptions": {
+        "invalid": "Hypothetical Syllogism is deductively valid. If P implies Q and Q implies R, P must imply R."
+      },
+      "hints": [
+        "If P is true, what does Premise 1 say about Q?",
+        "If Q is true, what does Premise 2 say about R?"
+      ],
+      "correct": [
+        { "kind": "p", "text": "Correct. Hypothetical Syllogism (P -> Q, Q -> R |= P -> R) is deductively valid in formal logic." }
+      ],
+      "solution": [
+        { "kind": "p", "text": "Answer: Valid." }
+      ]
+    },
+    {
+      "id": "r-soundness-false-premise",
+      "kind": "choice",
+      "family": "rev-soundness-valid-but-false",
+      "title": "Review: valid form with a false premise",
+      "objective_ids": ["logic.soundness"],
+      "confidence": true,
+      "body": [
+        { "kind": "p", "text": "An argument has flawless, deductively valid logical form. However, one of its premises is factually false. What is the status of this argument?" }
+      ],
+      "options": [
+        { "id": "valid-unsound", "text": "Deductively valid, but unsound." },
+        { "id": "invalid", "text": "Invalid in form." },
+        { "id": "sound", "text": "Sound, because form takes precedence." }
+      ],
+      "key": { "choice": ["valid-unsound"] },
+      "misconceptions": {
+        "invalid": "A false premise does not invalidate the argument's formal structure.",
+        "sound": "An argument cannot be sound if any premise is false."
+      },
+      "hints": [
+        "Validity is property of the form; soundness requires truth of the premises."
+      ],
+      "correct": [
+        { "kind": "p", "text": "Correct. The argument retains its valid logical form, but fails the requirement for soundness because of the false premise." }
+      ],
+      "solution": [
+        { "kind": "p", "text": "Answer: Deductively valid, but unsound." }
+      ]
+    },
+    {
+      "id": "r-modus-tollens-check",
+      "kind": "choice",
+      "family": "rev-mt-deduction",
+      "title": "Review: denying the consequent",
+      "objective_ids": ["logic.inference-rules"],
+      "confidence": true,
+      "body": [
+        { "kind": "p", "text": "Evaluate the formal structure:" },
+        { "kind": "code", "lang": "text", "text": "Premise 1: R -> S\nPremise 2: ~S\nConclusion: ~R" },
+        { "kind": "p", "text": "Based on logical form alone, is this argument valid or invalid?" }
+      ],
+      "options": [
+        { "id": "valid", "text": "Valid: Modus Tollens." },
+        { "id": "invalid", "text": "Invalid: formal fallacy." }
+      ],
+      "key": { "choice": ["valid"] },
+      "misconceptions": {
+        "invalid": "Modus Tollens is valid: denying the consequent guarantees the negation of the antecedent."
+      },
+      "hints": [
+        "If R implies S, and S did not occur, could R have occurred?"
+      ],
+      "correct": [
+        { "kind": "p", "text": "Correct. Modus Tollens (R -> S, ~S |= ~R) is valid." }
+      ],
+      "solution": [
+        { "kind": "p", "text": "Answer: Valid (Modus Tollens)." }
+      ]
+    },
+    {
+      "id": "r-denying-antecedent-check",
+      "kind": "choice",
+      "family": "rev-da-fallacy",
+      "title": "Review: denying the antecedent",
+      "objective_ids": ["logic.formal-fallacies"],
+      "confidence": true,
+      "body": [
+        { "kind": "p", "text": "Evaluate the formal structure:" },
+        { "kind": "code", "lang": "text", "text": "Premise 1: R -> S\nPremise 2: ~R\nConclusion: ~S" },
+        { "kind": "p", "text": "Based on logical form alone, is this argument valid or invalid?" }
+      ],
+      "options": [
+        { "id": "invalid", "text": "Invalid: Denying the Antecedent." },
+        { "id": "valid", "text": "Valid: Modus Tollens." }
+      ],
+      "key": { "choice": ["invalid"] },
+      "misconceptions": {
+        "valid": "This denies the antecedent (~R), not the consequent (~S). It is an invalid formal fallacy."
+      },
+      "hints": [
+        "Does ~R guarantee ~S, or could S still occur through other causes?",
+        "Assignment R=false, S=true makes premises true and conclusion false."
+      ],
+      "correct": [
+        { "kind": "p", "text": "Correct. Denying the Antecedent is invalid. Counterexample: R=false, S=true." }
+      ],
+      "solution": [
+        { "kind": "p", "text": "Answer: Invalid (Denying the Antecedent)." }
+      ]
+    }
+  ]
+}
