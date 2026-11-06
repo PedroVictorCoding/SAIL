@@ -137,6 +137,14 @@ pooled as light along the bottom edge plus a soft halo of the same hue, and whit
 the dark upper part. Each hue maps to one real measurement or state. Above phone width the
 Library frame is exactly the viewport and its columns scroll independently.
 
+**Glow cards everywhere (weak).** Every other card surface uses the same material at lower
+strength: the Tools Map stage, node labels, side card, Dialogue column, Live Activity,
+workspace and briefing cards, and the Library's saved places. The hue names the subsystem
+(for example Dialogue blue, Forge orange, Arena pink), and the stage keeps the ambient state
+light. No glow card has a top highlight: light only comes from below. Glow backgrounds never
+repeat, because a repeating bottom bloom shows up as a coloured line along the top border.
+Reading, code and lesson surfaces inside a card stay flat.
+
 ### Timelines and daily phases
 Use a vertical timeline / anchored events for Life, Pulse, Calendar and Health schedules. The gradient tint can reflect task class or phase when real data exists. **Do not infer medical recommendations from a designer reference.** Calendar remains source-truth from #335.
 
