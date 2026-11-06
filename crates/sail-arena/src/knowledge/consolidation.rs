@@ -62,10 +62,7 @@ pub fn normalize_concept_name(raw: &str) -> String {
         .trim()
         .trim_matches(|c: char| matches!(c, '*' | '#' | '"' | '\'' | ':' | '-' | ' '))
         .to_string();
-    if let Some(rest) = s
-        .strip_prefix("Reading ")
-        .or_else(|| s.strip_prefix("reading "))
-    {
+    if let Some(rest) = s.strip_prefix("Reading ").or_else(|| s.strip_prefix("reading ")) {
         s = rest.trim().to_string();
     }
     for sep in [" — ", " – ", " - ", " | ", " · ", " from "] {
@@ -111,16 +108,15 @@ pub fn compute_concept_aliases(
     }
 
     if name.contains('\'') || name.contains('’') {
-        let stripped: String = name.chars().filter(|&c| c != '\'' && c != '’').collect();
+        let stripped: String = name
+            .chars()
+            .filter(|&c| c != '\'' && c != '’')
+            .collect();
         push(stripped);
     } else {
         // E.g. "Rokos Basilisk" -> "Roko's Basilisk"
         let words: Vec<&str> = name.split_whitespace().collect();
-        if words.len() >= 2
-            && words[0].len() >= 4
-            && words[0].ends_with('s')
-            && !words[0].ends_with("ss")
-        {
+        if words.len() >= 2 && words[0].len() >= 4 && words[0].ends_with('s') && !words[0].ends_with("ss") {
             let stem = &words[0][..words[0].len() - 1];
             let mut possessive = format!("{stem}'s");
             for w in &words[1..] {
@@ -151,10 +147,7 @@ pub fn compute_concept_aliases(
 fn first_url(text: &str) -> Option<String> {
     for token in text.split_whitespace() {
         let clean = token.trim_matches(|c: char| {
-            matches!(
-                c,
-                '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | ',' | '.' | ';'
-            )
+            matches!(c, '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | ',' | '.' | ';')
         });
         if (clean.starts_with("https://") || clean.starts_with("http://")) && clean.len() > 10 {
             return Some(clean.to_string());
@@ -302,9 +295,7 @@ pub(crate) fn extract_learned_turn(body: &str) -> Option<Candidate> {
         {
             let bold_lead = normalize_concept_name(&block[2..2 + end]);
             let after = block[2 + end + 2..].trim_start();
-            if (after.starts_with("is ")
-                || after.starts_with("was ")
-                || after.starts_with("refers to "))
+            if (after.starts_with("is ") || after.starts_with("was ") || after.starts_with("refers to "))
                 && bold_lead.chars().count() >= 2
                 && bold_lead.chars().count() <= 120
             {
@@ -506,11 +497,7 @@ impl KnowledgeStore<'_> {
     ) -> KnowledgeResult<Option<i64>> {
         let clean = normalize_concept_name(name);
         let aliases = compute_concept_aliases(&clean, extra_aliases, source_ref);
-        self.read(|conn| {
-            find_existing_learned_claim_in_conn(
-                conn, scope, &clean, &aliases, predicate, source_ref,
-            )
-        })
+        self.read(|conn| find_existing_learned_claim_in_conn(conn, scope, &clean, &aliases, predicate, source_ref))
     }
 
     /// Add learned knowledge to memory at most once for redundant content, or expand an
@@ -652,13 +639,7 @@ fn maybe_expand_learned_claim_in_tx(
     let Ok((subject_id, existing_value, existing_status_str)) = tx.conn.query_row(
         "SELECT subject_id, COALESCE(object_value,''), status FROM kn_claims WHERE id=?1",
         [existing_claim],
-        |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        },
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
     ) else {
         return Ok((existing_claim, false));
     };
