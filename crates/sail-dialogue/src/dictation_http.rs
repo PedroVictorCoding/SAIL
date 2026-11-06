@@ -43,15 +43,17 @@ fn failure(code: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
     (code, Json(json!({"error": message})))
 }
 fn decode_pcm(body: &[u8]) -> Result<Vec<i16>, (StatusCode, Json<Value>)> {
-    if body.is_empty() || body.len() % 2 != 0 || body.len() > MAX_BYTES {
+    if body.is_empty() || !body.len().is_multiple_of(2) || body.len() > MAX_BYTES {
         return Err(failure(
             StatusCode::BAD_REQUEST,
             "Provide up to 60 seconds of 16 kHz mono PCM audio.",
         ));
     }
     Ok(body
-        .chunks_exact(2)
-        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i16::from_le_bytes(*b))
         .collect())
 }
 async fn transcribe(
