@@ -40,7 +40,7 @@
       about: 'Approves or denies every effectful action and keeps a tamper-evident audit trail.'},
     {id: 'discover', name: 'Discover', sub: 'Proactive · Tracker', u: 10.6, v: 19.6, icon: 'discovery', page: 'discovery', endpoint: '/api/tracker/config',
       about: 'Curiosity and the Tracker board: what is changing in the world you follow.'},
-    {id: 'entertainment', name: 'Entertainment', sub: 'Music · Video · Books', u: 5.2, v: 22.6, icon: 'entertainment', page: null,
+    {id: 'entertainment', name: 'Entertainment', sub: 'Music · Video · Books', u: 5.2, v: 22.6, icon: 'entertainment', page: 'entertainment',
       about: 'Media spaces: music, video and books.'},
   ];
   const LINKS = [
@@ -182,7 +182,7 @@
   function linkPath(a, b) { return [[a.gx, a.gy], [b.gx, a.gy], [b.gx, b.gy]]; }
 
   // ------------------------------------------------------------------ build DOM
-  let root, world, svgRoot, stage, pane, paneMain, paneEmpty, inspector, trackerHost, chatSlot, chatMarker, packets = [];
+  let root, world, svgRoot, stage, pane, paneMain, paneEmpty, inspector, trackerHost, entertainmentHost, chatSlot, chatMarker, packets = [];
   function build() {
     if (state.built) return;
     state.built = true;
@@ -193,7 +193,8 @@
         navItem('home', 'Home', 'home'), navItem('dialogue', 'Dialogue', 'dialogue'), navItem('arena', 'Arena', 'arena'),
         navItem('canvas', 'Canvas', 'canvas'), navItem('forge', 'Forge', 'forge'), navItem('flow', 'Flow', 'flow'),
         navItem('system', 'System', 'sense'), navItem('mind', 'Mind', 'mind'), navItem('memory', 'Memory', 'mesh'),
-        navItem('discover', 'Discover', 'discovery'), navItem('guardian', 'Guardian', 'guardian')),
+        navItem('discover', 'Discover', 'discovery'),
+        navItem('entertainment', 'Entertainment', 'entertainment'), navItem('guardian', 'Guardian', 'guardian')),
       el('ul', {class: 'tm-nav tm-nav-2'},
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: (e) => openStation('forge', e.currentTarget, 'tasks')}, icon('tasks'), 'Tasks')),
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: () => document.getElementById('terminalRailBtn')?.click()}, icon('terminal'), 'Terminal')),
@@ -262,7 +263,8 @@
         paneEmpty = el('section', {class: 'tm-pane-empty', hidden: true},
           el('h1', {id: 'tmPaneTitle', tabindex: '-1'}), el('p', {id: 'tmPaneAbout'}),
           el('p', {class: 'tm-empty', text: 'This system has no controls in SAIL yet.'}))),
-      trackerHost = el('div', {class: 'tm-pane-tracker', hidden: true}));
+      trackerHost = el('div', {class: 'tm-pane-tracker', hidden: true}),
+      entertainmentHost = el('div', {class: 'tm-pane-entertainment', hidden: true}));
     const activity = el('section', {class: 'tm-activity', 'aria-label': 'Live activity'},
       el('div', {class: 'tm-activity-head'}, el('span', {class: 'tm-bolt', 'aria-hidden': 'true', text: '⚡'}),
         el('div', {}, el('h2', {text: 'Live Activity'}), el('p', {text: 'Real-time events across SAIL'}))),
@@ -962,10 +964,12 @@
   }
   function showPane(mode) {
     const opening = pane.hidden;
+    if (pane.dataset.mode === 'entertainment' && mode !== 'entertainment') readerVisibility(false);
     pane.dataset.mode = mode;
-    paneMain.hidden = mode === 'tracker';
+    paneMain.hidden = mode === 'tracker' || mode === 'entertainment';
     trackerHost.hidden = mode !== 'tracker';
-    pane.setAttribute('aria-labelledby', mode === 'tracker' ? 'tmTrackerLabel' : paneEmpty.hidden ? 'subsystemTitle' : 'tmPaneTitle');
+    entertainmentHost.hidden = mode !== 'entertainment';
+    pane.setAttribute('aria-labelledby', mode === 'entertainment' ? 'tmEntertainmentLabel' : mode === 'tracker' ? 'tmTrackerLabel' : paneEmpty.hidden ? 'subsystemTitle' : 'tmPaneTitle');
     if (opening) {
       pane.hidden = false; stage.hidden = true;
       document.documentElement.classList.add('tm-pane-open');
@@ -992,8 +996,66 @@
     showPane('tracker');
     select(null);
   }
+  const MEDIA_TABS = ['reader', 'music', 'movies'];
+  let mediaTab = 'reader';
+  function readerVisibility(visible) {
+    document.getElementById('tmReader')?.contentWindow?.postMessage(
+      {type: 'sail:reader-visibility', visible}, location.origin);
+  }
+  function switchMedia(tab, focus = false) {
+    if (!MEDIA_TABS.includes(tab)) return;
+    if (mediaTab === 'reader' && tab !== 'reader') readerVisibility(false);
+    mediaTab = tab;
+    for (const id of MEDIA_TABS) {
+      const selected = id === tab;
+      const control = document.getElementById(`tmMediaTab-${id}`);
+      control.setAttribute('aria-selected', String(selected));
+      control.tabIndex = selected ? 0 : -1;
+      document.getElementById(`tmMediaPanel-${id}`).hidden = !selected;
+    }
+    if (tab === 'reader') readerVisibility(true);
+    if (focus) document.getElementById(`tmMediaTab-${tab}`).focus();
+  }
+  function showEntertainment() {
+    if (!entertainmentHost.firstChild) {
+      const tabs = el('nav', {class: 'tm-media-tabs', role: 'tablist', 'aria-label': 'Entertainment'});
+      const labels = {reader: 'Reader', music: 'Music player', movies: 'Movies'};
+      entertainmentHost.append(el('span', {class: 'tm-sr', id: 'tmEntertainmentLabel', text: 'Entertainment'}), tabs);
+      for (const id of MEDIA_TABS) {
+        tabs.append(el('button', {type: 'button', class: 'tm-btn', role: 'tab', id: `tmMediaTab-${id}`,
+          'aria-controls': `tmMediaPanel-${id}`, onclick: () => switchMedia(id), onkeydown: event => {
+            let index = MEDIA_TABS.indexOf(mediaTab);
+            if (event.key === 'ArrowRight') index++;
+            else if (event.key === 'ArrowLeft') index--;
+            else if (event.key === 'Home') index = 0;
+            else if (event.key === 'End') index = MEDIA_TABS.length - 1;
+            else return;
+            event.preventDefault();
+            switchMedia(MEDIA_TABS[(index + MEDIA_TABS.length) % MEDIA_TABS.length], true);
+          }}, labels[id]));
+        const panel = el('section', {class: 'tm-media-panel', id: `tmMediaPanel-${id}`,
+          role: 'tabpanel', 'aria-labelledby': `tmMediaTab-${id}`, hidden: id !== 'reader'});
+        if (id === 'reader') {
+          const frame = el('iframe', {class: 'tm-tracker-frame', id: 'tmReader', src: '/reader', title: 'Book reader'});
+          frame.addEventListener('load', () => readerVisibility(
+            state.on && !pane.hidden && pane.dataset.mode === 'entertainment' && mediaTab === 'reader'));
+          panel.append(frame);
+        } else {
+          panel.tabIndex = 0;
+          panel.append(el('div', {class: 'tm-media-empty'}, el('h2', {text: labels[id]}),
+            el('p', {text: `${labels[id]} will be available in a later update.`})));
+        }
+        entertainmentHost.append(panel);
+      }
+    }
+    state.tracker = false; state.popup = 'entertainment';
+    showPane('entertainment');
+    switchMedia(mediaTab);
+    select('entertainment');
+  }
   function hidePane() {
     if (pane.hidden) return;
+    readerVisibility(false);
     pane.hidden = true; stage.hidden = false;
     state.popup = null; state.tracker = false;
     document.documentElement.classList.remove('tm-pane-open');
@@ -1072,6 +1134,10 @@
     apply(page !== 'classic');
     if (!state.on) return;
     if (page === 'home') { state.pending = null; hidePane(); return; }
+    if (page === 'entertainment') {
+      state.pending = null; showEntertainment();
+      return;
+    }
     if (page === 'tracker') {
       const requested = !!state.trigger;
       state.pending = null; showTracker();

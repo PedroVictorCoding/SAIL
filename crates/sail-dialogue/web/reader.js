@@ -1031,6 +1031,18 @@ const SailReader = (() => {
         status('Could not load saved position.', true);
       }
     };
+    // Hiding an iframe does not fire document.visibilitychange. The workspace
+    // explicitly pauses and checkpoints it; returning never auto-resumes audio.
+    if (window.parent !== window) {
+      document.querySelector('.toolbar > a')?.remove();
+      window.addEventListener('message', event => {
+        if (event.origin !== location.origin || event.source !== window.parent) return;
+        if (event.data?.type !== 'sail:reader-visibility' || event.data.visible !== false) return;
+        if (state.narrator) state.narrator.pause();
+        else stopAudio(); // Discard a still-loading Read Aloud action.
+        savePosition();
+      });
+    }
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         state.narrator?.pause();
