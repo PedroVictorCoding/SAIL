@@ -46,6 +46,8 @@ pub struct ServerState {
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
     inference: sail_mind::MindService,
+    /// The owner token this boot uses, for the host-shell socket. Never logged.
+    owner_token: Option<String>,
 }
 pub async fn run_dialogue_server(
     addr: SocketAddr,
@@ -264,6 +266,7 @@ pub async fn run_dialogue_server_with_services(
             services,
             arena,
             inference,
+            owner_token,
         }))
         .layer(axum::middleware::map_response(cross_origin_isolation));
     match (

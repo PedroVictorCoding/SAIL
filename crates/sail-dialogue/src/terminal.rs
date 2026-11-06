@@ -14,6 +14,8 @@ use tracing::{info, warn};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TerminalClientMessage {
+    /// First message on the socket: the owner token Guardian approvals use.
+    Auth { token: String },
     Input { data: String },
     Resize { cols: u16, rows: u16 },
     Restart,
@@ -25,7 +27,55 @@ pub enum TerminalServerMessage {
     Connected { shell: String, cwd: String },
     Output { data: String },
     Exit { code: Option<i32> },
+    /// No shell was spawned: the socket did not prove it is the owner.
+    Locked { reason: String },
     Error { message: String },
+}
+
+/// What a terminal socket must prove before a shell is spawned. The host shell is the widest
+/// capability SAIL exposes, so the socket is not trusted: the owner token is required, the
+/// socket gets no shell until the first message authenticates, and every attempt is audited.
+pub struct TerminalGuard {
+    /// The owner token this boot uses. `None` closes the terminal (fail closed).
+    owner_token: Option<String>,
+    /// Where the browser said it came from; recorded, never authenticated by itself.
+    origin: String,
+    /// Guardian's ledger, so opening and refusing a host shell are auditable.
+    audit: Option<Arc<sail_guardian::AuditLedger>>,
+}
+
+impl TerminalGuard {
+    pub fn new(
+        owner_token: Option<String>,
+        origin: impl Into<String>,
+        audit: Option<Arc<sail_guardian::AuditLedger>>,
+    ) -> Self {
+        Self {
+            owner_token,
+            origin: origin.into(),
+            audit,
+        }
+    }
+
+    fn record(&self, outcome: sail_guardian::audit::DecisionOutcome, reason: String) {
+        use sail_guardian::capability::{Capability, ToolCapability};
+        if let Some(audit) = &self.audit {
+            let receipt = audit.record(
+                sail_common::types::SubsystemId::Dialogue,
+                Capability::Tool(ToolCapability::KernelTool("terminal:session".into())),
+                outcome,
+                reason.clone(),
+            );
+            match outcome {
+                sail_guardian::audit::DecisionOutcome::Granted => {
+                    info!(receipt = %receipt.receipt_id, %reason, "Host shell authorized")
+                }
+                _ => warn!(receipt = %receipt.receipt_id, %reason, "Host shell refused"),
+            }
+            return;
+        }
+        warn!(%reason, "Host shell event without an audit ledger");
+    }
 }
 
 #[derive(Clone)]
@@ -345,7 +395,73 @@ impl TerminalSession {
     }
 }
 
-pub async fn handle_terminal_socket(socket: WebSocket, initial_cwd: Option<PathBuf>) {
+/// How long the socket waits for the owner token before the shell request is dropped.
+pub const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Tell the socket why no shell was opened, then close it.
+async fn send_and_close(mut socket: WebSocket, message: TerminalServerMessage) {
+    let text = serde_json::to_string(&message).unwrap_or_default();
+    let _ = socket.send(Message::Text(text)).await;
+    let _ = socket.close().await;
+}
+
+pub async fn handle_terminal_socket(
+    socket: WebSocket,
+    initial_cwd: Option<PathBuf>,
+    guard: TerminalGuard,
+) {
+    let mut socket = socket;
+    // No shell exists yet: the socket must prove it is the owner first.
+    let authority = guard
+        .owner_token
+        .as_deref()
+        .and_then(|token| sail_guardian::authority::ApprovalAuthority::new(token).ok());
+    let Some(authority) = authority else {
+        guard.record(
+            sail_guardian::audit::DecisionOutcome::Denied,
+            "no owner token is configured, so the host shell stays closed".into(),
+        );
+        send_and_close(
+            socket,
+            TerminalServerMessage::Locked {
+                reason: "This SAIL boot has no owner token, so the terminal stays closed. Set \
+                         SAIL_APPROVAL_TOKEN and restart SAIL."
+                    .into(),
+            },
+        )
+        .await;
+        return;
+    };
+    let owner = match tokio::time::timeout(AUTH_TIMEOUT, socket.next()).await {
+        Ok(Some(Ok(Message::Text(text)))) => {
+            matches!(serde_json::from_str::<TerminalClientMessage>(&text),
+                Ok(TerminalClientMessage::Auth { token }) if authority.authenticates(&token))
+        }
+        _ => false,
+    };
+    if !owner {
+        guard.record(
+            sail_guardian::audit::DecisionOutcome::Denied,
+            format!(
+                "a host shell was requested without the owner token (origin: {})",
+                guard.origin
+            ),
+        );
+        send_and_close(
+            socket,
+            TerminalServerMessage::Locked {
+                reason: "The owner token is required to open the host shell. Paste it in \
+                         Guardian → Approvals and try again."
+                    .into(),
+            },
+        )
+        .await;
+        return;
+    }
+    guard.record(
+        sail_guardian::audit::DecisionOutcome::Granted,
+        format!("owner opened a host shell (origin: {})", guard.origin),
+    );
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
     let (mut session, mut output_rx) = match TerminalSession::spawn(initial_cwd.clone()) {
