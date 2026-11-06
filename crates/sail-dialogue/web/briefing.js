@@ -141,13 +141,7 @@
       document.getElementById('briefingLearnEstimate').textContent = `~${l.estimated_minutes} min lesson`;
       const learnBtn = document.getElementById('briefingStartLearnBtn');
       if (learnBtn) {
-        learnBtn.onclick = () => {
-          if (window.location.hash !== '#arena') {
-            window.location.hash = '#arena';
-          }
-          const memoryCard = document.getElementById('memoryCard');
-          if (memoryCard) memoryCard.scrollIntoView({ behavior: 'smooth' });
-        };
+        learnBtn.onclick = () => openPage('arena');
       }
     }
 
@@ -168,10 +162,7 @@
       });
       const eventsBtn = document.getElementById('briefingEventsBtn');
       if (eventsBtn) {
-        eventsBtn.onclick = () => {
-          const pulseCard = document.getElementById('pulseCard');
-          if (pulseCard) pulseCard.scrollIntoView({ behavior: 'smooth' });
-        };
+        eventsBtn.onclick = () => openPage('pulse');
       }
     }
 
@@ -203,6 +194,12 @@
       document.getElementById('briefingSentinelStorage').textContent = s.storage_status;
       document.getElementById('briefingSentinelMemory').textContent = s.memory_headroom;
     }
+  }
+
+  // Open a SAIL page (Arena, Reminders) through the shared router the Tools Map follows.
+  function openPage(id) {
+    if (window.sailNavigate) window.sailNavigate(id);
+    else window.location.hash = `#${id}`;
   }
 
   function escapeHtml(str) {

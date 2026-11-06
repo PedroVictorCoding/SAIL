@@ -239,6 +239,11 @@
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom out', onclick: () => zoom(1 / 1.2)}, '−'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoom(1.2)}, '+')));
 
+    // The return briefing ("While You Were Away") sits over the map as a dismissible sheet.
+    // briefing.js fills and hides it by id wherever it is mounted.
+    const briefing = document.getElementById('returnBriefingDeck');
+    if (briefing) { briefing.classList.add('tm-briefing'); stage.append(briefing); }
+
     // Right column: the live Dialogue panel (#homeView, moved in by showChat()) and, behind
     // the other tabs, the status of the open system (SAIL Core on the map).
     inspector = el('div', {class: 'tm-inspector', id: 'tmInspector', role: 'tabpanel', 'aria-labelledby': 'tmTab-context', hidden: true});
@@ -783,7 +788,7 @@
       const btn = (key, label, glyph) => el('button', {class: 'tm-np-btn', type: 'button', 'data-key': key, 'aria-label': label, title: label, onclick: () => spotifyControl(key)}, glyph);
       kids = [
         el('div', {class: 'tm-np-row'},
-          now.image ? el('img', {class: 'tm-np-art', src: now.image, alt: '', width: 44, height: 44, referrerpolicy: 'no-referrer'}) : el('span', {class: 'tm-np-art', 'aria-hidden': 'true'}),
+          now.image ? el('img', {class: 'tm-np-art', src: now.image, alt: '', width: 44, height: 44, crossorigin: 'anonymous', referrerpolicy: 'no-referrer'}) : el('span', {class: 'tm-np-art', 'aria-hidden': 'true'}),
           el('div', {class: 'tm-np-text'},
             el('p', {class: 'tm-np-label', text: now.is_playing ? 'Now Playing' : 'Paused'}),
             el('p', {class: 'tm-np-name', text: now.name, title: now.name}),
