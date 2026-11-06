@@ -95,6 +95,7 @@
     const s = svg('svg', {class: 'tm-icon', 'aria-hidden': 'true', viewBox: '0 0 24 24'});
     const stroke = {fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round'};
     if (name === 'forge') { s.append(svg('path', {d: 'M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16', ...stroke})); return s; }
+    if (name === 'away') { s.append(svg('path', {d: 'M3 12a9 9 0 1 0 2.6-6.4L3 8M3 3v5h5M12 7v5l3 2', ...stroke})); return s; }
     if (name === 'tasks') { s.append(svg('path', {d: 'M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01', ...stroke})); return s; }
     s.removeAttribute('viewBox');
     s.append(svg('use', {href: `/icons.svg#${name}`}));
@@ -233,16 +234,20 @@
         el('select', {class: 'tm-btn', id: 'tmSpeed', onchange: (e) => { state.speed = Number(e.target.value); }},
           el('option', {value: '0.5', text: '0.5x'}), el('option', {value: '1', text: '1x', selected: true}), el('option', {value: '2', text: '2x'}))),
       el('div', {class: 'tm-ctl tm-ctl-mid', role: 'group', 'aria-label': 'Map view'},
-        modeBtn('topology', 'Topology'), modeBtn('map', 'Tools Map'), modeBtn('flows', 'Flows'), modeBtn('resources', 'Resources')),
+        modeBtn('topology', 'Topology'), modeBtn('map', 'Tools Map'), modeBtn('flows', 'Flows'), modeBtn('resources', 'Resources'),
+        modeBtn('away', 'While You Were Away')),
       el('div', {class: 'tm-ctl tm-ctl-right'},
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Fit map', onclick: fit}, '⛶'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom out', onclick: () => zoom(1 / 1.2)}, '−'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoom(1.2)}, '+')));
 
-    // The return briefing ("While You Were Away") sits over the map as a dismissible sheet.
-    // briefing.js fills and hides it by id wherever it is mounted.
+    // The return briefing is the "While You Were Away" view of the map stage (data-mode
+    // "away"); briefing.js fills it by id and hides it when there is no briefing.
     const briefing = document.getElementById('returnBriefingDeck');
     if (briefing) { briefing.classList.add('tm-briefing'); stage.append(briefing); }
+    stage.append(el('div', {class: 'tm-away-empty'},
+      el('p', {text: 'Nothing new since you were away.'}),
+      el('button', {class: 'tm-btn', type: 'button', onclick: () => window.sailBriefing?.refresh(), text: 'Prepare a briefing'})));
 
     // Right column: the live Dialogue panel (#homeView, moved in by showChat()) and, behind
     // the other tabs, the status of the open system (SAIL Core on the map).
@@ -294,7 +299,8 @@
   }
   function modeBtn(mode, label) {
     return el('button', {class: 'tm-seg', type: 'button', 'data-mode': mode, 'aria-pressed': state.mode === mode ? 'true' : 'false', onclick: () => setMode(mode)},
-      icon({topology: 'mesh', map: 'spaces', flows: 'flow', resources: 'sense'}[mode]), label);
+      icon({topology: 'mesh', map: 'spaces', flows: 'flow', resources: 'sense', away: 'away'}[mode]), label,
+      mode === 'away' ? el('span', {class: 'tm-seg-dot', id: 'tmAwayDot', hidden: !state.awayFresh, title: 'New briefing'}) : null);
   }
 
   function buildWorld() {
@@ -1160,6 +1166,12 @@
   window.sailToolsMap = {show, hide, open: (id) => openStation(id)};
   window.sailFactory = window.sailToolsMap;
   window.addEventListener('sail:page', (event) => route(event.detail));
+  // A fresh briefing marks its view; closing the briefing returns to the map.
+  window.addEventListener('sail:briefing', (event) => {
+    state.awayFresh = !!event.detail?.fresh;
+    const dot = document.getElementById('tmAwayDot'); if (dot) dot.hidden = !state.awayFresh;
+    if (event.detail?.closed && state.mode === 'away' && root) setMode('map');
+  });
   document.getElementById('openFactorySettings')?.addEventListener('click', show);
   // Retire the browser-wide style preference; the map is now the workspace.
   try { localStorage.removeItem('sail_ui_style'); } catch (_) {}
