@@ -44,48 +44,40 @@ html[data-sail-visuals=subtle] .sail-backdrop::after { opacity: .07; }
 @property --sail-shown-b { syntax: '<color>'; inherits: true; initial-value: #384257; }
 @property --sail-shown-c { syntax: '<color>'; inherits: true; initial-value: #0e121a; }
 html.sail-backdrop-on {
-  transition: --sail-shown-a 1.2s ease, --sail-shown-b 1.2s ease, --sail-shown-c 1.2s ease,
+  transition: --sail-shown-a 4s ease, --sail-shown-b 4s ease, --sail-shown-c 4s ease,
     --sail-light-a var(--sail-transition-state, 420ms) var(--sail-ease, ease), --sail-light-b var(--sail-transition-state, 420ms) var(--sail-ease, ease), --sail-light-c var(--sail-transition-state, 420ms) var(--sail-ease, ease),
     --ambient-one var(--sail-transition-state, 420ms) var(--sail-ease, ease), --ambient-two var(--sail-transition-state, 420ms) var(--sail-ease, ease), --ambient-three var(--sail-transition-state, 420ms) var(--sail-ease, ease);
 }
 @media (prefers-reduced-motion: reduce) { html.sail-backdrop-on { transition: none; } }
 
-/* Fixed indicators as glow pills, the same material as the Library's glow tiles: a near
-   black capsule with its status colour pooled as light along the bottom edge and a halo
-   around it. White text sits on the dark upper half (WCAG AA). */
+/* Fixed indicators are plain dark glass pills: no bloom or halo. The status shows in the
+   coloured dot, and the text stays white on the dark pill (WCAG AA). */
 html.sail-backdrop-on .connection-pill,
 html.sail-backdrop-on .privacy-indicator,
 html.sail-backdrop-on .loading-indicator {
-  --glow: #8a93a6; --glow-hot: #dfe4ee;
+  --glow: #8a93a6;
   color: #fff;
   font-weight: 600;
-  text-shadow: 0 1px 6px rgba(0, 0, 0, .6);
   border: 1px solid rgba(255, 255, 255, .12);
   border-radius: var(--radius-pill, 999px);
-  background:
-    radial-gradient(60% 55% at 50% 118%, rgba(255, 255, 255, .75), transparent 100%),
-    radial-gradient(85% 80% at 50% 125%, var(--glow-hot), transparent 100%),
-    radial-gradient(130% 120% at 50% 135%, var(--glow), transparent 75%),
-    linear-gradient(180deg, #06070a 35%, #0b0d12);
-  background-repeat: no-repeat;
-  box-shadow: 0 8px 26px -8px var(--glow), 0 0 22px -6px var(--glow);
+  background: rgba(8, 10, 14, .72);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .3);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  transition: box-shadow var(--sail-transition-fast, 140ms) var(--sail-ease),
-              color var(--sail-transition-fast, 140ms) var(--sail-ease);
+  transition: color var(--sail-transition-fast, 140ms) var(--sail-ease);
 }
 html.sail-backdrop-on .connection-pill i,
 html.sail-backdrop-on .privacy-indicator i {
-  background: var(--glow-hot);
+  background: var(--glow);
   color: var(--glow);
-  box-shadow: 0 0 8px var(--glow);
+  box-shadow: none;
 }
-html.sail-backdrop-on .connection-pill.is-connected { --glow: #22d84a; --glow-hot: #c8ff6a; }
-html.sail-backdrop-on .connection-pill.is-disconnected { --glow: #ff9a1a; --glow-hot: #ffd45a; }
-html.sail-backdrop-on .privacy-indicator { --glow: #ff2f6d; --glow-hot: #ffa3c0; }
-html.sail-backdrop-on .privacy-indicator.rec-indicator { --glow: #ff2a2a; --glow-hot: #ff9b7a; }
-html.sail-backdrop-on #micLiveIndicator { --glow: #1fa5ff; --glow-hot: #a5f3fc; }
-html.sail-backdrop-on .loading-indicator { --glow: #7a5cff; --glow-hot: #d8c8ff; }
+html.sail-backdrop-on .connection-pill.is-connected { --glow: #22d84a; }
+html.sail-backdrop-on .connection-pill.is-disconnected { --glow: #ff9a1a; }
+html.sail-backdrop-on .privacy-indicator { --glow: #ff2f6d; }
+html.sail-backdrop-on .privacy-indicator.rec-indicator { --glow: #ff2a2a; }
+html.sail-backdrop-on #micLiveIndicator { --glow: #1fa5ff; }
+html.sail-backdrop-on .loading-indicator { --glow: #7a5cff; }
 html.sail-backdrop-on .loading-indicator progress {
   border-color: rgba(255, 255, 255, .35);
   background: rgba(0, 0, 0, .45);
@@ -137,9 +129,9 @@ html.sail-backdrop-on .top-actions .icon-button:hover {
    from below. Backgrounds never repeat, so the bottom bloom can't wrap into the top border.
    The hue names the subsystem or state the card belongs to. Band sizes are lengths on panes
    (a tall pane gets a strip, not a flood) and percentages on small cards. */
-html.sail-backdrop-on :is(.tm-stage, .tm-chat, .tm-activity, .tm-label, .tm-sidecard,
+html.sail-backdrop-on :is(.tm-stage, .tm-chat, .tm-label, .tm-sidecard,
   .workspace-card, .briefing-card, .activity-entry) {
-  --glow: var(--sail-light-a, #5b7cff); --glow-hot: #dfe4ff;
+  --glow: var(--sail-shown-a, var(--sail-light-a, #5b7cff)); --glow-hot: #dfe4ff;
   --glow-a1: 56%; --glow-a2: 46%; --glow-h1: 120px; --glow-h2: 230px; --glow-y1: 24px; --glow-y2: 48px; --glow-halo: 50%;
   --glow-bg:
     radial-gradient(ellipse 55% var(--glow-h1) at 50% calc(100% + var(--glow-y1)),
@@ -157,12 +149,12 @@ html.sail-backdrop-on :is(.tm-stage, .tm-chat, .tm-activity, .tm-label, .tm-side
 html.sail-backdrop-on .tm-stage {
   background: var(--glow-bg),
     radial-gradient(ellipse 75% 65% at 50% 20%,
-      color-mix(in srgb, var(--sail-light-a, #496f9d) calc(var(--sail-illumination, .15) * 100%), transparent), transparent 75%),
+      color-mix(in srgb, var(--sail-shown-a, var(--sail-light-a, #496f9d)) calc(var(--sail-illumination, .15) * 100%), transparent), transparent 75%),
     var(--tm-stage);
   background-repeat: no-repeat;
 }
 html.sail-backdrop-on .workspace-card::after { display: none; }
-html.sail-backdrop-on :is(.tm-label, .tm-sidecard, .tm-activity, .briefing-card, .activity-entry) {
+html.sail-backdrop-on :is(.tm-label, .tm-sidecard, .briefing-card, .activity-entry) {
   --glow-h1: 75%; --glow-h2: 130%; --glow-y1: 4px; --glow-y2: 12px; --glow-a1: 52%; --glow-a2: 42%;
 }
 html.sail-backdrop-on :is(.tm-label, .briefing-card, .workspace-card):hover {
@@ -175,14 +167,13 @@ html.sail-backdrop-on .tm-label[aria-pressed="true"] {
 html.sail-backdrop-on .tm-label[aria-pressed="true"] .tm-label-icon {
   color: var(--glow-hot); border-color: color-mix(in srgb, var(--glow) 50%, transparent);
 }
-html[data-sail-visuals=subtle].sail-backdrop-on :is(.tm-stage, .tm-chat, .tm-activity, .tm-label,
+html[data-sail-visuals=subtle].sail-backdrop-on :is(.tm-stage, .tm-chat, .tm-label,
   .tm-sidecard, .workspace-card, .briefing-card, .activity-entry) {
   --glow-a1: 26%; --glow-a2: 20%; --glow-halo: 28%;
 }
 
 /* Hues: one per subsystem or state. */
 html.sail-backdrop-on .tm-chat { --glow: #1fa5ff; --glow-hot: #a5f3fc; }
-html.sail-backdrop-on .tm-activity { --glow: #ff9a1a; --glow-hot: #ffd45a; }
 html.sail-backdrop-on .tm-label[data-station="core"] { --glow: #7a8cff; --glow-hot: #e6ebff; }
 html.sail-backdrop-on .tm-label[data-station="dialogue"] { --glow: #1fa5ff; --glow-hot: #a5f3fc; }
 html.sail-backdrop-on .tm-label[data-station="mind"] { --glow: #7a5cff; --glow-hot: #d8c8ff; }
@@ -213,7 +204,7 @@ html.sail-backdrop-on .briefing-continuity-card { --glow: #22d84a; --glow-hot: #
 html.sail-backdrop-on .activity-entry { --glow: #ff7a1a; --glow-hot: #ffd45a; }
 
 @media (forced-colors: active) {
-  html.sail-backdrop-on :is(.tm-stage, .tm-chat, .tm-activity, .tm-label, .tm-sidecard,
+  html.sail-backdrop-on :is(.tm-stage, .tm-chat, .tm-label, .tm-sidecard,
     .workspace-card, .briefing-card, .activity-entry) {
     background: Canvas; border: 1px solid CanvasText; box-shadow: none;
   }
