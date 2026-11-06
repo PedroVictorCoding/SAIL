@@ -7,7 +7,7 @@ const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
 const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
 const position={percent:46.8,revision:1,anchor:{section:0,block:0,char:0},saved_at:'2026-11-06T11:40:00Z'};
 let books=[{id:'one',title:'The Shape of Attention',authors:['Alex Reader'],format:'epub',sections:1,chars:1000,position},{id:'two',title:'A Field Guide to Quiet Places',authors:['Sam Rivers'],format:'txt',sections:1,chars:1000,position:null},{id:'three',title:'Patterns of the Natural World',authors:['Robin Lee'],format:'epub',sections:1,chars:1000,position:{...position,percent:100}}];
-let fail=false, lookupFail=false, noMatches=false, coverFail=false, searches=0, coverRequests=0;
+let fail=false, lookupFail=false, noMatches=false, coverFail=false, searches=0, coverRequests=0, previewRequests=0, saves=0, saveFail=false;
 const coverJpeg=Buffer.from(await page.evaluate(() => {
  const canvas=document.createElement('canvas');canvas.width=300;canvas.height=450;
  const c=canvas.getContext('2d');const g=c.createLinearGradient(0,0,300,450);g.addColorStop(0,'#264862');g.addColorStop(1,'#142028');c.fillStyle=g;c.fillRect(0,0,300,450);
@@ -28,14 +28,24 @@ if(path.startsWith('/api/')){
    if(lookupFail)return r.fulfill({status:502,json:{error:'Open Library unavailable. Try later.'}});
    return r.fulfill({json:{matches:noMatches?[]:[match]}});
  }
+ if(path.endsWith('/metadata/preview')) {
+   previewRequests++;
+   assert.deepEqual(r.request().postDataJSON(),{work_key:match.work_key});
+   return r.fulfill({json:{preview_id:'draft-one',metadata:{...match,description:'<img src=x onerror=alert(1)> A book about the way we read.',cover_cached:true}}});
+ }
  if(path.endsWith('/metadata')) {
    const book=books.find(b=>path.includes(`/books/${b.id}/`));
    if(r.request().method()==='DELETE')book.metadata=null;
-   else {assert.deepEqual(r.request().postDataJSON(),{work_key:match.work_key});book.metadata={...match,description:'<img src=x onerror=alert(1)> A book about the way we read.',cover_cached:true,retrieved_at:'2026-11-06T12:00:00Z'};}
+   else {
+     if(saveFail)return r.fulfill({status:500,json:{error:'Could not save. Try again.'}});
+     const body=r.request().postDataJSON();assert(body.edits);assert(!('work_key' in body));
+     if(!book.metadata)assert.equal(body.preview_id,'draft-one');
+     saves++;book.metadata={...match,...body.edits,user_edited:true,cover_cached:body.use_cover,retrieved_at:'2026-11-06T12:00:00Z'};
+   }
    return r.fulfill({json:{book}});
  }
  if(path.endsWith('/cover')) {
-   coverRequests++;
+   if(!path.includes('/metadata/preview/')) coverRequests++;
    return coverFail?r.fulfill({status:404,json:{error:'No cover'}}):r.fulfill({contentType:'image/jpeg',body:coverJpeg});
  }
  if(path.endsWith('/import')) {
@@ -69,12 +79,46 @@ assert.equal(searches,0,'opening Library never sends an online request');
 await page.getByRole('button',{name:'Find cover & details',exact:true}).click();
 lookupFail=true;await page.locator('#metadata-search').click();await page.getByText('Open Library unavailable. Try later.').waitFor();
 lookupFail=false;noMatches=true;await page.locator('#metadata-search').click();await page.getByText('No matches found.',{exact:false}).waitFor();
-noMatches=false;await page.locator('#metadata-search').click();await page.getByRole('button',{name:'Use these details'}).click();
+noMatches=false;await page.locator('#metadata-search').click();await page.getByRole('button',{name:'Preview & edit'}).click();
+await page.locator('#metadata-cover-image').waitFor({state:'visible'});
+assert.equal(saves,0);assert.equal(books[0].metadata,undefined);
+assert.equal(await page.locator('#edit-title').inputValue(),match.title);
+assert.equal(await page.locator('#edit-description').inputValue(),'<img src=x onerror=alert(1)> A book about the way we read.');
+assert.equal(await page.locator('#metadata-editor img').count(),1);
+for(const width of [1440,360]) {
+ await page.setViewportSize({width,height:1000});
+ assert(await page.evaluate(()=>document.querySelector('#metadata-dialog').scrollWidth<=document.querySelector('#metadata-dialog').clientWidth));
+ await page.screenshot({path:`/tmp/library-metadata-preview-${width}.png`,fullPage:true});
+}
+await page.locator('#edit-title').fill('Discard this draft');
+await page.keyboard.press('Escape');assert.equal(saves,0);assert.equal(books[0].metadata,undefined);
+await page.getByRole('button',{name:'Find cover & details',exact:true}).click();
+await page.locator('#metadata-search').click();await page.getByRole('button',{name:'Preview & edit'}).click();
+await page.locator('#metadata-cover-image').waitFor({state:'visible'});
+await page.locator('#edit-title').fill('Reviewed title');
+await page.locator('#edit-authors').fill('Edited author');await page.locator('#edit-year').fill('2001');
+await page.locator('#edit-subjects').fill('Reviewed subject');
+await page.locator('#edit-description').fill('<img src=x onerror=alert(1)> Reviewed description');
+saveFail=true;await page.locator('#metadata-save').click();await page.getByText('Could not save. Try again.').waitFor();
+assert.equal(await page.locator('#edit-title').inputValue(),'Reviewed title');assert.equal(saves,0);
+saveFail=false;await page.locator('#metadata-save').click();
 await page.locator('#metadata-dialog').waitFor({state:'hidden'});
+assert.equal(saves,1);assert.equal(books[0].metadata.title,'Reviewed title');
+assert.equal(books[0].metadata.authors[0],'Edited author');assert.equal(books[0].metadata.first_publish_year,2001);
+assert.equal(books[0].metadata.subjects[0],'Reviewed subject');
+assert.equal(await page.locator('#continue h2').textContent(),'Reviewed title');
+// Editing saved metadata does not search or preview the external service again.
+const priorSearches=searches, priorPreviews=previewRequests;
+await page.locator('#continue .book-about summary').click();
+await page.getByRole('button',{name:'Change book details',exact:true}).click();
+await page.locator('#metadata-cover-image').waitFor({state:'visible'});
+await page.locator('#edit-description').fill('<img src=x onerror=alert(1)> Offline correction');
+await page.locator('#metadata-save').click();await page.locator('#metadata-dialog').waitFor({state:'hidden'});
+assert.equal(searches,priorSearches);assert.equal(previewRequests,priorPreviews);assert.equal(saves,2);
 await page.waitForFunction(()=>document.querySelector('#continue .cover-image')?.style.opacity==='1');
 assert.equal(await page.locator('#continue .book-description img').count(),0);
 assert((await page.locator('#continue .book-description').textContent()).startsWith('<img'));
-assert.equal(coverRequests,1,'one authenticated local image fetch is shared by all book thumbnails');
+assert(coverRequests>=2,'cover loads are authenticated and include the offline editor');
 for(const width of [1440,768,390,360]){
  await page.setViewportSize({width,height:1000});
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`overflow ${width}`);

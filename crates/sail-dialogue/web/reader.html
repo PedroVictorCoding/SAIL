@@ -88,7 +88,7 @@
         <div><p class="eyebrow">OPEN LIBRARY</p><h2 id="metadata-heading">Find a cover &amp; book details</h2></div>
         <button id="metadata-close" type="button">Close</button>
       </div>
-      <p class="muted">Search sends the title and author below to Open Library. Book text and reading history stay on your host. Choose a match to save its details and cover for offline use.</p>
+      <p class="muted">Search sends the title and author below to Open Library. Book text and reading history stay on your host. Preview a match and edit its details before saving. Searches and previews do not change your library.</p>
       <form id="metadata-form">
         <label>Title<input id="metadata-title" required maxlength="200"></label>
         <label>Author <span class="muted">(optional)</span><input id="metadata-author" maxlength="160"></label>
@@ -96,6 +96,29 @@
       </form>
       <p id="metadata-status" role="status" aria-live="polite"></p>
       <div id="metadata-results"></div>
+      <form id="metadata-editor" hidden aria-label="Review and edit book details">
+        <div class="metadata-review">
+          <div class="metadata-cover-preview">
+            <img id="metadata-cover-image" hidden alt="">
+            <p id="metadata-cover-empty" class="muted">No cover available</p>
+            <label class="metadata-cover-choice"><input id="metadata-use-cover" type="checkbox"> Use this cover</label>
+          </div>
+          <div class="metadata-fields">
+            <h3>Review before saving</h3>
+            <p id="metadata-provenance" class="muted"></p>
+            <label>Book title<input id="edit-title" required maxlength="300"></label>
+            <label>Authors <span class="muted">One per line, up to 8</span><textarea id="edit-authors" rows="2" maxlength="1287"></textarea></label>
+            <label>First publication year<input id="edit-year" type="number" step="1" min="-9999" max="9999"></label>
+            <label>Subjects <span class="muted">One per line, up to 4</span><textarea id="edit-subjects" rows="2" maxlength="323"></textarea></label>
+            <label>Description<textarea id="edit-description" rows="5" maxlength="1600"></textarea></label>
+          </div>
+        </div>
+        <div class="metadata-editor-actions">
+          <button id="metadata-save" type="submit">Save details</button>
+          <button id="metadata-back" type="button">Back to results</button>
+        </div>
+        <p class="muted">Edits are saved only in your local library. The imported file and reading position stay unchanged.</p>
+      </form>
     </dialog>
     <section id="reader" aria-label="Book reader" hidden>
       <aside id="toc" class="drawer" hidden aria-label="Table of contents">

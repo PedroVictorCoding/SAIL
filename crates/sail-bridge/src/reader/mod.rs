@@ -674,6 +674,7 @@ mod tests {
             cover_id: Some(123),
             cover_cached: true,
             retrieved_at: Utc::now(),
+            user_edited: false,
         };
         library
             .set_metadata(&book.id, Some(metadata), Some(b"cached raster"))
