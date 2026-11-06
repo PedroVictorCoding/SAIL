@@ -1,0 +1,24 @@
+#!/bin/sh
+# sail-learn-rust-check — installed by the administrator INSIDE the sail-runner image at
+# /usr/local/bin/sail-learn-rust-check (or $SAIL_LEARN_RUST_CHECKER). Never run it on the host.
+#
+# argv[1] is the learner's main.rs source. Contract with RunnerRustEvaluator:
+#   exit 0   compiled and ran successfully; stdout is the program's stdout
+#   exit 86  rustc rejected the program; stderr holds `rustc --error-format=json` lines
+#   other    compiled, the program exited with that code
+# rustc diagnostics (warnings included) always go to stderr as JSON. The program's own
+# stderr is discarded so it can't forge diagnostics.
+set -u
+src=${1:?source required}
+dir=$(mktemp -d "${TMPDIR:-/tmp}/learn.XXXXXX") || exit 70
+printf '%s' "$src" > "$dir/main.rs"
+if ! rustc --edition 2021 --error-format=json -C opt-level=0 -o "$dir/main" "$dir/main.rs" 2>"$dir/diag.json"; then
+  cat "$dir/diag.json" >&2
+  exit 86
+fi
+cat "$dir/diag.json" >&2
+"$dir/main" 2>/dev/null
+code=$?
+# 86 is reserved for "didn't compile", so a program that exits 86 reports 87.
+[ "$code" -eq 86 ] && exit 87
+exit "$code"

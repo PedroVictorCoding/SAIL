@@ -171,7 +171,11 @@ impl Step {
             title: self.title.clone(),
             body: self.body.clone(),
             objective_ids: self.objective_ids.clone(),
-            hint_count: if with_hints { self.hints.len() as u8 } else { 0 },
+            hint_count: if with_hints {
+                self.hints.len() as u8
+            } else {
+                0
+            },
             confidence: self.confidence,
             options: self.options.clone(),
             multi: self.multi,
@@ -372,7 +376,11 @@ fn validate_step(s: &Step, objectives: &BTreeSet<&str>) -> Result<(), String> {
     if s.objective_ids.is_empty() {
         return Err("needs at least one objective".into());
     }
-    if let Some(o) = s.objective_ids.iter().find(|o| !objectives.contains(o.as_str())) {
+    if let Some(o) = s
+        .objective_ids
+        .iter()
+        .find(|o| !objectives.contains(o.as_str()))
+    {
         return Err(format!("unknown objective {o}"));
     }
     if s.hints.len() > MAX_HINTS {
@@ -413,7 +421,10 @@ fn validate_step(s: &Step, objectives: &BTreeSet<&str>) -> Result<(), String> {
     if s.family.is_none() {
         return Err("scored steps need a family".into());
     }
-    if s.misconceptions.keys().any(|k| !option_ids.contains(k.as_str())) {
+    if s.misconceptions
+        .keys()
+        .any(|k| !option_ids.contains(k.as_str()))
+    {
         return Err("misconception for an unknown option".into());
     }
     Ok(())

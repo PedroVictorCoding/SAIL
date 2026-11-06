@@ -157,7 +157,12 @@ pub fn rfc3339(ms: i64) -> String {
 
 /// Hints and reveals since the previous attempt on the same step in the same context, so a
 /// retry after a hint is still assisted. Checked before an attempt is stored.
-pub fn assistance_for(events: &[Stored], context: Context, context_id: &str, step_id: &str) -> Assistance {
+pub fn assistance_for(
+    events: &[Stored],
+    context: Context,
+    context_id: &str,
+    step_id: &str,
+) -> Assistance {
     let mut level = Assistance::Independent;
     for s in events {
         match &s.event {
@@ -181,13 +186,12 @@ pub fn assistance_for(events: &[Stored], context: Context, context_id: &str, ste
                 if a.context == context
                     && a.context_id == context_id
                     && a.step_id == step_id
-                    && a.verdict != Verdict::Unavailable =>
+                    && a.verdict != Verdict::Unavailable
+                    // A lesson step stays assisted through retries until it's passed. A
+                    // review or diagnostic attempt ends its episode either way.
+                    && (context != Context::Lesson || a.verdict == Verdict::Correct) =>
             {
-                // A lesson step stays assisted through retries until it's passed. A review or
-                // diagnostic attempt ends its episode either way.
-                if context != Context::Lesson || a.verdict == Verdict::Correct {
-                    level = Assistance::Independent;
-                }
+                level = Assistance::Independent;
             }
             _ => {}
         }
@@ -335,22 +339,25 @@ fn project_one(
     };
     let next = due.map(rfc3339).unwrap_or_default();
     let why = match state {
-        EvidenceState::Untested => "Not assessed yet. SAIL doesn't assume you know it or don't.".to_string(),
+        EvidenceState::Untested => {
+            "Not assessed yet. SAIL doesn't assume you know it or don't.".to_string()
+        }
         EvidenceState::Exposure => {
             "You've seen this material, but no answer has been checked yet.".to_string()
         }
         EvidenceState::Assisted => format!(
             "Passed only with a hint or the solution. A fresh independent problem is due {next}."
         ),
-        EvidenceState::Weak => format!(
-            "Your most recent answer was wrong. A new problem is scheduled for {next}."
-        ),
-        EvidenceState::Due => {
-            "A delayed check is due now: a new problem, without help, shows whether it stuck.".to_string()
+        EvidenceState::Weak => {
+            format!("Your most recent answer was wrong. A new problem is scheduled for {next}.")
         }
-        EvidenceState::Retained => format!(
-            "Passed again on a new problem after a delay. The next check is {next}."
-        ),
+        EvidenceState::Due => {
+            "A delayed check is due now: a new problem, without help, shows whether it stuck."
+                .to_string()
+        }
+        EvidenceState::Retained => {
+            format!("Passed again on a new problem after a delay. The next check is {next}.")
+        }
         EvidenceState::Provisional => format!(
             "Passed independently, but not yet after a delay. The first retention check is {next}."
         ),

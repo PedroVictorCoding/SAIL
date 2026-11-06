@@ -2,7 +2,9 @@
 //! semantics, with an injected clock and no model anywhere.
 use sail_arena_learn::courses::content::{RunLimits, catalog};
 use sail_arena_learn::courses::grade::{Diagnostic, RustRun, parse_rustc_json};
-use sail_arena_learn::courses::{AttemptRequest, CourseEngine, CourseStore, NoSandbox, RustEvaluator};
+use sail_arena_learn::courses::{
+    AttemptRequest, CourseEngine, CourseStore, NoSandbox, RustEvaluator,
+};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
@@ -29,7 +31,11 @@ impl Fixture {
             rust,
             Arc::new(move || clock.load(Ordering::SeqCst)),
         );
-        Self { engine, now, seq: AtomicU32::new(0) }
+        Self {
+            engine,
+            now,
+            seq: AtomicU32::new(0),
+        }
     }
 
     fn advance_days(&self, days: i64) {
@@ -47,7 +53,10 @@ impl Fixture {
     }
 
     async fn lesson(&self, lesson: &str, step: &str, answer: Value) -> Value {
-        self.engine.lesson_attempt(lesson, self.req(Some(step), answer)).await.unwrap()
+        self.engine
+            .lesson_attempt(lesson, self.req(Some(step), answer))
+            .await
+            .unwrap()
     }
 
     fn state(&self, objective: &str) -> String {
@@ -67,11 +76,21 @@ impl Fixture {
     async fn pass_lesson_one(&self) {
         let l = "rust-own-move";
         self.lesson(l, "intro", Value::Null).await;
-        self.lesson(l, "predict-move", json!({"choice": ["c"]})).await;
-        self.lesson(l, "copy-types", json!({"choice": ["i32", "bool", "tuple", "str-ref"]})).await;
-        self.lesson(l, "fill-clone", json!({"text": " clone() "})).await;
-        self.lesson(l, "predict-copy", json!({"choice": ["a"]})).await;
-        let last = self.lesson(l, "predict-fn-move", json!({"choice": ["b"]})).await;
+        self.lesson(l, "predict-move", json!({"choice": ["c"]}))
+            .await;
+        self.lesson(
+            l,
+            "copy-types",
+            json!({"choice": ["i32", "bool", "tuple", "str-ref"]}),
+        )
+        .await;
+        self.lesson(l, "fill-clone", json!({"text": " clone() "}))
+            .await;
+        self.lesson(l, "predict-copy", json!({"choice": ["a"]}))
+            .await;
+        let last = self
+            .lesson(l, "predict-fn-move", json!({"choice": ["b"]}))
+            .await;
         assert_eq!(last["gate_decision"], "lesson_complete");
     }
 }
@@ -88,7 +107,11 @@ fn embedded_packages_validate_and_views_hide_answers() {
                     assert!(!view.contains(secret.as_str()), "{} leaks {secret}", s.id);
                 }
                 // A solution may restate a visible option; that's not a leak.
-                for b in s.solution.iter().filter(|b| !s.options.iter().any(|o| o.text == b.text)) {
+                for b in s
+                    .solution
+                    .iter()
+                    .filter(|b| !s.options.iter().any(|o| o.text == b.text))
+                {
                     assert!(!view.contains(&b.text), "{} leaks its solution", s.id);
                 }
                 assert!(!view.contains("\"key\""));
@@ -113,7 +136,12 @@ fn catalog_lists_planned_tracks_without_fake_lessons() {
 #[tokio::test]
 async fn fresh_learner_is_untested_and_starts_with_the_placement_check() {
     let f = Fixture::new();
-    for o in ["rust.move", "rust.copy", "rust.borrow-shared", "rust.borrow-mut"] {
+    for o in [
+        "rust.move",
+        "rust.copy",
+        "rust.borrow-shared",
+        "rust.borrow-mut",
+    ] {
         assert_eq!(f.state(o), "untested");
     }
     assert_eq!(f.engine.next("rust-systems").unwrap()["kind"], "diagnostic");
@@ -127,15 +155,32 @@ async fn diagnostic_skips_items_whose_prerequisite_failed() {
     assert_eq!(start["step"]["id"], "d-move");
     assert_eq!(start["step"]["hint_count"], 0);
     // Wrong on moves: the shared-borrow item depends on it and must be skipped.
-    let g = f.engine.diagnostic_attempt(&id, f.req(Some("d-move"), json!({"choice": ["a"]}))).await.unwrap();
+    let g = f
+        .engine
+        .diagnostic_attempt(&id, f.req(Some("d-move"), json!({"choice": ["a"]})))
+        .await
+        .unwrap();
     assert_eq!(g["result"], "incorrect");
     assert_eq!(g["next"]["id"], "d-copy");
-    let g = f.engine.diagnostic_attempt(&id, f.req(Some("d-copy"), json!({"choice": ["yes"]}))).await.unwrap();
+    let g = f
+        .engine
+        .diagnostic_attempt(&id, f.req(Some("d-copy"), json!({"choice": ["yes"]})))
+        .await
+        .unwrap();
     assert_eq!(g["next"]["id"], "d-mut");
-    let g = f.engine.diagnostic_attempt(&id, f.req(Some("d-mut"), json!({"text": ""}))).await.unwrap();
+    let g = f
+        .engine
+        .diagnostic_attempt(&id, f.req(Some("d-mut"), json!({"text": ""})))
+        .await
+        .unwrap();
     assert_eq!(g["done"], true);
     let report = f.engine.diagnostic_report(&id).unwrap();
-    assert!(report["untested"].as_array().unwrap().contains(&json!("rust.borrow-shared")));
+    assert!(
+        report["untested"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("rust.borrow-shared"))
+    );
     assert_eq!(f.state("rust.copy"), "provisional");
     assert_eq!(f.state("rust.move"), "weak");
     assert_eq!(f.state("rust.borrow-shared"), "untested");
@@ -146,22 +191,39 @@ async fn hinted_pass_is_assisted_and_never_certifies() {
     let f = Fixture::new();
     let l = "rust-own-move";
     f.lesson(l, "intro", Value::Null).await;
-    let hint = f.engine.hint(sail_arena_learn::courses::Context::Lesson, l, Some("predict-move")).await.unwrap();
+    let hint = f
+        .engine
+        .hint(
+            sail_arena_learn::courses::Context::Lesson,
+            l,
+            Some("predict-move"),
+        )
+        .await
+        .unwrap();
     assert_eq!(hint["level"], 1);
     let g = f.lesson(l, "predict-move", json!({"choice": ["c"]})).await;
     assert_eq!(g["result"], "correct");
     assert_eq!(g["assistance_state"], "hinted");
     assert_eq!(g["provisional_vs_retained"], "none");
     // The fill-clone step is the only other rust.move evidence: reveal it, then answer it.
-    f.lesson(l, "copy-types", json!({"choice": ["i32", "bool", "tuple", "str-ref"]})).await;
+    f.lesson(
+        l,
+        "copy-types",
+        json!({"choice": ["i32", "bool", "tuple", "str-ref"]}),
+    )
+    .await;
     f.engine.reveal(l, "fill-clone").await.unwrap();
     let g = f.lesson(l, "fill-clone", json!({"text": "clone"})).await;
     assert_eq!(g["assistance_state"], "solution_seen");
     f.lesson(l, "predict-copy", json!({"choice": ["a"]})).await;
     // A wrong answer then a right retry, independent: rust.move gets one independent pass.
-    let g = f.lesson(l, "predict-fn-move", json!({"choice": ["a"]})).await;
+    let g = f
+        .lesson(l, "predict-fn-move", json!({"choice": ["a"]}))
+        .await;
     assert_eq!(g["gate_decision"], "retry");
-    let g = f.lesson(l, "predict-fn-move", json!({"choice": ["b"]})).await;
+    let g = f
+        .lesson(l, "predict-fn-move", json!({"choice": ["b"]}))
+        .await;
     assert_eq!(g["assistance_state"], "independent");
     assert_eq!(f.state("rust.copy"), "provisional");
 }
@@ -173,7 +235,10 @@ async fn assisted_only_objective_blocks_certification() {
     f.lesson(l, "intro", Value::Null).await;
     for (step, ans) in [
         ("predict-move", json!({"choice": ["c"]})),
-        ("copy-types", json!({"choice": ["i32", "bool", "tuple", "str-ref"]})),
+        (
+            "copy-types",
+            json!({"choice": ["i32", "bool", "tuple", "str-ref"]}),
+        ),
         ("fill-clone", json!({"text": "clone"})),
         ("predict-copy", json!({"choice": ["a"]})),
         ("predict-fn-move", json!({"choice": ["b"]})),
@@ -186,7 +251,12 @@ async fn assisted_only_objective_blocks_certification() {
     assert_eq!(f.state("rust.move"), "assisted");
     let adv = f.engine.advance(l).await.unwrap();
     assert_eq!(adv["certified"], false);
-    assert!(adv["gate_reasons"][0].as_str().unwrap().contains("without help"));
+    assert!(
+        adv["gate_reasons"][0]
+            .as_str()
+            .unwrap()
+            .contains("without help")
+    );
 }
 
 #[tokio::test]
@@ -197,17 +267,35 @@ async fn independent_today_is_provisional_then_delayed_unseen_pass_is_retained()
     let adv = f.engine.advance("rust-own-move").await.unwrap();
     assert_eq!(adv["certified"], true);
     // Same day: nothing is due, and a review can't be taken early.
-    assert_eq!(f.engine.reviews_due("rust-systems").unwrap()["items"], json!([]));
-    assert!(f.engine.review_attempt("r-move-struct", f.req(None, json!({"choice": ["b"]}))).await.is_err());
+    assert_eq!(
+        f.engine.reviews_due("rust-systems").unwrap()["items"],
+        json!([])
+    );
+    assert!(
+        f.engine
+            .review_attempt("r-move-struct", f.req(None, json!({"choice": ["b"]})))
+            .await
+            .is_err()
+    );
 
     f.advance_days(1);
     assert_eq!(f.state("rust.move"), "due");
     let due = f.engine.reviews_due("rust-systems").unwrap();
     let items = due["items"].as_array().unwrap();
-    let mv = items.iter().find(|i| i["objective_id"] == "rust.move").unwrap();
+    let mv = items
+        .iter()
+        .find(|i| i["objective_id"] == "rust.move")
+        .unwrap();
     let review_id = mv["id"].as_str().unwrap().to_string();
-    assert!(review_id.starts_with("r-move"), "unseen variant for rust.move, got {review_id}");
-    let g = f.engine.review_attempt(&review_id, f.req(None, json!({"choice": ["b"]}))).await.unwrap();
+    assert!(
+        review_id.starts_with("r-move"),
+        "unseen variant for rust.move, got {review_id}"
+    );
+    let g = f
+        .engine
+        .review_attempt(&review_id, f.req(None, json!({"choice": ["b"]})))
+        .await
+        .unwrap();
     assert_eq!(g["result"], "correct");
     assert_eq!(f.state("rust.move"), "retained");
     assert_eq!(g["provisional_vs_retained"], "retained");
@@ -224,10 +312,18 @@ async fn due_reviews_block_certified_advance_server_side() {
     f.lesson(l, "intro", Value::Null).await;
     f.lesson(l, "predict-lend", json!({"choice": ["a"]})).await;
     f.lesson(l, "which-line", json!({"choice": ["l4"]})).await;
-    f.lesson(l, "order-mut", json!({"order": ["decl", "borrow", "add", "print"]})).await;
-    let g = f.lesson(l, "fix-borrow", json!({"code": "fn main() {}"})).await;
+    f.lesson(
+        l,
+        "order-mut",
+        json!({"order": ["decl", "borrow", "add", "print"]}),
+    )
+    .await;
+    let g = f
+        .lesson(l, "fix-borrow", json!({"code": "fn main() {}"}))
+        .await;
     assert_eq!(g["result"], "unavailable");
-    f.lesson(l, "predict-two-mut", json!({"choice": ["a"]})).await;
+    f.lesson(l, "predict-two-mut", json!({"choice": ["a"]}))
+        .await;
     let adv = f.engine.advance(l).await.unwrap();
     assert_eq!(adv["gate_decision"], "blocked_by_review");
     assert_eq!(adv["certified"], false);
@@ -241,18 +337,43 @@ async fn delayed_failure_is_weak_and_rescheduled_not_green() {
     f.pass_lesson_one().await;
     f.advance_days(1);
     let due = f.engine.reviews_due("rust-systems").unwrap();
-    let mv = due["items"].as_array().unwrap().iter().find(|i| i["objective_id"] == "rust.move").unwrap().clone();
-    let g = f.engine.review_attempt(mv["id"].as_str().unwrap(), f.req(None, json!({"choice": ["a"]}))).await.unwrap();
+    let mv = due["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["objective_id"] == "rust.move")
+        .unwrap()
+        .clone();
+    let g = f
+        .engine
+        .review_attempt(
+            mv["id"].as_str().unwrap(),
+            f.req(None, json!({"choice": ["a"]})),
+        )
+        .await
+        .unwrap();
     assert_eq!(g["result"], "incorrect");
     assert_eq!(f.state("rust.move"), "weak");
     let ev = f.engine.evidence("rust-systems").unwrap();
-    let o = ev["objectives"].as_array().unwrap().iter().find(|o| o["objective_id"] == "rust.move").unwrap().clone();
+    let o = ev["objectives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["objective_id"] == "rust.move")
+        .unwrap()
+        .clone();
     assert!(o["retention_due_at"].is_string());
     assert!(o["last_delayed_success"].is_null());
     // Next day: a different variant is offered.
     f.advance_days(1);
     let due = f.engine.reviews_due("rust-systems").unwrap();
-    let again = due["items"].as_array().unwrap().iter().find(|i| i["objective_id"] == "rust.move").unwrap().clone();
+    let again = due["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["objective_id"] == "rust.move")
+        .unwrap()
+        .clone();
     assert_ne!(again["id"], mv["id"]);
 }
 
@@ -265,9 +386,21 @@ async fn backlog_gate_opens_after_a_bounded_session() {
     assert!(due["catch_up"]["total_due"].as_u64().unwrap() >= 1);
     for item in due["items"].as_array().unwrap() {
         // Wrong answers still finish the session: the gate must not starve the learner.
-        f.engine.review_attempt(item["id"].as_str().unwrap(), f.req(None, json!({"choice": ["zz"]}))).await.ok();
+        f.engine
+            .review_attempt(
+                item["id"].as_str().unwrap(),
+                f.req(None, json!({"choice": ["zz"]})),
+            )
+            .await
+            .ok();
         let any = item["step"]["options"][0]["id"].clone();
-        f.engine.review_attempt(item["id"].as_str().unwrap(), f.req(None, json!({"choice": [any]}))).await.unwrap();
+        f.engine
+            .review_attempt(
+                item["id"].as_str().unwrap(),
+                f.req(None, json!({"choice": [any]})),
+            )
+            .await
+            .unwrap();
     }
     let after = f.engine.reviews_due("rust-systems").unwrap();
     assert_eq!(after["items"], json!([]));
@@ -280,11 +413,21 @@ async fn attempts_are_idempotent_by_attempt_id() {
         "step_id": "predict-move", "attempt_id": "same-1", "answer": {"choice": ["c"]}
     }))
     .unwrap();
-    let a = f.engine.lesson_attempt("rust-own-move", req.clone()).await.unwrap();
+    let a = f
+        .engine
+        .lesson_attempt("rust-own-move", req.clone())
+        .await
+        .unwrap();
     let b = f.engine.lesson_attempt("rust-own-move", req).await.unwrap();
     assert_eq!(a, b);
     let ev = f.engine.evidence("rust-systems").unwrap();
-    let mv = ev["objectives"].as_array().unwrap().iter().find(|o| o["objective_id"] == "rust.move").unwrap().clone();
+    let mv = ev["objectives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["objective_id"] == "rust.move")
+        .unwrap()
+        .clone();
     assert_eq!(mv["independent_passes"], 1);
 }
 
@@ -293,10 +436,16 @@ async fn bad_answer_shape_is_a_client_error_not_a_wrong_answer() {
     let f = Fixture::new();
     let err = f
         .engine
-        .lesson_attempt("rust-own-move", f.req(Some("predict-move"), json!({"choice": ["nope"]})))
+        .lesson_attempt(
+            "rust-own-move",
+            f.req(Some("predict-move"), json!({"choice": ["nope"]})),
+        )
         .await
         .unwrap_err();
-    assert!(matches!(err, sail_arena_learn::courses::CourseError::Invalid(_)));
+    assert!(matches!(
+        err,
+        sail_arena_learn::courses::CourseError::Invalid(_)
+    ));
     assert_eq!(f.state("rust.move"), "untested");
 }
 
@@ -314,23 +463,50 @@ impl RustEvaluator for FakeSandbox {
 #[tokio::test]
 async fn rust_edit_is_graded_from_sandbox_output_only() {
     let ok = Fixture::with_rust(Arc::new(FakeSandbox {
-        run: RustRun::Compiled { exit_code: Some(0), stdout: "9 2\n".into(), diagnostics: vec![] },
+        run: RustRun::Compiled {
+            exit_code: Some(0),
+            stdout: "9 2\n".into(),
+            diagnostics: vec![],
+        },
     }));
-    let g = ok.lesson("rust-own-borrow", "fix-borrow", json!({"code": "fn main(){}"})).await;
+    let g = ok
+        .lesson(
+            "rust-own-borrow",
+            "fix-borrow",
+            json!({"code": "fn main(){}"}),
+        )
+        .await;
     assert_eq!(g["result"], "correct");
     assert_eq!(g["validator_kind"], "rustc");
 
     let fail = Fixture::with_rust(Arc::new(FakeSandbox {
         run: RustRun::CompileFailed {
-            diagnostics: vec![Diagnostic { line: 7, column: 21, level: "error".into(), message: "[E0308] mismatched types".into() }],
+            diagnostics: vec![Diagnostic {
+                line: 7,
+                column: 21,
+                level: "error".into(),
+                message: "[E0308] mismatched types".into(),
+            }],
         },
     }));
-    let g = fail.lesson("rust-own-borrow", "fix-borrow", json!({"code": "fn main(){}"})).await;
+    let g = fail
+        .lesson(
+            "rust-own-borrow",
+            "fix-borrow",
+            json!({"code": "fn main(){}"}),
+        )
+        .await;
     assert_eq!(g["result"], "incorrect");
     assert_eq!(g["feedback"]["diagnostics"][0]["line"], 7);
 
     let none = Fixture::new();
-    let g = none.lesson("rust-own-borrow", "fix-borrow", json!({"code": "fn main(){}"})).await;
+    let g = none
+        .lesson(
+            "rust-own-borrow",
+            "fix-borrow",
+            json!({"code": "fn main(){}"}),
+        )
+        .await;
     assert_eq!(g["result"], "unavailable");
     assert!(g["feedback"]["unavailable_reason"].is_string());
     assert_eq!(none.state("rust.borrow-shared"), "exposure");

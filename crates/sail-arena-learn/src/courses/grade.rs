@@ -169,10 +169,7 @@ pub fn grade_rust(step: &Step, run: &RustRun) -> Result<Graded, String> {
             (Verdict::Unavailable, fb)
         }
         RustRun::CompileFailed { diagnostics } => {
-            let mut fb = feedback(
-                "It doesn't compile yet. Read the first error.",
-                Vec::new(),
-            );
+            let mut fb = feedback("It doesn't compile yet. Read the first error.", Vec::new());
             fb.diagnostics = diagnostics.clone();
             (Verdict::Incorrect, fb)
         }
@@ -183,7 +180,10 @@ pub fn grade_rust(step: &Step, run: &RustRun) -> Result<Graded, String> {
         } => {
             let ok = *exit_code == Some(0) && stdout.trim_end() == expected.trim_end();
             let mut fb = if ok {
-                feedback("It compiles and prints the expected output.", step.correct.clone())
+                feedback(
+                    "It compiles and prints the expected output.",
+                    step.correct.clone(),
+                )
             } else if *exit_code != Some(0) {
                 feedback(
                     "It compiles, but the program didn't exit successfully.",

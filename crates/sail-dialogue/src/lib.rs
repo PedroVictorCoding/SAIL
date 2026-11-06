@@ -8,6 +8,7 @@ pub mod conversation_controller;
 mod conversation_controller_tests;
 pub mod dictation_http;
 mod execution;
+pub mod learn_courses_http;
 pub mod learn_http;
 pub mod live_context;
 pub mod memory_http;

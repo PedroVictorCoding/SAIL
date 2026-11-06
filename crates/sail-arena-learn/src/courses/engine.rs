@@ -105,9 +105,10 @@ impl CourseEngine {
             .iter()
             .find(|t| t.id == course_id)
             .ok_or_else(|| CourseError::NotFound(format!("No course named `{course_id}`.")))?;
-        track.package.as_ref().ok_or_else(|| {
-            CourseError::Conflict(format!("{} has no lessons yet.", track.title))
-        })
+        track
+            .package
+            .as_ref()
+            .ok_or_else(|| CourseError::Conflict(format!("{} has no lessons yet.", track.title)))
     }
 
     fn lesson(&self, lesson_id: &str) -> Result<(&CoursePackage, &Lesson)> {
@@ -179,7 +180,9 @@ impl CourseEngine {
         let now = self.now();
         let summary = self.course_summary(track, &events, now);
         let Some(p) = &track.package else {
-            return Ok(json!({ "course": summary, "objectives": [], "chapters": [], "diagnostic": null }));
+            return Ok(
+                json!({ "course": summary, "objectives": [], "chapters": [], "diagnostic": null }),
+            );
         };
         let chapters: Vec<Value> = p
             .chapters
@@ -224,7 +227,9 @@ impl CourseEngine {
     }
 
     fn next_for(&self, p: &CoursePackage, events: &[Stored], now: i64) -> Value {
-        if p.diagnostic.is_some() && open_or_last_diagnostic(&p.id, events).is_none_or(|(_, done)| !done) {
+        if p.diagnostic.is_some()
+            && open_or_last_diagnostic(&p.id, events).is_none_or(|(_, done)| !done)
+        {
             return json!({
                 "kind": "diagnostic",
                 "reasons": ["A short cold check finds where to start. Nothing counts as known without a real answer."],
@@ -260,8 +265,16 @@ impl CourseEngine {
         let (p, l) = self.lesson(lesson_id)?;
         let events = self.store.events()?;
         let done = completed_steps(l, &events);
-        let current = l.steps.iter().find(|s| !done.contains(&s.id)).map(|s| s.id.clone());
-        let steps: Vec<Value> = l.steps.iter().map(|s| label(&s.view(&l.id, true))).collect();
+        let current = l
+            .steps
+            .iter()
+            .find(|s| !done.contains(&s.id))
+            .map(|s| s.id.clone());
+        let steps: Vec<Value> = l
+            .steps
+            .iter()
+            .map(|s| label(&s.view(&l.id, true)))
+            .collect();
         Ok(json!({
             "lesson": {
                 "id": l.id, "course_id": p.id, "version": p.version, "title": l.title,
@@ -284,26 +297,41 @@ impl CourseEngine {
         let step = l
             .step(&step_id)
             .ok_or_else(|| CourseError::NotFound(format!("No step `{step_id}` in this lesson.")))?;
-        self.attempt(p, Context::Lesson, &l.id, step, Some(l), req).await
+        self.attempt(p, Context::Lesson, &l.id, step, Some(l), req)
+            .await
     }
 
-    pub async fn hint(&self, context: Context, context_id: &str, step_id: Option<&str>) -> Result<Value> {
+    pub async fn hint(
+        &self,
+        context: Context,
+        context_id: &str,
+        step_id: Option<&str>,
+    ) -> Result<Value> {
         let (p, step) = match context {
             Context::Lesson => {
                 let (p, l) = self.lesson(context_id)?;
-                let id = step_id.ok_or_else(|| CourseError::Invalid("`step_id` is required.".into()))?;
-                (p, l.step(id).ok_or_else(|| CourseError::NotFound(format!("No step `{id}`.")))?)
+                let id =
+                    step_id.ok_or_else(|| CourseError::Invalid("`step_id` is required.".into()))?;
+                (
+                    p,
+                    l.step(id)
+                        .ok_or_else(|| CourseError::NotFound(format!("No step `{id}`.")))?,
+                )
             }
             Context::Review => self.review(context_id)?,
             Context::Diagnostic => {
-                return Err(CourseError::Conflict("The placement check has no hints.".into()));
+                return Err(CourseError::Conflict(
+                    "The placement check has no hints.".into(),
+                ));
             }
         };
         let _guard = self.write.lock().await;
         let events = self.store.events()?;
         let used = evidence::hints_used(&events, context, context_id, &step.id);
         if usize::from(used) >= step.hints.len() {
-            return Err(CourseError::Conflict("There are no more hints for this step.".into()));
+            return Err(CourseError::Conflict(
+                "There are no more hints for this step.".into(),
+            ));
         }
         let level = used + 1;
         self.store.append(
@@ -332,7 +360,9 @@ impl CourseEngine {
             .step(step_id)
             .ok_or_else(|| CourseError::NotFound(format!("No step `{step_id}`.")))?;
         if !step.scored() {
-            return Err(CourseError::Invalid("This step has no solution to reveal.".into()));
+            return Err(CourseError::Invalid(
+                "This step has no solution to reveal.".into(),
+            ));
         }
         let _guard = self.write.lock().await;
         self.store.append(
@@ -355,7 +385,9 @@ impl CourseEngine {
         let events = self.store.events()?;
         let now = self.now();
         if lesson_state(l, &events) != "completed" {
-            return Err(CourseError::Conflict("Finish every step of this lesson first.".into()));
+            return Err(CourseError::Conflict(
+                "Finish every step of this lesson first.".into(),
+            ));
         }
         let queue = evidence::due_queue(p, &events, now);
         let due = self.review_items(p, &queue);
@@ -364,11 +396,20 @@ impl CourseEngine {
                 "Review required before the next certified unit: {} objective(s) are due. You can still read any lesson.",
                 queue.total_due
             )];
-            reasons.extend(queue.items.iter().map(|i| format!("{}: {}", i.objective_title, i.reason)));
-            return Ok(json!({ "gate_decision": "blocked_by_review", "gate_reasons": reasons, "certified": false, "due": due }));
+            reasons.extend(
+                queue
+                    .items
+                    .iter()
+                    .map(|i| format!("{}: {}", i.objective_title, i.reason)),
+            );
+            return Ok(
+                json!({ "gate_decision": "blocked_by_review", "gate_reasons": reasons, "certified": false, "due": due }),
+            );
         }
         if certified(&p.id, &l.id, &events) {
-            return Ok(json!({ "gate_decision": "continue", "gate_reasons": ["This lesson is already certified."], "certified": true, "due": due }));
+            return Ok(
+                json!({ "gate_decision": "continue", "gate_reasons": ["This lesson is already certified."], "certified": true, "due": due }),
+            );
         }
         let projected = evidence::project(p, &events, now);
         let mut reasons = Vec::new();
@@ -383,7 +424,9 @@ impl CourseEngine {
             }
         }
         if !reasons.is_empty() {
-            return Ok(json!({ "gate_decision": "continue", "gate_reasons": reasons, "certified": false, "due": due }));
+            return Ok(
+                json!({ "gate_decision": "continue", "gate_reasons": reasons, "certified": false, "due": due }),
+            );
         }
         self.store.append(
             now,
@@ -407,7 +450,9 @@ impl CourseEngine {
     pub async fn diagnostic_start(&self, course_id: &str) -> Result<Value> {
         let p = self.package(course_id)?;
         if p.diagnostic.is_none() {
-            return Err(CourseError::Conflict("This course has no placement check.".into()));
+            return Err(CourseError::Conflict(
+                "This course has no placement check.".into(),
+            ));
         }
         let _guard = self.write.lock().await;
         let events = self.store.events()?;
@@ -417,7 +462,10 @@ impl CourseEngine {
                 let id = format!("diag-{}", uuid::Uuid::new_v4().simple());
                 self.store.append(
                     self.now(),
-                    &CourseEvent::DiagnosticStarted { id: id.clone(), course_id: p.id.clone() },
+                    &CourseEvent::DiagnosticStarted {
+                        id: id.clone(),
+                        course_id: p.id.clone(),
+                    },
                     None,
                 )?;
                 id
@@ -425,7 +473,9 @@ impl CourseEngine {
         };
         let events = self.store.events()?;
         let next = self.diagnostic_next(p, &id, &events)?;
-        Ok(json!({ "id": id, "step": next.map(|s| label(&s.view(&id, false))), "done": next.is_none() }))
+        Ok(
+            json!({ "id": id, "step": next.map(|s| label(&s.view(&id, false))), "done": next.is_none() }),
+        )
     }
 
     fn diagnostic_course(&self, id: &str) -> Result<&CoursePackage> {
@@ -433,7 +483,9 @@ impl CourseEngine {
         let course = events
             .iter()
             .find_map(|s| match &s.event {
-                CourseEvent::DiagnosticStarted { id: d, course_id } if d == id => Some(course_id.clone()),
+                CourseEvent::DiagnosticStarted { id: d, course_id } if d == id => {
+                    Some(course_id.clone())
+                }
                 _ => None,
             })
             .ok_or_else(|| CourseError::NotFound(format!("No placement check `{id}`.")))?;
@@ -442,8 +494,15 @@ impl CourseEngine {
 
     /// The next unanswered item. An item is skipped (and stays untested) when a
     /// prerequisite objective was answered wrongly earlier in this check.
-    fn diagnostic_next<'a>(&self, p: &'a CoursePackage, id: &str, events: &[Stored]) -> Result<Option<&'a Step>> {
-        let Some(d) = &p.diagnostic else { return Ok(None) };
+    fn diagnostic_next<'a>(
+        &self,
+        p: &'a CoursePackage,
+        id: &str,
+        events: &[Stored],
+    ) -> Result<Option<&'a Step>> {
+        let Some(d) = &p.diagnostic else {
+            return Ok(None);
+        };
         let mut answered = std::collections::BTreeSet::new();
         let mut failed = std::collections::BTreeSet::new();
         for s in events {
@@ -472,25 +531,45 @@ impl CourseEngine {
             return Ok(prior);
         }
         let events = self.store.events()?;
-        if events.iter().any(|s| matches!(&s.event, CourseEvent::DiagnosticFinished { id: d } if d == id)) {
-            return Err(CourseError::Conflict("This placement check is finished.".into()));
+        if events
+            .iter()
+            .any(|s| matches!(&s.event, CourseEvent::DiagnosticFinished { id: d } if d == id))
+        {
+            return Err(CourseError::Conflict(
+                "This placement check is finished.".into(),
+            ));
         }
-        let step = self
-            .diagnostic_next(p, id, &events)?
-            .ok_or_else(|| CourseError::Conflict("This placement check has no open question.".into()))?;
+        let step = self.diagnostic_next(p, id, &events)?.ok_or_else(|| {
+            CourseError::Conflict("This placement check has no open question.".into())
+        })?;
         if req.step_id.as_deref() != Some(step.id.as_str()) {
-            return Err(CourseError::Conflict(format!("Answer the current question, `{}`.", step.id)));
+            return Err(CourseError::Conflict(format!(
+                "Answer the current question, `{}`.",
+                step.id
+            )));
         }
-        let mut grade = self.attempt(p, Context::Diagnostic, id, step, None, req).await?;
+        let mut grade = self
+            .attempt(p, Context::Diagnostic, id, step, None, req)
+            .await?;
         let _guard = self.write.lock().await;
         let events = self.store.events()?;
         let next = self.diagnostic_next(p, id, &events)?;
         if next.is_none() {
-            self.store.append(self.now(), &CourseEvent::DiagnosticFinished { id: id.to_string() }, None)?;
+            self.store.append(
+                self.now(),
+                &CourseEvent::DiagnosticFinished { id: id.to_string() },
+                None,
+            )?;
         }
-        grade["next"] = next.map(|s| label(&s.view(id, false))).unwrap_or(Value::Null);
+        grade["next"] = next
+            .map(|s| label(&s.view(id, false)))
+            .unwrap_or(Value::Null);
         grade["done"] = json!(next.is_none());
-        grade["gate_decision"] = json!(if next.is_none() { "lesson_complete" } else { "continue" });
+        grade["gate_decision"] = json!(if next.is_none() {
+            "lesson_complete"
+        } else {
+            "continue"
+        });
         grade["next_step_id"] = next.map(|s| json!(s.id)).unwrap_or(Value::Null);
         Ok(grade)
     }
@@ -504,7 +583,10 @@ impl CourseEngine {
             .filter(|e| e.not_assessed)
             .map(|e| e.objective_id.as_str())
             .collect();
-        let independent = projected.iter().filter(|e| e.independent_passes > 0).count();
+        let independent = projected
+            .iter()
+            .filter(|e| e.independent_passes > 0)
+            .count();
         let summary = format!(
             "{} of {} objectives have a checked answer; {} passed without help. Untested objectives stay untested: SAIL doesn't guess.",
             projected.len() - untested.len(),
@@ -558,9 +640,12 @@ impl CourseEngine {
         let events = self.store.events()?;
         let queue = evidence::due_queue(p, &events, self.now());
         if !queue.items.iter().any(|i| i.step_id == step.id) {
-            return Err(CourseError::Conflict("This review isn't due right now.".into()));
+            return Err(CourseError::Conflict(
+                "This review isn't due right now.".into(),
+            ));
         }
-        self.attempt(p, Context::Review, &step.id, step, None, req).await
+        self.attempt(p, Context::Review, &step.id, step, None, req)
+            .await
     }
 
     pub fn evidence(&self, course_id: &str) -> Result<Value> {
@@ -576,7 +661,10 @@ impl CourseEngine {
 
     fn replay(&self, attempt_id: &str) -> Result<Option<Value>> {
         Ok(match self.store.by_attempt_key(attempt_id)? {
-            Some(Stored { event: CourseEvent::Attempt(a), .. }) => Some(a.response),
+            Some(Stored {
+                event: CourseEvent::Attempt(a),
+                ..
+            }) => Some(a.response),
             Some(_) => Some(json!({ "result": "correct", "replayed": true })),
             None => None,
         })
@@ -592,8 +680,13 @@ impl CourseEngine {
         req: AttemptRequest,
     ) -> Result<Value> {
         let id = req.attempt_id.trim();
-        if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return Err(CourseError::Invalid("`attempt_id` must be 1–64 letters, digits or dashes.".into()));
+        if id.is_empty()
+            || id.len() > 64
+            || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Err(CourseError::Invalid(
+                "`attempt_id` must be 1–64 letters, digits or dashes.".into(),
+            ));
         }
         let _guard = self.write.lock().await;
         if let Some(prior) = self.replay(id)? {
@@ -605,7 +698,9 @@ impl CourseEngine {
 
         if step.kind == StepKind::Explain {
             if req.answer.is_some() {
-                return Err(CourseError::Invalid("An explanation step takes `answer: null`.".into()));
+                return Err(CourseError::Invalid(
+                    "An explanation step takes `answer: null`.".into(),
+                ));
             }
             let event = CourseEvent::Exposure {
                 course_id: p.id.clone(),
@@ -614,7 +709,11 @@ impl CourseEngine {
                 objective_ids: step.objective_ids.clone(),
             };
             self.store.append(now, &event, Some(id))?;
-            events.push(Stored { seq: revision, at_ms: now, event });
+            events.push(Stored {
+                seq: revision,
+                at_ms: now,
+                event,
+            });
             let next = lesson.and_then(|l| next_step(l, &events));
             return Ok(json!({
                 "result": "correct", "evidence_id": format!("exp-{id}"),
@@ -634,12 +733,20 @@ impl CourseEngine {
             .ok_or_else(|| CourseError::Invalid("`answer` is required for this step.".into()))?;
         let graded: Graded = if step.kind == StepKind::RustEdit {
             let Answer::Code(code) = answer else {
-                return Err(CourseError::Invalid("This step takes `{\"code\": …}`.".into()));
+                return Err(CourseError::Invalid(
+                    "This step takes `{\"code\": …}`.".into(),
+                ));
             };
             if code.len() > grade::MAX_CODE {
-                return Err(CourseError::Invalid(format!("Code is limited to {} bytes.", grade::MAX_CODE)));
+                return Err(CourseError::Invalid(format!(
+                    "Code is limited to {} bytes.",
+                    grade::MAX_CODE
+                )));
             }
-            let limits = step.limits.unwrap_or(RunLimits { wall_ms: 20_000, mem_mb: 512 });
+            let limits = step.limits.unwrap_or(RunLimits {
+                wall_ms: 20_000,
+                mem_mb: 512,
+            });
             let run = self.rust.run(code, limits).await;
             grade::grade_rust(step, &run).map_err(CourseError::Invalid)?
         } else {
@@ -668,7 +775,11 @@ impl CourseEngine {
             confidence: req.confidence,
             response: Value::Null,
         };
-        events.push(Stored { seq: revision, at_ms: now, event: CourseEvent::Attempt(record.clone()) });
+        events.push(Stored {
+            seq: revision,
+            at_ms: now,
+            event: CourseEvent::Attempt(record.clone()),
+        });
         let projected = evidence::project(p, &events, now);
         let mine: Vec<_> = projected
             .iter()
@@ -685,10 +796,20 @@ impl CourseEngine {
         let next = lesson.and_then(|l| next_step(l, &events));
         let (decision, mut reasons) = gate_for(context, graded.verdict, next.is_some());
         if graded.verdict == Verdict::Correct && assistance != Assistance::Independent {
-            reasons.push("You used help, so this counts as assisted. A fresh problem will check it later.".into());
+            reasons.push(
+                "You used help, so this counts as assisted. A fresh problem will check it later."
+                    .into(),
+            );
         }
-        if context == Context::Review && graded.verdict == Verdict::Correct && assistance == Assistance::Independent && standing != "retained" {
-            reasons.push("Passed. It counts as retained once it holds on a new problem after a delay.".into());
+        if context == Context::Review
+            && graded.verdict == Verdict::Correct
+            && assistance == Assistance::Independent
+            && standing != "retained"
+        {
+            reasons.push(
+                "Passed. It counts as retained once it holds on a new problem after a delay."
+                    .into(),
+            );
         }
         let response = json!({
             "result": label(&graded.verdict),
@@ -706,7 +827,8 @@ impl CourseEngine {
             "policy_version": evidence::POLICY_VERSION,
         });
         record.response = response.clone();
-        self.store.append(now, &CourseEvent::Attempt(record), Some(id))?;
+        self.store
+            .append(now, &CourseEvent::Attempt(record), Some(id))?;
         Ok(response)
     }
 }
@@ -732,7 +854,9 @@ fn completed_steps(l: &Lesson, events: &[Stored]) -> std::collections::BTreeSet<
     let mut done = std::collections::BTreeSet::new();
     for s in events {
         match &s.event {
-            CourseEvent::Exposure { lesson_id, step_id, .. } if lesson_id == &l.id => {
+            CourseEvent::Exposure {
+                lesson_id, step_id, ..
+            } if lesson_id == &l.id => {
                 done.insert(step_id.clone());
             }
             CourseEvent::Attempt(a)
@@ -750,7 +874,10 @@ fn completed_steps(l: &Lesson, events: &[Stored]) -> std::collections::BTreeSet<
 
 fn next_step(l: &Lesson, events: &[Stored]) -> Option<String> {
     let done = completed_steps(l, events);
-    l.steps.iter().find(|s| !done.contains(&s.id)).map(|s| s.id.clone())
+    l.steps
+        .iter()
+        .find(|s| !done.contains(&s.id))
+        .map(|s| s.id.clone())
 }
 
 fn lesson_state(l: &Lesson, events: &[Stored]) -> &'static str {
