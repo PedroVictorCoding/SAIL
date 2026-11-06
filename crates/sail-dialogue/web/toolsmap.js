@@ -104,7 +104,9 @@
   }
   function logo() {
     const s = svg('svg', {class: 'tm-logo-mark', viewBox: '0 0 32 32', 'aria-hidden': 'true'});
-    s.append(svg('path', {d: 'M16 3L29 28H21.5L16 16.5 10.5 28H3z', fill: 'currentColor'}));
+    // SAIL's mark: the nabla (∇), the gradient operator. A filled triangle with a cut-out,
+    // heavy on the left like Computer Modern's \nabla.
+    s.append(svg('path', {d: 'M3 3.5H29L16 28.5Z M11.8 7.5H23.5L17.7 18.7Z', 'fill-rule': 'evenodd', fill: 'currentColor'}));
     return s;
   }
   function bytes(b, unit) {
