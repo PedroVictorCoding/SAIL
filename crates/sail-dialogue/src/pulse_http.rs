@@ -100,6 +100,9 @@ struct CreateRequest {
     due_at: String,
     timezone: String,
     utc_offset_minutes: i32,
+    /// Optional same-origin destination to open from the reminder.
+    #[serde(default)]
+    link: Option<String>,
 }
 
 fn parse_due(value: &str) -> Result<DateTime<Utc>, (StatusCode, Json<Value>)> {
@@ -121,6 +124,7 @@ async fn create(
         request.timezone,
         request.utc_offset_minutes,
     )
+    .and_then(|new| new.with_link(request.link))
     .map_err(failure)?;
     let reminder = state.pulse.create(new).map_err(failure)?;
     Ok(Json(json!({"reminder": reminder})))

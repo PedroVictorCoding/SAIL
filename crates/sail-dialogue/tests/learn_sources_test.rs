@@ -180,6 +180,10 @@ async fn practice_hints_conclusion_imports_and_reminders() {
         pulse.get(&reminder).unwrap().status,
         sail_pulse::ReminderStatus::Pending
     );
+    assert_eq!(
+        pulse.get(&reminder).unwrap().link.as_deref(),
+        Some("#arena?practice=Congestion%20control")
+    );
     let (status, cancelled) =
         send(reqwest::Client::new().delete(format!("{base}/sessions/{id}/review"))).await;
     assert_eq!(

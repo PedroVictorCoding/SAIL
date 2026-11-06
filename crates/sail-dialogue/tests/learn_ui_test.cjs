@@ -82,6 +82,16 @@ test('practice outcomes are described without mastery or scores', () => {
   }
 });
 
+test('practice reminders carry the topic into a new practice session', () => {
+  assert.equal(ui.learnPracticeLink('#arena?practice=TCP%20congestion'), 'TCP congestion');
+  assert.equal(ui.learnPracticeLink('#arena?practice=Congestion+control'), 'Congestion control');
+  assert.equal(ui.learnPracticeLink('#arena'), '');
+  assert.equal(ui.learnPracticeLink(''), '');
+  assert.equal(ui.learnPracticeLink('#other?practice=TCP'), '');
+  assert.equal(ui.learnPracticeLink('#arena?practice='), '');
+  assert.equal(ui.learnPracticeLink(`#arena?practice=${'x'.repeat(400)}`).length, 300);
+});
+
 test('LearnHarness confidence stop snapping, session filtering, and Sugiyama DAG layout work cleanly', () => {
   assert.equal(ui.learnSnapConfidence(0), 0);
   assert.equal(ui.learnSnapConfidence(22), 20);

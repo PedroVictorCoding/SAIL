@@ -182,6 +182,50 @@ fn invalid_inputs_are_rejected() {
 }
 
 #[test]
+fn reminder_links_are_same_origin_and_survive_reopen() {
+    let (path, dir) = temp_path();
+    let now = Utc::now();
+    let id = {
+        let pulse = Pulse::open(&path).unwrap();
+        let created = pulse
+            .create_at(
+                reminder("practise", now + Duration::hours(2))
+                    .with_link(Some("#arena?practice=Tcp%20windows"))
+                    .unwrap(),
+                now,
+            )
+            .unwrap();
+        assert_eq!(
+            created.link.as_deref(),
+            Some("#arena?practice=Tcp%20windows")
+        );
+        created.id
+    };
+    {
+        let pulse = Pulse::open(&path).unwrap();
+        assert_eq!(
+            pulse.get(&id).unwrap().link.as_deref(),
+            Some("#arena?practice=Tcp%20windows")
+        );
+    }
+    for bad in [
+        "https://example.com/learn",
+        "//evil.test/learn",
+        "javascript:alert(1)",
+        "/a b",
+        "/x\"y",
+    ] {
+        assert!(
+            reminder("x", now + Duration::hours(1))
+                .with_link(Some(bad))
+                .is_err(),
+            "accepted unsafe link {bad}"
+        );
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn quiet_window_wraps_midnight_and_defaults_are_safe() {
     let settings = PulseSettings {
         quiet_hours_enabled: true,

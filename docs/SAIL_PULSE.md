@@ -27,6 +27,11 @@ Life, Discovery, Sense, Core scheduler, Dialogue, Guardian.
 ## 5. UI and interaction mapping
 Existing reminders/focus controls and compact notifications; granular snooze and disable.
 
+A reminder may carry one optional same-origin destination (a `/path` or `#fragment`). The
+Pulse card renders it as an explicit open action; absolute URLs, schemes and
+protocol-relative links are rejected so a reminder cannot become an open redirect or a
+script URL. Arena Learn uses this to open a new practice session on the saved topic.
+
 Use the existing SAIL design: compact dark UI, contextual cards, ambient Orb, progressive disclosure, accessible keyboard/touch controls, and no permanent new tab unless justified by repeated user use. Show honest loading, empty, unavailable, permission-denied and reconnection states. Web and Android share one typed state model.
 
 ## 6. Security, privacy and resource limits
