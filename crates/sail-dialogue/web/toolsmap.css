@@ -173,11 +173,16 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-ask input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--tm-text); }
 .tm-ask input::placeholder { color: var(--tm-dim); }
 .tm-ask kbd { font: 11px ui-monospace, monospace; color: var(--tm-muted); padding: 2px 6px; border: 1px solid var(--tm-line); border-radius: 5px; background: var(--tm-panel-2); }
-.tm-indicators { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.tm-top-indicators { display: flex; align-items: center; gap: 8px; }
+.tm-indicators, #tmTopIndicators { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.tm-indicators .top-actions, #tmTopIndicators .top-actions { display: inline-flex; align-items: center; gap: 8px; }
+.tm-indicators .connection-pill, .tm-indicators .privacy-indicator,
+#tmTopIndicators .connection-pill, #tmTopIndicators .privacy-indicator,
 .tm-top-indicators .connection-pill, .tm-top-indicators .privacy-indicator { min-height: 32px; font-size: 11px; padding: 0 10px; }
-.tm-top-indicators .loading-indicator { min-height: 32px; }
-.tm-meters { list-style: none; display: flex; gap: 22px; margin: 0; padding: 0; }
+.tm-indicators .loading-indicator, #tmTopIndicators .loading-indicator,
+.tm-top-indicators .loading-indicator { min-height: 32px; font-size: 11px; padding: 0 10px; }
+.tm-indicators .loading-indicator progress, #tmTopIndicators .loading-indicator progress,
+.tm-top-indicators .loading-indicator progress { width: 44px; }
+.tm-meters { list-style: none; display: flex; gap: 22px; margin: 0; padding: 0; flex-shrink: 0; }
 .tm-meter { display: grid; gap: 2px; min-width: 70px; }
 .tm-meter-label { font-size: 11px; color: var(--tm-muted); }
 .tm-meter-value { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }

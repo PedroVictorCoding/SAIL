@@ -111,6 +111,15 @@ with sync_playwright() as p:
     cooldown = pg.evaluate("SailBackdrop.COOLDOWN_MS")
     pg.wait_for_timeout(cooldown + 200)
     pg.evaluate("__push({type:'session',session_id:'s1',learning:true,control:{is_muted:false,max_recording_ms:180000}})")
+    assert pg.evaluate("""() => {
+        const ind = document.getElementById('learningIndicator');
+        const conn = document.getElementById('connection');
+        const indStyle = getComputedStyle(ind);
+        const connStyle = getComputedStyle(conn);
+        return !ind.hidden && indStyle.color === 'rgb(23, 19, 11)' && indStyle.backgroundImage.includes('gradient')
+            && connStyle.color === 'rgb(23, 19, 11)' && connStyle.backgroundImage.includes('gradient')
+            && indStyle.borderRadius === '999px' && connStyle.borderRadius === '999px';
+    }"""), "fixed indicator buttons use live UI vibrant styling with dark ink on paper shader backdrop"
     pg.evaluate("__push({type:'turn_started',turn_id:1,epoch:1,transcript:'hi',state:'thinking'})")
     assert lit() == want("thinking"), "first change is immediate"
     pg.evaluate("__push({type:'tool_event',epoch:1,event:{tool:'fs_read',state:'executing'}})")

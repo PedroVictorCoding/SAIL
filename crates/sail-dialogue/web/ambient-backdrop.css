@@ -49,3 +49,89 @@ html.sail-backdrop-on {
     --ambient-one var(--sail-transition-state, 420ms) var(--sail-ease, ease), --ambient-two var(--sail-transition-state, 420ms) var(--sail-ease, ease), --ambient-three var(--sail-transition-state, 420ms) var(--sail-ease, ease);
 }
 @media (prefers-reduced-motion: reduce) { html.sail-backdrop-on { transition: none; } }
+
+/* Fixed indicator buttons with the paper shader: live UI with vibrant luminous
+   colour and dark ink (DESIGN.md, Library tiles composition). */
+html.sail-backdrop-on .connection-pill,
+html.sail-backdrop-on .privacy-indicator,
+html.sail-backdrop-on .loading-indicator {
+  --tile-ink: #17130b;
+  color: var(--tile-ink);
+  font-weight: 600;
+  border: 0;
+  border-radius: var(--radius-pill, 999px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: background var(--sail-transition-fast, 140ms) var(--sail-ease),
+              box-shadow var(--sail-transition-fast, 140ms) var(--sail-ease),
+              color var(--sail-transition-fast, 140ms) var(--sail-ease);
+}
+html.sail-backdrop-on .connection-pill i,
+html.sail-backdrop-on .privacy-indicator i {
+  background: var(--tile-ink);
+  color: var(--tile-ink);
+  box-shadow: none;
+}
+html.sail-backdrop-on .connection-pill.is-connected {
+  background: linear-gradient(150deg, #bdf5a0, #8fe27a);
+}
+html.sail-backdrop-on .connection-pill.is-disconnected {
+  background: linear-gradient(150deg, #ffe27a, #f6c945);
+}
+html.sail-backdrop-on .privacy-indicator {
+  background: linear-gradient(150deg, #ffc2c2, #f08a89);
+}
+html.sail-backdrop-on .privacy-indicator.rec-indicator {
+  background: linear-gradient(150deg, #ff9b9b, #ef4444);
+}
+html.sail-backdrop-on #micLiveIndicator {
+  background: linear-gradient(150deg, #a5f3fc, #38bdf8);
+}
+html.sail-backdrop-on .loading-indicator {
+  background: linear-gradient(150deg, #e9d5ff, #c084fc);
+}
+html.sail-backdrop-on .loading-indicator progress {
+  border-color: rgba(23, 19, 11, .3);
+  background: rgba(23, 19, 11, .15);
+}
+html.sail-backdrop-on .loading-indicator progress::-webkit-progress-bar {
+  background: rgba(23, 19, 11, .15);
+}
+html.sail-backdrop-on .loading-indicator progress::-webkit-progress-value {
+  background: #17130b;
+}
+html.sail-backdrop-on .loading-indicator progress::-moz-progress-bar {
+  background: #17130b;
+}
+html.sail-backdrop-on .loading-indicator #speechLoadValue,
+html.sail-backdrop-on .loading-indicator #modelLoadValue {
+  color: #17130b;
+}
+
+html.sail-backdrop-on .top-actions .icon-button {
+  background: rgba(255, 255, 255, .08);
+  border: 1px solid rgba(222, 238, 255, .16);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255, 255, 255, .15);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+html.sail-backdrop-on .top-actions .icon-button:hover {
+  background: rgba(255, 255, 255, .15);
+  border-color: rgba(222, 238, 255, .28);
+}
+
+@media (forced-colors: active) {
+  html.sail-backdrop-on .connection-pill,
+  html.sail-backdrop-on .privacy-indicator,
+  html.sail-backdrop-on .loading-indicator {
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+  html.sail-backdrop-on .connection-pill i,
+  html.sail-backdrop-on .privacy-indicator i {
+    background: CanvasText;
+  }
+}
