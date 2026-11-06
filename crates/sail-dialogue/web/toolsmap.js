@@ -320,11 +320,11 @@
     state.world = {minX, minY, W, H};
     svgRoot = svg('svg', {class: 'tm-svg', viewBox: `${minX} ${minY} ${W} ${H}`, width: W, height: H, 'aria-hidden': 'true'});
     svgRoot.append(svg('defs', {},
-      svg('pattern', {id: 'tmDots', width: 22, height: 22, patternUnits: 'userSpaceOnUse'}, svg('circle', {cx: 2, cy: 2, r: 1, fill: '#3a3f45'})),
+      svg('pattern', {id: 'tmDots', width: 22, height: 22, patternUnits: 'userSpaceOnUse'}, svg('circle', {cx: 2, cy: 2, r: 1, fill: 'rgba(222, 238, 255, 0.08)'})),
       svg('filter', {id: 'tmGlow', x: '-50%', y: '-50%', width: '200%', height: '200%'},
         svg('feGaussianBlur', {stdDeviation: '3', result: 'b'}),
         svg('feMerge', {}, svg('feMergeNode', {in: 'b'}), svg('feMergeNode', {in: 'SourceGraphic'}))),
-      svg('radialGradient', {id: 'tmHalo'}, svg('stop', {offset: 0, 'stop-color': '#ff8a32', 'stop-opacity': '.22'}), svg('stop', {offset: 1, 'stop-color': '#ff8a32', 'stop-opacity': '0'}))));
+      svg('radialGradient', {id: 'tmHalo'}, svg('stop', {offset: 0, 'stop-color': 'var(--sail-light-a, #496f9d)', 'stop-opacity': '.22'}), svg('stop', {offset: 1, 'stop-color': 'var(--sail-light-a, #496f9d)', 'stop-opacity': '0'}))));
     svgRoot.append(svg('rect', {x: minX, y: minY, width: W, height: H, fill: 'url(#tmDots)'}));
     const [hx, hy] = P(byId.core.gx, byId.core.gy, 0);
     svgRoot.append(svg('ellipse', {cx: hx, cy: hy, rx: 380, ry: 220, fill: 'url(#tmHalo)'}));
