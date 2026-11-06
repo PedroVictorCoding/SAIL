@@ -61,6 +61,7 @@ fn learn_services(
     inference: &sail_mind::MindService,
     arena: &Arc<sail_arena::ArenaSubsystem>,
     authority: Option<sail_guardian::authority::ApprovalAuthority>,
+    course_authority: Option<sail_guardian::authority::ApprovalAuthority>,
     pulse: Option<Arc<sail_pulse::Pulse>>,
 ) -> (Option<Arc<sail_arena_learn::Engine>>, Option<Router>) {
     use sail_arena_learn::{Engine, SqliteEventStore, agent::ArenaKnowledge, agent::MindModel};
@@ -74,7 +75,13 @@ fn learn_services(
                 Err(error) => warn!(%error, "Arena Learn graph unavailable; knowledge is disabled"),
             }
             let engine = Arc::new(engine);
-            let router = crate::learn_http::router_with_pulse(engine.clone(), authority, pulse);
+            let mut router = crate::learn_http::router_with_pulse(engine.clone(), authority, pulse);
+            match sail_arena_learn::courses::CourseStore::open(&path) {
+                Ok(courses) => router = router.merge(course_routes(courses, course_authority)),
+                Err(error) => {
+                    warn!(%error, "Interactive Courses store unavailable; courses disabled")
+                }
+            }
             (Some(engine), Some(router))
         }
         Err(error) => {
@@ -82,6 +89,21 @@ fn learn_services(
             (None, None)
         }
     }
+}
+
+/// Interactive Courses (#386). Learner Rust runs only through `sail-runner`; without it,
+/// Rust steps report `unavailable`.
+fn course_routes(
+    store: sail_arena_learn::courses::CourseStore,
+    authority: Option<sail_guardian::authority::ApprovalAuthority>,
+) -> Router {
+    use sail_arena_learn::courses::{CourseEngine, NoSandbox, RustEvaluator};
+    let rust: Arc<dyn RustEvaluator> =
+        match crate::learn_courses_http::RunnerRustEvaluator::from_env() {
+            Some(runner) => Arc::new(runner),
+            None => Arc::new(NoSandbox),
+        };
+    crate::learn_courses_http::router(Arc::new(CourseEngine::new(store, rust)), authority)
 }
 
 /// SAIL Tracker's owner API. The tracker is unavailable (and logged) if its store cannot be
@@ -144,7 +166,7 @@ pub async fn run_dialogue_server_with_plans(
     let live_context_authority = authority();
     let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
     let (learn_engine, learn_routes) =
-        learn_services(&inference, &arena, authority(), pulse.clone());
+        learn_services(&inference, &arena, authority(), authority(), pulse.clone());
     let tracker_routes = tracker_routes(authority());
     let reader_routes = crate::reader_http::routes(authority(), services.clone());
     let music_routes = crate::music_http::routes(authority());

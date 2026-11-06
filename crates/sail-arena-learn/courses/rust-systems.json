@@ -1,0 +1,544 @@
+{
+  "id": "rust-systems",
+  "version": "2026.11.1",
+  "title": "Rust & Systems Programming",
+  "domain": "rust",
+  "summary": "Ownership, borrowing and the type system, checked by the real compiler.",
+  "objectives": [
+    { "id": "rust.move", "title": "A non-Copy value moves on assignment", "prerequisites": [] },
+    { "id": "rust.copy", "title": "Copy types are duplicated, not moved", "prerequisites": [] },
+    { "id": "rust.borrow-shared", "title": "Shared references read without taking ownership", "prerequisites": ["rust.move"] },
+    { "id": "rust.borrow-mut", "title": "Only one mutable reference at a time", "prerequisites": ["rust.borrow-shared"] }
+  ],
+  "chapters": [
+    { "id": "ownership", "title": "Ownership and borrowing", "lessons": ["rust-own-move", "rust-own-borrow"] }
+  ],
+  "lessons": [
+    {
+      "id": "rust-own-move",
+      "title": "Who owns this String?",
+      "minutes": 5,
+      "objective_ids": ["rust.move", "rust.copy"],
+      "prerequisites": [],
+      "steps": [
+        {
+          "id": "intro",
+          "kind": "explain",
+          "title": "One owner at a time",
+          "objective_ids": ["rust.move"],
+          "body": [
+            { "kind": "p", "text": "Every value in Rust has exactly one owner. When the owner goes out of scope, the value is dropped." },
+            { "kind": "p", "text": "A String keeps its text on the heap. Writing `let b = a;` doesn't copy that text. It hands ownership from `a` to `b`, and `a` can't be used afterwards." },
+            { "kind": "note", "text": "Make a prediction before you check each answer. A wrong guess teaches you more than a lucky one." }
+          ]
+        },
+        {
+          "id": "predict-move",
+          "kind": "predict",
+          "family": "move-print",
+          "title": "What happens when this runs?",
+          "objective_ids": ["rust.move"],
+          "confidence": true,
+          "body": [{ "kind": "p", "text": "Read the program and predict what the compiler and the program do." }],
+          "code": "fn main() {\n    let route = String::from(\"north ridge\");\n    let saved = route;\n    println!(\"{route}\");\n}",
+          "options": [
+            { "id": "a", "text": "It prints `north ridge`." },
+            { "id": "b", "text": "It prints an empty line." },
+            { "id": "c", "text": "It doesn't compile: `route` was moved into `saved`." },
+            { "id": "d", "text": "It compiles, then panics at run time." }
+          ],
+          "key": { "choice": ["c"] },
+          "misconceptions": {
+            "a": "Assigning a String doesn't copy its heap text. Ownership moves to `saved`, so the compiler rejects the later use of `route`.",
+            "b": "Nothing runs. Rust finds the use of a moved value at compile time.",
+            "d": "Rust doesn't wait for run time here. The borrow checker rejects the program before it's built."
+          },
+          "hints": [
+            "Think about how many owners the text \"north ridge\" can have at once.",
+            "After `let saved = route;`, which variable owns the String?",
+            "Using a variable after its value has moved is a compile-time error (E0382)."
+          ],
+          "correct": [{ "kind": "p", "text": "Right. `saved` now owns the String, so `route` is no longer usable. rustc reports E0382: borrow of moved value." }],
+          "solution": [
+            { "kind": "p", "text": "Answer: it doesn't compile." },
+            { "kind": "code", "lang": "text", "text": "error[E0382]: borrow of moved value: `route`" }
+          ]
+        },
+        {
+          "id": "copy-types",
+          "kind": "choice",
+          "family": "copy-types",
+          "title": "Which of these types are Copy?",
+          "objective_ids": ["rust.copy"],
+          "confidence": true,
+          "multi": true,
+          "body": [{ "kind": "p", "text": "A Copy type is duplicated bit for bit on assignment, so the original stays usable. Select every type that is Copy." }],
+          "options": [
+            { "id": "i32", "text": "i32", "code": true },
+            { "id": "bool", "text": "bool", "code": true },
+            { "id": "string", "text": "String", "code": true },
+            { "id": "vec", "text": "Vec<u8>", "code": true },
+            { "id": "tuple", "text": "(u8, char)", "code": true },
+            { "id": "str-ref", "text": "&str", "code": true }
+          ],
+          "key": { "choice": ["i32", "bool", "tuple", "str-ref"] },
+          "misconceptions": {
+            "string": "A String owns heap memory. Copying it bit for bit would give two owners of the same buffer, so it moves instead.",
+            "vec": "A Vec owns a heap buffer, so like a String it moves on assignment."
+          },
+          "hints": [
+            "Ask whether the type owns memory on the heap.",
+            "A tuple is Copy when every field in it is Copy.",
+            "Shared references such as `&str` are Copy. Copying a reference doesn't copy what it points to."
+          ],
+          "correct": [{ "kind": "p", "text": "Right. Scalars, tuples of Copy fields and shared references are Copy. String and Vec own heap buffers, so they move." }],
+          "solution": [{ "kind": "p", "text": "Copy: i32, bool, (u8, char), &str. Not Copy: String, Vec<u8>." }]
+        },
+        {
+          "id": "fill-clone",
+          "kind": "fill",
+          "family": "move-clone",
+          "title": "Keep both names usable",
+          "objective_ids": ["rust.move"],
+          "body": [{ "kind": "p", "text": "Fill in the method so that `route` and `saved` both own their own String, and `route` can still be printed." }],
+          "template": "let route = String::from(\"north ridge\");\nlet saved = route.____();\nprintln!(\"{route} / {saved}\");",
+          "placeholder": "method name",
+          "key": { "text": ["clone", "clone()"] },
+          "hints": [
+            "You need a second, independent String.",
+            "The method makes a deep copy of the heap text.",
+            "It's the method from the `Clone` trait."
+          ],
+          "correct": [{ "kind": "p", "text": "Right. `clone()` allocates a new String, so each variable has its own owner. Clones are explicit because they cost an allocation." }],
+          "solution": [{ "kind": "code", "lang": "rust", "text": "let saved = route.clone();" }]
+        },
+        {
+          "id": "predict-copy",
+          "kind": "predict",
+          "family": "copy-print",
+          "title": "Transfer: the same shape, a different type",
+          "objective_ids": ["rust.copy"],
+          "confidence": true,
+          "body": [{ "kind": "p", "text": "This has the same shape as the first program, but the type is different. Predict the result." }],
+          "code": "fn main() {\n    let depth: u32 = 40;\n    let copy = depth;\n    println!(\"{depth} {copy}\");\n}",
+          "options": [
+            { "id": "a", "text": "It prints `40 40`." },
+            { "id": "b", "text": "It doesn't compile: `depth` was moved." },
+            { "id": "c", "text": "It prints `40 0`." }
+          ],
+          "key": { "choice": ["a"] },
+          "misconceptions": {
+            "b": "u32 is Copy. Assignment duplicates the value, so `depth` stays usable.",
+            "c": "Rust never leaves a zeroed value behind. A Copy type is duplicated, and a non-Copy value moves."
+          },
+          "hints": [
+            "Is u32 a Copy type?",
+            "For a Copy type, `let copy = depth;` duplicates the bits."
+          ],
+          "correct": [{ "kind": "p", "text": "Right. u32 is Copy, so both variables hold 40." }],
+          "solution": [{ "kind": "p", "text": "It prints `40 40`." }]
+        },
+        {
+          "id": "predict-fn-move",
+          "kind": "predict",
+          "family": "move-fn",
+          "title": "Transfer: passing a String to a function",
+          "objective_ids": ["rust.move"],
+          "confidence": true,
+          "body": [{ "kind": "p", "text": "Calling a function with a value works like assigning it to the parameter. Predict the result." }],
+          "code": "fn shout(text: String) -> usize {\n    text.len()\n}\n\nfn main() {\n    let name = String::from(\"Ada\");\n    let n = shout(name);\n    println!(\"{name} has {n} letters\");\n}",
+          "options": [
+            { "id": "a", "text": "It prints `Ada has 3 letters`." },
+            { "id": "b", "text": "It doesn't compile: `name` moved into `shout`." },
+            { "id": "c", "text": "It doesn't compile: `shout` returns the wrong type." }
+          ],
+          "key": { "choice": ["b"] },
+          "misconceptions": {
+            "a": "`shout` takes a String by value, so it takes ownership. `name` can't be used after the call.",
+            "c": "`text.len()` returns usize, which matches the signature. The problem is the later use of `name`."
+          },
+          "hints": [
+            "What does the parameter type `String` (not `&String`) mean for the caller?",
+            "Ownership of `name` moves into `text` at the call."
+          ],
+          "correct": [{ "kind": "p", "text": "Right. A by-value parameter takes ownership. Borrowing is the next lesson's fix." }],
+          "solution": [{ "kind": "p", "text": "It doesn't compile (E0382). `name` moved into `shout`." }]
+        }
+      ]
+    },
+    {
+      "id": "rust-own-borrow",
+      "title": "Borrow instead of taking",
+      "minutes": 6,
+      "objective_ids": ["rust.borrow-shared", "rust.borrow-mut"],
+      "prerequisites": ["rust-own-move"],
+      "steps": [
+        {
+          "id": "intro",
+          "kind": "explain",
+          "title": "Shared and mutable references",
+          "objective_ids": ["rust.borrow-shared", "rust.borrow-mut"],
+          "body": [
+            { "kind": "p", "text": "A reference lets code use a value without owning it. `&T` is a shared reference, and you may hold as many of them as you like." },
+            { "kind": "p", "text": "`&mut T` is a mutable reference. While one is in use, no other reference to the same value may be used, shared or mutable." },
+            { "kind": "p", "text": "A reference is in use from where it's created to where it's last used, not to the end of the block." }
+          ]
+        },
+        {
+          "id": "predict-lend",
+          "kind": "predict",
+          "family": "shared-lend",
+          "title": "Lend the String to a function",
+          "objective_ids": ["rust.borrow-shared"],
+          "confidence": true,
+          "body": [{ "kind": "p", "text": "This time the function takes `&String`. Predict the result." }],
+          "code": "fn first_word(text: &String) -> &str {\n    text.split(' ').next().unwrap_or(\"\")\n}\n\nfn main() {\n    let line = String::from(\"base camp\");\n    let w = first_word(&line);\n    println!(\"{w} | {line}\");\n}",
+          "options": [
+            { "id": "a", "text": "It prints `base | base camp`." },
+            { "id": "b", "text": "It doesn't compile: `line` moved into `first_word`." },
+            { "id": "c", "text": "It doesn't compile: `w` outlives `line`." }
+          ],
+          "key": { "choice": ["a"] },
+          "misconceptions": {
+            "b": "`&line` lends a shared reference, so `main` keeps ownership of `line`.",
+            "c": "`w` borrows from `line`, and `line` lives until the end of `main`, so the borrow is fine."
+          },
+          "hints": [
+            "Look at the `&` in the call and in the parameter type.",
+            "Several shared reads of `line` may be in use at once."
+          ],
+          "correct": [{ "kind": "p", "text": "Right. A shared borrow lets `first_word` read `line` while `main` keeps owning it." }],
+          "solution": [{ "kind": "p", "text": "It prints `base | base camp`." }]
+        },
+        {
+          "id": "which-line",
+          "kind": "choice",
+          "family": "shared-then-push",
+          "title": "Which line stops this from compiling?",
+          "objective_ids": ["rust.borrow-mut"],
+          "confidence": true,
+          "body": [
+            { "kind": "p", "text": "Exactly one line makes the compiler reject this program." },
+            { "kind": "code", "lang": "rust", "text": "fn main() {\n    let mut scores = vec![3, 5];   // line 2\n    let first = &scores[0];        // line 3\n    scores.push(8);                // line 4\n    println!(\"{first}\");           // line 5\n}" }
+          ],
+          "options": [
+            { "id": "l2", "text": "Line 2" },
+            { "id": "l3", "text": "Line 3" },
+            { "id": "l4", "text": "Line 4" },
+            { "id": "l5", "text": "Line 5" }
+          ],
+          "key": { "choice": ["l4"] },
+          "misconceptions": {
+            "l3": "Taking a shared reference is fine on its own. The conflict comes when something needs `&mut scores` while `first` is still in use.",
+            "l5": "rustc reports the error where the conflicting mutable borrow happens. Line 5 is only the reason `first` is still in use."
+          },
+          "hints": [
+            "`push` needs `&mut scores`.",
+            "Is `first` still in use when `push` runs?",
+            "A push may reallocate the buffer, which would leave `first` pointing at freed memory."
+          ],
+          "correct": [{ "kind": "p", "text": "Right. Line 4 needs a mutable borrow while the shared borrow `first` is still in use on line 5 (E0502)." }],
+          "solution": [
+            { "kind": "p", "text": "Line 4." },
+            { "kind": "code", "lang": "text", "text": "error[E0502]: cannot borrow `scores` as mutable because it is also borrowed as immutable" }
+          ]
+        },
+        {
+          "id": "order-mut",
+          "kind": "order",
+          "family": "order-mut",
+          "title": "Order the lines so the program prints 8",
+          "objective_ids": ["rust.borrow-mut"],
+          "body": [{ "kind": "p", "text": "These are the lines inside `fn main()`. Put them in an order that compiles and prints `8`." }],
+          "items": [
+            { "id": "decl", "text": "let mut total = 5;", "code": true },
+            { "id": "borrow", "text": "let r = &mut total;", "code": true },
+            { "id": "add", "text": "*r += 3;", "code": true },
+            { "id": "print", "text": "println!(\"{total}\");", "code": true }
+          ],
+          "key": { "order": ["decl", "borrow", "add", "print"] },
+          "hints": [
+            "A variable must be declared before it's borrowed.",
+            "`println!` borrows `total` too, so the mutable reference must be finished first."
+          ],
+          "correct": [{ "kind": "p", "text": "Right. The mutable borrow `r` ends at its last use, `*r += 3;`, so `println!` can then read `total`." }],
+          "solution": [{ "kind": "code", "lang": "rust", "text": "let mut total = 5;\nlet r = &mut total;\n*r += 3;\nprintln!(\"{total}\");" }]
+        },
+        {
+          "id": "fix-borrow",
+          "kind": "rust_edit",
+          "family": "fix-borrow-arg",
+          "title": "Fix it with the compiler",
+          "objective_ids": ["rust.borrow-shared"],
+          "body": [
+            { "kind": "p", "text": "This program doesn't compile. Change it so that it compiles and prints `9 2`, without cloning the vector." },
+            { "kind": "note", "text": "Your code runs only in SAIL's isolated sandbox. If the sandbox isn't available, this step is shown as not assessed." }
+          ],
+          "starter": "fn longest(words: &Vec<String>) -> usize {\n    words.iter().map(|w| w.len()).max().unwrap_or(0)\n}\n\nfn main() {\n    let words = vec![String::from(\"rope\"), String::from(\"carabiner\")];\n    let n = longest(words);\n    println!(\"{n} {}\", words.len());\n}\n",
+          "limits": { "wall_ms": 20000, "mem_mb": 512 },
+          "key": { "rust": { "stdout": "9 2" } },
+          "hints": [
+            "Read the compiler's first error: what type does `longest` expect?",
+            "`longest` wants a reference, but the call passes the Vec itself.",
+            "Pass `&words` so `main` keeps ownership."
+          ],
+          "correct": [{ "kind": "p", "text": "Right. Passing `&words` lends the vector to `longest`, and `main` still owns it afterwards." }],
+          "solution": [{ "kind": "code", "lang": "rust", "text": "let n = longest(&words);" }]
+        },
+        {
+          "id": "predict-two-mut",
+          "kind": "predict",
+          "family": "mut-two",
+          "title": "Transfer: two mutable references",
+          "objective_ids": ["rust.borrow-mut"],
+          "confidence": true,
+          "body": [{ "kind": "p", "text": "Predict the result." }],
+          "code": "fn main() {\n    let mut log = String::new();\n    let a = &mut log;\n    let b = &mut log;\n    a.push_str(\"x\");\n    b.push_str(\"y\");\n}",
+          "options": [
+            { "id": "a", "text": "It doesn't compile: `log` is borrowed as mutable twice." },
+            { "id": "b", "text": "It compiles and leaves `log` as `xy`." },
+            { "id": "c", "text": "It compiles, but `a` and `b` race at run time." }
+          ],
+          "key": { "choice": ["a"] },
+          "misconceptions": {
+            "b": "`a` is still in use when `b` is created, so there would be two live mutable references. Rust rejects that (E0499).",
+            "c": "Rust prevents this aliasing at compile time, so the program never runs."
+          },
+          "hints": [
+            "Is `a` still in use when `b` is created?",
+            "Only one `&mut` may be live at a time."
+          ],
+          "correct": [{ "kind": "p", "text": "Right. E0499: `a` is used after `b` is created, so two mutable borrows overlap." }],
+          "solution": [{ "kind": "p", "text": "It doesn't compile (E0499). Use `a` before you create `b`." }]
+        }
+      ]
+    }
+  ],
+  "diagnostic": {
+    "id": "rust-ownership-probe",
+    "steps": [
+      {
+        "id": "d-move",
+        "kind": "predict",
+        "family": "move-vec",
+        "title": "Predict the result",
+        "objective_ids": ["rust.move"],
+        "confidence": true,
+        "body": [{ "kind": "p", "text": "Pick the result you expect. If you don't know, say so: an honest \"not sure\" places you better than a guess." }],
+        "code": "fn main() {\n    let tools = vec![\"axe\", \"rope\"];\n    let pack = tools;\n    println!(\"{}\", tools.len());\n}",
+        "options": [
+          { "id": "a", "text": "It prints `2`." },
+          { "id": "b", "text": "It doesn't compile: `tools` was moved." },
+          { "id": "c", "text": "It prints `0`." },
+          { "id": "unsure", "text": "I'm not sure." }
+        ],
+        "key": { "choice": ["b"] }
+      },
+      {
+        "id": "d-copy",
+        "kind": "choice",
+        "family": "copy-char",
+        "title": "After a copy",
+        "objective_ids": ["rust.copy"],
+        "confidence": true,
+        "body": [{ "kind": "p", "text": "`a` has type `char`. After `let b = a;`, can `a` still be used?" }],
+        "options": [
+          { "id": "yes", "text": "Yes, char is Copy." },
+          { "id": "no", "text": "No, `a` has moved into `b`." },
+          { "id": "unsure", "text": "I'm not sure." }
+        ],
+        "key": { "choice": ["yes"] }
+      },
+      {
+        "id": "d-shared",
+        "kind": "predict",
+        "family": "shared-many",
+        "title": "Predict the result",
+        "objective_ids": ["rust.borrow-shared"],
+        "confidence": true,
+        "body": [{ "kind": "p", "text": "Pick the result you expect." }],
+        "code": "fn main() {\n    let peak = String::from(\"K2\");\n    let x = &peak;\n    let y = &peak;\n    println!(\"{x} {y} {peak}\");\n}",
+        "options": [
+          { "id": "a", "text": "It prints `K2 K2 K2`." },
+          { "id": "b", "text": "It doesn't compile: `peak` is borrowed twice." },
+          { "id": "c", "text": "It doesn't compile: `peak` moved into `x`." },
+          { "id": "unsure", "text": "I'm not sure." }
+        ],
+        "key": { "choice": ["a"] }
+      },
+      {
+        "id": "d-mut",
+        "kind": "fill",
+        "family": "mut-param",
+        "title": "Complete the signature",
+        "objective_ids": ["rust.borrow-mut"],
+        "body": [{ "kind": "p", "text": "Fill in the parameter type's reference so that the function can change the caller's number. Leave it blank if you don't know." }],
+        "template": "fn add_one(n: ____ i32) {\n    *n += 1;\n}",
+        "placeholder": "reference kind",
+        "key": { "text": ["&mut"] }
+      }
+    ]
+  },
+  "reviews": [
+    {
+      "id": "r-move-struct",
+      "kind": "predict",
+      "family": "move-struct",
+      "title": "Review: a struct with a String field",
+      "objective_ids": ["rust.move"],
+      "confidence": true,
+      "body": [{ "kind": "p", "text": "Predict the result." }],
+      "code": "struct Note {\n    text: String,\n}\n\nfn main() {\n    let a = Note { text: String::from(\"camp\") };\n    let b = a;\n    println!(\"{}\", a.text);\n}",
+      "options": [
+        { "id": "a", "text": "It prints `camp`." },
+        { "id": "b", "text": "It doesn't compile: `a` was moved into `b`." },
+        { "id": "c", "text": "It prints an empty line." }
+      ],
+      "key": { "choice": ["b"] },
+      "misconceptions": { "a": "A struct with a String field isn't Copy, so `let b = a;` moves the whole struct." },
+      "hints": ["Is `Note` Copy? Look at what its field owns.", "A struct is Copy only if it derives Copy and all its fields are Copy."],
+      "correct": [{ "kind": "p", "text": "Right. `Note` isn't Copy, so assignment moves it, and `a.text` is a use after move." }],
+      "solution": [{ "kind": "p", "text": "It doesn't compile (E0382)." }]
+    },
+    {
+      "id": "r-move-loop",
+      "kind": "predict",
+      "family": "move-loop",
+      "title": "Review: looping over a Vec",
+      "objective_ids": ["rust.move"],
+      "confidence": true,
+      "body": [{ "kind": "p", "text": "Predict the result." }],
+      "code": "fn main() {\n    let names = vec![String::from(\"Ana\"), String::from(\"Bo\")];\n    for n in names {\n        println!(\"{n}\");\n    }\n    println!(\"{}\", names.len());\n}",
+      "options": [
+        { "id": "a", "text": "It prints `Ana`, `Bo`, then `2`." },
+        { "id": "b", "text": "It doesn't compile: the loop moved `names`." },
+        { "id": "c", "text": "It prints `Ana`, `Bo`, then `0`." }
+      ],
+      "key": { "choice": ["b"] },
+      "misconceptions": { "a": "`for n in names` calls `into_iter()` on the Vec itself, which consumes it. Use `&names` to loop without moving." },
+      "hints": ["What does `for x in v` do with `v`?", "Compare `for n in names` with `for n in &names`."],
+      "correct": [{ "kind": "p", "text": "Right. Looping over the Vec by value moves it into the loop." }],
+      "solution": [{ "kind": "p", "text": "It doesn't compile (E0382). Write `for n in &names` to keep `names`." }]
+    },
+    {
+      "id": "r-copy-tuple",
+      "kind": "predict",
+      "family": "copy-tuple",
+      "title": "Review: copying a tuple",
+      "objective_ids": ["rust.copy"],
+      "confidence": true,
+      "body": [{ "kind": "p", "text": "Predict the result." }],
+      "code": "fn main() {\n    let p = (2, 3.5);\n    let q = p;\n    println!(\"{} {}\", p.0, q.1);\n}",
+      "options": [
+        { "id": "a", "text": "It prints `2 3.5`." },
+        { "id": "b", "text": "It doesn't compile: `p` was moved." },
+        { "id": "c", "text": "It doesn't compile: tuples can't be assigned." }
+      ],
+      "key": { "choice": ["a"] },
+      "misconceptions": { "b": "Every field (an integer and a float) is Copy, so the tuple is Copy too." },
+      "hints": ["A tuple is Copy when all of its fields are."],
+      "correct": [{ "kind": "p", "text": "Right. `(i32, f64)` is Copy, so `p` stays usable." }],
+      "solution": [{ "kind": "p", "text": "It prints `2 3.5`." }]
+    },
+    {
+      "id": "r-copy-contrast",
+      "kind": "choice",
+      "family": "copy-vs-move",
+      "title": "Review: copy or move?",
+      "objective_ids": ["rust.copy", "rust.move"],
+      "confidence": true,
+      "multi": true,
+      "body": [{ "kind": "p", "text": "Select every snippet that compiles." }],
+      "options": [
+        { "id": "a", "text": "let x = 7u8; let y = x; println!(\"{x}\");", "code": true },
+        { "id": "b", "text": "let s = String::from(\"7\"); let t = s; println!(\"{s}\");", "code": true },
+        { "id": "c", "text": "let s = String::from(\"7\"); let t = s.clone(); println!(\"{s}\");", "code": true }
+      ],
+      "key": { "choice": ["a", "c"] },
+      "misconceptions": { "b": "The String moved into `t`, so printing `s` is a use after move." },
+      "hints": ["Which of these values are Copy?", "An explicit `clone()` leaves the original usable."],
+      "correct": [{ "kind": "p", "text": "Right. u8 copies, a moved String can't be reused, and a clone keeps both." }],
+      "solution": [{ "kind": "p", "text": "Snippets 1 and 3 compile." }]
+    },
+    {
+      "id": "r-shared-fn",
+      "kind": "predict",
+      "family": "shared-fn",
+      "title": "Review: lending to a function",
+      "objective_ids": ["rust.borrow-shared"],
+      "confidence": true,
+      "body": [{ "kind": "p", "text": "Predict the result." }],
+      "code": "fn count(text: &String) -> usize {\n    text.len()\n}\n\nfn main() {\n    let path = String::from(\"trail\");\n    let n = count(&path);\n    println!(\"{path} {n}\");\n}",
+      "options": [
+        { "id": "a", "text": "It prints `trail 5`." },
+        { "id": "b", "text": "It doesn't compile: `path` moved into `count`." },
+        { "id": "c", "text": "It doesn't compile: `path` is still borrowed in `println!`." }
+      ],
+      "key": { "choice": ["a"] },
+      "misconceptions": {
+        "b": "`count(&path)` lends a shared reference. Ownership stays with `path`.",
+        "c": "The borrow passed to `count` ends when the call returns."
+      },
+      "hints": ["Look at the `&` at the call site."],
+      "correct": [{ "kind": "p", "text": "Right. A shared borrow lends the value, and ownership stays in `main`." }],
+      "solution": [{ "kind": "p", "text": "It prints `trail 5`." }]
+    },
+    {
+      "id": "r-shared-fill",
+      "kind": "fill",
+      "family": "shared-fill",
+      "title": "Review: lend, don't give",
+      "objective_ids": ["rust.borrow-shared"],
+      "body": [{ "kind": "p", "text": "`fn sum(v: &Vec<i32>) -> i32` is already defined. Fill in the call so that `values` can still be used afterwards." }],
+      "template": "let values = vec![1, 2, 3];\nlet total = sum(____values);\nprintln!(\"{total} {:?}\", values);",
+      "placeholder": "what goes before values",
+      "key": { "text": ["&"] },
+      "hints": ["The parameter type is `&Vec<i32>`.", "Borrow `values` with a shared reference."],
+      "correct": [{ "kind": "p", "text": "Right. `&values` lends the vector without moving it." }],
+      "solution": [{ "kind": "code", "lang": "rust", "text": "let total = sum(&values);" }]
+    },
+    {
+      "id": "r-mut-scope",
+      "kind": "predict",
+      "family": "mut-scope",
+      "title": "Review: mutable borrows in sequence",
+      "objective_ids": ["rust.borrow-mut"],
+      "confidence": true,
+      "body": [{ "kind": "p", "text": "Predict the result." }],
+      "code": "fn main() {\n    let mut count = 0;\n    {\n        let c = &mut count;\n        *c += 2;\n    }\n    let d = &mut count;\n    *d += 1;\n    println!(\"{count}\");\n}",
+      "options": [
+        { "id": "a", "text": "It prints `3`." },
+        { "id": "b", "text": "It doesn't compile: `count` is borrowed as mutable twice." },
+        { "id": "c", "text": "It prints `1`." }
+      ],
+      "key": { "choice": ["a"] },
+      "misconceptions": { "b": "The two mutable borrows never overlap: `c` is finished before `d` is created." },
+      "hints": ["Are `c` and `d` ever in use at the same time?"],
+      "correct": [{ "kind": "p", "text": "Right. Mutable borrows one after another are fine. Only overlapping ones are rejected." }],
+      "solution": [{ "kind": "p", "text": "It prints `3`." }]
+    },
+    {
+      "id": "r-mut-loop",
+      "kind": "predict",
+      "family": "mut-while-iter",
+      "title": "Review: pushing while iterating",
+      "objective_ids": ["rust.borrow-mut"],
+      "confidence": true,
+      "body": [{ "kind": "p", "text": "Predict the result." }],
+      "code": "fn main() {\n    let mut stack = vec![1, 2];\n    for x in &stack {\n        stack.push(*x);\n    }\n}",
+      "options": [
+        { "id": "a", "text": "It doesn't compile: `stack` is mutably borrowed while the loop borrows it." },
+        { "id": "b", "text": "It runs forever, doubling the vector." },
+        { "id": "c", "text": "It leaves `stack` as `[1, 2, 1, 2]`." }
+      ],
+      "key": { "choice": ["a"] },
+      "misconceptions": {
+        "b": "Rust rejects this before it runs: `push` needs `&mut stack` while the loop holds `&stack`.",
+        "c": "The loop's shared borrow is live for the whole loop, so `push` can't borrow mutably inside it."
+      },
+      "hints": ["What does `for x in &stack` borrow, and for how long?"],
+      "correct": [{ "kind": "p", "text": "Right. E0502: the loop's shared borrow overlaps with the mutable borrow `push` needs." }],
+      "solution": [{ "kind": "p", "text": "It doesn't compile (E0502)." }]
+    }
+  ]
+}
