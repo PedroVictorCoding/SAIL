@@ -1,0 +1,39 @@
+/* SAIL ambient backdrop (ambient-backdrop.js). One fixed light layer behind the page:
+   a Paper Shaders mesh gradient, film grain, and optional liquid-glass lenses. */
+html.sail-backdrop-on { background: #030407; }
+html.sail-backdrop-on body { background: transparent; }
+
+.sail-backdrop {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: #030407;
+}
+.sail-backdrop[hidden] { display: none; }
+/* Grain: the dithered texture of the references, crisp at any shader resolution. */
+.sail-backdrop::after {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  opacity: .11;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+html[data-sail-visuals=subtle] .sail-backdrop::after { opacity: .07; }
+/* No WebGL2: the same light as a static CSS gradient. */
+.sail-backdrop--css {
+  background:
+    radial-gradient(ellipse 60% 55% at 78% 92%, color-mix(in srgb, var(--sail-backdrop-1, #496f9d) 70%, transparent), transparent 70%),
+    radial-gradient(ellipse 50% 50% at 18% 70%, color-mix(in srgb, var(--sail-backdrop-3, #384257) 60%, transparent), transparent 72%),
+    radial-gradient(ellipse 70% 60% at 50% 0%, color-mix(in srgb, var(--sail-backdrop-0, #0e121a) 80%, transparent), transparent 75%),
+    #030407;
+}
+.sail-lens { position: absolute; z-index: 1; pointer-events: none; }
+.sail-lens[hidden] { display: none; }
+
+@media (forced-colors: active) {
+  .sail-backdrop { display: none; }
+}

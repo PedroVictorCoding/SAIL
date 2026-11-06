@@ -127,6 +127,13 @@ Clear and semantic; responsive glass sheets only when needed. Selected navigatio
 - **CSS only** for blur, glow, glass and most cards; `Canvas 2D` for a single low-fps Orb visualizer if profiling justifies; **no WebGPU mandatory dependency**.
 - Advanced shader/gradient libraries (OGL, Three.js, PixiJS) require a separate GPU/compatibility budget review; avoid adding a WebGL canvas per card or competing with client-side Whisper WebGPU. Use only where CSS measurably fails and the exact effect improves usability.
 
+**Decision (owner, 2026-11-06): Paper Shaders + liquid glass.** The CSS-only default
+did not reach the references, so:
+- **Paper Shaders** (`@paper-design/shaders`, Apache-2.0, vendored subset `web/vendor/paper-shaders/`): exactly **one** `MeshGradient` canvas per page, mounted by `web/ambient-backdrop.js` behind the page (`data-sail-backdrop` on `<html>`). Home lights it from the ambient state contract (`--sail-light-*`, read as targets, not computed mid-transition); the Library lights it from the featured book's cover. Rendered at ≤1280×800 (subtle ≤640×400) and upscaled; grain is a CSS overlay. Paused when hidden or off-screen, and while a book is open.
+- **Liquid glass** (`@ybouane/liquidglass`, MIT, `web/vendor/liquidglass/`): only in **expressive** mode on non-touch devices, loaded on demand, for elements marked `data-sail-lens`. The lens is an empty element in the backdrop layer that tracks the real element, so it refracts the shader light and never rasterises page content.
+- Owner setting `sail.ambientVisuals` (localStorage) = `off | subtle | expressive`; default expressive, subtle on touch. Reduced transparency / forced colours → off; reduced motion → still frame; no WebGL2 → CSS gradient of the same light.
+- Test: `scripts/ui/ambient_backdrop_browser_test.py`.
+
 Required ADR compares runtime size, Dioxus interop, license, Android WebView support, reduced-motion compliance, bundle impact, graphics workload, maintenance and resource priority. At most one animation helper dependency in the first slice.
 
 ## 6. Performance / accessibility / fallback gates

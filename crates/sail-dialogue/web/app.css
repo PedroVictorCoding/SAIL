@@ -4211,3 +4211,7 @@ a.nav-item { text-decoration:none; color:var(--muted) }
 .learn-dictation-status { color:var(--text); font-size:.875rem; overflow-wrap:anywhere; }
 .learn-dictation-status[data-phase="error"] { font-weight:600; }
 @media (forced-colors: active) { .learn-dictate { border:1px solid ButtonText; } .learn-dictate[aria-pressed="true"] { border:3px double Highlight; } }
+
+/* Ambient backdrop (ambient-backdrop.js): the shell lets the shader light through. */
+html.sail-backdrop-on body, html.sail-backdrop-on .app-shell { background:transparent }
+html.sail-backdrop-on .app-shell::before { display:none }

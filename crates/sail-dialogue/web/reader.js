@@ -201,6 +201,17 @@ const SailReader = (() => {
       node.setAttribute('aria-label', `Open ${titleOf(book)}`);
       return node;
     }
+    // The Library is lit by the featured book: its cover's colours, or a warm default.
+    const LIBRARY_LIGHT = ['#f2a65a', '#d9467a', '#2a1440'];
+    function lightFromCover(image) {
+      const backdrop = window.SailBackdrop?.current;
+      if (!backdrop) return;
+      backdrop.setLights(LIBRARY_LIGHT);
+      image?.addEventListener('load', () => {
+        const colors = window.SailBackdrop.paletteFromImage(image);
+        if (colors && image.isConnected) backdrop.setLights(colors);
+      }, {once: true});
+    }
     function renderLibrary() {
       imageObserver?.disconnect();
       const activeCoverKeys = new Set(state.books.filter(b => b.metadata?.cover_cached).map(b => `${b.id}:${b.metadata.retrieved_at}`));
@@ -264,6 +275,7 @@ const SailReader = (() => {
         if (details) info.append(about);
         card.append(cover(recent), info);
         $('continue').append(card);
+        lightFromCover(card.querySelector('.cover-image'));
         const panel = el('div', undefined, 'reading-progress');
         panel.append(el('p', 'READING PROGRESS', 'eyebrow'),
           el('strong', progress === undefined ? 'Not started' : `${progress.toFixed(1)}%`),
@@ -274,6 +286,14 @@ const SailReader = (() => {
         meter.setAttribute('aria-label', `Reading progress for ${titleOf(recent)}`);
         panel.append(meter);
         $('library-summary').append(panel);
+        const saved = new Date(recent.position?.saved_at);
+        if (recent.position && !Number.isNaN(saved.getTime())) {
+          const last = el('div', undefined, 'last-read-summary');
+          last.append(el('p', 'LAST READ', 'eyebrow'),
+            el('strong', saved.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'})),
+            el('p', saved.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}), 'muted'));
+          $('library-summary').append(last);
+        }
       }
       if (recent && !query) {
         const chapters = el('div', undefined, 'chapter-summary');
@@ -628,6 +648,8 @@ const SailReader = (() => {
         document.title = `${data.book.title} · SAIL Reader`;
         $('library').hidden = true;
         $('reader').hidden = false;
+        // Book text is never read over light or blur (DESIGN.md §6).
+        window.SailBackdrop?.current?.setActive(false);
         for (const id of ['toc-button', 'appearance-button', 'read-aloud'])
           $(id).hidden = false;
         $('toc-list').replaceChildren(tocList(data.toc.length
@@ -1019,6 +1041,7 @@ const SailReader = (() => {
       state.section = null;
       $('reader').hidden = true;
       $('library').hidden = false;
+      window.SailBackdrop?.current?.setActive(true);
       for (const id of ['toc', 'appearance', 'toc-button', 'appearance-button', 'read-aloud'])
         $(id).hidden = true;
       document.title = 'Reader · SAIL';
