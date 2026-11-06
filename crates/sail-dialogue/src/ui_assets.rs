@@ -77,6 +77,8 @@ assets![
     ("/card-modal.js", "web/card-modal.js", JS),
     ("/markdown.js", "web/markdown.js", JS),
     ("/ambient-state.js", "web/ambient-state.js", JS),
+    ("/ambient-backdrop.js", "web/ambient-backdrop.js", JS),
+    ("/ambient-backdrop.css", "web/ambient-backdrop.css", CSS),
     ("/voice.js", "web/voice.js", JS),
     ("/forge.js", "web/forge.js", JS),
     ("/approvals.js", "web/approvals.js", JS),
@@ -106,6 +108,16 @@ assets![
     ("/vendor/xterm.js", "web/vendor/xterm/xterm.js", JS),
     ("/vendor/addon-fit.js", "web/vendor/xterm/addon-fit.js", JS),
     ("/vendor/xterm.css", "web/vendor/xterm/xterm.css", CSS),
+    (
+        "/vendor/paper-shaders.js",
+        "web/vendor/paper-shaders/paper-shaders.js",
+        JS
+    ),
+    (
+        "/vendor/liquidglass.js",
+        "web/vendor/liquidglass/liquidglass.js",
+        JS
+    ),
 ];
 
 /// The client injected into pages in dev mode.

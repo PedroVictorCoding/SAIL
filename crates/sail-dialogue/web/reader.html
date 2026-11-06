@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-sail-backdrop="library">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -8,9 +8,10 @@
     </title>
     <link rel="stylesheet" href="/tokens.css">
     <link rel="stylesheet" href="/reader.css">
+    <link rel="stylesheet" href="/ambient-backdrop.css">
   </head>
   <body>
-    <header class="toolbar">
+    <header class="toolbar" data-sail-lens>
       <a href="/">
         SAIL
       </a>
@@ -233,6 +234,8 @@
         </p>
       </div>
     </section>
+    <script src="/vendor/paper-shaders.js"></script>
+    <script src="/ambient-backdrop.js"></script>
     <script src="/client-speech.js">
     </script>
     <script src="/reader-audio.js">

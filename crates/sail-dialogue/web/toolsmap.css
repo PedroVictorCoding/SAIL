@@ -680,3 +680,13 @@ html.tm-active, html.tm-active body { overflow: hidden; }
   .tm-root[data-mode="away"] .tm-stage .return-briefing-deck.tm-briefing:not([hidden]) { padding: 12px; bottom: 58px; }
   .tm-root[data-mode="away"] .tm-briefing[hidden] + .tm-away-empty { bottom: 58px; }
 }
+
+/* Ambient backdrop (ambient-backdrop.js): the map floats on the shader light. Panels
+   become tinted glass; text keeps the same tokens and contrast. */
+html.sail-backdrop-on .tm-root {
+  --tm-bg: transparent;
+  --tm-stage: rgb(8 10 15 / .38);
+  --tm-panel: rgb(8 10 15 / .52);
+  --tm-panel-2: rgb(255 255 255 / .08);
+  --tm-blur: 26px;
+}
