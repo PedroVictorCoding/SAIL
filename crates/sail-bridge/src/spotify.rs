@@ -19,7 +19,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const ACCOUNTS: &str = "https://accounts.spotify.com";
 const API: &str = "https://api.spotify.com/v1";
 /// Read playback and playlists, control playback. Nothing that edits the library.
-pub const SCOPES: &str = "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative";
+pub const SCOPES: &str = "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative streaming user-read-email user-read-private";
+/// The scope the in-browser player (Spotify Web Playback SDK) needs. Connections made before
+/// the SAIL music player lack it and must be reconnected once.
+pub const PLAYER_SCOPE: &str = "streaming";
 /// Login attempts expire; a callback after this is refused.
 const LOGIN_TTL: Duration = Duration::from_secs(600);
 const MAX_OWN_PLAYLISTS: usize = 200;
@@ -97,6 +100,46 @@ impl Candidate {
             kind => format!("the {} '{}' by {}", kind.noun(), self.name, self.by),
         }
     }
+}
+
+/// A Spotify track as a SAIL music-player item. Local files, episodes and unplayable
+/// tracks are skipped.
+pub fn player_track(t: &Value) -> Option<Value> {
+    let uri = text(&t["uri"]);
+    if Kind::of_uri(&uri) != Some(Kind::Track) || t["is_local"] == true || t["is_playable"] == false
+    {
+        return None;
+    }
+    let artists: Vec<String> = t["artists"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|a| text(&a["name"]))
+        .filter(|n| !n.is_empty())
+        .collect();
+    let art = t["album"]["images"]
+        .as_array()
+        .and_then(|i| i.last().or(i.first()))
+        .map(|i| text(&i["url"]))
+        .unwrap_or_default();
+    let art_large = t["album"]["images"][0]["url"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    Some(json!({
+        "source": "spotify",
+        "id": uri,
+        "title": text(&t["name"]),
+        "artist": artists.join(", "),
+        "album": text(&t["album"]["name"]),
+        "duration_ms": t["duration_ms"].as_u64().unwrap_or(0),
+        "art": if art_large.is_empty() { art } else { art_large },
+    }))
+}
+
+/// Spotify ids (tracks, devices) are short base62 or hex strings.
+fn valid_device_id(id: &str) -> bool {
+    (8..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 fn text(value: &Value) -> String {
@@ -775,6 +818,118 @@ impl Spotify {
     pub async fn now_playing(&self) -> Result<Value> {
         let state = self.get("/me/player").await?;
         Ok(player_summary(&state))
+    }
+
+    /// Whether the stored sign-in carries the in-browser player's scope.
+    pub async fn can_stream(&self) -> bool {
+        self.token
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|t| t.scope.split_whitespace().any(|s| s == PLAYER_SCOPE))
+    }
+
+    /// A current access token and its expiry (Unix seconds) for the owner's in-browser
+    /// player. Refreshes when needed. Refused when the sign-in lacks the streaming scope.
+    pub async fn player_token(&self) -> Result<(String, u64)> {
+        if !self.can_stream().await {
+            return Err(SpotifyError::new(
+                "reconnect",
+                "Reconnect Spotify once so SAIL's player can play in this browser.",
+            ));
+        }
+        let access = self.access_token(false).await?;
+        let expires_at = self
+            .token
+            .lock()
+            .await
+            .as_ref()
+            .map(|t| t.expires_at)
+            .unwrap_or(0);
+        Ok((access, expires_at))
+    }
+
+    /// Play these track URIs on one device (the browser player), starting at `position_ms`.
+    /// Spotify plays only these tracks, so SAIL's queue decides what comes next.
+    pub async fn play_on(&self, device_id: &str, uris: &[String], position_ms: u64) -> Result<()> {
+        if !valid_device_id(device_id) {
+            return Err(SpotifyError::new(
+                "invalid",
+                "That is not a Spotify device id.",
+            ));
+        }
+        if uris.is_empty()
+            || uris.len() > 50
+            || uris.iter().any(|u| Kind::of_uri(u) != Some(Kind::Track))
+        {
+            return Err(SpotifyError::new(
+                "invalid",
+                "Send between 1 and 50 Spotify track URIs.",
+            ));
+        }
+        let path = format!("/me/player/play?device_id={device_id}");
+        self.call(
+            reqwest::Method::PUT,
+            &path,
+            Some(json!({"uris": uris, "position_ms": position_ms})),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Track search for the music player: up to `limit` tracks, as player items.
+    pub async fn search_tracks(&self, query: &str, limit: usize) -> Result<Vec<Value>> {
+        let mut url = url::Url::parse("http://x/search").expect("search URL");
+        url.query_pairs_mut()
+            .append_pair("q", query)
+            .append_pair("type", "track")
+            .append_pair("limit", &limit.clamp(1, 20).to_string());
+        let body = self
+            .get(&format!("/search?{}", url.query().unwrap_or_default()))
+            .await?;
+        Ok(body["tracks"]["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(player_track)
+            .collect())
+    }
+
+    /// The tracks of an album or playlist (first 100), as player items.
+    pub async fn tracks_of(&self, uri: &str) -> Result<Vec<Value>> {
+        let (kind, id) = match (Kind::of_uri(uri), uri.rsplit(':').next()) {
+            (Some(k @ (Kind::Album | Kind::Playlist)), Some(id)) if valid_device_id(id) => (k, id),
+            _ => {
+                return Err(SpotifyError::new(
+                    "invalid",
+                    "Send a Spotify album or playlist URI.",
+                ));
+            }
+        };
+        if kind == Kind::Album {
+            let album = self.get(&format!("/albums/{id}")).await?;
+            let art = album["images"][0]["url"].clone();
+            let name = album["name"].clone();
+            return Ok(album["tracks"]["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| {
+                    let mut t = t.clone();
+                    t["album"] = json!({"name": name, "images": [{"url": art}]});
+                    player_track(&t)
+                })
+                .collect());
+        }
+        let page = self
+            .get(&format!("/playlists/{id}/tracks?limit=100"))
+            .await?;
+        Ok(page["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|i| player_track(&i["track"]))
+            .collect())
     }
 
     /// Search every kind at once and pick what a plain "play X" most likely means: an exact

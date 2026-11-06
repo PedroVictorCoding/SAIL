@@ -1128,6 +1128,17 @@
           frame.addEventListener('load', () => readerVisibility(
             state.on && !pane.hidden && pane.dataset.mode === 'entertainment' && mediaTab === 'reader'));
           panel.append(frame);
+        } else if (id === 'music') {
+          // The music player is served without cross-origin isolation (Spotify's player
+          // loads from Spotify), so it is embedded credentialless; set before src.
+          if ('credentialless' in HTMLIFrameElement.prototype) {
+            panel.append(el('iframe', {credentialless: true, class: 'tm-tracker-frame', id: 'tmMusic', src: '/music', title: 'Music player', allow: 'autoplay; encrypted-media'}));
+          } else {
+            panel.tabIndex = 0;
+            panel.append(el('div', {class: 'tm-media-empty'}, el('h2', {text: labels[id]}),
+              el('p', {text: 'This browser cannot show the music player inside SAIL.'}),
+              el('a', {class: 'tm-btn', href: '/music', target: '_blank', rel: 'noopener', text: 'Open the music player'})));
+          }
         } else {
           panel.tabIndex = 0;
           panel.append(el('div', {class: 'tm-media-empty'}, el('h2', {text: labels[id]}),

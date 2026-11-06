@@ -147,6 +147,7 @@ pub async fn run_dialogue_server_with_plans(
         learn_services(&inference, &arena, authority(), pulse.clone());
     let tracker_routes = tracker_routes(authority());
     let reader_routes = crate::reader_http::routes(authority(), services.clone());
+    let music_routes = crate::music_http::routes(authority());
     let system_routes = crate::system_http::router(authority());
     let spotify_routes = crate::spotify_http::router(authority());
     let briefing_dir = sail_common::storage::resolve().path.join("briefing");
@@ -213,7 +214,10 @@ pub async fn run_dialogue_server_with_plans(
     if let Some(routes) = reader_routes {
         app = app.nest_service("/api/reader", routes);
     }
-    let app = app.layer(axum::middleware::map_response(cross_origin_isolation));
+    if let Some(routes) = music_routes {
+        app = app.nest_service("/api/music", routes);
+    }
+    let app = app.layer(axum::middleware::from_fn(cross_origin_isolation));
     match (
         std::env::var("SAIL_TLS_CERT"),
         std::env::var("SAIL_TLS_KEY"),
@@ -1218,19 +1222,33 @@ impl ClientSpeech {
 }
 /// Cross-origin isolation, so on-device speech can use WebAssembly threads
 /// (SharedArrayBuffer). Every resource the page loads is same-origin.
+///
+/// The one exception is the music player document (`/music`): Spotify's Web Playback SDK
+/// loads a script and an iframe from Spotify, which `require-corp` would block. The player is
+/// embedded in SAIL as a `credentialless` iframe, so the isolated app around it is unaffected.
 async fn cross_origin_isolation(
-    mut response: axum::response::Response,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let headers = response.headers_mut();
-    headers.insert(
-        "cross-origin-opener-policy",
-        axum::http::HeaderValue::from_static("same-origin"),
-    );
-    headers.insert(
-        "cross-origin-embedder-policy",
-        axum::http::HeaderValue::from_static("require-corp"),
-    );
+    let isolate = !is_unisolated_document(request.uri().path());
+    let mut response = next.run(request).await;
+    if isolate {
+        let headers = response.headers_mut();
+        headers.insert(
+            "cross-origin-opener-policy",
+            axum::http::HeaderValue::from_static("same-origin"),
+        );
+        headers.insert(
+            "cross-origin-embedder-policy",
+            axum::http::HeaderValue::from_static("require-corp"),
+        );
+    }
     response
+}
+
+/// Documents served without cross-origin isolation (see `cross_origin_isolation`).
+pub fn is_unisolated_document(path: &str) -> bool {
+    path == "/music"
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3371,3 +3389,48 @@ mod tests {
 #[cfg(test)]
 #[path = "server/live_context_tests.rs"]
 mod live_conversation_tests;
+
+#[cfg(test)]
+mod isolation_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    /// Every document is cross-origin isolated except the music player, which hosts Spotify's
+    /// Web Playback SDK; its own scripts and the API stay isolated.
+    #[tokio::test]
+    async fn only_the_music_document_skips_isolation() {
+        let app = Router::new()
+            .route("/", get(|| async { "home" }))
+            .route("/music", get(|| async { "music" }))
+            .route("/music.js", get(|| async { "js" }))
+            .route("/api/music/library", get(|| async { "{}" }))
+            .layer(axum::middleware::from_fn(cross_origin_isolation));
+        for (path, isolated) in [
+            ("/", true),
+            ("/music", false),
+            ("/music.js", true),
+            ("/api/music/library", true),
+            ("/music/", true),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let coep = response
+                .headers()
+                .get("cross-origin-embedder-policy")
+                .map(|v| v.to_str().unwrap().to_string());
+            assert_eq!(coep.is_some(), isolated, "{path}");
+            if isolated {
+                assert_eq!(coep.as_deref(), Some("require-corp"));
+                assert_eq!(
+                    response.headers()["cross-origin-opener-policy"],
+                    "same-origin"
+                );
+            }
+        }
+    }
+}
