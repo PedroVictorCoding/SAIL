@@ -5,7 +5,7 @@ Home: the shader mounts behind the Tools Map, follows the ambient state contract
 light change holds for a cooldown and quick flips are coalesced to the latest state.
 Settings: `sail.ambientVisuals=off`, forced colours and reduced transparency mount
 nothing; reduced motion keeps a still frame; no WebGL2 falls back to CSS light.
-Library: lit by the featured cover, colour tiles carry real measurements only, a
+Library: lit by the featured cover and fits the view; glow tiles carry real measurements only;
 the liquid-glass lens works for a floating control, and the light switches off while a book is open.
 
 Run with: .venv-voice/bin/python scripts/ui/ambient_backdrop_browser_test.py [shot-dir]
@@ -116,10 +116,11 @@ with sync_playwright() as p:
         const conn = document.getElementById('connection');
         const indStyle = getComputedStyle(ind);
         const connStyle = getComputedStyle(conn);
-        return !ind.hidden && indStyle.color === 'rgb(23, 19, 11)' && indStyle.backgroundImage.includes('gradient')
-            && connStyle.color === 'rgb(23, 19, 11)' && connStyle.backgroundImage.includes('gradient')
+        return !ind.hidden && indStyle.color === 'rgb(255, 255, 255)' && indStyle.backgroundImage.includes('radial-gradient')
+            && connStyle.color === 'rgb(255, 255, 255)' && connStyle.backgroundImage.includes('radial-gradient')
+            && indStyle.boxShadow.includes('rgb(') && connStyle.boxShadow.includes('rgb(')
             && indStyle.borderRadius === '999px' && connStyle.borderRadius === '999px';
-    }"""), "fixed indicator buttons use live UI vibrant styling with dark ink on paper shader backdrop"
+    }"""), "fixed indicators are glow pills: white text, bottom light and a halo"
     pg.evaluate("__push({type:'turn_started',turn_id:1,epoch:1,transcript:'hi',state:'thinking'})")
     assert lit() == want("thinking"), "first change is immediate"
     pg.evaluate("__push({type:'tool_event',epoch:1,event:{tool:'fs_read',state:'executing'}})")
@@ -173,6 +174,9 @@ with sync_playwright() as p:
         assert light != pg.evaluate("SailBackdrop.palette(['#f2a65a','#d9467a','#2a1440'],'expressive')[2]"), "cover, not default, lights the Library"
         assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"overflow {width}"
         if width > 400:
+            assert pg.evaluate("document.documentElement.scrollHeight <= innerHeight"), "the Library fits the view"
+            assert pg.evaluate("new Set([...document.querySelectorAll('#library-summary > div')].map(d => d.getBoundingClientRect().top)).size") == 1, "tiles share one row"
+            assert pg.evaluate("getComputedStyle(document.querySelector('.reading-progress')).color") == "rgb(255, 255, 255)", "glow tile text"
             # The Library uses no lens (it fills the canvas); the lens capability still
             # works for a floating control placed over the light.
             assert pg.evaluate("document.querySelectorAll('.sail-lens').length") == 0
