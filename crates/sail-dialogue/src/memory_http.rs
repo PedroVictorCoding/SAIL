@@ -110,6 +110,7 @@ struct Change {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum Mutation {
+    ApproveInsight { claim: i64, approved: bool },
     Correct { claim: i64, value: String },
     Pin { entity: i64, pinned: bool },
     Merge { from: i64, into: i64 },
@@ -139,6 +140,7 @@ async fn change(
     };
     k.write_at_generation(request.generation, Actor::User, |tx| {
         match request.action {
+            Mutation::ApproveInsight { claim, approved } => tx.approve_insight(claim, approved)?,
             Mutation::Pin { entity, pinned } => tx.pin_entity(entity, pinned)?,
             Mutation::Merge { from, into } => tx.merge_entities(from, into, "owner merge")?,
             Mutation::Separate { entity } => tx.separate_entity(entity, "owner separation")?,

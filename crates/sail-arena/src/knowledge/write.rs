@@ -1190,3 +1190,31 @@ impl KnowledgeTx<'_> {
         )
     }
 }
+
+impl KnowledgeTx<'_> {
+    pub fn approve_insight(&mut self, claim: i64, approved: bool) -> KnowledgeResult<()> {
+        let row = self.claim_row(claim)?;
+        if !row.status.is_active() {
+            return Err(invalid("only active claims can be approved"));
+        }
+        if approved {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO kn_approved_insights(claim_id,approved_at) VALUES(?1,?2)",
+                params![claim, self.now],
+            )?;
+        } else {
+            self.conn.execute(
+                "DELETE FROM kn_approved_insights WHERE claim_id=?1",
+                [claim],
+            )?;
+            self.bump_generation()?;
+        }
+        self.log(
+            "approve_insight",
+            "claim",
+            Some(claim),
+            None,
+            json!({"approved":approved}),
+        )
+    }
+}

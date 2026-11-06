@@ -10,11 +10,21 @@ use sail_common::{
 
 pub struct DiscoverySubsystem {
     bus: Option<EventBus>,
+    memory: Option<sail_arena::memory::MemoryClient>,
 }
 
 impl DiscoverySubsystem {
     pub fn new() -> Self {
-        Self { bus: None }
+        Self {
+            bus: None,
+            memory: None,
+        }
+    }
+    pub fn with_memory(mut self, client: sail_arena::memory::MemoryClient) -> Self {
+        if client.principal() == SubsystemId::Discovery {
+            self.memory = Some(client);
+        }
+        self
     }
 }
 
@@ -65,6 +75,17 @@ impl Subsystem for DiscoverySubsystem {
             );
 
             if let Some(bus) = &self.bus {
+                if let Some(memory) = &self.memory {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
+                    if let Ok(context) = memory.context(event.id, topic, now) {
+                        if !context.is_empty() {
+                            let _=bus.publish(SailEvent::new(self.id(),EventPayload::CanvasRender{canvas_id:format!("research-memory-{}",event.id),artifact_type:"text".into(),content:format!("Owner-approved research context (claims retain their status):\n{context}")}).with_target(SubsystemId::Canvas));
+                        }
+                    }
+                }
                 let trigger = SailEvent::new(
                     self.id(),
                     EventPayload::ResearchTriggerDispatched {

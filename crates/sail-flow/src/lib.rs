@@ -145,9 +145,9 @@ impl Subsystem for FlowSubsystem {
                     tokio::select! {
                         _=shutdown.notified()=>break,
                         _=ticks.tick()=>{
-                            let memory=memory.clone();
-                            match tokio::task::spawn_blocking(move ||memory.tick(Utc::now().timestamp_millis())).await {
-                                Ok(Ok(_))=>{},Ok(Err(error))=>warn!(%error,"Memory maintenance failed"),Err(error)=>warn!(%error,"Memory worker failed"),
+                            let blocking_memory=memory.clone();
+                            match tokio::task::spawn_blocking(move ||blocking_memory.tick(Utc::now().timestamp_millis())).await {
+                                Ok(Ok(true))=>{if let Err(error)=memory.embed_idle(Utc::now().timestamp_millis()).await {warn!(%error,"Memory embedding worker unavailable; keyword retrieval remains active");}},Ok(Ok(false))=>{},Ok(Err(error))=>warn!(%error,"Memory maintenance failed"),Err(error)=>warn!(%error,"Memory worker failed"),
                             }
                         }
                     }

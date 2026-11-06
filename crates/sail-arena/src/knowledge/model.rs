@@ -219,15 +219,17 @@ impl Actor {
 /// the store enforces it in SQL, so unauthorized rows are never hydrated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Access {
+    pub(crate) approved_only: bool,
     /// Visible scopes, e.g. `user`, `project:sail`, `life`. `None` means every scope.
-    pub scopes: Option<Vec<String>>,
-    pub max_sensitivity: Sensitivity,
+    pub(crate) scopes: Option<Vec<String>>,
+    pub(crate) max_sensitivity: Sensitivity,
 }
 
 impl Access {
     /// Everything, for the owner's own administrative views.
     pub fn owner() -> Self {
         Self {
+            approved_only: false,
             scopes: None,
             max_sensitivity: Sensitivity::Sensitive,
         }
@@ -235,6 +237,7 @@ impl Access {
 
     pub fn scoped(scopes: &[&str], max_sensitivity: Sensitivity) -> Self {
         Self {
+            approved_only: false,
             scopes: Some(scopes.iter().map(|s| s.to_string()).collect()),
             max_sensitivity,
         }

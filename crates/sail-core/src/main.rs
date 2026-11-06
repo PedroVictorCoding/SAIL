@@ -75,6 +75,84 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut agents = AgentsSubsystem::new();
     let mut guardian = GuardianSubsystem::new();
 
+    let memory_authority = Arc::new(sail_guardian::memory::MemoryAuthority::new());
+    let project_scopes: Vec<String> = OrchestratorConfig::default()
+        .allowed_repos
+        .iter()
+        .map(|r| format!("project:{r}"))
+        .collect();
+    let mut maintenance_scopes = vec!["voice".to_string(), "bus".to_string()];
+    maintenance_scopes.extend(project_scopes.clone());
+    for (principal, scopes, max_sensitivity, observe, maintain, approved_only) in [
+        (
+            SubsystemId::Dialogue,
+            vec!["voice".into()],
+            1,
+            false,
+            false,
+            false,
+        ),
+        (
+            SubsystemId::Agents,
+            vec!["bus".into()],
+            0,
+            false,
+            false,
+            false,
+        ),
+        (
+            SubsystemId::Forge,
+            project_scopes.clone(),
+            1,
+            true,
+            false,
+            false,
+        ),
+        (
+            SubsystemId::Flow,
+            maintenance_scopes.clone(),
+            1,
+            false,
+            true,
+            false,
+        ),
+        (
+            SubsystemId::Discovery,
+            maintenance_scopes.clone(),
+            1,
+            false,
+            false,
+            true,
+        ),
+    ] {
+        memory_authority.configure(
+            principal,
+            sail_guardian::memory::MemoryPolicy {
+                scopes,
+                max_sensitivity,
+                observe,
+                maintain,
+                approved_only,
+            },
+        )?;
+    }
+    let memory_client = |principal, scopes| {
+        sail_arena::memory::MemoryClient::new(
+            arena.store().clone(),
+            memory_authority.clone(),
+            principal,
+            scopes,
+        )
+    };
+    let dialogue_memory = memory_client(SubsystemId::Dialogue, vec!["voice".into()]);
+    let forge_memory = memory_client(SubsystemId::Forge, project_scopes);
+    let flow_memory = memory_client(SubsystemId::Flow, maintenance_scopes.clone());
+    agents = agents.with_memory(memory_client(SubsystemId::Agents, vec!["bus".into()]));
+    discovery = discovery.with_memory(memory_client(
+        SubsystemId::Discovery,
+        maintenance_scopes.clone(),
+    ));
+    arena = arena.with_voice_memory(dialogue_memory);
     let review_broker = Arc::new(
         ReviewBroker::new(ReviewPolicyConfig::default()).with_credentials(guardian.credentials()),
     );
@@ -86,7 +164,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             review_broker,
             guardian.sandbox(),
         )
-        .with_self_reviewer(Arc::new(LocalModelReviewer::new())),
+        .with_self_reviewer(Arc::new(LocalModelReviewer::new()))
+        .with_memory(forge_memory),
     );
     if !std::env::var("SAIL_MEMORY_BACKGROUND").is_ok_and(|v| v == "0" || v == "false") {
         let admission_mind = model_service.clone();
@@ -108,16 +187,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|v| v.parse::<u32>().ok())
             .filter(|n| (1..=3650).contains(n))
             .unwrap_or(30);
-        flow = flow.with_memory(sail_flow::memory::MemoryMaintenance::new(
-            arena.store().clone(),
-            sail_arena::knowledge::Access::scoped(
-                &["voice", "bus"],
-                sail_arena::knowledge::Sensitivity::Private,
+        flow = flow.with_memory(
+            sail_flow::memory::MemoryMaintenance::new(
+                arena.store().clone(),
+                sail_arena::knowledge::Access::scoped(
+                    &["voice", "bus"],
+                    sail_arena::knowledge::Sensitivity::Private,
+                ),
+                maintenance_scopes,
+                idle,
+                days,
+            )
+            .with_client(flow_memory)
+            .with_embedder(
+                sail_mind::embedding::EmbeddingClient::from_env().map_err(std::io::Error::other)?,
             ),
-            vec!["voice".into(), "bus".into()],
-            idle,
-            days,
-        ));
+        );
     }
     let mut forge = ForgeSubsystem::new(orchestrator.clone());
     let nightly_config = NightlyConfig::from_env();

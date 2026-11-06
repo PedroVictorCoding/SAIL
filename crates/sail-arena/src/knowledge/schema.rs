@@ -217,3 +217,8 @@ CREATE TABLE kn_source_progress(
  PRIMARY KEY(record_id,extractor_version)
 ) STRICT, WITHOUT ROWID;
 ";
+
+pub(crate) const V6: &str = "
+CREATE TABLE kn_approved_insights(claim_id INTEGER PRIMARY KEY REFERENCES kn_claims(id) ON DELETE CASCADE,approved_at INTEGER NOT NULL) STRICT;
+CREATE TRIGGER revoke_insight_privacy AFTER UPDATE OF sensitivity ON kn_claims WHEN new.sensitivity>old.sensitivity BEGIN DELETE FROM kn_approved_insights WHERE claim_id=new.id; END;
+";

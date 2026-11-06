@@ -7,6 +7,7 @@ authors.workspace = true
 
 [dependencies]
 sail-common.workspace = true
+sail-arena.workspace = true
 sail-protocol.workspace = true
 sail-guardian.workspace = true
 tokio.workspace = true

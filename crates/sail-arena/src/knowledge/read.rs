@@ -7,7 +7,7 @@ use super::{KnowledgeError, KnowledgeResult, KnowledgeStore};
 /// `:scopes` and `:maxsens`, so every query using it must pass [`access_params`].
 fn visible(a: &str) -> String {
     format!(
-        "((:all = 1 OR {a}.scope IN (SELECT value FROM json_each(:scopes))) AND {a}.sensitivity <= :maxsens)"
+        "(:approved >= 0 AND (:all = 1 OR {a}.scope IN (SELECT value FROM json_each(:scopes))) AND {a}.sensitivity <= :maxsens)"
     )
 }
 
@@ -15,10 +15,12 @@ struct AccessParams {
     all: i64,
     scopes: String,
     maxsens: i64,
+    approved: i64,
 }
 
 fn access_params(access: &Access) -> AccessParams {
     AccessParams {
+        approved: access.approved_only as i64,
         all: access.scopes.is_none() as i64,
         scopes: serde_json::to_string(access.scopes.as_deref().unwrap_or(&[])).unwrap_or_default(),
         maxsens: access.max_sensitivity as i64,
@@ -34,6 +36,7 @@ fn named<'p>(
         (":all", &a.all),
         (":scopes", &a.scopes),
         (":maxsens", &a.maxsens),
+        (":approved", &a.approved),
     ];
     out.extend_from_slice(extra);
     out
@@ -115,7 +118,7 @@ fn claim_from_clause() -> String {
         "FROM kn_claims c
          JOIN kn_entities s ON s.id = c.subject_id
          LEFT JOIN kn_entities o ON o.id = c.object_entity_id
-         WHERE {} AND {} AND (c.object_entity_id IS NULL OR {})",
+         WHERE {} AND {} AND (c.object_entity_id IS NULL OR {}) AND (:approved=0 OR EXISTS(SELECT 1 FROM kn_approved_insights ai WHERE ai.claim_id=c.id))",
         visible("c"),
         visible("s"),
         visible("o")
@@ -696,5 +699,25 @@ impl KnowledgeStore<'_> {
             });
         }
         Ok(serde_json::json!({"version":1,"generation":generation,"entities":entities}))
+    }
+}
+
+impl KnowledgeStore<'_> {
+    pub fn embedding_candidates(
+        &self,
+        access: &Access,
+        model: &str,
+        revision: &str,
+        now: i64,
+        limit: usize,
+    ) -> KnowledgeResult<(i64, Vec<(i64, String)>)> {
+        let a = access_params(access);
+        self.read(|conn| {
+   let generation=super::write::generation(conn)?;
+   let sql=format!("SELECT c.id,d.text {} AND d.id=c.id AND c.status NOT IN ('superseded','invalidated') AND (c.valid_from IS NULL OR c.valid_from<=:now) AND (c.valid_until IS NULL OR c.valid_until>:now) AND (c.expires_at IS NULL OR c.expires_at>:now) AND NOT EXISTS(SELECT 1 FROM kn_vectors v WHERE v.claim_id=c.id AND v.model=:model AND v.revision=:revision) ORDER BY c.id LIMIT :limit",claim_from_clause().replace("FROM kn_claims c","FROM kn_claims c CROSS JOIN kn_search_documents d"));
+   let limit=limit.min(16) as i64;let mut stmt=conn.prepare(&sql)?;
+   let rows=stmt.query_map(&*named(&a,&[(":now",&now),(":model",&model),(":revision",&revision),(":limit",&limit)]),|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<Result<_,_>>()?;
+   Ok((generation,rows))
+  })
     }
 }

@@ -99,3 +99,24 @@ impl EmbeddingClient {
         Ok(embedding)
     }
 }
+
+impl EmbeddingClient {
+    pub fn identity(&self) -> (&str, &str) {
+        (&self.model, &self.revision)
+    }
+    pub fn from_env() -> Result<Option<Self>, String> {
+        let Ok(endpoint) = std::env::var("SAIL_MEMORY_EMBEDDING_URL") else {
+            return Ok(None);
+        };
+        let required = |key| {
+            std::env::var(key)
+                .map_err(|_| format!("{key} is required with SAIL_MEMORY_EMBEDDING_URL"))
+        };
+        let model = required("SAIL_MEMORY_EMBEDDING_MODEL")?;
+        let revision = required("SAIL_MEMORY_EMBEDDING_REVISION")?;
+        let dimensions = required("SAIL_MEMORY_EMBEDDING_DIMENSIONS")?
+            .parse()
+            .map_err(|_| "invalid embedding dimensions")?;
+        Self::new(&endpoint, &model, &revision, dimensions).map(Some)
+    }
+}

@@ -50,6 +50,7 @@
       const evidence=(data.why||[]).find(w=>w.claim_id===claim.id);
       for(const link of evidence?.evidence||[]) why.append(node('p',`${link.stance} · ${link.evidence.source_kind} · ${link.evidence.source_ref || 'source receipt'}: ${link.evidence.receipt || 'No excerpt retained'}`));
       row.append(why);
+      row.append(button('Share with Discovery',()=>{if(confirm(`Share this claim with Discovery: ${value}?`))return change({action:'approve_insight',claim:claim.id,approved:true});}),button('Stop sharing',()=>change({action:'approve_insight',claim:claim.id,approved:false})));
       if(!['superseded','invalidated'].includes(claim.status)) {
         const form=node('form');const label=node('label','Correct this value');const input=node('input');input.value=value;input.required=true;input.maxLength=2000;label.append(input);const save=node('button','Save correction','quiet-button');save.type='submit';form.append(label,save);
         form.addEventListener('submit',event=>{event.preventDefault();change({action:'correct',claim:claim.id,value:input.value}).catch(fail);});row.append(form);

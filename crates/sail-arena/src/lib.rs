@@ -13,6 +13,7 @@ use sail_common::{
 
 pub mod compaction;
 pub mod knowledge;
+pub mod memory;
 pub mod store;
 
 pub use compaction::{Breadcrumb, ContextBudget, Recall, WorkingContext};
@@ -53,6 +54,7 @@ pub struct ArenaSubsystem {
     bus: Option<EventBus>,
     store: Arc<MemoryStore>,
     budget: ContextBudget,
+    voice_memory: Option<memory::MemoryClient>,
     sessions: RwLock<HashMap<String, SessionLedger>>,
 }
 
@@ -68,8 +70,41 @@ impl ArenaSubsystem {
             bus: None,
             store,
             budget: ContextBudget::from_env(),
+            voice_memory: None,
             sessions: RwLock::new(HashMap::new()),
         }
+    }
+
+    pub fn with_voice_memory(mut self, client: memory::MemoryClient) -> Self {
+        if client.principal() == SubsystemId::Dialogue {
+            self.voice_memory = Some(client);
+        }
+        self
+    }
+    pub fn long_term_context(&self, task: uuid::Uuid, query: &str) -> String {
+        self.voice_memory
+            .as_ref()
+            .and_then(|m| {
+                m.context(task, query, store::now_ms())
+                    .map_err(|e| warn!(error=%e,"Structured memory unavailable"))
+                    .ok()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn long_term_context_with_embedding(
+        &self,
+        task: uuid::Uuid,
+        query: &str,
+        embedding: Option<&sail_protocol::memory::Embedding>,
+    ) -> String {
+        self.voice_memory
+            .as_ref()
+            .and_then(|m| {
+                m.context_with_embedding(task, query, embedding, store::now_ms())
+                    .ok()
+            })
+            .unwrap_or_default()
     }
 
     pub fn with_budget(mut self, budget: ContextBudget) -> Self {
