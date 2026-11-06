@@ -303,12 +303,15 @@ function appendConversation(role, text) {
 // owner scrolls away from the bottom; scrolling back to the bottom resumes following.
 const chatFollow = (() => {
   const box = document.getElementById('conversation');
-  let follow = true, queued = false;
+  let follow = true, queued = false, programScroll = false;
   const atBottom = () => box.scrollHeight - box.scrollTop - box.clientHeight <= 4;
   const stick = () => {
     queued = false;
     // Hidden (e.g. behind another tab in the Dialogue column): nothing to scroll yet.
-    if (follow && box.clientHeight) box.scrollTop = box.scrollHeight;
+    if (follow && box.clientHeight) {
+      programScroll = true;
+      box.scrollTop = box.scrollHeight;
+    }
   };
   const schedule = () => { if (follow && !queued) { queued = true; requestAnimationFrame(stick); } };
   // Upward intent stops following at once, before a pending stick can pull the view back.
@@ -319,7 +322,10 @@ const chatFollow = (() => {
   box.addEventListener('touchstart', (e) => { touchY = e.touches[0]?.clientY ?? null; }, { passive: true });
   box.addEventListener('touchmove', (e) => { const y = e.touches[0]?.clientY; if (touchY !== null && y > touchY) leave(); touchY = y; }, { passive: true });
   // Scrollbar drags and everything else: follow exactly when the view is at the bottom.
-  box.addEventListener('scroll', () => { if (box.clientHeight) follow = atBottom(); }, { passive: true });
+  box.addEventListener('scroll', () => {
+    if (programScroll) { programScroll = false; return; }
+    if (box.clientHeight) follow = atBottom();
+  }, { passive: true });
   // Streamed tokens, Markdown/diagram renders and cards all grow the log.
   new MutationObserver(schedule).observe(box, { childList: true, subtree: true, characterData: true });
   new ResizeObserver(schedule).observe(box);

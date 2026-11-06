@@ -25,8 +25,12 @@ SHOT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/tmp/factory-room.png")
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        if self.path.startswith("/vendor/") and "/xterm/" not in self.path:
+        if self.path in ("/vendor/xterm.js", "/vendor/addon-fit.js", "/vendor/xterm.css"):
             self.path = "/vendor/xterm/" + self.path.split("/")[-1]
+        elif self.path == "/vendor/paper-shaders.js":
+            self.path = "/vendor/paper-shaders/paper-shaders.js"
+        elif self.path == "/vendor/liquidglass.js":
+            self.path = "/vendor/liquidglass/liquidglass.js"
         if self.path == "/tracker":
             self.path = "/tracker.html"
         if self.path == "/icons.svg":
