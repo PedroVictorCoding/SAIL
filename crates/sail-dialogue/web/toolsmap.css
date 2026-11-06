@@ -2,18 +2,18 @@
    Dark graphite industrial look with SAIL's orange accent; isometric scene drawn in SVG. */
 html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-root {
-  --tm-bg: #121417;
-  --tm-stage: #16181b;
-  --tm-panel: #1b1e22;
-  --tm-panel-2: #212429;
-  --tm-line: #2c3036;
-  --tm-text: #eceef0;
-  --tm-muted: #a3abb2;
-  --tm-dim: #8b939a;
-  --tm-accent: var(--accent, #FF8A32);
-  --tm-ok: #5fd38a;
-  --tm-warn: var(--warning, #E5BE79);
-  --tm-bad: #f4a3a3;
+  --tm-bg: var(--sail-base, #0a0c10);
+  --tm-stage: #10141d;
+  --tm-panel: var(--sail-surface, #141820);
+  --tm-panel-2: var(--sail-surface-raised, #1d232c);
+  --tm-line: var(--sail-glass-border, rgba(222, 238, 255, 0.13));
+  --tm-text: var(--sail-text, #f2f5fa);
+  --tm-muted: var(--sail-text-muted, #aeb8c8);
+  --tm-dim: var(--sail-text-subtle, #8592a6);
+  --tm-accent: var(--accent, #ff7a45);
+  --tm-ok: #00b894;
+  --tm-warn: var(--warning, #e5be79);
+  --tm-bad: #e17055;
   position: fixed; inset: 0; z-index: 8;
   display: grid;
   grid-template-columns: 208px minmax(0, 1fr) 340px;

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::info;
@@ -14,29 +14,42 @@ use sail_common::{
 
 pub mod design_tokens {
     pub mod colors {
-        pub const PAGE_BG: &str = "#1C2023";
-        pub const PANEL_SURFACE: &str = "#24292D";
-        pub const CONTROL_SURFACE: &str = "#292F33";
-        pub const RECESSED_SURFACE: &str = "#191D20";
-        pub const PRIMARY_TEXT: &str = "#F0F2F3";
-        pub const SECONDARY_TEXT: &str = "#B5BEC5";
-        pub const ACCENT: &str = "#FF8A32";
-        pub const FOCUS: &str = "#FFC184";
+        pub const SAIL_BASE: &str = "#0a0c10";
+        pub const SAIL_SURFACE: &str = "#141820";
+        pub const SAIL_SURFACE_RAISED: &str = "#1d232c";
+        pub const SAIL_GLASS_FILL: &str = "rgba(22, 29, 40, 0.65)";
+        pub const SAIL_GLASS_BORDER: &str = "rgba(222, 238, 255, 0.13)";
+        pub const SAIL_GLASS_HIGHLIGHT: &str = "rgba(255, 255, 255, 0.12)";
+        pub const PRIMARY_TEXT: &str = "#f2f5fa";
+        pub const SECONDARY_TEXT: &str = "#aeb8c8";
+        pub const SUBTLE_TEXT: &str = "#8592a6";
+        pub const ACCENT: &str = "#ff7a45";
+        pub const FOCUS: &str = "#ffd69f";
+
+        // Aliases for compatibility
+        pub const PAGE_BG: &str = SAIL_BASE;
+        pub const PANEL_SURFACE: &str = SAIL_SURFACE;
+        pub const CONTROL_SURFACE: &str = SAIL_SURFACE_RAISED;
+        pub const RECESSED_SURFACE: &str = "#0e121a";
     }
     pub mod depth {
-        pub const RAISED_HIGHLIGHT: &str = "inset 1px 1px 0 rgba(255,255,255,0.08)";
-        pub const RAISED_SHADOW: &str = "4px 4px 12px rgba(0,0,0,0.45)";
-        pub const INSET_HIGHLIGHT: &str = "inset -1px -1px 0 rgba(0,0,0,0.3)";
-        pub const INSET_SHADOW: &str = "inset 4px 4px 12px rgba(0,0,0,0.5)";
-        pub const ACTIVE_GLOW: &str = "0 0 12px rgba(255, 138, 50, 0.35)";
+        pub const GLASS_PANEL: &str = "0 16px 48px rgba(0,0,0,0.22), inset 0 1px rgba(255,255,255,0.09)";
+        pub const GLASS_BORDER: &str = "1px solid rgba(222, 238, 255, 0.13)";
+        pub const RAISED_HIGHLIGHT: &str = "inset 0 1px 0 rgba(255,255,255,0.12)";
+        pub const RAISED_SHADOW: &str = "0 4px 12px rgba(0,0,0,0.35)";
+        pub const INSET_HIGHLIGHT: &str = "inset 0 -1px 0 rgba(255,255,255,0.03)";
+        pub const INSET_SHADOW: &str = "inset 0 2px 6px rgba(0,0,0,0.5)";
+        pub const ACTIVE_GLOW: &str = "0 0 24px rgba(255, 122, 69, 0.35)";
     }
     pub mod layout {
-        pub const CONTROL_RADIUS: u32 = 12;
-        pub const CARD_RADIUS: u32 = 20;
+        pub const CONTROL_RADIUS: u32 = 14;
+        pub const CARD_RADIUS: u32 = 24;
+        pub const SHEET_RADIUS: u32 = 30;
         pub const PANEL_RADIUS: u32 = 28;
     }
     pub mod motion {
-        pub const FAST_TRANSITION: u64 = 120;
+        pub const FAST_TRANSITION: u64 = 140;
+        pub const STATE_TRANSITION: u64 = 420;
         pub const NORMAL_TRANSITION: u64 = 200;
         pub const IDLE_QUIET_TIMEOUT_SECS: u64 = 30;
     }
