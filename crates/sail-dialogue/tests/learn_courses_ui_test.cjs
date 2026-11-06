@@ -259,6 +259,37 @@ test('diagnostics progress after incorrect feedback and load the server report',
   assert.equal(calls[1].url, '/diagnostics/moves/report');
 });
 
+test('completed diagnostic reports use the runtime session ID without starting another check', async () => {
+  const {controller, calls} = fixture(url => {
+    if (url === '/courses/rust') return {
+      course: {id: 'rust'}, chapters: [], objectives: [],
+      diagnostic: {id: 'definition-probe', session_id: 'session-old', state: 'done'},
+    };
+    if (url.startsWith('/next')) return {kind: 'lesson', lesson_id: 'moves', reasons: []};
+    if (url === '/diagnostics/session-old/report') return {objectives: [], untested: [], summary: 'Saved report'};
+    throw Error(`Unexpected request ${url}`);
+  });
+  await controller.course('rust');
+  await controller.diagnosticReport(controller.detail.diagnostic.session_id);
+  assert.equal(controller.screen, 'report');
+  assert.equal(controller.report.summary, 'Saved report');
+  assert(calls.every(call => call.method === 'GET'));
+});
+
+test('server-settled unavailable steps can continue without certifying an assessment', async () => {
+  const settled = {...grade, result: 'unavailable', gate_decision: 'continue', next_step_id: null};
+  const {controller, calls} = fixture(url => url.endsWith('/attempt') ? settled : {
+    ...lesson, progress: {...lesson.progress, state: 'completed', current_step_id: null},
+  });
+  choose(controller);
+  await controller.submit();
+  assert.equal(gradeEvidence(controller.player.grade), 'No success certified');
+  await controller.continuePlayer();
+  assert.equal(controller.player.complete, true);
+  assert.equal(calls[1].url, '/lessons/moves');
+  assert.equal(calls.some(call => call.url.endsWith('/advance')), false);
+});
+
 test('review outage is unavailable, hints remain assistance, and queue is refetched', async () => {
   const queue = {items: [], catch_up: {total_due: 0, cap: 5, sessions: 0}};
   const {controller, calls} = fixture(url => {
@@ -269,6 +300,7 @@ test('review outage is unavailable, hints remain assistance, and queue is refetc
   choose(controller, 'review');
   controller.courseId = 'rust';
   await controller.hint();
+  assert.equal(calls[0].body, null);
   await controller.submit();
   assert.equal(calls[1].body.step_id, undefined);
   assert.equal(controller.player.grade.result, 'unavailable');
@@ -347,7 +379,8 @@ test('real backend response fixture matches navigation, input and evidence proje
     throw Error(`Unexpected fixture request: ${url}`);
   });
   await controller.catalog();
-  assert.equal(controller.courses.filter(course => course.status === 'ready').length, 2);
+  assert.equal(controller.courses.find(course => course.id === 'rust-systems').status, 'ready');
+  assert.equal(controller.courses.find(course => course.id === 'physics-engineering').status, 'planned');
   await controller.course('rust-systems');
   assert.equal(controller.error, '');
   assert.equal(controller.next.kind, samples['GET /next'].kind);
@@ -388,7 +421,6 @@ test('browser: diagnostic, lesson, hints, reveal, retry, runner outage, gate, re
     let hinted = false;
     let revealed = false;
     let loseChoiceResponse = true;
-    let runnerAvailable = false;
     const receipts = new Map();
     const steps = [
       {id: 'read', kind: 'explain', title: 'A single owner', body: [{kind: 'p', text: 'Track where a value is available.'}], hint_count: 0},
@@ -428,7 +460,7 @@ test('browser: diagnostic, lesson, hints, reveal, retry, runner outage, gate, re
       if (endpoint === '/courses') {
         result = {courses: [course, {id: 'logic', title: 'Philosophy & Logic', status: 'planned'}, {id: 'physics', title: 'Physics, Math & Engineering', status: 'planned'}]};
       } else if (endpoint === '/courses/rust') {
-        result = {course, diagnostic: {id: 'cold', session_id: diagnosticDone ? 'cold' : null, state: diagnosticDone ? 'done' : 'not_started'}, objectives: [],
+        result = {course, diagnostic: {id: 'definition-probe', session_id: diagnosticDone ? 'cold' : null, state: diagnosticDone ? 'done' : 'not_started'}, objectives: [],
           chapters: [{id: 'ownership', title: 'Ownership', lessons: [{id: 'moves', title: 'Move and borrow', minutes: 5, state: complete ? 'completed' : 'in_progress', certified: false, prerequisites: []}]}]};
       } else if (endpoint === '/next?course=rust') {
         result = diagnosticDone ? {kind: 'lesson', lesson_id: 'moves', reasons: ['Continue the current lesson.']} : {kind: 'diagnostic', reasons: ['Start with a cold diagnostic.']};
@@ -443,6 +475,7 @@ test('browser: diagnostic, lesson, hints, reveal, retry, runner outage, gate, re
         result = {lesson: {id: 'moves', course_id: 'rust', title: 'Move and borrow', minutes: 5, steps},
           progress: {current_step_id: steps[current].id, completed_step_ids: steps.slice(0, current).map(item => item.id), state: complete ? 'completed' : 'in_progress'}};
       } else if (endpoint === '/lessons/moves/hint' || endpoint === '/reviews/review-move/hint') {
+        if (endpoint.startsWith('/reviews/')) assert.equal(body, null);
         hinted = true;
         result = {level: 1, text: '<img src=x>Follow the value.', hints_used: 1, hint_count: 2, assistance_state: 'hinted'};
       } else if (endpoint === '/lessons/moves/reveal') {
@@ -459,17 +492,15 @@ test('browser: diagnostic, lesson, hints, reveal, retry, runner outage, gate, re
           if (active.kind === 'order') assert.deepEqual(body.answer.order, ['b', 'a']);
           if (active.kind === 'fill') assert.equal(body.answer.text, '  &value  ');
           if (active.kind === 'rust_edit') assert.match(body.answer.code, /<img src=x>/);
-          const unavailable = active.kind === 'rust_edit' && !runnerAvailable;
+          const unavailable = active.kind === 'rust_edit';
           result = {...grade, result: unavailable ? 'unavailable' : 'correct',
             assistance_state: revealed ? 'solution_seen' : hinted ? 'hinted' : 'independent',
             provisional_vs_retained: hinted || unavailable || active.kind === 'explain' ? 'none' : 'provisional',
-            gate_decision: unavailable ? 'retry' : current === steps.length - 1 ? 'lesson_complete' : 'continue',
+            gate_decision: unavailable ? 'continue' : current === steps.length - 1 ? 'lesson_complete' : 'continue',
             next_step_id: unavailable || current === steps.length - 1 ? null : steps[current + 1].id,
             feedback: {summary: unavailable ? 'Runner is offline.' : '<img src=x onerror=alert(1)> Checked.', explanation: [], diagnostics: [], unavailable_reason: unavailable ? 'No sandbox is configured.' : null}};
-          if (!unavailable) {
-            if (current === steps.length - 1) complete = true;
-            else current++;
-          }
+          if (current === steps.length - 1) complete = true;
+          else current++;
           receipts.set(body.attempt_id, result);
           if (active.kind === 'choice' && loseChoiceResponse) {
             loseChoiceResponse = false;
@@ -512,6 +543,11 @@ test('browser: diagnostic, lesson, hints, reveal, retry, runner outage, gate, re
     await click('View diagnostic report');
     await page.getByText('Not assessed: borrow', {exact: true}).waitFor();
     await click('Course path');
+    const checksStarted = requests.filter(item => item.endpoint === '/diagnostics').length;
+    await click('Diagnostic report');
+    await page.getByText('Not assessed: borrow', {exact: true}).waitFor();
+    assert.equal(requests.filter(item => item.endpoint === '/diagnostics').length, checksStarted);
+    await click('Course path');
     await click('Continue lesson');
     await click('Study freely');
     const before = requests.filter(item => item.endpoint.endsWith('/attempt')).length;
@@ -549,8 +585,8 @@ test('browser: diagnostic, lesson, hints, reveal, retry, runner outage, gate, re
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `overflow at ${width}`);
       await page.screenshot({path: `/tmp/courses-player-${width}.png`, fullPage: true});
     }
-    runnerAvailable = true;
-    await click('Check in sandbox');
+    assert.equal(await page.getByRole('button', {name: 'Check in sandbox', exact: true}).count(), 0);
+    await click('Continue without assessment');
     await click('Check certified advance');
     await page.getByText('Review ownership first.', {exact: true}).waitFor();
     await click('Open due reviews');

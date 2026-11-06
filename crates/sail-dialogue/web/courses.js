@@ -349,7 +349,8 @@
         const player = this.player;
         if (player.mode === 'diagnostic' || !player.step || player.browsing || this.pending) return;
         const prefix = player.mode === 'review' ? '/reviews' : '/lessons';
-        const hint = await this.api.request(`${prefix}/${encodeURIComponent(player.id)}/hint`, 'POST', {step_id: player.step.id});
+        const body = player.mode === 'review' ? null : {step_id: player.step.id};
+        const hint = await this.api.request(`${prefix}/${encodeURIComponent(player.id)}/hint`, 'POST', body);
         player.hints.push(hint);
         player.hintsUsed = hint.hints_used;
         player.hintCount = hint.hint_count;
@@ -468,7 +469,6 @@
         view.append(button(next.kind === 'review' ? 'Start due review' : next.kind === 'diagnostic' ? 'Find my starting point' : 'Continue lesson', () => controller.nextActivity(), 'courses-primary'));
       }
       view.append(list(next?.reasons));
-      // The report is keyed by the runtime session, not the check's definition id.
       if (detail.diagnostic?.state === 'done' && detail.diagnostic.session_id) {
         view.append(button('Diagnostic report', () => controller.diagnosticReport(detail.diagnostic.session_id)));
       }
@@ -550,6 +550,15 @@
     function player() {
       const p = controller.player;
       const step = p.step;
+      const settledWithoutAssessment = p.mode === 'lesson'
+        && p.grade?.result === 'unavailable'
+        && p.grade.gate_decision === 'continue';
+      const diagnosticOrReviewSettled = p.grade
+        && p.mode !== 'lesson'
+        && p.grade.result !== 'unavailable';
+      const hintsAllowed = !p.grade
+        || (p.grade.result === 'unavailable' && p.grade.gate_decision !== 'continue')
+        || (p.mode === 'lesson' && p.grade.result === 'incorrect');
       const view = element('section', null, 'courses-player');
       view.append(element('p', p.mode === 'diagnostic' ? 'Cold diagnostic · no hints or reveal' : p.mode === 'review' ? 'Delayed review · assistance is recorded' : 'Lesson', 'courses-label'));
       view.append(heading(p.lesson?.title || p.review?.objective_title || 'Find your starting point'));
@@ -576,10 +585,10 @@
       if (step.template) view.append(element('pre', step.template, 'courses-code'));
       if (p.mode === 'lesson' && p.complete && !p.browsing) {
         view.append(paragraph('The server reports this lesson completed. Completion alone does not certify retention.'), button('Check certified advance', () => controller.advance(), 'courses-primary'));
-      } else if (!p.browsing && !(p.grade && p.mode !== 'lesson' && p.grade.result !== 'unavailable')) {
+      } else if (!p.browsing && !settledWithoutAssessment && !diagnosticOrReviewSettled) {
         view.append(exercise(p));
       }
-      if (!p.browsing && !controller.pending && (!p.grade || p.grade.result === 'unavailable' || (p.mode === 'lesson' && p.grade.result === 'incorrect')) && !(p.mode === 'lesson' && p.complete)) {
+      if (!p.browsing && !controller.pending && hintsAllowed && !(p.mode === 'lesson' && p.complete)) {
         const actions = element('div', null, 'courses-actions');
         if (p.mode !== 'diagnostic' && step.hint_count > 0) {
           const count = p.hintCount ?? step.hint_count;
@@ -595,6 +604,9 @@
           }));
         }
         view.append(actions);
+      }
+      if (settledWithoutAssessment && step.kind === 'rust_edit') {
+        view.append(element('h3', 'Submitted code · not assessed'), element('pre', p.draft.code, 'courses-code'));
       }
       for (const hint of p.hints) view.append(element('p', `Hint ${hint.level}: ${hint.text}`, 'courses-note'));
       if (p.confirmReveal && !p.solution) {
@@ -744,7 +756,9 @@
       } else if (player.mode === 'diagnostic' && (grade.next || grade.done)) {
         view.append(button(grade.done ? 'View diagnostic report' : 'Next diagnostic challenge', () => controller.continuePlayer(), 'courses-primary'));
       } else if (player.mode === 'lesson') {
-        if (grade.result === 'correct' && (grade.next_step_id || grade.gate_decision === 'lesson_complete')) {
+        if (grade.result === 'unavailable' && grade.gate_decision === 'continue') {
+          view.append(button('Continue without assessment', () => controller.continuePlayer(), 'courses-primary'));
+        } else if (grade.result === 'correct' && (grade.next_step_id || grade.gate_decision === 'lesson_complete')) {
           view.append(button('Continue lesson', () => controller.continuePlayer(), 'courses-primary'));
         }
         if (grade.gate_decision === 'lesson_complete') {
