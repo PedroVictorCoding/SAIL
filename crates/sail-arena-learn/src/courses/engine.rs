@@ -576,6 +576,27 @@ impl CourseEngine {
         Ok(grade)
     }
 
+    /// Read-only state of a placement check: its current item, or `done`. It never starts a
+    /// session, so a reloaded client can resume without side effects.
+    pub fn diagnostic_view(&self, id: &str) -> Result<Value> {
+        let p = self.diagnostic_course(id)?;
+        let events = self.store.events()?;
+        let finished = events
+            .iter()
+            .any(|s| matches!(&s.event, CourseEvent::DiagnosticFinished { id: d } if d == id));
+        let next = if finished {
+            None
+        } else {
+            self.diagnostic_next(p, id, &events)?
+        };
+        Ok(json!({
+            "id": id,
+            "course_id": p.id,
+            "step": next.map(|s| label(&s.view(id, false))),
+            "done": next.is_none(),
+        }))
+    }
+
     pub fn diagnostic_report(&self, id: &str) -> Result<Value> {
         let p = self.diagnostic_course(id)?;
         let events = self.store.events()?;

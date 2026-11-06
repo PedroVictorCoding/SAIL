@@ -95,6 +95,27 @@ async fn courses_api_contract() {
     assert_eq!(g["result"], "correct");
     assert_eq!(g["next"]["id"], "d-copy");
     sample.insert("POST /diagnostics/:id/attempt".into(), g);
+    let (status, view) = call(&app, "GET", &format!("/diagnostics/{diag}"), None, true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        view["step"]["id"], "d-copy",
+        "GET shows the current item without side effects"
+    );
+    assert_eq!(view["done"], false);
+    let (_, resumed) = call(
+        &app,
+        "POST",
+        "/diagnostics",
+        Some(json!({"course_id": "rust-systems"})),
+        true,
+    )
+    .await;
+    assert_eq!(
+        resumed["id"],
+        json!(diag),
+        "POST resumes the open check instead of starting another"
+    );
+    sample.insert("GET /diagnostics/:id".into(), view);
     let (_, course) = call(&app, "GET", "/courses/rust-systems", None, true).await;
     assert_eq!(course["diagnostic"]["session_id"], json!(diag));
     let (status, _) = call(
