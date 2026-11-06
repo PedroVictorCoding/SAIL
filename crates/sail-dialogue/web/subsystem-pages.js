@@ -1,6 +1,8 @@
 'use strict';
 
-// Matches sail_common::SubsystemId; Agents and Forge are separate workspaces.
+// Mostly matches sail_common::SubsystemId; Agents and Forge are separate workspaces, and
+// Memory is Arena's store shown on its own page. `tabs` limits a shared card to the
+// tabs that belong to the page.
 const subsystemPages = [
   {
     "id": "factory",
@@ -51,16 +53,31 @@ const subsystemPages = [
     "id": "arena",
     "name": "Arena",
     "icon": "arena",
-    "subtitle": "Learn and remember",
-    "description": "Learn something step by step, and review what SAIL remembers.",
+    "subtitle": "Learn step by step",
+    "description": "Learn something step by step with an assessment, a lesson map and guided teaching.",
     "card": "memoryCard",
     "panel": "learnPanelMain",
+    "tabs": ["learnPanelMain"],
     "settings": null,
     "details": [
       "Arena Learn: assessment, a lesson map and step-by-step teaching",
+      "Research collections"
+    ]
+  },
+  {
+    "id": "memory",
+    "name": "Memory",
+    "icon": "mesh",
+    "subtitle": "What SAIL remembers",
+    "description": "Search, review and export what SAIL remembers from your conversations.",
+    "card": "memoryCard",
+    "panel": "memoryPanelMain",
+    "tabs": ["memoryPanelMain"],
+    "settings": null,
+    "details": [
       "Episodic memory",
       "Associative knowledge graph",
-      "Research collections"
+      "Change history and export"
     ]
   },
   {
@@ -216,6 +233,12 @@ function initializeSubsystemPages() {
     card.before(marker);
     cardHomes.set(card, marker);
   }
+  // Hide the tabs of a shared card that belong to another page; with one tab left, hide the row.
+  function showCardTabs(card, allowed) {
+    const tabs = [...card.querySelectorAll('.card-tab')];
+    for (const tab of tabs) tab.hidden = !!allowed && !allowed.includes(tab.dataset.tabPanel);
+    for (const list of card.querySelectorAll('.card-tabs')) list.hidden = !!allowed && tabs.filter(tab => !tab.hidden).length < 2;
+  }
   function pageLink(item, className) {
     const link = document.createElement('a');
     link.className = className; link.href = `#${item.id}`; link.dataset.page = item.id;
@@ -240,7 +263,7 @@ function initializeSubsystemPages() {
     if (!found && route === 'home' && id !== 'home') history.replaceState(null, '', '#home');
     closeSheet();
     // Move original nodes so socket updates, form state, and listeners stay live.
-    for (const [card, marker] of cardHomes) marker.after(card);
+    for (const [card, marker] of cardHomes) { marker.after(card); showCardTabs(card, null); }
     content.replaceChildren(); home.hidden = route !== 'classic'; page.hidden = !item;
     workspace.setAttribute('aria-label', `${item?.name || (route === 'entertainment' ? 'Entertainment' : 'Home')} workspace`);
     document.title = `SAIL — ${item?.name || {classic: 'Home', tracker: 'Tracker', entertainment: 'Entertainment'}[route] || 'Workspace'}`;
@@ -259,7 +282,11 @@ function initializeSubsystemPages() {
       notice.textContent = item.card ? '' : `${item.name} controls and results are not connected to this interface yet.`;
       const settings = document.getElementById('subsystemSettings'); settings.hidden = !item.settings;
       settings.onclick = () => { openSheet(contextSheet); contextSheet.querySelector(`[data-settings-tab="${item.settings}"]`)?.click(); };
-      if (item.card) { content.append(document.getElementById(item.card)); if (item.panel) switchCardTab(item.card, requestedPanel || item.panel); }
+      if (item.card) {
+        const card = document.getElementById(item.card); content.append(card); showCardTabs(card, item.tabs);
+        const panel = item.tabs && !item.tabs.includes(requestedPanel) ? item.panel : requestedPanel || item.panel;
+        if (panel) switchCardTab(item.card, panel);
+      }
 
     }
     currentPage = route; requestedPanel = null; workspace.scrollTop = 0;
