@@ -3807,7 +3807,7 @@ a.nav-item { text-decoration:none; color:var(--muted) }
 
 /* ==========================================================================
    Return Briefing & Session Staging Deck ("While Away" Intelligence Layer)
-   Adheres to DESIGN.md dark tactile neumorphism and WCAG AA contrast.
+   Adheres to DESIGN.md ambient glass, living light, and WCAG AA contrast.
    ========================================================================== */
 .return-briefing-deck {
   margin-bottom: var(--space-6);

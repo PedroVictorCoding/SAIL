@@ -12,7 +12,7 @@ Before planning or editing any feature, read [SAIL Master Vision](docs/SAIL_MAST
 ## UI design requirements
 
 Before creating or changing UI, read and follow [DESIGN.md](DESIGN.md). Its shared
-neumorphism, accessibility, and verification rules are acceptance criteria for
+ambient glass, living light, accessibility, and verification rules are acceptance criteria for
 UI changes by every coding assistant. Apply them within the requested scope.
 
 ## Mandatory branch and pull-request workflow
