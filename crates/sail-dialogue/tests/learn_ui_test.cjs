@@ -82,6 +82,16 @@ test('practice outcomes are described without mastery or scores', () => {
   }
 });
 
+test('practice reminders carry the topic into a new practice session', () => {
+  assert.equal(ui.learnPracticeLink('#arena?practice=TCP%20congestion'), 'TCP congestion');
+  assert.equal(ui.learnPracticeLink('#arena?practice=Congestion+control'), 'Congestion control');
+  assert.equal(ui.learnPracticeLink('#arena'), '');
+  assert.equal(ui.learnPracticeLink(''), '');
+  assert.equal(ui.learnPracticeLink('#other?practice=TCP'), '');
+  assert.equal(ui.learnPracticeLink('#arena?practice='), '');
+  assert.equal(ui.learnPracticeLink(`#arena?practice=${'x'.repeat(400)}`).length, 300);
+});
+
 test('diagrams render only bounded Mermaid and fall back honestly', () => {
   const good = ui.learnDiagram({mermaid: 'flowchart TD\n  a-->b', caption: 'A to B', node_id: 'ack'});
   assert.deepEqual([good.usable, good.caption, good.error], [true, 'A to B', '']);

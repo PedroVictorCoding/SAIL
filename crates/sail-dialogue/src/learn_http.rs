@@ -459,6 +459,20 @@ struct ReviewBody {
     utc_offset_minutes: i32,
 }
 
+/// Percent-encode one URL component so a session goal survives the fragment round-trip.
+fn encode_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
 /// Schedules one opt-in Pulse reminder after practice (#257). Off unless this is called.
 async fn schedule_review(
     State(s): State<Arc<LearnState>>,
@@ -479,9 +493,12 @@ async fn schedule_review(
     let view = s.engine.view(&id).map_err(error)?;
     let due = chrono::Utc::now() + chrono::Duration::days(i64::from(b.days));
     let text = format!("Practise: {}", view.goal);
+    // The reminder opens Arena Learn in practice mode with this topic prefilled (#257).
+    let link = format!("#arena?practice={}", encode_component(&view.goal));
     let reminder = pulse
         .create(
             sail_pulse::NewReminder::new(text, due, b.timezone, b.utc_offset_minutes)
+                .and_then(|new| new.with_link(Some(link)))
                 .map_err(|e| error(TurnError::Invalid(e.to_string())))?,
         )
         .map_err(|e| error(TurnError::Invalid(e.to_string())))?;

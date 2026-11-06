@@ -468,6 +468,19 @@
     } catch (error) { cancel(); throw error; }
   }
 
+  // A spaced-practice reminder links here with the topic to practise (#257).
+  function learnPracticeLink(hash) {
+    const raw = String(hash || '');
+    if (!raw.startsWith('#arena')) return '';
+    const query = raw.split('?')[1] || '';
+    if (!query) return '';
+    try {
+      return (new URLSearchParams(query).get('practice') || '').trim().slice(0, 300);
+    } catch (_) {
+      return '';
+    }
+  }
+
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       learnCaptureAudio,
@@ -486,6 +499,7 @@
       learnLayoutPlanDag,
       learnContextMeter,
       learnPracticeText,
+      learnPracticeLink,
       learnDiagram,
     };
   }
@@ -2020,8 +2034,8 @@
     }
     if (summaryGrid) {
       summaryGrid.innerHTML = `
-        <div>Input: <strong>${(view.input_tokens || 0).toLocaleString()}</strong></div>
-        <div>Output: <strong>${(view.output_tokens || 0).toLocaleString()}</strong></div>
+        <div>Prompt: <strong>${(view.input_tokens || 0).toLocaleString()}</strong></div>
+        <div>Completion: <strong>${(view.output_tokens || 0).toLocaleString()}</strong></div>
         <div>Context: <strong>${pct}%</strong></div>
         <div>Events: <strong>${view.last_seq || 0}</strong></div>
       `;
@@ -2030,9 +2044,49 @@
       turnsList.replaceChildren();
       for (const t of turns) {
         const row = document.createElement('div');
-        row.textContent = `Turn ${t.turn} (${t.role}): ${(t.input_tokens || 0) + (t.output_tokens || 0)} tok`;
+        const prompt = (t.input_tokens || 0).toLocaleString();
+        const completion = (t.output_tokens || 0).toLocaleString();
+        row.textContent = `Turn ${t.turn} (${t.role}): ${prompt} prompt + ${completion} completion`;
         turnsList.appendChild(row);
       }
+    }
+  }
+
+  function reviewDueText(ms) {
+    const date = new Date(Number(ms));
+    return Number.isNaN(date.getTime())
+      ? 'a later day'
+      : date.toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'});
+  }
+
+  // Opt-in spaced practice (#257). The offer appears only after a practice attempt; a reminder
+  // that already exists replaces it with its real due time and a cancel action.
+  function renderReview(view) {
+    const strip = $('learnReviewStrip');
+    if (!strip) return;
+    const practice = view && view.kind === 'practice' ? view.practice : null;
+    const problems = practice && Array.isArray(practice.problems) ? practice.problems : [];
+    const attempted = problems.some(p => p && p.outcome);
+    const review = view && view.review;
+    const activeProblem = Boolean(practice && practice.active_problem);
+    strip.hidden = !(review || (attempted && !activeProblem));
+
+    const offer = $('learnReviewOffer');
+    const active = $('learnReviewActive');
+    if (offer) offer.hidden = Boolean(review);
+    if (active) active.hidden = !review;
+
+    const text = $('learnReviewText');
+    if (text) {
+      text.textContent = review
+        ? `Practice again on ${reviewDueText(review.due_at_ms)}.`
+        : 'Practise this topic again later? You choose.';
+    }
+    const activeText = $('learnReviewActiveText');
+    if (activeText) {
+      activeText.textContent = review
+        ? `Reminder set for ${reviewDueText(review.due_at_ms)}.`
+        : '';
     }
   }
 
@@ -2067,6 +2121,7 @@
     renderTranscript(view);
     renderDock(view);
     renderSessionStatsBar(view);
+    renderReview(view);
 
     const msgInput = $('learnMessageInput');
     const msgSend = $('learnMessageSend');
@@ -2250,6 +2305,41 @@
     }, {passive: false});
   }
 
+  async function startSessionFromInput() {
+    const input = $('learnGoal');
+    if (!input) return;
+    const goal = input.value.trim();
+    if (!goal) return;
+    try {
+      const view = await api('/sessions', 'POST', {
+        goal,
+        kind: state.homeMode,
+        graph_context: state.pickedProps,
+      });
+      input.value = '';
+      state.pickedProps = [];
+      updatePickedNodesUi();
+      state.sessionId = view.session;
+      applyView(view);
+      loadSessions();
+      connectStream(view.session);
+    } catch (err) {
+      setStatus(err.message, 'failed', false);
+    }
+  }
+
+  // Open the practice topic carried by a spaced-practice reminder (#257).
+  async function openPracticeLink() {
+    const topic = learnPracticeLink(location.hash);
+    if (!topic) return;
+    history.replaceState(null, '', '#arena');
+    setHomeMode('practice');
+    showHomeView();
+    const input = $('learnGoal');
+    if (input) input.value = topic;
+    await startSessionFromInput();
+  }
+
   function init() {
     if (!$('learnStartForm')) return;
 
@@ -2312,24 +2402,32 @@
     });
 
     // Start new session form (Teaching or Practice, with optional picked graph propositions)
-    $('learnStartForm').addEventListener('submit', async e => {
+    $('learnStartForm').addEventListener('submit', e => {
       e.preventDefault();
-      const input = $('learnGoal');
-      const goal = input.value.trim();
-      if (!goal) return;
+      startSessionFromInput();
+    });
+
+    // Opt-in spaced-practice reminder (#257). Off unless the learner asks for one.
+    $('learnReviewScheduleBtn')?.addEventListener('click', async () => {
+      if (!state.sessionId) return;
+      const days = Number($('learnReviewDays')?.value || 3);
       try {
-        const view = await api('/sessions', 'POST', {
-          goal,
-          kind: state.homeMode,
-          graph_context: state.pickedProps,
+        const view = await api(`/sessions/${encodeURIComponent(state.sessionId)}/review`, 'POST', {
+          days,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+          utc_offset_minutes: -new Date().getTimezoneOffset(),
         });
-        input.value = '';
-        state.pickedProps = [];
-        updatePickedNodesUi();
-        state.sessionId = view.session;
         applyView(view);
-        loadSessions();
-        connectStream(view.session);
+      } catch (err) {
+        setStatus(err.message, 'failed', false);
+      }
+    });
+    $('learnReviewCancelBtn')?.addEventListener('click', async () => {
+      if (!state.sessionId) return;
+      try {
+        const result = await api(`/sessions/${encodeURIComponent(state.sessionId)}/review`, 'DELETE');
+        if (result && result.cancelled) setStatus('Practice reminder cancelled.', 'ready', false);
+        applyView(await api(`/sessions/${encodeURIComponent(state.sessionId)}`));
       } catch (err) {
         setStatus(err.message, 'failed', false);
       }
@@ -2657,19 +2755,21 @@
     window.addEventListener('pagehide', () => dictation.cancel());
     document.addEventListener('visibilitychange', () => { if (document.hidden) dictation.cancel(); });
     window.addEventListener('hashchange', () => {
-      if (location.hash !== '#arena') dictation.cancel();
-      if (location.hash === '#arena') {
+      const arena = location.hash.startsWith('#arena');
+      if (!arena) dictation.cancel();
+      if (arena) {
         loadSessions();
         refreshGraph();
         refreshActivityDock();
       }
+      openPracticeLink();
     });
     $('learnTab')?.addEventListener('click', () => {
       loadSessions();
       refreshGraph();
     });
 
-    if (location.hash === '#arena') {
+    if (location.hash.startsWith('#arena')) {
       loadSessions();
       refreshGraph();
       refreshActivityDock();
@@ -2679,6 +2779,7 @@
         refreshGraph();
       }, 300);
     }
+    openPracticeLink();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

@@ -622,6 +622,27 @@
                   <button class="lh-btn-secondary" id="learnRetry" type="button" hidden>Try again</button>
                 </div>
 
+                <!-- Opt-in spaced practice (#257); the reminder opens a new practice session. -->
+                <div class="lh-review-strip" id="learnReviewStrip" hidden>
+                  <div class="lh-review-copy">
+                    <span class="lh-eyebrow">SPACED PRACTICE</span>
+                    <p id="learnReviewText">Practise this topic again later? You choose.</p>
+                  </div>
+                  <div class="lh-review-actions" id="learnReviewOffer">
+                    <label class="sr-only" for="learnReviewDays">When to practise again</label>
+                    <select id="learnReviewDays">
+                      <option value="1">Tomorrow</option>
+                      <option value="3" selected>In 3 days</option>
+                      <option value="7">In 7 days</option>
+                    </select>
+                    <button type="button" class="lh-top-action-btn" id="learnReviewScheduleBtn">Remind me</button>
+                  </div>
+                  <div class="lh-review-actions" id="learnReviewActive" hidden>
+                    <span id="learnReviewActiveText"></span>
+                    <button type="button" class="lh-top-action-btn lh-danger-text" id="learnReviewCancelBtn">Cancel reminder</button>
+                  </div>
+                </div>
+
                 <!-- Scrollable Conversation Transcript + Hidden/Drawer Map for compatibility -->
                 <div class="lh-session-body learn-layout">
                   <nav class="lh-map-drawer learn-map" id="learnMapAside" aria-label="Learning map" hidden>

@@ -1,7 +1,24 @@
 # SAIL Design System — Ambient Glass, Living Light & State-Driven Motion
 
-**Status:** proposed design-system replacement for the former neumorphic direction.
+**Status:** adopted. The tokens and primitives are implemented in `crates/sail-dialogue/web/tokens.css`; the Reader Library composition (#339, #341) is the reference implementation for a calm, information-dense workspace. Live voice/Orb states still need their own measured slices.
 **Authority:** this file governs new or materially revised UI. `docs/SAIL_UI_DESIGN_GUIDE.md` provides component implementation examples. The eight owner-supplied visual references are documented in `docs/design/AMBIENT_GLASS_REFERENCES.md`; artwork must not be copied as production UI.
+
+## Reference implementation
+
+The Reader Library (`crates/sail-dialogue/web/reader.css`, `#library`) is the worked
+example to copy from:
+
+- it consumes only shared `--sail-*` tokens for material, typography, radii and focus;
+- it composes a navigator, a featured/primary region and a contextual activity column,
+  stacking them below 1180px and 700px instead of hiding capabilities;
+- illumination is a single static localized tint, with no blur, no new activity reducer,
+  no continuous animation and no external artwork;
+- metrics (progress, counts, timestamps) come from persisted records, never invented;
+- it includes `prefers-reduced-transparency`, `forced-colors` and keyboard-focus handling;
+- its Playwright fixture test covers 1440/768/390/360 widths and the empty/error states.
+
+New workspaces follow that material and composition discipline unless a live,
+immersive state (Section 3) explicitly justifies more motion.
 
 ## Design goal
 
@@ -104,6 +121,16 @@ Small at rest and only visually prominent for active voice. Color, breathing, gl
 ### Glass panels and contextual cards
 Minimal floating glass for playback, system activity, tool inspector, permission reviews and compact reader controls. Prefer flat panes with a single soft radial glow at a corner; chart content must be accurate. Data cards show real timestamps, units and sources; no fake progress percentages.
 
+### Library, reading and study workspaces
+Use the #341 composition: a thin navigator, a primary content column, and one contextual
+column for saved activity or related material. The shell uses an opaque `--sail-surface`
+with one static localized tint; do not stack translucent cards or animate the backdrop
+behind text. Progress is percentage-by-text from the persisted position, and activity
+lists show real saved timestamps. Reading and exercise text keeps its own neutral,
+non-animated theme. Below 1180px the contextual column moves under the content; on phones
+all regions stack with full-width actions. The same rules apply to Arena Learn lesson and
+practice surfaces: truthful state, stable text, no ambient motion while the learner reads.
+
 ### Timelines and daily phases
 Use a vertical timeline / anchored events for Life, Pulse, Calendar and Health schedules. The gradient tint can reflect task class or phase when real data exists. **Do not infer medical recommendations from a designer reference.** Calendar remains source-truth from #335.
 
@@ -129,7 +156,7 @@ Clear and semantic; responsive glass sheets only when needed. Selected navigatio
 
 **Decision (owner, 2026-11-06): Paper Shaders + liquid glass.** The CSS-only default
 did not reach the references, so:
-- **Paper Shaders** (`@paper-design/shaders`, Apache-2.0, vendored subset `web/vendor/paper-shaders/`): exactly **one** `MeshGradient` canvas per page, mounted by `web/ambient-backdrop.js` behind the page (`data-sail-backdrop` on `<html>`). Home lights it from the ambient state contract (`--sail-light-*`, read as targets, not computed mid-transition); the Library lights it from the featured book's cover. Rendered at ≤1280×800 (subtle ≤640×400) and upscaled; grain is a CSS overlay. Paused when hidden or off-screen, and while a book is open.
+- **Paper Shaders** (`@paper-design/shaders`, Apache-2.0, vendored subset `web/vendor/paper-shaders/`): exactly **one** `MeshGradient` canvas per page, mounted by `web/ambient-backdrop.js` behind the page (`data-sail-backdrop` on `<html>`). Home lights it from the ambient state contract (`--sail-light-*`, read as targets, not computed mid-transition); the Library lights it from the featured book's cover. Rendered at ≤1280×800 (subtle ≤640×400) and upscaled; grain is a CSS overlay. Paused when hidden or off-screen, and while a book is open. Light changes have a **cooldown**: each change holds ≥2.5 s and fades over 1.2 s; changes inside the hold are coalesced to the latest, so quick state flips never strobe the page (status indicators, not the backdrop, carry immediacy).
 - **Liquid glass** (`@ybouane/liquidglass`, MIT, `web/vendor/liquidglass/`): only in **expressive** mode on non-touch devices, loaded on demand, for elements marked `data-sail-lens`. The lens is an empty element in the backdrop layer that tracks the real element, so it refracts the shader light and never rasterises page content.
 - Owner setting `sail.ambientVisuals` (localStorage) = `off | subtle | expressive`; default expressive, subtle on touch. Reduced transparency / forced colours → off; reduced motion → still frame; no WebGL2 → CSS gradient of the same light.
 - Test: `scripts/ui/ambient_backdrop_browser_test.py`.
@@ -151,7 +178,7 @@ Required ADR compares runtime size, Dioxus interop, license, Android WebView sup
 
 1. Audit current SAIL component/tokens/CSS and status event protocol; preserve one authoritative visual state reducer in client UI. Make a crosswalk from former neumorphic tokens and remove obsolete universal shadow classes deliberately.
 2. Create shared `AmbientState` enum/state reducer + CSS `data-sail-state` hooks, semantic colors, a single `GlassSurface` primitive, `LuminousAccent`, `AmbientBackdrop`, and optional `OrbReactive`. Avoid new renderers, duplicate telemetry, model-driven HTML/CSS.
-3. Implement **one vertical slice**: idle → listening → thinking → speaking → idle, and real disconnected/error/recording semantics on Web and Android. Simulated fixture only in Storybook/demo, never in live UI.
+3. Implement **one vertical slice**: ready → listening → thinking → speaking → ready, and real disconnected/error/recording semantics on Web and Android. Simulated fixture only in Storybook/demo, never in live UI. The Reader Library (#341) is the completed calm-workspace slice: reuse its tokens, responsive composition and verification rather than inventing a second material system.
 4. Add focused component tests and a manual storyboard capturing at least one screenshot for each state and breakpoint (desktop 1440, mobile 360/390). Compare against owner-provided references and `docs/design/AMBIENT_GLASS_REFERENCES.md`.
 5. Profile before using advanced shaders; test Web GPU-limited and reduced-motion/forced-colors modes. No production fake numbers or state.
 6. Use actual `DESIGN.md` as code-review acceptance. Mark visual QA limitations honestly; do not claim rendered comparison unless performed on target devices.

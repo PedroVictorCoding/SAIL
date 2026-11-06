@@ -1,0 +1,988 @@
+{
+  "recorded_at": "2026-11-06T13:35:27.118181536+00:00",
+  "endpoint": "http://127.0.0.1:8081/v1/chat/completions",
+  "model": "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+  "limits": {
+    "inference_timeout_ms": 1800000,
+    "max_output_tokens": 1024
+  },
+  "sessions": [
+    {
+      "session": "learn_728e2f9a65e343e782f0e391043e1656",
+      "goal": "Understand TCP congestion control",
+      "kind": "teach",
+      "mode": "teach",
+      "probe": {
+        "summary": "The learner has limited understanding of TCP congestion control. They do not seem to know that routers drop packets when buffers are full, that missing ACKs indicate packet loss, or that congestion control aims to prevent network overload. They also do not recognize the sliding window protocol as a key mechanism.",
+        "known": [],
+        "gaps": [
+          "Understanding that routers drop packets during congestion",
+          "Recognizing that missing ACKs signal packet loss",
+          "Knowing the purpose of TCP congestion control (preventing overload)",
+          "Identifying the sliding window protocol as a congestion control mechanism"
+        ]
+      },
+      "plan": {
+        "revision": 1,
+        "goal": "goal",
+        "nodes": [
+          {
+            "id": "routers_drop",
+            "title": "Routers drop packets during congestion"
+          },
+          {
+            "id": "missing_acks",
+            "title": "Missing ACKs signal packet loss"
+          },
+          {
+            "id": "congestion_purpose",
+            "title": "Purpose of TCP congestion control"
+          },
+          {
+            "id": "sliding_window",
+            "title": "Sliding window protocol"
+          },
+          {
+            "id": "goal",
+            "title": "Understand TCP congestion control"
+          }
+        ],
+        "edges": [
+          [
+            "routers_drop",
+            "missing_acks"
+          ],
+          [
+            "missing_acks",
+            "congestion_purpose"
+          ],
+          [
+            "congestion_purpose",
+            "sliding_window"
+          ],
+          [
+            "sliding_window",
+            "goal"
+          ]
+        ],
+        "order": [
+          "routers_drop",
+          "missing_acks",
+          "congestion_purpose",
+          "sliding_window",
+          "goal"
+        ],
+        "mermaid": "flowchart TD\n  routers_drop[\"Routers drop packets during congestion\"]\n  missing_acks[\"Missing ACKs signal packet loss\"]\n  congestion_purpose[\"Purpose of TCP congestion control\"]\n  sliding_window[\"Sliding window protocol\"]\n  goal[\"Understand TCP congestion control\"]\n  routers_drop --> missing_acks\n  missing_acks --> congestion_purpose\n  congestion_purpose --> sliding_window\n  sliding_window --> goal\n"
+      },
+      "progress": {
+        "current": "missing_acks",
+        "visited": [
+          "routers_drop",
+          "missing_acks"
+        ],
+        "upcoming": [
+          "congestion_purpose",
+          "sliding_window",
+          "goal"
+        ]
+      },
+      "input_tokens": 40291,
+      "output_tokens": 1902,
+      "turns": [
+        {
+          "turn": 1,
+          "role": "prober",
+          "input_tokens": 1682,
+          "output_tokens": 211
+        },
+        {
+          "turn": 2,
+          "role": "prober",
+          "input_tokens": 1984,
+          "output_tokens": 209
+        },
+        {
+          "turn": 3,
+          "role": "prober",
+          "input_tokens": 2284,
+          "output_tokens": 181
+        },
+        {
+          "turn": 4,
+          "role": "prober",
+          "input_tokens": 2551,
+          "output_tokens": 166
+        },
+        {
+          "turn": 5,
+          "role": "teacher",
+          "input_tokens": 14026,
+          "output_tokens": 593
+        },
+        {
+          "turn": 6,
+          "role": "teacher",
+          "input_tokens": 8504,
+          "output_tokens": 274
+        },
+        {
+          "turn": 7,
+          "role": "teacher",
+          "input_tokens": 9260,
+          "output_tokens": 268
+        }
+      ],
+      "graph_context": [],
+      "active_question": "call_3f8c3224b485470e96a5ddbe8393f6f0",
+      "last_failure": null,
+      "transcript": [
+        {
+          "type": "question",
+          "id": "call_ea1ec881d6b64dfbb08450605a866476",
+          "kind": "single",
+          "prompt": "When sending data over the internet, what happens if too many packets arrive at a router at once and its buffer is full?",
+          "options": [
+            {
+              "id": "a",
+              "text": "The router sends the extra packets to a different route automatically."
+            },
+            {
+              "id": "b",
+              "text": "The router drops the extra packets."
+            },
+            {
+              "id": "c",
+              "text": "The router increases its buffer size to hold all packets."
+            },
+            {
+              "id": "d",
+              "text": "The router sends a signal to slow down the entire internet."
+            }
+          ],
+          "node_id": null,
+          "answer": {
+            "choices": [
+              "a"
+            ],
+            "confidence_pct": 65
+          },
+          "grade": "incorrect",
+          "correct": [
+            "b"
+          ],
+          "judgment": null,
+          "follow_up_of": null,
+          "tool": "probe",
+          "explanation": "When a router's buffer is full, it must drop incoming packets. This packet loss is a key signal in TCP congestion control."
+        },
+        {
+          "type": "question",
+          "id": "call_948fe784a62e408399069a83d0804116",
+          "kind": "single",
+          "prompt": "If a sender receives no acknowledgment (ACK) for a sent packet, what is the most likely reason in TCP?",
+          "options": [
+            {
+              "id": "a",
+              "text": "The packet was lost or dropped somewhere in the network."
+            },
+            {
+              "id": "b",
+              "text": "The receiver is intentionally ignoring the packet."
+            },
+            {
+              "id": "c",
+              "text": "The packet arrived but was corrupted and deleted."
+            },
+            {
+              "id": "d",
+              "text": "The network is working perfectly, but the ACK got lost."
+            }
+          ],
+          "node_id": null,
+          "answer": {
+            "choices": [
+              "d"
+            ],
+            "confidence_pct": 65
+          },
+          "grade": "incorrect",
+          "correct": [
+            "a"
+          ],
+          "judgment": null,
+          "follow_up_of": null,
+          "tool": "probe",
+          "explanation": "In TCP, if no ACK arrives, the sender assumes the packet was lost (often due to congestion) and may retransmit it."
+        },
+        {
+          "type": "question",
+          "id": "call_fed91fe4cd7a456e84e9f309c522695f",
+          "kind": "single",
+          "prompt": "What is the main purpose of TCP congestion control?",
+          "options": [
+            {
+              "id": "a",
+              "text": "To encrypt data during transmission."
+            },
+            {
+              "id": "b",
+              "text": "To prevent network overload by adjusting the sending rate."
+            },
+            {
+              "id": "c",
+              "text": "To ensure data reaches the correct application."
+            },
+            {
+              "id": "d",
+              "text": "To compress data for faster transmission."
+            }
+          ],
+          "node_id": null,
+          "answer": {
+            "choices": [
+              "d"
+            ],
+            "confidence_pct": 65
+          },
+          "grade": "incorrect",
+          "correct": [
+            "b"
+          ],
+          "judgment": null,
+          "follow_up_of": null,
+          "tool": "probe",
+          "explanation": "TCP congestion control aims to avoid overwhelming the network by dynamically adjusting how much data is sent based on network conditions."
+        },
+        {
+          "type": "question",
+          "id": "call_380c00cf6da74508b74bc729156a57b1",
+          "kind": "single",
+          "prompt": "Which of these is a common mechanism used by TCP to handle congestion?",
+          "options": [
+            {
+              "id": "a",
+              "text": "Sliding window protocol"
+            },
+            {
+              "id": "b",
+              "text": "Packet encryption"
+            },
+            {
+              "id": "c",
+              "text": "Data compression"
+            },
+            {
+              "id": "d",
+              "text": "IP address masking"
+            }
+          ],
+          "node_id": null,
+          "answer": {
+            "choices": [
+              "d"
+            ],
+            "confidence_pct": 65
+          },
+          "grade": "incorrect",
+          "correct": [
+            "a"
+          ],
+          "judgment": null,
+          "follow_up_of": null,
+          "tool": "probe",
+          "explanation": "The sliding window protocol allows TCP to control the amount of data in flight, which is fundamental to managing congestion."
+        },
+        {
+          "type": "notice",
+          "text": "Assessment finished: The learner has limited understanding of TCP congestion control. They do not seem to know that routers drop packets when buffers are full, that missing ACKs indicate packet loss, or that congestion control aims to prevent network overload. They also do not recognize the sliding window protocol as a key mechanism."
+        },
+        {
+          "type": "notice",
+          "text": "Lesson plan revision 1: 5 steps"
+        },
+        {
+          "type": "explain",
+          "node_id": "routers_drop",
+          "text": "When too many packets arrive at a router at once, its buffer fills up. Once full, the router must drop incoming packets to keep processing the ones it has."
+        },
+        {
+          "type": "question",
+          "id": "call_f24e7ac7f80a41d99f6c1e8bf0198d19",
+          "kind": "single",
+          "prompt": "If a router's buffer is full, what happens to new incoming packets?",
+          "options": [
+            {
+              "id": "a",
+              "text": "They are dropped."
+            },
+            {
+              "id": "b",
+              "text": "They are queued indefinitely."
+            },
+            {
+              "id": "c",
+              "text": "They are sent to a backup router."
+            },
+            {
+              "id": "d",
+              "text": "They are compressed to fit."
+            }
+          ],
+          "node_id": "routers_drop",
+          "answer": {
+            "choices": [
+              "a"
+            ],
+            "confidence_pct": 65
+          },
+          "grade": "correct",
+          "correct": [
+            "a"
+          ],
+          "judgment": null,
+          "follow_up_of": null,
+          "tool": "quiz",
+          "explanation": "When a router's buffer is full, it drops new incoming packets to manage the overflow."
+        },
+        {
+          "type": "explain",
+          "node_id": "missing_acks",
+          "text": "In TCP, the receiver sends an acknowledgment (ACK) for each packet it receives. If the sender doesn't receive an ACK, it assumes the packet was lost—often due to congestion."
+        },
+        {
+          "type": "question",
+          "id": "call_31b217baadca48079f0004aaa66373f4",
+          "kind": "single",
+          "prompt": "If a TCP sender does not receive an ACK for a sent packet, what does it most likely assume?",
+          "options": [
+            {
+              "id": "a",
+              "text": "The packet was lost in the network."
+            },
+            {
+              "id": "b",
+              "text": "The receiver is busy."
+            },
+            {
+              "id": "c",
+              "text": "The packet was delivered successfully."
+            },
+            {
+              "id": "d",
+              "text": "The network speed increased."
+            }
+          ],
+          "node_id": "missing_acks",
+          "answer": {
+            "choices": [
+              "d"
+            ],
+            "confidence_pct": 65
+          },
+          "grade": "incorrect",
+          "correct": [
+            "a"
+          ],
+          "judgment": null,
+          "follow_up_of": null,
+          "tool": "quiz",
+          "explanation": "Missing ACKs are interpreted by TCP as a sign that the packet was lost, often due to congestion."
+        },
+        {
+          "type": "explain",
+          "node_id": "missing_acks",
+          "text": "When an ACK is missing, TCP assumes the packet was lost—usually because a router dropped it during congestion. This triggers retransmission and adjustments to avoid further overload."
+        },
+        {
+          "type": "question",
+          "id": "call_3f8c3224b485470e96a5ddbe8393f6f0",
+          "kind": "single",
+          "prompt": "What does TCP do when it detects a missing ACK?",
+          "options": [
+            {
+              "id": "a",
+              "text": "It retransmits the packet and adjusts its sending rate."
+            },
+            {
+              "id": "b",
+              "text": "It stops sending data forever."
+            },
+            {
+              "id": "c",
+              "text": "It increases the sending rate."
+            },
+            {
+              "id": "d",
+              "text": "It ignores the missing ACK."
+            }
+          ],
+          "node_id": "missing_acks",
+          "answer": null,
+          "grade": null,
+          "correct": null,
+          "judgment": null,
+          "follow_up_of": null,
+          "tool": "quiz"
+        }
+      ]
+    },
+    {
+      "session": "learn_13d63bd1c188463483c46dabfefca9b0",
+      "goal": "How does TCP congestion control affect web page latency?",
+      "kind": "teach",
+      "mode": "teach",
+      "probe": {
+        "summary": "The learner understands the basic mechanics of TCP congestion control (e.g., slow start, congestion avoidance, window adjustments) but struggles to connect these mechanisms to the practical outcome of increased web page latency. Specifically, they have difficulty explaining how a reduced transmission rate due to congestion control leads to longer load times for web pages, especially when multiple resources are involved.",
+        "known": [
+          "Understands TCP congestion control mechanisms like slow start and congestion avoidance",
+          "Knows that packet loss triggers a reduction in the congestion window"
+        ],
+        "gaps": [
+          "Does not clearly link reduced transmission rates to increased web page load times",
+          "Does not understand how delays in one TCP connection can affect the overall loading of a multi-resource web page"
+        ]
+      },
+      "plan": {
+        "revision": 1,
+        "goal": "goal",
+        "nodes": [
+          {
+            "id": "step1",
+            "title": "Reduced Transmission Rate"
+          },
+          {
+            "id": "step2",
+            "title": "Delayed Resource Arrival"
+          },
+          {
+            "id": "step3",
+            "title": "Multi-Resource Dependencies"
+          },
+          {
+            "id": "goal",
+            "title": "Overall Web Page Latency"
+          }
+        ],
+        "edges": [
+          [
+            "step1",
+            "step2"
+          ],
+          [
+            "step2",
+            "step3"
+          ],
+          [
+            "step3",
+            "goal"
+          ]
+        ],
+        "order": [
+          "step1",
+          "step2",
+          "step3",
+          "goal"
+        ],
+        "mermaid": "flowchart TD\n  step1[\"Reduced Transmission Rate\"]\n  step2[\"Delayed Resource Arrival\"]\n  step3[\"Multi-Resource Dependencies\"]\n  goal[\"Overall Web Page Latency\"]\n  step1 --> step2\n  step2 --> step3\n  step3 --> goal\n"
+      },
+      "progress": {
+        "current": "step1",
+        "visited": [
+          "step1"
+        ],
+        "upcoming": [
+          "step2",
+          "step3",
+          "goal"
+        ]
+      },
+      "input_tokens": 21275,
+      "output_tokens": 1300,
+      "turns": [
+        {
+          "turn": 1,
+          "role": "prober",
+          "input_tokens": 1808,
+          "output_tokens": 184
+        },
+        {
+          "turn": 2,
+          "role": "prober",
+          "input_tokens": 2074,
+          "output_tokens": 239
+        },
+        {
+          "turn": 3,
+          "role": "prober",
+          "input_tokens": 2399,
+          "output_tokens": 221
+        },
+        {
+          "turn": 4,
+          "role": "teacher",
+          "input_tokens": 14994,
+          "output_tokens": 656
+        }
+      ],
+      "graph_context": [
+        {
+          "name": "missing acks signal packet loss",
+          "statement": "When an ACK is missing, TCP assumes the packet was lost—usually because a router dropped it during congestion. This triggers retransmission and adjustments to avoid further overload."
+        },
+        {
+          "name": "purpose of tcp congestion control",
+          "statement": "Purpose of TCP congestion control (part of Understand TCP congestion control)"
+        },
+        {
+          "name": "routers drop packets during congestion",
+          "statement": "When too many packets arrive at a router at once, its buffer fills up. Once full, the router must drop incoming packets to keep processing the ones it has."
+        }
+      ],
+      "active_question": "call_eccf71cdff2e4a8b9fefae5b6fcf9ee7",
+      "last_failure": null,
+      "transcript": [
+        {
+          "type": "question",
+          "id": "call_d0ab3d38676b47dbb1edb27c2946f68f",
+          "kind": "single",
+          "prompt": "When a TCP connection experiences packet loss due to network congestion, what is the immediate effect on the sender's transmission rate?",
+          "options": [
+            {
+              "id": "a",
+              "text": "It increases to recover lost data faster"
+            },
+            {
+              "id": "b",
+              "text": "It decreases to reduce network load"
+            },
+            {
+              "id": "c",
+              "text": "It remains unchanged"
+            },
+            {
+              "id": "d",
+              "text": "I don't know"
+            }
+          ],
+          "node_id": null,
+          "answer": {
+            "choices": [
+              "c"
+            ],
+            "confidence_pct": 65
+          },
+          "grade": "incorrect",
+          "correct": [
+            "b"
+          ],
+          "judgment": null,
+          "follow_up_of": null,
+          "tool": "probe",
+          "explanation": "TCP congestion control reduces the transmission rate (window size) when packet loss is detected to alleviate network congestion."
+        },
+        {
+          "type": "question",
+          "id": "call_034b58773bef4e428ac0cb0ab4f7fad8",
+          "kind": "single",
+          "prompt": "If a web page requires multiple TCP connections to load (e.g., for images, scripts, stylesheets), and one of those connections slows down due to congestion control, how does this affect the overall page load time?",
+          "options": [
+            {
+              "id": "a",
+              "text": "It has no effect; other connections continue at full speed"
+            },
+            {
+              "id": "b",
+              "text": "It can delay the entire page load until the slow connection recovers"
+            },
+            {
+              "id": "c",
+              "text": "It speeds up other connections to compensate"
+            },
+            {
+              "id": "d",
+              "text": "I don't know"
+            }
+          ],
+          "node_id": null,
+          "answer": {
+            "choices": [
+              "c"
+            ],
+            "confidence_pct": 65
+          },
+          "grade": "incorrect",
+          "correct": [
+            "b"
+          ],
+          "judgment": null,
+          "follow_up_of": null,
+          "tool": "probe",
+          "explanation": "Web pages often depend on multiple resources. If one TCP connection is slowed by congestion control, the browser may have to wait for that connection to recover before it can fully render the page, increasing overall latency."
+        },
+        {
+          "type": "question",
+          "id": "call_2b53024367e745268213f8a4f4a506dd",
+          "kind": "free_recall",
+          "prompt": "Explain in your own words how TCP congestion control can increase the time it takes for a web page to load.",
+          "options": [],
+          "node_id": null,
+          "answer": {
+            "choices": [],
+            "text": "The congestion window bounds unacknowledged data. Slow start doubles it each RTT; congestion avoidance grows it about one segment per RTT. Loss sets ssthresh to about half the window.",
+            "confidence_pct": 65
+          },
+          "grade": "needs_judgment",
+          "correct": null,
+          "judgment": {
+            "verdict": "incorrect",
+            "missing": "The answer describes TCP window mechanics but fails to explain how these mechanisms increase web page load time by reducing the sending rate and delaying data arrival.",
+            "feedback": "The learner correctly defines TCP congestion control mechanisms but does not connect them to the specific outcome of increased web page load times as requested.",
+            "attempts": 1
+          },
+          "follow_up_of": null,
+          "tool": "probe",
+          "explanation": "TCP congestion control aims to prevent network overload by reducing the data transmission rate when packet loss is detected. This reduction in speed means that resources needed to load a web page (like images, CSS, JavaScript) take longer to be transmitted. Since a web page often cannot be fully displayed until all its resources are received, this delay directly contributes to increased page latency."
+        },
+        {
+          "type": "notice",
+          "text": "Assessment finished: The learner understands the basic mechanics of TCP congestion control (e.g., slow start, congestion avoidance, window adjustments) but struggles to connect these mechanisms to the practical outcome of increased web page latency. Specifically, they have difficulty explaining how a reduced transmission rate due to congestion control leads to longer load times for web pages, especially when multiple resources are involved."
+        },
+        {
+          "type": "notice",
+          "text": "Lesson plan revision 1: 4 steps"
+        },
+        {
+          "type": "explain",
+          "node_id": "step1",
+          "text": "When TCP detects congestion (usually through packet loss), it reduces its transmission rate. This means it sends data more slowly to avoid overwhelming the network."
+        },
+        {
+          "type": "question",
+          "id": "call_eccf71cdff2e4a8b9fefae5b6fcf9ee7",
+          "kind": "single",
+          "prompt": "If a TCP connection detects packet loss, what does it typically do to its transmission rate?",
+          "options": [
+            {
+              "id": "a",
+              "text": "Increases it"
+            },
+            {
+              "id": "b",
+              "text": "Decreases it"
+            },
+            {
+              "id": "c",
+              "text": "Keeps it the same"
+            }
+          ],
+          "node_id": "step1",
+          "answer": null,
+          "grade": null,
+          "correct": null,
+          "judgment": null,
+          "follow_up_of": null,
+          "tool": "quiz"
+        }
+      ]
+    }
+  ],
+  "trace": {
+    "first": [
+      {
+        "running": false,
+        "question": false,
+        "mode": "assess",
+        "plan_revision": null,
+        "entries": 0,
+        "answered": 0,
+        "incorrect": 0
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "assess",
+        "plan_revision": null,
+        "entries": 1,
+        "answered": 0,
+        "incorrect": 0
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "assess",
+        "plan_revision": null,
+        "entries": 2,
+        "answered": 1,
+        "incorrect": 1
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "assess",
+        "plan_revision": null,
+        "entries": 3,
+        "answered": 2,
+        "incorrect": 2
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "assess",
+        "plan_revision": null,
+        "entries": 4,
+        "answered": 3,
+        "incorrect": 3
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "teach",
+        "plan_revision": 1,
+        "entries": 8,
+        "answered": 4,
+        "incorrect": 4
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "teach",
+        "plan_revision": 1,
+        "entries": 10,
+        "answered": 5,
+        "incorrect": 4
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "teach",
+        "plan_revision": 1,
+        "entries": 12,
+        "answered": 6,
+        "incorrect": 5
+      }
+    ],
+    "second": [
+      {
+        "running": false,
+        "question": false,
+        "mode": "assess",
+        "plan_revision": null,
+        "entries": 0,
+        "answered": 0,
+        "incorrect": 0
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "assess",
+        "plan_revision": null,
+        "entries": 1,
+        "answered": 0,
+        "incorrect": 0
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "assess",
+        "plan_revision": null,
+        "entries": 2,
+        "answered": 1,
+        "incorrect": 1
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "assess",
+        "plan_revision": null,
+        "entries": 3,
+        "answered": 2,
+        "incorrect": 2
+      },
+      {
+        "running": false,
+        "question": true,
+        "mode": "teach",
+        "plan_revision": 1,
+        "entries": 7,
+        "answered": 3,
+        "incorrect": 3
+      }
+    ]
+  },
+  "graph": {
+    "propositions": [
+      {
+        "id": "prop-learn_728e2f9a65e343e782f0e391043e1656-missing_acks",
+        "name": "missing acks signal packet loss",
+        "statement": "When an ACK is missing, TCP assumes the packet was lost—usually because a router dropped it during congestion. This triggers retransmission and adjustments to avoid further overload.",
+        "aliases": [
+          "missing_acks"
+        ],
+        "created_at": 1793971713499,
+        "provenance": [
+          {
+            "kind": "teaching",
+            "session_id": "learn_728e2f9a65e343e782f0e391043e1656",
+            "label": "Understand TCP congestion control",
+            "created_at": 1793971713499
+          }
+        ]
+      },
+      {
+        "id": "prop-learn_728e2f9a65e343e782f0e391043e1656-congestion_purpose",
+        "name": "purpose of tcp congestion control",
+        "statement": "Purpose of TCP congestion control (part of Understand TCP congestion control)",
+        "aliases": [
+          "congestion_purpose"
+        ],
+        "created_at": 1793971713499,
+        "provenance": [
+          {
+            "kind": "teaching",
+            "session_id": "learn_728e2f9a65e343e782f0e391043e1656",
+            "label": "Understand TCP congestion control",
+            "created_at": 1793971713499
+          }
+        ]
+      },
+      {
+        "id": "prop-learn_728e2f9a65e343e782f0e391043e1656-routers_drop",
+        "name": "routers drop packets during congestion",
+        "statement": "When too many packets arrive at a router at once, its buffer fills up. Once full, the router must drop incoming packets to keep processing the ones it has.",
+        "aliases": [
+          "routers_drop"
+        ],
+        "created_at": 1793971713499,
+        "provenance": [
+          {
+            "kind": "teaching",
+            "session_id": "learn_728e2f9a65e343e782f0e391043e1656",
+            "label": "Understand TCP congestion control",
+            "created_at": 1793971713499
+          }
+        ]
+      },
+      {
+        "id": "prop-learn_728e2f9a65e343e782f0e391043e1656-sliding_window",
+        "name": "sliding window protocol",
+        "statement": "Sliding window protocol (part of Understand TCP congestion control)",
+        "aliases": [
+          "sliding_window"
+        ],
+        "created_at": 1793971713499,
+        "provenance": [
+          {
+            "kind": "teaching",
+            "session_id": "learn_728e2f9a65e343e782f0e391043e1656",
+            "label": "Understand TCP congestion control",
+            "created_at": 1793971713499
+          }
+        ]
+      },
+      {
+        "id": "prop-learn_728e2f9a65e343e782f0e391043e1656-goal",
+        "name": "understand tcp congestion control",
+        "statement": "Understand TCP congestion control (part of Understand TCP congestion control)",
+        "aliases": [
+          "goal"
+        ],
+        "created_at": 1793971713499,
+        "provenance": [
+          {
+            "kind": "teaching",
+            "session_id": "learn_728e2f9a65e343e782f0e391043e1656",
+            "label": "Understand TCP congestion control",
+            "created_at": 1793971713499
+          }
+        ]
+      }
+    ],
+    "chains": [
+      {
+        "id": "chain-learn_728e2f9a65e343e782f0e391043e1656-congestion_purpose-sliding_window",
+        "premises": [
+          "purpose of tcp congestion control"
+        ],
+        "conclusion": "sliding window protocol",
+        "created_at": 1793971713499,
+        "source_id": "learn_728e2f9a65e343e782f0e391043e1656",
+        "source_kind": "teaching",
+        "source_label": "Understand TCP congestion control"
+      },
+      {
+        "id": "chain-learn_728e2f9a65e343e782f0e391043e1656-missing_acks-congestion_purpose",
+        "premises": [
+          "missing acks signal packet loss"
+        ],
+        "conclusion": "purpose of tcp congestion control",
+        "created_at": 1793971713499,
+        "source_id": "learn_728e2f9a65e343e782f0e391043e1656",
+        "source_kind": "teaching",
+        "source_label": "Understand TCP congestion control"
+      },
+      {
+        "id": "chain-learn_728e2f9a65e343e782f0e391043e1656-routers_drop-missing_acks",
+        "premises": [
+          "routers drop packets during congestion"
+        ],
+        "conclusion": "missing acks signal packet loss",
+        "created_at": 1793971713499,
+        "source_id": "learn_728e2f9a65e343e782f0e391043e1656",
+        "source_kind": "teaching",
+        "source_label": "Understand TCP congestion control"
+      },
+      {
+        "id": "chain-learn_728e2f9a65e343e782f0e391043e1656-sliding_window-goal",
+        "premises": [
+          "sliding window protocol"
+        ],
+        "conclusion": "understand tcp congestion control",
+        "created_at": 1793971713499,
+        "source_id": "learn_728e2f9a65e343e782f0e391043e1656",
+        "source_kind": "teaching",
+        "source_label": "Understand TCP congestion control"
+      }
+    ],
+    "sources": [
+      {
+        "id": "learn_728e2f9a65e343e782f0e391043e1656",
+        "kind": "teaching",
+        "label": "Understand TCP congestion control",
+        "created_at": 1793971713499
+      }
+    ],
+    "positions": {},
+    "render_settings": {
+      "node_size": 1.0,
+      "edge_width": 1.0,
+      "arrow_size": 1.0,
+      "label_size": 1.0,
+      "label_zoom": 1.0,
+      "show_cluster_labels": true
+    }
+  },
+  "reuse": {
+    "graph_context": [
+      {
+        "name": "missing acks signal packet loss",
+        "statement": "When an ACK is missing, TCP assumes the packet was lost—usually because a router dropped it during congestion. This triggers retransmission and adjustments to avoid further overload."
+      },
+      {
+        "name": "purpose of tcp congestion control",
+        "statement": "Purpose of TCP congestion control (part of Understand TCP congestion control)"
+      },
+      {
+        "name": "routers drop packets during congestion",
+        "statement": "When too many packets arrive at a router at once, its buffer fills up. Once full, the router must drop incoming packets to keep processing the ones it has."
+      }
+    ]
+  },
+  "counts": {
+    "first_answered": 6,
+    "first_incorrect": 5,
+    "second_answered": 3,
+    "second_incorrect": 3,
+    "graph_propositions": 5,
+    "graph_chains": 4
+  }
+}

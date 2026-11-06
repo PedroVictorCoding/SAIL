@@ -206,11 +206,14 @@ const SailReader = (() => {
     function lightFromCover(image) {
       const backdrop = window.SailBackdrop?.current;
       if (!backdrop) return;
-      backdrop.setLights(LIBRARY_LIGHT);
-      image?.addEventListener('load', () => {
+      // One change per featured book: the backdrop holds each light for a cooldown,
+      // so a default shown first would delay the cover's colours.
+      if (!image) { backdrop.setLights(LIBRARY_LIGHT); return; }
+      image.addEventListener('load', () => {
         const colors = window.SailBackdrop.paletteFromImage(image);
-        if (colors && image.isConnected) backdrop.setLights(colors);
+        if (image.isConnected) backdrop.setLights(colors || LIBRARY_LIGHT);
       }, {once: true});
+      image.addEventListener('error', () => backdrop.setLights(LIBRARY_LIGHT), {once: true});
     }
     function renderLibrary() {
       imageObserver?.disconnect();

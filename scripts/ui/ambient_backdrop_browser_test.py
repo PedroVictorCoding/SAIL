@@ -1,7 +1,8 @@
 """Ambient backdrop (Paper Shaders + liquid glass) in a real browser, fixture transport.
 
 Home: the shader mounts behind the Tools Map, follows the ambient state contract
-(idle -> speaking -> idle from /ws/voice events) and never sets state itself.
+(idle -> speaking -> idle from /ws/voice events) and never sets state itself; each
+light change holds for a cooldown and quick flips are coalesced to the latest state.
 Settings: `sail.ambientVisuals=off`, forced colours and reduced transparency mount
 nothing; reduced motion keeps a still frame; no WebGL2 falls back to CSS light.
 Library: lit by the featured cover, colour tiles carry real measurements only, a
@@ -100,16 +101,32 @@ with sync_playwright() as p:
     assert pg.evaluate("SailBackdrop.current.shader.speed") > 0
     lit = lambda: pg.evaluate("[0,1,2,3].map(i => SailBackdrop.current.layer.style.getPropertyValue('--sail-backdrop-'+i))")
     want = lambda s: pg.evaluate(f"SailBackdrop.palette(SailAmbient.STATES[{s!r}].light,'expressive').slice(1)")
-    pg.wait_for_timeout(900); assert lit() == want("idle"), (lit(), want("idle"))
+    settle = lambda s: pg.wait_for_function(
+        f"JSON.stringify([0,1,2,3].map(i => SailBackdrop.current.layer.style.getPropertyValue('--sail-backdrop-'+i)))"
+        f" === JSON.stringify(SailBackdrop.palette(SailAmbient.STATES[{s!r}].light,'expressive').slice(1))", timeout=8000)
+    settle("idle")
     pg.screenshot(path=str(SHOTS / "backdrop-home-idle.png"))
+    # Cooldown: the first change shows at once; a burst right after it is held and
+    # coalesced, so executing is never painted and speaking appears once.
+    cooldown = pg.evaluate("SailBackdrop.COOLDOWN_MS")
+    pg.wait_for_timeout(cooldown + 200)
     pg.evaluate("__push({type:'session',session_id:'s1',learning:true,control:{is_muted:false,max_recording_ms:180000}})")
     pg.evaluate("__push({type:'turn_started',turn_id:1,epoch:1,transcript:'hi',state:'thinking'})")
+    assert lit() == want("thinking"), "first change is immediate"
+    pg.evaluate("__push({type:'tool_event',epoch:1,event:{tool:'fs_read',state:'executing'}})")
+    pg.evaluate("__push({type:'tool_event',epoch:1,event:{tool:'fs_read',state:'completed'}})")
     pg.evaluate("__push({type:'response_finished',epoch:1})")
     assert pg.evaluate("document.documentElement.dataset.sailState") == "speaking"
-    pg.wait_for_timeout(900); assert lit() == want("speaking"), "backdrop follows speaking"
+    seen = []
+    for _ in range(int(cooldown / 250) + 4):
+        seen.append(lit()); pg.wait_for_timeout(250)
+    assert want("executing") not in seen, "a coalesced intermediate state is never shown"
+    assert seen[0] == want("thinking") and seen[-1] == want("speaking"), "holds, then shows the latest state"
+    changes = sum(1 for a, b in zip(seen, seen[1:]) if a != b)
+    assert changes == 1, f"one light change after the hold, saw {changes}"
     pg.screenshot(path=str(SHOTS / "backdrop-home-speaking.png"))
     pg.evaluate("__push({type:'turn_finished',epoch:1,state:'idle'})")
-    pg.wait_for_timeout(900); assert lit() == want("idle"), "and returns to idle"
+    settle("idle")
     assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth")
     pg.context.close()
 

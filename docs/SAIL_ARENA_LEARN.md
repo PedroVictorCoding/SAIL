@@ -251,7 +251,13 @@ still halves its history window and retries.
   Audio is processed by the existing on-device speech pipeline; the transcript is inserted
   for the learner to edit and is never submitted automatically.
 - After practice, the learner may opt into one Pulse reminder at 1, 3 or 7 days. It is off by
-  default and can be cancelled from the session view. Pulse owns quiet-hour timing.
+  default and can be cancelled from the session view. Pulse owns quiet-hour timing. The
+  reminder carries a same-origin `#arena?practice=<topic>` link; opening it starts a new
+  practice session with that topic. Pulse rejects absolute or scheme-bearing links so a
+  reminder cannot become an open redirect.
+- The prober is bounded to at most four diagnostic questions; after the fourth answer it must
+  call `probe_done` and hand off even if uncertainty remains. This prevents a local model from
+  looping on probes instead of teaching.
 
 ### 9.6 Learning graph, extraction, imports and retrieval (#248–#251)
 
@@ -271,3 +277,23 @@ still halves its history window and retries.
   documented gated graph-read tools. Results are bounded (`SAIL_LEARN_MEMORY_BYTES`, default
   1500), labelled untrusted data, and never presented as mastery. Automatic injection remains
   an explicit non-goal unless a future ADR reverses this decision.
+
+### 9.7 Recorded real-model journey (#215 acceptance)
+
+The opt-in harness `crates/sail-dialogue/tests/real_learn_journey.rs` drives two related teach
+sessions against a live local `llama.cpp` endpoint. It answers one diagnostic question with a
+misconception, fails the first teaching quiz to require a repair, extracts the graph, and
+passes the extracted propositions into the second session as explicit context.
+
+The 2026-11-06 CPU-only run with the resident Qwen3.6-35B-A3B model recorded:
+
+- 4 diagnostic probes and a probe summary naming the gaps;
+- a 5-node lesson plan;
+- an incorrect teaching quiz followed by a repair explanation of the same node;
+- 5 extracted propositions and 4 reasoning chains;
+- a second session created with 3 of those propositions as context.
+
+The narrative is [`SAIL_ARENA_LEARN_JOURNEY.md`](SAIL_ARENA_LEARN_JOURNEY.md) and the raw
+record is [`acceptance/arena-learn-journey-2026-11-06.json`](acceptance/arena-learn-journey-2026-11-06.json).
+This is one run on one machine, not a benchmark; GPU offload, Android/WebView and manual
+browser checks remain separate.

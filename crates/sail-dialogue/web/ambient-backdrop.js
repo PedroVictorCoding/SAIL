@@ -20,7 +20,8 @@
   const BASE = '#030407';
   const SPEED = Object.freeze({ subtle: 0.05, expressive: 0.12 });
   const MAX_PIXELS = Object.freeze({ subtle: 640 * 400, expressive: 1280 * 800 });
-  const TWEEN_MS = 700;
+  const TWEEN_MS = 1200;
+  const COOLDOWN_MS = 2500;
 
   // ---- pure helpers (unit-tested) -------------------------------------------------
 
@@ -141,10 +142,12 @@
     const paintCss = colors => colors.slice(1).forEach((c, i) => layer.style.setProperty(`--sail-backdrop-${i}`, c));
     paintCss(current);
 
-    let tween = 0;
-    function setLights(next) {
-      const target = palette(next, mode);
-      if (!target || target.join() === current.join()) return;
+    // Cooldown: after the light changes it holds for COOLDOWN_MS. Changes arriving in
+    // that window are coalesced and only the latest is shown when it ends, so quick
+    // state flips (thinking → executing → thinking → speaking) never strobe the page.
+    let tween = 0, hold = 0, pending = null, shown = current, changedAt = -Infinity;
+    function show(target) {
+      shown = target; changedAt = performance.now();
       paintCss(target);
       cancelAnimationFrame(tween);
       if (!shader) { current = target; return; }
@@ -157,6 +160,22 @@
         if (k < 1) tween = requestAnimationFrame(step); else current = target;
       };
       tween = requestAnimationFrame(step);
+    }
+    function release() {
+      hold = 0;
+      const next = pending; pending = null;
+      if (next && next.join() !== shown.join()) show(next);
+    }
+    function setLights(next) {
+      const target = palette(next, mode);
+      if (!target) return;
+      const wait = changedAt + COOLDOWN_MS - performance.now();
+      if (wait > 0 || hold) {
+        pending = target;
+        if (!hold) hold = setTimeout(release, Math.max(0, wait));
+        return;
+      }
+      if (target.join() !== shown.join()) show(target);
     }
 
     // Liquid glass: an empty lens in the backdrop layer tracks a real element above it,
@@ -204,7 +223,7 @@
       shader?.setSpeed(active ? speed : 0);
     }
     function destroy() {
-      cancelAnimationFrame(tween); cancelAnimationFrame(syncing); tracked.length = 0;
+      cancelAnimationFrame(tween); cancelAnimationFrame(syncing); clearTimeout(hold); tracked.length = 0;
       glass?.destroy(); shader?.dispose(); layer.remove(); html.classList.remove('sail-backdrop-on');
     }
     return { mode, layer, get shader() { return shader; }, setLights, setActive, addLens, destroy };
@@ -240,7 +259,7 @@
   }
 
   return {
-    MODES, STORAGE_KEY, visualsMode, parseColor, palette, paletteFromPixels, paletteFromImage, mount,
+    MODES, STORAGE_KEY, COOLDOWN_MS, visualsMode, parseColor, palette, paletteFromPixels, paletteFromImage, mount,
     get current() { return current; },
   };
 });

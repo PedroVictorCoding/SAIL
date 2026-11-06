@@ -256,7 +256,8 @@ function initializeSubsystemPages() {
   // Routes: #home (also #factory) is the Tools Map workspace; a subsystem id (or #tracker)
   // replaces the map in the workspace's centre (toolsmap.js).
   function renderRoute(focus = true) {
-    let id = location.hash.slice(1) || 'home';
+    // Fragments may carry a deep-link query (`#arena?practice=…`); the route is the id.
+    let id = location.hash.slice(1).split('?')[0] || 'home';
     if (id === 'classic') {
       history.replaceState(null, '', '#home');
       id = 'home';

@@ -100,6 +100,19 @@
     return [select, button];
   }
 
+  function openLink(reminder) {
+    const link = reminder.link;
+    if (typeof link !== 'string' || !link) return null;
+    const label = link.startsWith('#arena?practice=') ? 'Practise' : 'Open';
+    return actionButton(label, async () => {
+      if (reminder.status === 'due') {
+        await request(`/reminders/${encodeURIComponent(reminder.id)}/acknowledge`, {});
+      }
+      if (link.startsWith('#')) window.location.hash = link;
+      else window.location.assign(link);
+    });
+  }
+
   function renderReminder(reminder, isHistory = false) {
     const item = el('article', `pulse-item ${reminder.status}`);
     const main = el('div', 'pulse-item-main');
@@ -115,6 +128,8 @@
 
     const actions = el('div', 'pulse-item-actions');
     if (reminder.status === 'pending' || reminder.status === 'due') {
+      const link = openLink(reminder);
+      if (link) actions.append(link);
       actions.append(...snoozeParts(reminder));
       if (reminder.status === 'due') {
         actions.append(actionButton('Dismiss', async () => {
@@ -128,6 +143,8 @@
         await load();
       }, true));
     } else if (reminder.status === 'delivered') {
+      const link = openLink(reminder);
+      if (link) actions.append(link);
       actions.append(...snoozeParts(reminder));
     }
     item.append(actions);
