@@ -52,3 +52,12 @@ prohibited the listener; the complete enforcement run used the host execution
 context. A failed early run also caught `/dev/null` being opened after restriction;
 the worker now opens its null input before enforcement without adding a filesystem
 grant for that device.
+
+## Relationship to the unified sandbox runtime
+
+The new `sail-sandbox` crate now defines the typed `ExecutionPlan`, checked policy profiles, the
+default-deny network policy and the CONNECT broker core for issue #379. See
+[`SANDBOX_RUNTIME.md`](SANDBOX_RUNTIME.md). This worker remains an **optional additive**
+Landlock/nono layer; it does not replace the mandatory Bubblewrap/runner boundary and is not yet
+wired into every execution path. Do not route network or credential-bearing operations through
+this worker.

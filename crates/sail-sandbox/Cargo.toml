@@ -1,0 +1,22 @@
+[package]
+name = "sail-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+sail-common.workspace = true
+sail-protocol.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+libc = "0.2"
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
