@@ -97,8 +97,17 @@ async fn test_terminal_spawn_piped() {
     assert!(!session.is_alive());
 }
 
+const TEST_OWNER_TOKEN: &str = "terminal-test-owner-token-0123456789abcdef";
+
 async fn test_ws_terminal(_headers: HeaderMap, ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(|socket| sail_dialogue::terminal::handle_terminal_socket(socket, None))
+    ws.on_upgrade(|socket| {
+        let guard = sail_dialogue::terminal::TerminalGuard::new(
+            Some(TEST_OWNER_TOKEN.to_string()),
+            "test",
+            None,
+        );
+        sail_dialogue::terminal::handle_terminal_socket(socket, None, guard)
+    })
 }
 
 #[tokio::test]
@@ -139,6 +148,16 @@ async fn test_terminal_websocket_integration() {
     let (mut ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
         .await
         .expect("Failed to connect to /ws/terminal");
+
+    // The shell opens only after the socket proves it is the owner.
+    let auth = serde_json::to_string(&TerminalClientMessage::Auth {
+        token: TEST_OWNER_TOKEN.to_string(),
+    })
+    .unwrap();
+    ws_stream
+        .send(Message::Text(auth))
+        .await
+        .expect("Failed to send auth");
 
     // First message must be "connected"
     let first_msg = timeout(Duration::from_secs(5), ws_stream.next())

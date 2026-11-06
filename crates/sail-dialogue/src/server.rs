@@ -49,6 +49,8 @@ pub struct ServerState {
     services: VoiceModelServices,
     arena: Arc<sail_arena::ArenaSubsystem>,
     inference: sail_mind::MindService,
+    /// The owner token this boot uses, for the host-shell socket. Never logged.
+    owner_token: Option<String>,
     plans: Option<Arc<crate::plans::Plans>>,
     pulse: Option<Arc<sail_pulse::Pulse>>,
     briefing: Option<Arc<crate::briefing::BriefingEngine>>,
@@ -166,8 +168,9 @@ pub async fn run_dialogue_server_with_plans(
     let approval_routes = crate::approval_http::router_with_token(
         owner_authority,
         sail_guardian::global_broker().ok(),
-        active_token,
+        active_token.clone(),
     );
+    let owner_token = active_token;
     let mut app = Router::new()
         .nest_service("/api/guardian", approval_routes)
         .nest_service("/api/memory", memory_routes)
@@ -190,6 +193,7 @@ pub async fn run_dialogue_server_with_plans(
             services,
             arena,
             inference,
+            owner_token,
             plans,
             pulse,
             briefing: Some(briefing_engine),
@@ -279,7 +283,26 @@ async fn ws_handler(
         .into_response()
 }
 
-async fn ws_terminal_handler(headers: HeaderMap, ws: WebSocketUpgrade) -> axum::response::Response {
+async fn ws_terminal_handler(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> axum::response::Response {
+    terminal_upgrade(headers, ws, state.owner_token.clone())
+}
+
+/// Same-origin check, then hand the socket to the terminal, which demands the owner token
+/// before it spawns a shell.
+fn terminal_upgrade(
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+    owner_token: Option<String>,
+) -> axum::response::Response {
+    let origin_label = headers
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("none")
+        .to_string();
     if let Some(origin) = headers.get("origin") {
         let origin = origin
             .to_str()
@@ -302,7 +325,16 @@ async fn ws_terminal_handler(headers: HeaderMap, ws: WebSocketUpgrade) -> axum::
     }
     ws.max_message_size(1_048_576)
         .max_frame_size(1_048_576)
-        .on_upgrade(|socket| crate::terminal::handle_terminal_socket(socket, None))
+        .on_upgrade(move |socket| {
+            let guard = crate::terminal::TerminalGuard::new(
+                owner_token,
+                origin_label,
+                sail_guardian::global_broker()
+                    .ok()
+                    .map(|b| b.audit().clone()),
+            );
+            crate::terminal::handle_terminal_socket(socket, None, guard)
+        })
         .into_response()
 }
 struct Outbound {
@@ -3228,7 +3260,12 @@ mod tests {
 
     #[tokio::test]
     async fn ws_terminal_handler_origin_validation() {
-        let app = Router::new().route("/ws/terminal", get(ws_terminal_handler));
+        let app = Router::new().route(
+            "/ws/terminal",
+            get(|headers: HeaderMap, ws: WebSocketUpgrade| async move {
+                terminal_upgrade(headers, ws, None)
+            }),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
