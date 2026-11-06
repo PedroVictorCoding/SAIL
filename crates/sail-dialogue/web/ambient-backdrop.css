@@ -67,7 +67,8 @@ html.sail-backdrop-on .loading-indicator {
     radial-gradient(85% 80% at 50% 125%, var(--glow-hot), transparent 100%),
     radial-gradient(130% 120% at 50% 135%, var(--glow), transparent 75%),
     linear-gradient(180deg, #06070a 35%, #0b0d12);
-  box-shadow: 0 8px 26px -8px var(--glow), 0 0 22px -6px var(--glow), inset 0 1px 0 rgba(255, 255, 255, .14);
+  background-repeat: no-repeat;
+  box-shadow: 0 8px 26px -8px var(--glow), 0 0 22px -6px var(--glow);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   transition: box-shadow var(--sail-transition-fast, 140ms) var(--sail-ease),
@@ -127,5 +128,93 @@ html.sail-backdrop-on .top-actions .icon-button:hover {
   html.sail-backdrop-on .connection-pill i,
   html.sail-backdrop-on .privacy-indicator i {
     background: CanvasText;
+  }
+}
+
+/* Weak glow cards (DESIGN.md "Glow tiles and pills"): the Library tile material at lower
+   strength on every card surface. A near-black glass card, its hue pooled softly along the
+   bottom edge and a faint halo of the same hue. There is no top highlight: light only comes
+   from below. Backgrounds never repeat, so the bottom bloom can't wrap into the top border.
+   The hue names the subsystem or state the card belongs to. Band sizes are lengths on panes
+   (a tall pane gets a strip, not a flood) and percentages on small cards. */
+html.sail-backdrop-on :is(.tm-stage, .tm-chat, .tm-activity, .tm-label, .tm-sidecard,
+  .workspace-card, .briefing-card, .activity-entry) {
+  --glow: var(--sail-light-a, #5b7cff); --glow-hot: #dfe4ff;
+  --glow-a1: 56%; --glow-a2: 46%; --glow-h1: 120px; --glow-h2: 230px; --glow-y1: 24px; --glow-y2: 48px; --glow-halo: 50%;
+  --glow-bg:
+    radial-gradient(ellipse 55% var(--glow-h1) at 50% calc(100% + var(--glow-y1)),
+      color-mix(in srgb, var(--glow-hot) var(--glow-a1), transparent), transparent 100%),
+    radial-gradient(ellipse 95% var(--glow-h2) at 50% calc(100% + var(--glow-y2)),
+      color-mix(in srgb, var(--glow) var(--glow-a2), transparent), transparent 100%);
+  --glow-shadow: 0 12px 32px rgb(0 0 0 / .38),
+    0 18px 48px -22px color-mix(in srgb, var(--glow) var(--glow-halo), transparent);
+  border: 1px solid rgb(255 255 255 / .08);
+  background: var(--glow-bg), linear-gradient(180deg, rgb(6 7 10 / .86) 40%, rgb(11 13 18 / .9));
+  background-repeat: no-repeat;
+  box-shadow: var(--glow-shadow);
+}
+/* The stage keeps the ambient state light it shows behind the map. */
+html.sail-backdrop-on .tm-stage {
+  background: var(--glow-bg),
+    radial-gradient(ellipse 75% 65% at 50% 20%,
+      color-mix(in srgb, var(--sail-light-a, #496f9d) calc(var(--sail-illumination, .15) * 100%), transparent), transparent 75%),
+    var(--tm-stage);
+  background-repeat: no-repeat;
+}
+html.sail-backdrop-on .workspace-card::after { display: none; }
+html.sail-backdrop-on :is(.tm-label, .tm-sidecard, .tm-activity, .briefing-card, .activity-entry) {
+  --glow-h1: 75%; --glow-h2: 130%; --glow-y1: 4px; --glow-y2: 12px; --glow-a1: 52%; --glow-a2: 42%;
+}
+html.sail-backdrop-on :is(.tm-label, .briefing-card, .workspace-card):hover {
+  --glow-a1: 64%; --glow-a2: 52%; --glow-halo: 65%;
+}
+html.sail-backdrop-on .tm-label[aria-pressed="true"] {
+  --glow-a1: 72%; --glow-a2: 60%; --glow-halo: 75%;
+  border-color: color-mix(in srgb, var(--glow) 55%, transparent);
+}
+html.sail-backdrop-on .tm-label[aria-pressed="true"] .tm-label-icon {
+  color: var(--glow-hot); border-color: color-mix(in srgb, var(--glow) 50%, transparent);
+}
+html[data-sail-visuals=subtle].sail-backdrop-on :is(.tm-stage, .tm-chat, .tm-activity, .tm-label,
+  .tm-sidecard, .workspace-card, .briefing-card, .activity-entry) {
+  --glow-a1: 26%; --glow-a2: 20%; --glow-halo: 28%;
+}
+
+/* Hues: one per subsystem or state. */
+html.sail-backdrop-on .tm-chat { --glow: #1fa5ff; --glow-hot: #a5f3fc; }
+html.sail-backdrop-on .tm-activity { --glow: #ff9a1a; --glow-hot: #ffd45a; }
+html.sail-backdrop-on .tm-label[data-station="core"] { --glow: #7a8cff; --glow-hot: #e6ebff; }
+html.sail-backdrop-on .tm-label[data-station="dialogue"] { --glow: #1fa5ff; --glow-hot: #a5f3fc; }
+html.sail-backdrop-on .tm-label[data-station="mind"] { --glow: #7a5cff; --glow-hot: #d8c8ff; }
+html.sail-backdrop-on .tm-label[data-station="memory"] { --glow: #b84dff; --glow-hot: #f0b8ff; }
+html.sail-backdrop-on .tm-label[data-station="system"] { --glow: #14d6c8; --glow-hot: #b8fff4; }
+html.sail-backdrop-on .tm-label[data-station="vision"] { --glow: #38bdf8; --glow-hot: #c7f0ff; }
+html.sail-backdrop-on .tm-label[data-station="flow"] { --glow: #22d84a; --glow-hot: #c8ff6a; }
+html.sail-backdrop-on .tm-label[data-station="canvas"] { --glow: #ffb020; --glow-hot: #ffe08a; }
+html.sail-backdrop-on .tm-label[data-station="arena"] { --glow: #ff2f86; --glow-hot: #ff9bd0; }
+html.sail-backdrop-on .tm-label[data-station="forge"] { --glow: #ff7a1a; --glow-hot: #ffd45a; }
+html.sail-backdrop-on .tm-label[data-station="guardian"] { --glow: #ff3b3b; --glow-hot: #ffb0a0; }
+html.sail-backdrop-on .tm-label[data-station="discover"] { --glow: #5b5cff; --glow-hot: #b9a8ff; }
+html.sail-backdrop-on .tm-label[data-station="entertainment"] { --glow: #ff4fd8; --glow-hot: #ffc2f2; }
+html.sail-backdrop-on #memoryCard { --glow: #ff2f86; --glow-hot: #ff9bd0; }
+html.sail-backdrop-on #forgeCard { --glow: #ff7a1a; --glow-hot: #ffd45a; }
+html.sail-backdrop-on #pulseCard { --glow: #22d84a; --glow-hot: #c8ff6a; }
+html.sail-backdrop-on #terminalCard { --glow: #14d6c8; --glow-hot: #b8fff4; }
+html.sail-backdrop-on #systemCard { --glow: #14d6c8; --glow-hot: #b8fff4; }
+html.sail-backdrop-on #modelsCard { --glow: #7a5cff; --glow-hot: #d8c8ff; }
+html.sail-backdrop-on #canvasCard { --glow: #ffb020; --glow-hot: #ffe08a; }
+html.sail-backdrop-on #sessionCard { --glow: #1fa5ff; --glow-hot: #a5f3fc; }
+html.sail-backdrop-on #toolsCard { --glow: #5b5cff; --glow-hot: #b9a8ff; }
+html.sail-backdrop-on .briefing-music-card { --glow: #ff4fd8; --glow-hot: #ffc2f2; }
+html.sail-backdrop-on .briefing-learn-card { --glow: #ff2f86; --glow-hot: #ff9bd0; }
+html.sail-backdrop-on .briefing-events-card { --glow: #ff9a1a; --glow-hot: #ffd45a; }
+html.sail-backdrop-on .briefing-news-card { --glow: #1fa5ff; --glow-hot: #a5f3fc; }
+html.sail-backdrop-on .briefing-continuity-card { --glow: #22d84a; --glow-hot: #c8ff6a; }
+html.sail-backdrop-on .activity-entry { --glow: #ff7a1a; --glow-hot: #ffd45a; }
+
+@media (forced-colors: active) {
+  html.sail-backdrop-on :is(.tm-stage, .tm-chat, .tm-activity, .tm-label, .tm-sidecard,
+    .workspace-card, .briefing-card, .activity-entry) {
+    background: Canvas; border: 1px solid CanvasText; box-shadow: none;
   }
 }

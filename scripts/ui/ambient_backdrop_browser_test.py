@@ -5,6 +5,7 @@ Home: the shader mounts behind the Tools Map, follows the ambient state contract
 light change holds for a cooldown and quick flips are coalesced to the latest state.
 Settings: `sail.ambientVisuals=off`, forced colours and reduced transparency mount
 nothing; reduced motion keeps a still frame; no WebGL2 falls back to CSS light.
+Glow cards: every card surface carries a weak glow in its own hue, with no top line or highlight.
 Library: lit by the featured cover and fits the view; glow tiles carry real measurements only;
 the liquid-glass lens works for a floating control, and the light switches off while a book is open.
 
@@ -106,6 +107,17 @@ with sync_playwright() as p:
         f" === JSON.stringify(SailBackdrop.palette(SailAmbient.STATES[{s!r}].light,'expressive').slice(1))", timeout=8000)
     settle("idle")
     pg.screenshot(path=str(SHOTS / "backdrop-home-idle.png"))
+    # Weak glow cards everywhere: each surface carries its own hue pooled along the bottom,
+    # never repeats its background (a repeat wrapped the bloom into the top border as a
+    # coloured line) and has no inset top highlight.
+    glow = pg.evaluate("""() => ['.tm-label[data-station=forge]', '.tm-chat', '.tm-activity', '.tm-stage', '.connection-pill'].map(sel => {
+      const s = getComputedStyle(document.querySelector(sel));
+      return [sel, s.backgroundImage.includes('radial-gradient'), s.backgroundRepeat, s.boxShadow.includes('inset')];
+    })""")
+    for sel, radial, repeat, inset in glow:
+        assert radial and repeat.startswith("no-repeat") and not inset, (sel, radial, repeat, inset)
+    hues = pg.evaluate("['.tm-chat', '.tm-activity', '.tm-label[data-station=forge]'].map(s => getComputedStyle(document.querySelector(s)).getPropertyValue('--glow').trim())")
+    assert len(set(hues)) == 3, f"each surface has its own hue: {hues}"
     # Cooldown: the first change shows at once; a burst right after it is held and
     # coalesced, so executing is never painted and speaking appears once.
     cooldown = pg.evaluate("SailBackdrop.COOLDOWN_MS")
@@ -177,6 +189,8 @@ with sync_playwright() as p:
             assert pg.evaluate("document.documentElement.scrollHeight <= innerHeight"), "the Library fits the view"
             assert pg.evaluate("new Set([...document.querySelectorAll('#library-summary > div')].map(d => d.getBoundingClientRect().top)).size") == 1, "tiles share one row"
             assert pg.evaluate("getComputedStyle(document.querySelector('.reading-progress')).color") == "rgb(255, 255, 255)", "glow tile text"
+            assert pg.evaluate("[...document.querySelectorAll('#library-summary > div')].every(d => getComputedStyle(d).backgroundRepeat.startsWith('no-repeat') && !getComputedStyle(d).boxShadow.includes('inset'))"), "no top line on tiles"
+            assert pg.evaluate("getComputedStyle(document.querySelector('#library .activity-entry')).backgroundImage.includes('radial-gradient')"), "saved places glow"
             # The Library uses no lens (it fills the canvas); the lens capability still
             # works for a floating control placed over the light.
             assert pg.evaluate("document.querySelectorAll('.sail-lens').length") == 0
