@@ -181,7 +181,7 @@ impl BriefingEngine {
         let now_utc = Utc::now();
         let now_local = Local::now();
         let hour = now_local.hour();
-        let (slot_name, slot_rationale) = Self::circadian_slot(hour);
+        let (slot_name, _) = Self::circadian_slot(hour);
 
         let greeting = if hour < 12 {
             "Good morning"
@@ -208,7 +208,7 @@ impl BriefingEngine {
         };
 
         // 1. Stage Music
-        let staged_music = self.stage_music(slot_name, slot_rationale).await;
+        let staged_music = self.stage_music(slot_name).await;
 
         // 2. Stage Learning
         let learning_plan = self.stage_learning().await;
@@ -276,73 +276,31 @@ impl BriefingEngine {
         }
     }
 
-    /// Stage music through Spotify or fallback.
-    async fn stage_music(&self, slot_name: &str, slot_rationale: &str) -> Option<StagedMusic> {
-        if self.spotify.configured() && self.spotify.connected().await {
-            match self.spotify.my_playlists().await {
-                Ok(playlists) if !playlists.is_empty() => {
-                    // Try to match circadian slot with playlist name keywords
-                    let keywords: &[&str] = match slot_name {
-                        "Morning Focus" => &[
-                            "focus",
-                            "morning",
-                            "piano",
-                            "classical",
-                            "acoustic",
-                            "coffee",
-                        ],
-                        "Afternoon Flow" => &[
-                            "work",
-                            "flow",
-                            "energy",
-                            "electronic",
-                            "rock",
-                            "upbeat",
-                            "drive",
-                        ],
-                        "Evening Wind-Down" => &[
-                            "chill", "evening", "relax", "calm", "lofi", "ambient", "night",
-                        ],
-                        _ => &["ambient", "deep", "sleep", "dark", "space"],
-                    };
-
-                    let chosen = playlists
-                        .iter()
-                        .find(|p| {
-                            let lower = p.name.to_lowercase();
-                            keywords.iter().any(|&k| lower.contains(k))
-                        })
-                        .unwrap_or(&playlists[0]);
-
-                    return Some(StagedMusic {
-                        uri: chosen.uri.clone(),
-                        name: chosen.name.clone(),
-                        by: chosen.by.clone(),
-                        kind: "playlist".to_string(),
-                        circadian_slot: slot_name.to_string(),
-                        rationale: format!(
-                            "{slot_rationale} Selected '{}' from your Spotify library.",
-                            chosen.name
-                        ),
-                        is_spotify: true,
-                        confirmed: true,
-                    });
-                }
-                _ => {}
+    /// Stage a real track from the owner's timestamped listening history.
+    async fn stage_music(&self, slot_name: &str) -> Option<StagedMusic> {
+        if !self.spotify.configured() || !self.spotify.connected().await {
+            return None;
+        }
+        match self.spotify.stage_from_history().await {
+            Ok(Some((chosen, rationale))) => Some(StagedMusic {
+                uri: chosen.uri,
+                name: chosen.name,
+                by: chosen.by,
+                kind: "track".to_string(),
+                circadian_slot: slot_name.to_string(),
+                rationale,
+                is_spotify: true,
+                confirmed: true,
+            }),
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code,
+                    "Spotify listening history unavailable for staging"
+                );
+                None
             }
         }
-
-        // Ambient fallback when Spotify is not connected or has no playlists
-        Some(StagedMusic {
-            uri: "sail:ambient:focus".to_string(),
-            name: "Deep Focus Ambient Station".to_string(),
-            by: "SAIL Audio Engine".to_string(),
-            kind: "ambient".to_string(),
-            circadian_slot: slot_name.to_string(),
-            rationale: format!("{slot_rationale} Ready to play directly through local audio."),
-            is_spotify: false,
-            confirmed: true,
-        })
     }
 
     /// Stage learning topic from Arena Learn or knowledge memory.
@@ -503,12 +461,10 @@ impl BriefingEngine {
             }
             self.spotify.play(uri).await.map_err(|e| e.message)
         } else {
-            // Local ambient playback acknowledgment
-            Ok(serde_json::json!({
-                "status": "playing",
-                "uri": uri,
-                "player": "sail-local-ambient"
-            }))
+            Err(
+                "No local ambient player is available. Connect Spotify to play staged music."
+                    .to_string(),
+            )
         }
     }
 
@@ -525,7 +481,16 @@ impl BriefingEngine {
     fn load_from_disk(&self) -> Option<ReturnBriefing> {
         let file = self.storage_dir.join("latest.json");
         let bytes = fs::read(file).ok()?;
-        serde_json::from_slice(&bytes).ok()
+        let briefing: ReturnBriefing = serde_json::from_slice(&bytes).ok()?;
+        // Older caches used playlist-name heuristics or a simulated ambient station.
+        if briefing
+            .staged_music
+            .as_ref()
+            .is_some_and(|music| music.kind != "track")
+        {
+            return None;
+        }
+        Some(briefing)
     }
 }
 
@@ -605,7 +570,7 @@ mod tests {
         let briefing = engine.prepare().await;
 
         assert!(!briefing.id.is_empty());
-        assert!(briefing.staged_music.is_some());
+        assert!(briefing.staged_music.is_none());
         assert!(!briefing.events_to_watch.is_empty());
         assert_eq!(briefing.news_radar.len(), 3);
         assert!(!briefing.dismissed);
@@ -613,6 +578,21 @@ mod tests {
         // Verify loaded from disk matches
         let loaded = engine.load_from_disk().expect("briefing persisted");
         assert_eq!(loaded.id, briefing.id);
+
+        // Old persisted selections must not survive the history-based migration.
+        let mut legacy = briefing.clone();
+        legacy.staged_music = Some(StagedMusic {
+            uri: "spotify:playlist:legacy".into(),
+            name: "Morning focus".into(),
+            by: "Owner".into(),
+            kind: "playlist".into(),
+            circadian_slot: "Morning Focus".into(),
+            rationale: "Name matched focus".into(),
+            is_spotify: true,
+            confirmed: true,
+        });
+        engine.save_to_disk(&legacy).unwrap();
+        assert!(engine.load_from_disk().is_none());
 
         let _ = fs::remove_dir_all(tmp);
     }

@@ -334,3 +334,31 @@ Its own [methodology page](https://www.taranify.com/how-it-works) expressly caut
 - **Life:** food recommendations if ever adopted.
 
 **MVP acceptance (after player MVP):** Without any external account, user selects Music, optionally states desired mood, receives grounded recommendations from an available local/public catalog, sees provenance and can regenerate; user can skip/color-mode toggle and clear all transient answers. Separate integration tests for provider unavailable, user opt-out, missing catalog, inaccessible colors, and mobile navigation. Do not claim that Taranify's private source or model has been incorporated.
+
+## Music staging from listening history
+
+The return briefing selects an actual track from the owner's last 50 Spotify plays,
+using [`GET /me/player/recently-played`](https://developer.spotify.com/documentation/web-api/reference/get-recently-played).
+Reconnect Spotify once to grant `user-read-recently-played`, then refresh the briefing.
+Playlist names and assumed genres no longer influence this choice.
+
+Selection runs locally without an LLM or runtime web search. It prefers tracks played
+within two hours of the current time, including across midnight, using the SAIL host's
+local timezone. Distinct listening days rank before play counts, then the latest play
+breaks ties. If no plays match the time window, the same ranking uses all recent plays.
+Invalid, future, older-than-30-day, local and explicitly unplayable tracks are excluded;
+duplicate track/timestamp pairs count once. The card explains the observed evidence.
+
+This is a bounded recent-history sample, not a complete or long-term listening profile.
+No raw play history is persisted or sent to a model; the existing briefing cache stores
+the selected track and rationale. Spotify's
+[top-items endpoint](https://developer.spotify.com/documentation/web-api/reference/get-users-top-artists-and-tracks)
+provides affinity over weeks/months but no play timestamps, so it cannot establish
+usual listening times and is not used. Longer-term habits would require an explicitly
+bounded local history collector, which is not implemented in this slice.
+
+Disconnected Spotify, missing consent, an empty sample or an API error leaves music
+unstaged and the play action disabled. API failures are not reported as a preference.
+The former ambient placeholder did not play audio; it no longer creates a recommendation
+or acknowledges simulated playback. Playback still requires Spotify Premium and an
+available Spotify Connect device; staging never starts playback automatically.

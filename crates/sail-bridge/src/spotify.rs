@@ -8,6 +8,7 @@
 //! Asking for music plays it: Dialogue finds the best match and plays it in the same turn.
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::{DateTime, Local, Timelike, Utc};
 use ring::rand::SecureRandom;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -18,8 +19,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const ACCOUNTS: &str = "https://accounts.spotify.com";
 const API: &str = "https://api.spotify.com/v1";
-/// Read playback and playlists, control playback. Nothing that edits the library.
-pub const SCOPES: &str = "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative streaming user-read-email user-read-private";
+/// Consent required to read timestamped listening history for staging.
+pub const HISTORY_SCOPE: &str = "user-read-recently-played";
+/// Read playback, playlists and recent plays; control playback without editing the library.
+pub const SCOPES: &str = "user-read-recently-played user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative streaming user-read-email user-read-private";
 /// The scope the in-browser player (Spotify Web Playback SDK) needs. Connections made before
 /// the SAIL music player lack it and must be reconnected once.
 pub const PLAYER_SCOPE: &str = "streaming";
@@ -328,6 +331,99 @@ fn write_private(path: &std::path::Path, value: &impl Serialize) -> std::io::Res
     file.write_all(&serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?)?;
     file.sync_all()?;
     std::fs::rename(tmp, path)
+}
+
+/// Rank observed plays, never playlist names. Distinct listening days outrank repeat
+/// loops on one day. The bounded Spotify sample is evidence, not a lifetime profile.
+fn select_recent_music<T: chrono::TimeZone>(
+    page: &Value,
+    current: DateTime<T>,
+) -> Option<(Candidate, String)> {
+    struct Plays {
+        track: Candidate,
+        days: std::collections::HashSet<chrono::NaiveDate>,
+        nearby_days: std::collections::HashSet<chrono::NaiveDate>,
+        count: usize,
+        nearby_count: usize,
+        latest: i64,
+    }
+    let mut tracks: HashMap<String, Plays> = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    let timezone = current.timezone();
+    let minute = current.hour() * 60 + current.minute();
+    for item in page["items"].as_array().into_iter().flatten().take(50) {
+        let Some(played) = item["played_at"]
+            .as_str()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        else {
+            continue;
+        };
+        let age = current
+            .with_timezone(&Utc)
+            .signed_duration_since(played.with_timezone(&Utc));
+        if age < chrono::Duration::zero() || age > chrono::Duration::days(30) {
+            continue;
+        }
+        if item["track"]["is_local"].as_bool() == Some(true)
+            || item["track"]["is_playable"].as_bool() == Some(false)
+        {
+            continue;
+        }
+        let Some(track) = candidate(Kind::Track, &item["track"]) else {
+            continue;
+        };
+        if !seen.insert((track.uri.clone(), played.timestamp_millis())) {
+            continue;
+        }
+        let local = played.with_timezone(&timezone);
+        let distance = minute.abs_diff(local.hour() * 60 + local.minute());
+        let nearby = distance.min(1440 - distance) <= 120;
+        let entry = tracks.entry(track.uri.clone()).or_insert_with(|| Plays {
+            track,
+            days: Default::default(),
+            nearby_days: Default::default(),
+            count: 0,
+            nearby_count: 0,
+            latest: played.timestamp_millis(),
+        });
+        entry.days.insert(local.date_naive());
+        entry.count += 1;
+        entry.latest = entry.latest.max(played.timestamp_millis());
+        if nearby {
+            entry.nearby_days.insert(local.date_naive());
+            entry.nearby_count += 1;
+        }
+    }
+    let has_nearby = tracks.values().any(|plays| plays.nearby_count > 0);
+    let chosen = tracks.values().max_by_key(|plays| {
+        (
+            if has_nearby {
+                plays.nearby_days.len()
+            } else {
+                plays.days.len()
+            },
+            if has_nearby {
+                plays.nearby_count
+            } else {
+                plays.count
+            },
+            plays.latest,
+            plays.track.uri.clone(),
+        )
+    })?;
+    let rationale = if has_nearby {
+        format!(
+            "Played within two hours of this time on {} distinct day(s) in Spotify’s recent sample, using the SAIL host’s local timezone.",
+            chosen.nearby_days.len()
+        )
+    } else {
+        format!(
+            "No plays near this local hour in Spotify’s recent sample. Selected from your recent listening: {} play(s) on {} distinct day(s).",
+            chosen.count,
+            chosen.days.len()
+        )
+    };
+    Some((chosen.track.clone(), rationale))
 }
 
 /// The owner's Spotify connection.
@@ -735,6 +831,25 @@ impl Spotify {
             .call(reqwest::Method::GET, path, None)
             .await?
             .unwrap_or(Value::Null))
+    }
+
+    /// Choose from the last 50 actual plays, preferring the current host-local hour.
+    /// Old connections must reconnect to grant the history scope. No history is persisted.
+    pub async fn stage_from_history(&self) -> Result<Option<(Candidate, String)>> {
+        let allowed = self.token.lock().await.as_ref().is_some_and(|token| {
+            token
+                .scope
+                .split_whitespace()
+                .any(|scope| scope == HISTORY_SCOPE)
+        });
+        if !allowed {
+            return Err(SpotifyError::new(
+                "reconnect",
+                "Reconnect Spotify to allow recent listening history.",
+            ));
+        }
+        let page = self.get("/me/player/recently-played?limit=50").await?;
+        Ok(select_recent_music(&page, Local::now()))
     }
 
     /// The owner's playlists (created or followed), as candidates.
@@ -1258,6 +1373,132 @@ pub fn global() -> Arc<Spotify> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn history_play(uri: &str, at: &str) -> Value {
+        json!({"played_at": at, "track": {"uri": uri, "name": "A real track",
+            "artists": [{"name": "Artist"}]}})
+    }
+
+    fn history_now() -> DateTime<chrono::FixedOffset> {
+        DateTime::parse_from_rfc3339("2026-11-06T00:30:00+02:00").unwrap()
+    }
+
+    #[test]
+    fn staging_prefers_nearby_local_hours_across_midnight_and_distinct_days() {
+        let page = json!({"items": [
+            history_play("spotify:track:night", "2026-11-04T21:50:00Z"),
+            history_play("spotify:track:night", "2026-11-02T22:40:00Z"),
+            history_play("spotify:track:loop", "2026-11-05T22:00:00Z"),
+            history_play("spotify:track:loop", "2026-11-05T22:10:00Z"),
+            history_play("spotify:track:loop", "2026-11-05T22:20:00Z"),
+            history_play("spotify:track:day", "2026-11-05T10:00:00Z")
+        ]});
+        let (track, reason) = select_recent_music(&page, history_now()).unwrap();
+        assert_eq!(track.uri, "spotify:track:night");
+        assert!(reason.contains("2 distinct day(s)"));
+    }
+
+    #[test]
+    fn staging_falls_back_to_actual_recent_frequency_and_deduplicates() {
+        let single = history_play("spotify:track:single", "2026-11-05T10:00:00Z");
+        let page = json!({"items": [single.clone(), single.clone(), single,
+            history_play("spotify:track:usual", "2026-11-04T10:00:00Z"),
+            history_play("spotify:track:usual", "2026-11-03T10:00:00Z")
+        ]});
+        let (track, reason) = select_recent_music(&page, history_now()).unwrap();
+        assert_eq!(track.uri, "spotify:track:usual");
+        assert!(reason.contains("No plays near this local hour"));
+    }
+
+    #[test]
+    fn staging_rejects_stale_future_unplayable_and_malformed_history() {
+        let mut unplayable = history_play("spotify:track:blocked", "2026-11-05T22:00:00Z");
+        unplayable["track"]["is_playable"] = json!(false);
+        let mut local = unplayable.clone();
+        local["track"]["is_playable"] = json!(true);
+        local["track"]["is_local"] = json!(true);
+        let page = json!({"items": [unplayable, local,
+            history_play("spotify:track:old", "2026-09-01T00:00:00Z"),
+            history_play("spotify:track:future", "2026-12-01T00:00:00Z"),
+            history_play("spotify:episode:podcast", "2026-11-05T22:00:00Z"),
+            history_play("spotify:track:bad", "invalid")
+        ]});
+        assert!(select_recent_music(&page, history_now()).is_none());
+        assert!(select_recent_music(&json!({"items": []}), history_now()).is_none());
+        assert!(select_recent_music(&Value::Null, history_now()).is_none());
+    }
+
+    #[tokio::test]
+    async fn staging_requires_history_consent_without_network() {
+        let dir = std::env::temp_dir().join(format!("sail-history-{}", uuid::Uuid::new_v4()));
+        let spotify = Spotify::with_endpoints(dir, "http://127.0.0.1:1", "http://127.0.0.1:1");
+        *spotify.token.lock().await = Some(Token {
+            access_token: "test".into(),
+            refresh_token: "test".into(),
+            expires_at: now() + 3600,
+            scope: PLAYER_SCOPE.into(),
+        });
+        assert_eq!(
+            spotify.stage_from_history().await.unwrap_err().code,
+            "reconnect"
+        );
+        assert!(
+            SCOPES
+                .split_whitespace()
+                .any(|scope| scope == HISTORY_SCOPE)
+        );
+    }
+
+    #[tokio::test]
+    async fn staging_fetches_timestamped_history_and_propagates_api_errors() {
+        use axum::{
+            Json, Router,
+            http::{HeaderMap, StatusCode},
+            routing::get,
+        };
+        let app = Router::new()
+            .route(
+                "/me/player/recently-played",
+                get(
+                    |headers: HeaderMap,
+                     query: axum::extract::Query<HashMap<String, String>>| async move {
+                        assert_eq!(headers["authorization"], "Bearer history-test");
+                        assert_eq!(query.get("limit").map(String::as_str), Some("50"));
+                        Json(json!({"items": [history_play(
+                            "spotify:track:actual", &Utc::now().to_rfc3339()
+                        )]}))
+                    },
+                ),
+            )
+            .route(
+                "/denied/me/player/recently-played",
+                get(|| async { StatusCode::FORBIDDEN }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = std::env::temp_dir().join(format!("sail-history-{}", uuid::Uuid::new_v4()));
+        for (prefix, succeeds) in [("", true), ("/denied", false)] {
+            let spotify = Spotify::with_endpoints(
+                dir.clone(),
+                &format!("http://{addr}{prefix}"),
+                "http://127.0.0.1:1",
+            );
+            *spotify.token.lock().await = Some(Token {
+                access_token: "history-test".into(),
+                refresh_token: "test".into(),
+                expires_at: now() + 3600,
+                scope: HISTORY_SCOPE.into(),
+            });
+            let result = spotify.stage_from_history().await;
+            if succeeds {
+                assert_eq!(result.unwrap().unwrap().0.uri, "spotify:track:actual");
+            } else {
+                assert!(result.is_err());
+            }
+        }
+        server.abort();
+    }
 
     fn indexed(name: &str, uri: &str, tracks: u32, artists: &[(&str, u32)]) -> IndexedPlaylist {
         IndexedPlaylist {
