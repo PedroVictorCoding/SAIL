@@ -842,3 +842,56 @@ html.sail-backdrop-on .tm-root {
   .tm-briefing .briefing-card { border: 1px solid CanvasText; box-shadow: none; }
   .tm-briefing .briefing-cards-grid, .tm-briefing .briefing-card-body { mask-image: none; }
 }
+
+/* Map light response: the blocks catch a little of the ambient light. Faces mix in the
+   current --sail-light-* (registered properties, so state changes fade), a soft sheen
+   drifts across the map and the core halo breathes. Light only: geometry, labels and
+   contrast are unchanged. Reduced motion keeps the tint, stops the motion; ambient
+   visuals off removes all three. */
+.tm-root {
+  /* The backdrop's shown light (after its cooldown); the contract light without it. */
+  --tm-light-a: var(--sail-shown-a, var(--sail-light-a, #496f9d));
+  --tm-light-b: var(--sail-shown-b, var(--sail-light-b, #384257));
+  --tm-lit-top: 8%; --tm-lit-side: 4%; --tm-lit-rim: 30%; }
+html[data-sail-visuals=subtle] .tm-root { --tm-lit-top: 5%; --tm-lit-side: 2.5%; --tm-lit-rim: 20%; }
+html[data-sail-visuals=off] .tm-root { --tm-lit-top: 0%; --tm-lit-side: 0%; --tm-lit-rim: 0%; }
+.tm-box .f-top { fill: color-mix(in srgb, #2a313d, var(--tm-light-a) var(--tm-lit-top)); }
+.tm-box .f-left { fill: color-mix(in srgb, #1c212a, var(--tm-light-b) var(--tm-lit-side)); }
+.tm-box .f-right { fill: color-mix(in srgb, #151921, var(--tm-light-b) calc(var(--tm-lit-side) / 2)); }
+.tm-box.plinth .f-top { fill: color-mix(in srgb, #202632, var(--tm-light-a) var(--tm-lit-top)); }
+.tm-box.deck .f-top { fill: color-mix(in srgb, #252c38, var(--tm-light-a) var(--tm-lit-top)); }
+.tm-box.machine .f-top { fill: color-mix(in srgb, #313a48, var(--tm-light-a) var(--tm-lit-top)); }
+.tm-box.machine.alt .f-top { fill: color-mix(in srgb, #272e3a, var(--tm-light-a) var(--tm-lit-top)); }
+.tm-box.tank .f-top { fill: color-mix(in srgb, #4a5464, var(--tm-light-a) var(--tm-lit-top)); }
+.tm-box.slab .f-top { fill: color-mix(in srgb, #171b23, var(--tm-light-a) var(--tm-lit-top)); }
+.tm-box.slab .f-left { fill: color-mix(in srgb, #11141a, var(--tm-light-b) var(--tm-lit-side)); }
+.tm-cyl .c-top { fill: color-mix(in srgb, #2f3744, var(--tm-light-a) var(--tm-lit-top)); }
+.tm-cyl.silo .c-top { fill: color-mix(in srgb, #262d39, var(--tm-light-a) var(--tm-lit-top)); }
+.tm-box .f-rim-top { stroke: color-mix(in srgb, rgba(120, 136, 157, 0.35), var(--tm-light-a) var(--tm-lit-rim)); }
+
+.tm-sheen {
+  position: absolute; inset: -15%; pointer-events: none; mix-blend-mode: screen; opacity: .16;
+  background:
+    radial-gradient(ellipse 28% 22% at 35% 40%, var(--tm-light-a), transparent 70%),
+    radial-gradient(ellipse 24% 20% at 68% 62%, var(--tm-light-b), transparent 70%);
+  animation: tm-sheen-drift 28s ease-in-out infinite alternate;
+  will-change: transform;
+}
+@keyframes tm-sheen-drift {
+  from { transform: translate3d(-7%, -4%, 0); }
+  to { transform: translate3d(7%, 5%, 0); }
+}
+html[data-sail-visuals=subtle] .tm-sheen { opacity: .1; }
+html[data-sail-visuals=off] .tm-sheen { display: none; }
+.tm-halo { animation: tm-halo-breathe 9s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes tm-halo-breathe {
+  0%, 100% { opacity: .85; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+html[data-sail-visuals=off] .tm-halo { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .tm-sheen, .tm-halo { animation: none; }
+}
+@media (forced-colors: active) {
+  .tm-sheen { display: none; }
+}

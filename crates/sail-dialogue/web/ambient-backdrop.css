@@ -37,3 +37,15 @@ html[data-sail-visuals=subtle] .sail-backdrop::after { opacity: .07; }
 @media (forced-colors: active) {
   .sail-backdrop { display: none; }
 }
+
+/* The light on screen after the backdrop's cooldown (ambient-backdrop.js publishes it on
+   <html>). Registered so surfaces that follow it fade at the backdrop's pace. */
+@property --sail-shown-a { syntax: '<color>'; inherits: true; initial-value: #496f9d; }
+@property --sail-shown-b { syntax: '<color>'; inherits: true; initial-value: #384257; }
+@property --sail-shown-c { syntax: '<color>'; inherits: true; initial-value: #0e121a; }
+html.sail-backdrop-on {
+  transition: --sail-shown-a 1.2s ease, --sail-shown-b 1.2s ease, --sail-shown-c 1.2s ease,
+    --sail-light-a var(--sail-transition-state, 420ms) var(--sail-ease, ease), --sail-light-b var(--sail-transition-state, 420ms) var(--sail-ease, ease), --sail-light-c var(--sail-transition-state, 420ms) var(--sail-ease, ease),
+    --ambient-one var(--sail-transition-state, 420ms) var(--sail-ease, ease), --ambient-two var(--sail-transition-state, 420ms) var(--sail-ease, ease), --ambient-three var(--sail-transition-state, 420ms) var(--sail-ease, ease);
+}
+@media (prefers-reduced-motion: reduce) { html.sail-backdrop-on { transition: none; } }
