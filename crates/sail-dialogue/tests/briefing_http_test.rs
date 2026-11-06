@@ -46,7 +46,7 @@ async fn latest_is_readable_without_auth_and_returns_complete_briefing() {
 
     assert!(briefing["id"].is_string());
     assert!(briefing["greeting"].is_string());
-    assert!(briefing["staged_music"].is_object());
+    assert!(briefing["staged_music"].is_null());
     assert!(briefing["learning_plan"].is_object());
     assert!(briefing["events_to_watch"].is_array());
     assert!(briefing["news_radar"].is_array());
@@ -90,7 +90,7 @@ async fn play_music_and_dismiss_actions() {
     let (base_url, dir, handle) = setup_test_server().await;
     let client = reqwest::Client::new();
 
-    // Play music action with valid token
+    // A valid token must not manufacture local ambient playback.
     let play_body = json!({
         "uri": "sail:ambient:focus"
     });
@@ -102,9 +102,9 @@ async fn play_music_and_dismiss_actions() {
         .await
         .unwrap();
 
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), reqwest::StatusCode::BAD_REQUEST);
     let val: Value = res.json().await.unwrap();
-    assert_eq!(val["ok"], true);
+    assert_eq!(val["ok"], false);
 
     // Dismiss action
     let res = client
