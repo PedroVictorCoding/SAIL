@@ -120,7 +120,40 @@ pub fn to_llm_messages(system_prompt: &str, events: &[Envelope]) -> Vec<Message>
         }
     }
 
+    // The latest compaction (#252) replaces history through `up_to_seq` with its digest. The
+    // compaction event itself is appended later, so the history it keeps (events after the
+    // cut) is replayed here, after the digest, rather than discarded.
+    let compaction = events.iter().rev().find_map(|e| match &e.event {
+        LearningEvent::ContextCompacted { up_to_seq, digest } => Some((*up_to_seq, digest)),
+        _ => None,
+    });
+    let mut digested = false;
+    let start_after_cut = |out: &mut Vec<Message>, pending: &mut Vec<String>| {
+        if let Some((up_to_seq, digest)) = compaction {
+            out.clear();
+            pending.clear();
+            out.push(Message::text(Role::System, system_prompt));
+            out.push(Message::text(
+                Role::User,
+                format!(
+                    "Earlier parts of this lesson (through event {up_to_seq}) are represented by this digest, not repeated:\n{digest}"
+                ),
+            ));
+        }
+    };
+    // Questions and problems asked before the cut: their calls are no longer in the prompt,
+    // so an answer that arrives after the cut is passed on as plain learner text.
+    let mut before_cut: Vec<String> = Vec::new();
+
     for envelope in events {
+        if let Some((up_to_seq, _)) = compaction
+            && !digested
+            && envelope.seq > up_to_seq
+        {
+            digested = true;
+            start_after_cut(&mut out, &mut pending);
+        }
+        let pre_cut = compaction.is_some_and(|(up_to_seq, _)| envelope.seq <= up_to_seq);
         match &envelope.event {
             LearningEvent::SessionCreated { goal } => {
                 flush(&mut out, &mut pending);
@@ -161,6 +194,9 @@ pub fn to_llm_messages(system_prompt: &str, events: &[Envelope]) -> Vec<Message>
                 }
             }
             LearningEvent::QuestionAsked { call_id, spec, .. } => {
+                if pre_cut {
+                    before_cut.push(call_id.clone());
+                }
                 questions.push((call_id.clone(), spec));
             }
             LearningEvent::ProblemAsked {
@@ -168,10 +204,26 @@ pub fn to_llm_messages(system_prompt: &str, events: &[Envelope]) -> Vec<Message>
                 problem_id,
                 spec,
             } => {
+                if pre_cut {
+                    before_cut.push(call_id.clone());
+                }
                 problems.push((call_id.clone(), problem_id.clone(), spec));
             }
             LearningEvent::PracticeAttempted { problem_id, text } => {
                 if let Some(i) = problems.iter().position(|(_, id, _)| id == problem_id)
+                    && !pending.iter().any(|id| id == &problems[i].0)
+                    && before_cut.contains(&problems[i].0)
+                {
+                    out.push(Message::text(
+                        Role::User,
+                        json!({
+                            "learner_attempt_for_problem": problem_id,
+                            "learner_attempt": text,
+                            "note": "This problem was posed before the digest. Practice evidence only. Evaluate it and call `conclude` with solved, solved_with_hints or not_solved.",
+                        })
+                        .to_string(),
+                    ));
+                } else if let Some(i) = problems.iter().position(|(_, id, _)| id == problem_id)
                     && pending.iter().any(|id| id == &problems[i].0)
                 {
                     let call_id = problems[i].0.clone();
@@ -201,19 +253,8 @@ pub fn to_llm_messages(system_prompt: &str, events: &[Envelope]) -> Vec<Message>
                     ),
                 ));
             }
-            LearningEvent::ContextCompacted { up_to_seq, digest } => {
-                out.clear();
-                pending.clear();
-                questions.clear();
-                problems.clear();
-                out.push(Message::text(Role::System, system_prompt));
-                out.push(Message::text(
-                    Role::User,
-                    format!(
-                        "Earlier parts of this lesson (through event {up_to_seq}) are represented by this digest, not repeated:\n{digest}"
-                    ),
-                ));
-            }
+            // Applied at the cut point above; older compactions are superseded.
+            LearningEvent::ContextCompacted { .. } => {}
             LearningEvent::Answered {
                 call_id,
                 answer,
@@ -231,6 +272,20 @@ pub fn to_llm_messages(system_prompt: &str, events: &[Envelope]) -> Vec<Message>
                         call_id,
                         answer_result(spec, answer, *grade, judgment),
                     ));
+                } else if before_cut.contains(call_id)
+                    && let Some((_, spec)) = questions.iter().find(|(id, _)| id == call_id)
+                {
+                    let judgment = judgments
+                        .iter()
+                        .find(|(id, _)| id == call_id)
+                        .map(|(_, j)| *j);
+                    out.push(Message::text(
+                        Role::User,
+                        format!(
+                            "Answer to a question asked before the digest: {}",
+                            answer_result(spec, answer, *grade, judgment)
+                        ),
+                    ));
                 }
             }
             LearningEvent::AnswerJudged { .. }
@@ -244,6 +299,9 @@ pub fn to_llm_messages(system_prompt: &str, events: &[Envelope]) -> Vec<Message>
             | LearningEvent::Paused
             | LearningEvent::Resumed => {}
         }
+    }
+    if compaction.is_some() && !digested {
+        start_after_cut(&mut out, &mut pending);
     }
     // At the end, an unanswered question or problem keeps its placeholder; anything else
     // was cut off.
@@ -330,20 +388,39 @@ pub fn event_tokens(envelope: &Envelope) -> u64 {
         .div_ceil(4)
 }
 
+/// The latest compaction's `up_to_seq` (0 when none) and its digest's approximate tokens.
+pub fn latest_compaction(events: &[Envelope]) -> (u64, u64) {
+    events
+        .iter()
+        .rev()
+        .find_map(|e| match &e.event {
+            LearningEvent::ContextCompacted { up_to_seq, digest } => {
+                Some((*up_to_seq, approx_text_tokens(digest)))
+            }
+            _ => None,
+        })
+        .unwrap_or((0, 0))
+}
+
+/// Approximate tokens of a piece of prompt text (bytes / 4, rounded up).
+pub fn approx_text_tokens(text: &str) -> u64 {
+    (text.len() as u64).div_ceil(4)
+}
+
 /// Picks a compaction cut for a long session (#252). Returns the `up_to_seq` to replace.
 ///
 /// The cut is always immediately before an input event (the learner's answer, message or
-/// practice attempt), so an assistant tool call is never separated from its result. Only
-/// events after the latest compaction are considered, so repeated turns do not keep cutting
-/// the same history. `None` when the log fits the budget.
+/// practice attempt), so an assistant tool call is never separated from its result. It
+/// measures what the prompt replays: the latest digest plus the events after its cut, so the
+/// kept history counts and a fresh compaction is not cut again at once. `None` when that fits.
 pub fn compaction_cut(events: &[Envelope], budget_tokens: u64) -> Option<u64> {
-    let start = events
+    // The prompt replays the latest digest plus every event after its cut, so measure that.
+    let (after, digest_tokens) = latest_compaction(events);
+    let recent: Vec<&Envelope> = events
         .iter()
-        .rposition(|e| matches!(e.event, LearningEvent::ContextCompacted { .. }))
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let recent = &events[start..];
-    let total: u64 = recent.iter().map(event_tokens).sum();
+        .filter(|e| e.seq > after && !matches!(e.event, LearningEvent::ContextCompacted { .. }))
+        .collect();
+    let total: u64 = digest_tokens + recent.iter().map(|e| event_tokens(e)).sum::<u64>();
     if total <= budget_tokens {
         return None;
     }
@@ -351,7 +428,7 @@ pub fn compaction_cut(events: &[Envelope], budget_tokens: u64) -> Option<u64> {
     let target = budget_tokens / 2;
     let mut acc = 0u64;
     for i in (0..recent.len()).rev() {
-        acc = acc.saturating_add(event_tokens(&recent[i]));
+        acc = acc.saturating_add(event_tokens(recent[i]));
         if acc > target {
             let boundary = (i..recent.len()).find(|&j| recent[j].event.is_input())?;
             let up_to = if boundary == 0 {

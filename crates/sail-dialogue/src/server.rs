@@ -164,6 +164,7 @@ pub async fn run_dialogue_server_with_plans(
     let pulse_routes = pulse
         .clone()
         .map(|pulse| crate::pulse_http::router(pulse, authority()));
+    let dictation_routes = crate::dictation_http::router(services.clone(), authority());
     let approval_routes = crate::approval_http::router_with_token(
         owner_authority,
         sail_guardian::global_broker().ok(),
@@ -172,6 +173,7 @@ pub async fn run_dialogue_server_with_plans(
     let mut app = Router::new()
         .nest_service("/api/guardian", approval_routes)
         .nest_service("/api/memory", memory_routes)
+        .nest_service("/api/speech", dictation_routes)
         .nest_service(
             "/voice-assets",
             crate::web_assets::router(crate::web_assets::assets_dir()),

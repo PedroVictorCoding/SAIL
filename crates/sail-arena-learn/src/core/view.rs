@@ -157,6 +157,10 @@ pub struct SessionView {
     /// Approximate prompt-history tokens; updated incrementally with the event log.
     #[serde(skip)]
     pub(crate) context_tokens: u64,
+    /// `(seq, tokens)` of each event the prompt still replays: those after the latest
+    /// compaction cut. A new cut drops the covered ones, so the meter falls after compaction.
+    #[serde(skip)]
+    pub(crate) context_events: Vec<(u64, u64)>,
     /// Hidden problem specs, never serialized: solutions and hints until revealed.
     #[serde(skip)]
     pub(crate) problem_specs: Vec<(String, ProblemSpec)>,
@@ -216,6 +220,7 @@ impl SessionView {
             context_fraction: 0.0,
             context_budget_tokens: CONTEXT_BUDGET_TOKENS,
             context_tokens: 0,
+            context_events: Vec::new(),
             problem_specs: Vec::new(),
         }
     }
@@ -270,9 +275,16 @@ impl SessionView {
             self.updated_ms = envelope.at_ms;
         }
         let event = &envelope.event;
-        self.context_tokens = self.context_tokens.saturating_add(approx_tokens(
-            &serde_json::to_string(event).unwrap_or_default(),
-        ));
+        if let LearningEvent::ContextCompacted { up_to_seq, digest } = event {
+            // Mirror the prompt: the digest plus the events after the cut (#252, #254).
+            self.context_events.retain(|(seq, _)| seq > up_to_seq);
+            self.context_tokens =
+                approx_tokens(digest) + self.context_events.iter().map(|(_, t)| t).sum::<u64>();
+        } else {
+            let tokens = approx_tokens(&serde_json::to_string(event).unwrap_or_default());
+            self.context_events.push((envelope.seq, tokens));
+            self.context_tokens = self.context_tokens.saturating_add(tokens);
+        }
         self.context_fraction =
             (self.context_tokens as f32 / CONTEXT_BUDGET_TOKENS as f32).min(1.0);
         if event.is_input() {
