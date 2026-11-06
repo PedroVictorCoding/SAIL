@@ -56,6 +56,8 @@ class Player {
   seek(ms) { __sdk.calls.push('seek:' + ms); return Promise.resolve(); }
   setVolume(v) { __sdk.calls.push('volume:' + v); return Promise.resolve(); }
   activateElement() { __sdk.calls.push('activate'); return Promise.resolve(); }
+  nextTrack() { __sdk.calls.push('next'); return Promise.resolve(); }
+  previousTrack() { __sdk.calls.push('previous'); return Promise.resolve(); }
 }
 window.Spotify = {Player};
 if (window.onSpotifyWebPlaybackSDKReady) window.onSpotifyWebPlaybackSDKReady();
@@ -94,8 +96,12 @@ class Fixture:
             return r.fulfill(body=AUDIO[path.rsplit("-", 1)[1]], content_type="audio/wav", headers={"accept-ranges": "bytes"})
         if path == "/api/spotify/status":
             return r.fulfill(json={"configured": self.spotify != "none", "connected": self.spotify != "none", "can_stream": self.spotify == "stream", "now_playing": None})
-        if path == "/api/spotify/player/playlists": return r.fulfill(json={"playlists": [{"kind": "playlist", "name": "Evening", "by": "Pedro", "uri": "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"}]})
-        if path == "/api/spotify/player/tracks": return r.fulfill(json={"tracks": SPOT})
+        if path == "/api/spotify/player/playlists": return r.fulfill(json={"playlists": [{"kind": "playlist", "name": "Evening", "by": "Pedro", "uri": "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"},
+            {"kind": "playlist", "name": "Thall Radio", "by": "KeifCheif4209", "uri": "spotify:playlist:followedplaylist0000000"}]})
+        if path == "/api/spotify/player/tracks":
+            if "followedplaylist" in query:
+                return r.fulfill(status=409, json={"code": "not_owner", "error": "Spotify only shares the songs of playlists you created or collaborate on. You can still play this playlist as a whole."})
+            return r.fulfill(json={"tracks": SPOT})
         if path == "/api/spotify/player/search": return r.fulfill(json={"tracks": SPOT})
         if path == "/api/spotify/player/token": return r.fulfill(json={"access_token": "browser-token", "expires_at": 9999999999})
         if path == "/api/spotify/player/play":
@@ -129,7 +135,7 @@ with sync_playwright() as p:
     fx = Fixture("stream")
     ctx, pg = open_page(b, fx)
     assert pg.locator(".mp-row .mp-badge[data-source=local]").count() == 2
-    assert pg.locator("#playlists button").all_inner_texts() == ["Evening"]
+    assert pg.locator("#playlists button").all_inner_texts() == ["Evening", "Thall Radio"]
     pg.fill("#search", "harbour")
     pg.wait_for_function("document.querySelectorAll('.mp-row .mp-badge[data-source=spotify]').length === 1")
     titles = pg.locator(".mp-row strong").all_inner_texts()
@@ -180,10 +186,33 @@ with sync_playwright() as p:
     pg.wait_for_function("document.querySelectorAll('.mp-row .mp-badge[data-source=local]').length === 3 || SailMusic.state.local.length === 3")
     assert fx.imports and fx.imports[0][0] == "Café Night.wav" and fx.imports[0][1] > 1000, fx.imports
     # Playlist view lists Spotify tracks.
-    pg.fill("#search", ""); pg.click("#playlists button")
+    pg.fill("#search", ""); pg.click("#playlists button >> nth=0")
     pg.wait_for_function("document.getElementById('viewTitle').textContent === 'Evening'")
     assert pg.locator(".mp-row").count() == 1
     assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    # Followed playlist: Spotify won't share its songs (Feb 2026), so it plays as a whole.
+    pg.click("#playlists button >> nth=1")
+    pg.wait_for_selector(".mp-context button")
+    assert "play this playlist as a whole" in pg.inner_text(".mp-context")
+    assert "Forbidden" not in pg.inner_text("body")
+    pg.click(".mp-context button")
+    pg.wait_for_function("SailMusic.player.engine === SailMusic.spotify && SailMusic.state.queue[0].context")
+    pg.wait_for_timeout(300)
+    assert fx.plays[-1] == {"device_id": "fakedevice123", "context_uri": "spotify:playlist:followedplaylist0000000"}, fx.plays[-1]
+    ctx_state = lambda name, uri, paused, pos, nxt: (
+        f"__sdk.player.emit('player_state_changed', {{paused:{str(paused).lower()}, position:{pos}, duration:200000, "
+        f"track_window:{{current_track:{{uri:'{uri}', name:'{name}', artists:[{{name:'Thall Band'}}], album:{{images:[]}}}}, "
+        f"previous_tracks:[], next_tracks:{nxt}}}}})")
+    pg.evaluate(ctx_state("Djent One", "spotify:track:aaaaaaaaaaaaaaaaaaaaaa", False, 1000, "[{uri:'spotify:track:bbbbbbbbbbbbbbbbbbbbbb'}]"))
+    assert pg.inner_text("#nowTitle") == "Djent One" and pg.inner_text("#nowArtist") == "Thall Band · Thall Radio"
+    pg.click("#next"); pg.wait_for_timeout(100)
+    assert pg.evaluate("__sdk.calls").count("next") == 1, "next moves within the playlist"
+    pg.evaluate(ctx_state("Djent Two", "spotify:track:bbbbbbbbbbbbbbbbbbbbbb", False, 199000, "[]"))
+    assert pg.inner_text("#nowTitle") == "Djent Two"
+    pg.evaluate(ctx_state("Djent Two", "spotify:track:bbbbbbbbbbbbbbbbbbbbbb", True, 0, "[]"))
+    pg.wait_for_function("document.getElementById('status').textContent.includes('End of the queue')", timeout=5000)
+    pg.screenshot(path=str(SHOTS / "music-followed-playlist.png"))
     ctx.close()
 
     # ---- phone layout

@@ -74,7 +74,7 @@ fn failure(error: SpotifyError) -> (StatusCode, Json<Value>) {
     let status = match error.code {
         "invalid" => StatusCode::BAD_REQUEST,
         "not_configured" | "not_connected" | "no_device" | "premium_required" | "expired"
-        | "reconnect" => StatusCode::CONFLICT,
+        | "reconnect" | "not_owner" => StatusCode::CONFLICT,
         "rate_limited" => StatusCode::TOO_MANY_REQUESTS,
         "auth" | "forbidden" => StatusCode::FORBIDDEN,
         _ => StatusCode::BAD_GATEWAY,
@@ -422,7 +422,12 @@ async fn player_token(State(state): State<Arc<HttpState>>, headers: HeaderMap) -
 #[derive(Deserialize)]
 struct PlayOn {
     device_id: String,
+    /// Exact tracks, in SAIL's order.
+    #[serde(default)]
     uris: Vec<String>,
+    /// Or one album/playlist played as a whole (playlists whose songs Spotify won't share).
+    #[serde(default)]
+    context_uri: Option<String>,
     #[serde(default)]
     position_ms: u64,
 }
@@ -433,6 +438,20 @@ async fn player_play(
     Json(body): Json<PlayOn>,
 ) -> Reply {
     authorize(&state, &headers)?;
+    if let Some(context) = &body.context_uri {
+        if !body.uris.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Send either uris or context_uri, not both."})),
+            ));
+        }
+        state
+            .spotify
+            .play_context_on(&body.device_id, context)
+            .await
+            .map_err(failure)?;
+        return Ok(Json(json!({"playing": context})));
+    }
     state
         .spotify
         .play_on(&body.device_id, &body.uris, body.position_ms)
@@ -459,7 +478,11 @@ async fn player_search(
             Json(json!({"error":"Search for 1 to 200 characters."})),
         ));
     }
-    let tracks = state.spotify.search_tracks(q, 20).await.map_err(failure)?;
+    let tracks = state
+        .spotify
+        .search_tracks(q, sail_bridge::spotify::SEARCH_LIMIT)
+        .await
+        .map_err(failure)?;
     Ok(Json(json!({"tracks": tracks})))
 }
 
@@ -509,8 +532,27 @@ mod player_tests {
                 }),
             )
             .route(
+                "/playlists/:id/items",
+                get(|axum::extract::Path(id): axum::extract::Path<String>| async move {
+                    if id == "followedplaylist0000000" {
+                        return (StatusCode::FORBIDDEN, Json(json!({"error": {"status": 403, "message": "Forbidden"}})));
+                    }
+                    (StatusCode::OK, Json(json!({"items": [
+                        {"added_at": "x", "is_local": false, "item": {"type": "track", "track": true, "episode": false,
+                            "uri": "spotify:track:3333333333333333333333", "name": "Mine", "duration_ms": 3000,
+                            "artists": [{"name": "Me"}], "album": {"name": "Own", "images": [{"url": "https://i.scdn.co/image/own"}]}}},
+                        {"added_at": "x", "is_local": false, "item": {"type": "episode", "uri": "spotify:episode:abc", "name": "Pod"}}
+                    ], "next": null})))
+                }),
+            )
+            .route(
+                "/playlists/:id/tracks",
+                get(|| async { (StatusCode::FORBIDDEN, Json(json!({"error": {"status": 403, "message": "Forbidden"}}))) }),
+            )
+            .route(
                 "/search",
-                get(|| async {
+                get(|Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                    assert!(q["limit"].parse::<usize>().unwrap() <= 10, "Spotify caps search at 10");
                     Json(json!({"tracks": {"items": [
                         {"uri": "spotify:track:4uLU6hMCjMI75M1A2tKUQC", "name": "Song", "duration_ms": 200000,
                          "artists": [{"name": "A"}, {"name": "B"}], "album": {"name": "LP", "images": [{"url": "https://i.scdn.co/image/big"}, {"url": "https://i.scdn.co/image/small"}]}},
@@ -697,6 +739,128 @@ mod player_tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Spotify, February 2026: playlist songs come from `/items` (rows hold `item`) and only
+    /// for the owner's playlists; followed playlists are played as a whole instead.
+    #[tokio::test]
+    async fn playlists_use_items_and_followed_ones_play_as_a_whole() {
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let api = fake_api(seen.clone()).await;
+        let dir =
+            std::env::temp_dir().join(format!("sail-spotify-player-{}", uuid::Uuid::new_v4()));
+        connected(&dir, "streaming");
+        let app = router_with(
+            Arc::new(Spotify::with_endpoints(dir.clone(), &api, &api)),
+            ApprovalAuthority::new(TOKEN).ok(),
+        );
+        let (status, body) = send(
+            &app,
+            owner(
+                "GET",
+                "/player/tracks?uri=spotify:playlist:ownplaylist000000000000",
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["tracks"],
+            json!([{"source": "spotify", "id": "spotify:track:3333333333333333333333", "title": "Mine",
+            "artist": "Me", "album": "Own", "duration_ms": 3000, "art": "https://i.scdn.co/image/own"}])
+        );
+        let (status, body) = send(
+            &app,
+            owner(
+                "GET",
+                "/player/tracks?uri=spotify:playlist:followedplaylist0000000",
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "not_owner");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("play this playlist as a whole")
+        );
+
+        let (status, body) = send(&app, owner("POST", "/player/play",
+            r#"{"device_id":"abc123def456","context_uri":"spotify:playlist:followedplaylist0000000"}"#)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            seen.lock().unwrap().last().unwrap().1,
+            json!({"context_uri": "spotify:playlist:followedplaylist0000000"})
+        );
+        for bad in [
+            r#"{"device_id":"abc123def456","context_uri":"spotify:track:4uLU6hMCjMI75M1A2tKUQC"}"#,
+            r#"{"device_id":"abc123def456","context_uri":"spotify:playlist:followedplaylist0000000","uris":["spotify:track:4uLU6hMCjMI75M1A2tKUQC"]}"#,
+        ] {
+            let (status, _) = send(&app, owner("POST", "/player/play", bad)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Spotify answers 503 intermittently: reads retry once, changes are never repeated.
+    #[tokio::test]
+    async fn transient_503_is_retried_for_reads_only() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let lists = Arc::new(AtomicUsize::new(0));
+        let plays = Arc::new(AtomicUsize::new(0));
+        let (l, pl) = (lists.clone(), plays.clone());
+        let api = Router::new()
+            .route(
+                "/me/playlists",
+                get(move || {
+                    let l = l.clone();
+                    async move {
+                        if l.fetch_add(1, Ordering::SeqCst) == 0 {
+                            return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})));
+                        }
+                        (StatusCode::OK, Json(json!({"items": [{"name": "Mine", "uri": "spotify:playlist:ownplaylist000000000000", "owner": {"display_name": "Pedro"}}], "next": null})))
+                    }
+                }),
+            )
+            .route(
+                "/me/player/play",
+                axum::routing::put(move || {
+                    let pl = pl.clone();
+                    async move {
+                        pl.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::SERVICE_UNAVAILABLE
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, api).await.unwrap() });
+        let base = format!("http://{addr}");
+        let dir =
+            std::env::temp_dir().join(format!("sail-spotify-player-{}", uuid::Uuid::new_v4()));
+        connected(&dir, "streaming");
+        let app = router_with(
+            Arc::new(Spotify::with_endpoints(dir.clone(), &base, &base)),
+            ApprovalAuthority::new(TOKEN).ok(),
+        );
+        let (status, body) = send(&app, owner("GET", "/player/playlists", "")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["playlists"][0]["name"], "Mine");
+        assert_eq!(lists.load(Ordering::SeqCst), 2);
+        let (status, _) = send(
+            &app,
+            owner(
+                "POST",
+                "/player/play",
+                r#"{"device_id":"abc123def456","uris":["spotify:track:4uLU6hMCjMI75M1A2tKUQC"]}"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(plays.load(Ordering::SeqCst), 1, "a change is sent once");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
