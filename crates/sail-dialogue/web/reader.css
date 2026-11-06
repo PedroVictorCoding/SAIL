@@ -781,7 +781,7 @@ body:has(#library:not([hidden])) #library-button { background: var(--sail-surfac
 #library .book-about button { display: block; font-size: 12px; padding: 8px 12px; }
 
 /* Lit Library (ambient-backdrop.js): the featured book's cover lights a shader field
-   behind a glass frame; stats are solid colour tiles with dark ink (WCAG AA). Reading
+   behind a glass frame; stats are dark glow tiles lit from below (WCAG AA). Reading
    surfaces stay opaque: the backdrop switches off when a book opens. */
 html.sail-backdrop-on body:has(#library:not([hidden])) { background: transparent; }
 html.sail-backdrop-on body:has(#library:not([hidden])) .toolbar {
@@ -818,30 +818,45 @@ html.sail-backdrop-on #library .activity-entry {
   backdrop-filter: blur(12px);
 }
 
-/* Colour tiles: one hue per real measurement, never decoration on fabricated data. */
-#library .library-summary { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-#library .library-summary > .reading-progress { grid-column: span 4; }
-#library .library-summary > .last-read-summary { grid-column: span 2; }
-#library .library-summary > .chapter-summary,
-#library .library-summary > .collection-summary { grid-column: span 3; }
+/* Glow tiles: one hue per real measurement, never decoration on fabricated data. A near
+   black glass tile with its colour pooled as light along the bottom edge and spilling out
+   as a halo; white text sits in the dark upper part (WCAG AA against #0b0d12). The four
+   tiles share one row, at 80% of the earlier tile scale, so the Library fits the view. */
+#library .library-summary { grid-template-columns: 1.7fr repeat(3, minmax(0, 1fr)); gap: 13px; margin-bottom: 26px; }
+#library .library-summary > div { grid-column: auto; padding: 14px 16px 44px; border-radius: 18px; }
+#library .library-summary .eyebrow { margin: 0 0 6px; font-size: 10px; }
+#library .library-summary strong { display: block; font-size: 24px; line-height: 1.15; }
+#library .library-summary .muted { margin: 4px 0 0; font-size: 11px; }
 #library .library-summary > .reading-progress:only-child,
 #library .library-summary > .collection-summary:only-child { grid-column: 1 / -1; }
 html.sail-backdrop-on #library .library-summary > div {
-  --tile-ink: #17130b;
-  color: var(--tile-ink); border: 0; border-radius: 22px;
-  box-shadow: 0 12px 30px rgb(0 0 0 / .28), inset 0 1px rgb(255 255 255 / .45);
+  --glow: #ff7a1a; --glow-hot: #ffd45a; --glow-edge: #ff3d2e;
+  position: relative; isolation: isolate; overflow: hidden;
+  color: #fff; border: 1px solid rgb(255 255 255 / .1);
+  background:
+    radial-gradient(55% 38% at 50% 104%, rgb(255 255 255 / .9), transparent 100%),
+    radial-gradient(85% 62% at 50% 108%, var(--glow-hot), transparent 100%),
+    radial-gradient(120% 90% at 50% 112%, var(--glow), transparent 72%),
+    radial-gradient(70% 80% at 0% 115%, var(--glow-edge), transparent 72%),
+    radial-gradient(70% 80% at 100% 118%, var(--glow-edge), transparent 68%),
+    linear-gradient(180deg, #06070a 25%, #0b0d12);
+  box-shadow: 0 22px 60px -16px var(--glow), 0 30px 90px -30px var(--glow-hot), inset 0 1px rgb(255 255 255 / .14);
+  text-shadow: 0 1px 10px rgb(0 0 0 / .55);
 }
-html.sail-backdrop-on #library .library-summary > div .eyebrow { color: var(--tile-ink); font-weight: 700; letter-spacing: .08em; }
-html.sail-backdrop-on #library .library-summary > div .muted { color: rgb(23 19 11 / .76); }
+html.sail-backdrop-on #library .library-summary > div .eyebrow { color: rgb(255 255 255 / .82); font-weight: 700; letter-spacing: .08em; }
+html.sail-backdrop-on #library .library-summary > div .muted { color: rgb(255 255 255 / .74); }
 html.sail-backdrop-on #library .library-summary strong { font-weight: 700; letter-spacing: -.04em; }
-html.sail-backdrop-on #library .reading-progress { background: linear-gradient(150deg, #ffe27a, #f6c945); }
-html.sail-backdrop-on #library .last-read-summary { background: linear-gradient(150deg, #ffb27a, #ff8f4f); }
-html.sail-backdrop-on #library .chapter-summary { background: linear-gradient(150deg, #d9c2ff, #b996ff); }
-html.sail-backdrop-on #library .collection-summary { background: linear-gradient(150deg, #bdf5a0, #8fe27a); }
-html.sail-backdrop-on #library .reading-progress progress { border-color: rgb(23 19 11 / .3); background: rgb(23 19 11 / .12); }
-html.sail-backdrop-on #library .reading-progress progress::-webkit-progress-bar { background: rgb(23 19 11 / .12); }
-html.sail-backdrop-on #library .reading-progress progress::-webkit-progress-value { background: #17130b; }
-html.sail-backdrop-on #library .reading-progress progress::-moz-progress-bar { background: #17130b; }
+html.sail-backdrop-on #library .library-summary > .reading-progress { --glow: #ff7a1a; --glow-hot: #ffd45a; --glow-edge: #e5341f; }
+html.sail-backdrop-on #library .library-summary > .last-read-summary { --glow: #ff2f86; --glow-hot: #ff9bd0; --glow-edge: #7a3cff; }
+html.sail-backdrop-on #library .library-summary > .chapter-summary { --glow: #5b5cff; --glow-hot: #b9a8ff; --glow-edge: #1fa5ff; }
+html.sail-backdrop-on #library .library-summary > .collection-summary { --glow: #22d84a; --glow-hot: #c8ff6a; --glow-edge: #14d6c8; }
+html.sail-backdrop-on #library .reading-progress progress { height: 6px; margin-top: 10px; border: 1px solid rgb(255 255 255 / .35); background: rgb(0 0 0 / .45); }
+html.sail-backdrop-on #library .reading-progress progress::-webkit-progress-bar { background: rgb(0 0 0 / .45); }
+html.sail-backdrop-on #library .reading-progress progress::-webkit-progress-value { background: #fff; }
+html.sail-backdrop-on #library .reading-progress progress::-moz-progress-bar { background: #fff; }
+@media (max-width: 800px) {
+  #library .library-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 700px) {
   #library .library-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #library .library-summary > .last-read-summary,
@@ -913,3 +928,30 @@ html[data-embedded=true] .library-home { display: none; }
 /* Typographic covers break between words, not inside them. */
 #library .cover strong { overflow-wrap: normal; word-break: normal; hyphens: auto; }
 #library .continue-card > .cover strong { font-size: clamp(17px, 1.5vw, 21px); }
+
+/* The Library fits the view: above phone width the frame is exactly the viewport and each
+   column scrolls on its own, so navigator, featured book, stats and shelf start on screen. */
+@media (min-width: 701px) {
+  #library, html.sail-backdrop-on #library { height: calc(100dvh - 24px); min-height: 0; }
+  html[data-embedded=true] #library { height: 100dvh; min-height: 0; }
+  #library .library-sidebar, #library .library-content, #library .library-activity {
+    min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
+  }
+  #library .library-content { padding: 24px 28px; }
+  #library .continue-card { margin-bottom: 20px; gap: 24px; }
+  #library .continue-card > .cover { width: 120px; min-height: 176px; height: 176px; }
+  #library .continue-card h2 { margin: 4px 0 6px; }
+  #library .continue-card .book-edition { margin: 6px 0; }
+  #library .library-heading { margin-bottom: 12px; }
+  #library .library-heading h2 { margin: 0; }
+  #library .shelf { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 18px 14px; }
+  #library .shelf .cover { min-height: 136px; padding: 14px; }
+  #library .shelf .cover strong { font-size: 16px; }
+}
+/* Activity stacks under the content below 980px: give the content the room and let a
+   short activity strip scroll on its own. */
+@media (min-width: 701px) and (max-width: 980px) {
+  #library { grid-template-rows: minmax(0, 1fr) auto; }
+  #library .library-sidebar { grid-row: 1 / span 2; }
+  #library .library-activity { max-height: 30dvh; padding-top: 18px; padding-bottom: 18px; }
+}

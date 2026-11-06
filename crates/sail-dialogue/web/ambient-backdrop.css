@@ -50,63 +50,57 @@ html.sail-backdrop-on {
 }
 @media (prefers-reduced-motion: reduce) { html.sail-backdrop-on { transition: none; } }
 
-/* Fixed indicator buttons with the paper shader: live UI with vibrant luminous
-   colour and dark ink (DESIGN.md, Library tiles composition). */
+/* Fixed indicators as glow pills, the same material as the Library's glow tiles: a near
+   black capsule with its status colour pooled as light along the bottom edge and a halo
+   around it. White text sits on the dark upper half (WCAG AA). */
 html.sail-backdrop-on .connection-pill,
 html.sail-backdrop-on .privacy-indicator,
 html.sail-backdrop-on .loading-indicator {
-  --tile-ink: #17130b;
-  color: var(--tile-ink);
+  --glow: #8a93a6; --glow-hot: #dfe4ee;
+  color: #fff;
   font-weight: 600;
-  border: 0;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, .6);
+  border: 1px solid rgba(255, 255, 255, .12);
   border-radius: var(--radius-pill, 999px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .45);
+  background:
+    radial-gradient(60% 55% at 50% 118%, rgba(255, 255, 255, .75), transparent 100%),
+    radial-gradient(85% 80% at 50% 125%, var(--glow-hot), transparent 100%),
+    radial-gradient(130% 120% at 50% 135%, var(--glow), transparent 75%),
+    linear-gradient(180deg, #06070a 35%, #0b0d12);
+  box-shadow: 0 8px 26px -8px var(--glow), 0 0 22px -6px var(--glow), inset 0 1px 0 rgba(255, 255, 255, .14);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  transition: background var(--sail-transition-fast, 140ms) var(--sail-ease),
-              box-shadow var(--sail-transition-fast, 140ms) var(--sail-ease),
+  transition: box-shadow var(--sail-transition-fast, 140ms) var(--sail-ease),
               color var(--sail-transition-fast, 140ms) var(--sail-ease);
 }
 html.sail-backdrop-on .connection-pill i,
 html.sail-backdrop-on .privacy-indicator i {
-  background: var(--tile-ink);
-  color: var(--tile-ink);
-  box-shadow: none;
+  background: var(--glow-hot);
+  color: var(--glow);
+  box-shadow: 0 0 8px var(--glow);
 }
-html.sail-backdrop-on .connection-pill.is-connected {
-  background: linear-gradient(150deg, #bdf5a0, #8fe27a);
-}
-html.sail-backdrop-on .connection-pill.is-disconnected {
-  background: linear-gradient(150deg, #ffe27a, #f6c945);
-}
-html.sail-backdrop-on .privacy-indicator {
-  background: linear-gradient(150deg, #ffc2c2, #f08a89);
-}
-html.sail-backdrop-on .privacy-indicator.rec-indicator {
-  background: linear-gradient(150deg, #ff9b9b, #ef4444);
-}
-html.sail-backdrop-on #micLiveIndicator {
-  background: linear-gradient(150deg, #a5f3fc, #38bdf8);
-}
-html.sail-backdrop-on .loading-indicator {
-  background: linear-gradient(150deg, #e9d5ff, #c084fc);
-}
+html.sail-backdrop-on .connection-pill.is-connected { --glow: #22d84a; --glow-hot: #c8ff6a; }
+html.sail-backdrop-on .connection-pill.is-disconnected { --glow: #ff9a1a; --glow-hot: #ffd45a; }
+html.sail-backdrop-on .privacy-indicator { --glow: #ff2f6d; --glow-hot: #ffa3c0; }
+html.sail-backdrop-on .privacy-indicator.rec-indicator { --glow: #ff2a2a; --glow-hot: #ff9b7a; }
+html.sail-backdrop-on #micLiveIndicator { --glow: #1fa5ff; --glow-hot: #a5f3fc; }
+html.sail-backdrop-on .loading-indicator { --glow: #7a5cff; --glow-hot: #d8c8ff; }
 html.sail-backdrop-on .loading-indicator progress {
-  border-color: rgba(23, 19, 11, .3);
-  background: rgba(23, 19, 11, .15);
+  border-color: rgba(255, 255, 255, .35);
+  background: rgba(0, 0, 0, .45);
 }
 html.sail-backdrop-on .loading-indicator progress::-webkit-progress-bar {
-  background: rgba(23, 19, 11, .15);
+  background: rgba(0, 0, 0, .45);
 }
 html.sail-backdrop-on .loading-indicator progress::-webkit-progress-value {
-  background: #17130b;
+  background: #fff;
 }
 html.sail-backdrop-on .loading-indicator progress::-moz-progress-bar {
-  background: #17130b;
+  background: #fff;
 }
 html.sail-backdrop-on .loading-indicator #speechLoadValue,
 html.sail-backdrop-on .loading-indicator #modelLoadValue {
-  color: #17130b;
+  color: #fff;
 }
 
 html.sail-backdrop-on .top-actions .icon-button {

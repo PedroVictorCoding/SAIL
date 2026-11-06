@@ -131,6 +131,12 @@ non-animated theme. Below 1180px the contextual column moves under the content; 
 all regions stack with full-width actions. The same rules apply to Arena Learn lesson and
 practice surfaces: truthful state, stable text, no ambient motion while the learner reads.
 
+**Glow tiles and pills.** Library stat tiles and the shell's status pills (learning,
+connection, mic, REC, loading) share one material: a near-black surface with its hue
+pooled as light along the bottom edge plus a soft halo of the same hue, and white text in
+the dark upper part. Each hue maps to one real measurement or state. Above phone width the
+Library frame is exactly the viewport and its columns scroll independently.
+
 ### Timelines and daily phases
 Use a vertical timeline / anchored events for Life, Pulse, Calendar and Health schedules. The gradient tint can reflect task class or phase when real data exists. **Do not infer medical recommendations from a designer reference.** Calendar remains source-truth from #335.
 
