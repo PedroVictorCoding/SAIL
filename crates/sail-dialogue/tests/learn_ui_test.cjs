@@ -116,3 +116,168 @@ test('LearnHarness confidence stop snapping, session filtering, and Sugiyama DAG
   );
 });
 
+
+function dictationHarness(overrides = {}) {
+  const changes = [];
+  const field = {value: 'My draft', maxLength: 4000, isConnected: true,
+    dispatchEvent(event) { this.event = event.type; }, focus() { this.focused = true; }};
+  let cancelled = 0;
+  const controller = ui.learnCreateDictation({
+    capture: async () => ({finish: async () => 'pcm', cancel: () => { cancelled++; }}),
+    transcribe: async () => 'spoken answer',
+    changed: change => changes.push(change), ...overrides,
+  });
+  return {controller, field, changes, cancelled: () => cancelled};
+}
+
+test('dictation records, transcribes and fills an editable draft without submitting', async () => {
+  const h = dictationHarness();
+  await h.controller.start(h.field);
+  assert.equal(h.controller.busy, true);
+  await h.controller.stop();
+  assert.deepEqual(h.changes.map(c => c.phase), ['requesting', 'recording', 'transcribing', 'filled']);
+  assert.equal(h.field.value, 'My draft spoken answer');
+  assert.equal(h.field.event, 'input');
+  assert.equal(h.field.focused, true);
+  assert.equal(h.controller.busy, false);
+});
+
+test('microphone denial is inline, keeps the draft and allows retry', async () => {
+  let denied = true;
+  const h = dictationHarness({capture: async () => {
+    if (denied) throw Object.assign(new Error('denied'), {name: 'NotAllowedError'});
+    return {finish: async () => 'pcm', cancel() {}};
+  }});
+  await h.controller.start(h.field);
+  assert.equal(h.changes.at(-1).phase, 'error');
+  assert.match(h.changes.at(-1).message, /permission denied/);
+  assert.equal(h.field.value, 'My draft');
+  denied = false;
+  await h.controller.start(h.field);
+  await h.controller.stop();
+  assert.equal(h.changes.at(-1).phase, 'filled');
+});
+
+test('STT failure, empty transcript and excessive length keep existing text', async () => {
+  for (const transcribe of [async () => { throw new Error('STT offline'); }, async () => ' ', async () => 'x'.repeat(4001)]) {
+    const h = dictationHarness({transcribe});
+    await h.controller.start(h.field);
+    await h.controller.stop();
+    assert.equal(h.changes.at(-1).phase, 'error');
+    assert.equal(h.field.value, 'My draft');
+    assert.equal(h.cancelled(), 1);
+    assert.equal(h.controller.busy, false);
+  }
+});
+
+test('cancellation during microphone permission releases the late capture', async () => {
+  let resolve;
+  let released = false;
+  const h = dictationHarness({capture: () => new Promise(r => { resolve = r; })});
+  const starting = h.controller.start(h.field);
+  h.controller.cancel();
+  resolve({cancel() { released = true; }});
+  await starting;
+  assert.equal(released, true);
+  assert.equal(h.changes.at(-1).phase, 'idle');
+});
+
+test('cancellation aborts STT and ignores late results after navigation', async () => {
+  let resolve, signal;
+  const h = dictationHarness({transcribe: (_, s) => { signal = s; return new Promise(r => { resolve = r; }); }});
+  await h.controller.start(h.field);
+  const stopping = h.controller.stop();
+  await Promise.resolve();
+  h.controller.cancel();
+  assert.equal(signal.aborted, true);
+  resolve('stale transcript');
+  await stopping;
+  assert.equal(h.field.value, 'My draft');
+  assert.equal(h.changes.at(-1).phase, 'idle');
+});
+
+test('dictation accepts one capture and stop, preserves edits made while transcribing', async () => {
+  let captures = 0, finish = 0, resolve;
+  const h = dictationHarness({
+    capture: async () => { captures++; return {finish: async () => { finish++; return 'pcm'; }, cancel() {}}; },
+    transcribe: () => new Promise(r => { resolve = r; }),
+  });
+  await h.controller.start(h.field);
+  await h.controller.start(h.field);
+  const stopping = h.controller.stop();
+  await h.controller.stop();
+  h.field.value = 'Edited draft';
+  resolve('new words');
+  await stopping;
+  assert.equal(captures, 1);
+  assert.equal(finish, 1);
+  assert.equal(h.field.value, 'Edited draft new words');
+});
+
+test('removed field never receives a transcript', async () => {
+  const h = dictationHarness();
+  await h.controller.start(h.field);
+  h.field.isConnected = false;
+  await h.controller.stop();
+  assert.equal(h.field.value, 'My draft');
+  assert.equal(h.changes.at(-1).phase, 'idle');
+});
+
+
+test('cancelled flush cannot orphan a newer recording', async () => {
+  let release;
+  let captures = 0, secondCancelled = 0;
+  const h = dictationHarness({capture: async () => ++captures === 1
+    ? {finish: () => new Promise(resolve => { release = resolve; }), cancel() {}}
+    : {finish: async () => 'new audio', cancel() { secondCancelled++; }}});
+  await h.controller.start(h.field);
+  const stopping = h.controller.stop();
+  h.controller.cancel();
+  await h.controller.start(h.field);
+  release('old audio');
+  await stopping;
+  assert.equal(h.controller.busy, true);
+  h.controller.cancel();
+  assert.equal(secondCancelled, 1);
+  assert.equal(h.field.value, 'My draft');
+});
+
+test('dictation capture reuses capture.js, flushes final PCM and releases microphone', async () => {
+  const vm = require('node:vm');
+  const fs = require('node:fs');
+  let stopped = false, closed = false, modulePath, processorName, processor;
+  const context = {
+    destination: {}, resume: async () => {}, close: async () => { closed = true; },
+    audioWorklet: {addModule: async path => { modulePath = path; }},
+    createMediaStreamSource: () => ({connect() {}, disconnect() {}}),
+  };
+  const track = {stop() { stopped = true; }};
+  const sandbox = {module: {exports: {}}, Blob, ArrayBuffer, setTimeout, clearTimeout,
+    document: {readyState: 'loading', addEventListener() {}},
+    window: {document: {}, isSecureContext: true,
+      navigator: {mediaDevices: {getUserMedia: async () => ({getTracks: () => [track]})}},
+      AudioContext: function () { return context; },
+      AudioWorkletNode: function (_, name) {
+        processorName = name;
+        processor = this;
+        this.connect = () => {};
+        this.disconnect = () => {};
+        this.port = {postMessage: request => {
+          assert.equal(request.action, 'flush');
+          this.port.onmessage({data: new Uint8Array([1, 0]).buffer});
+          this.port.onmessage({data: {type: 'flushed'}});
+        }};
+      },
+    },
+  };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../web/learn.js'), 'utf8'), sandbox);
+  const capture = await sandbox.module.exports.learnCaptureAudio(() => {});
+  processor.port.onmessage({data: new Uint8Array([0, 128]).buffer});
+  const audio = await capture.finish();
+  assert.equal(modulePath, '/capture.js');
+  assert.equal(processorName, 'sail-capture');
+  assert.equal(audio.type, 'application/octet-stream');
+  assert.deepEqual([...new Uint8Array(await audio.arrayBuffer())], [0, 128, 1, 0]);
+  assert.equal(stopped, true);
+  assert.equal(closed, true);
+});

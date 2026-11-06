@@ -346,8 +346,113 @@
     };
   }
 
+  /** One capture at a time; invalidated operations can never fill a different dock. */
+  function learnCreateDictation({capture, transcribe, changed}) {
+    let serial = 0, phase = 'idle', recording = null, abort = null, target = null;
+    const update = (next, message = '') => { phase = next; changed({phase, target, message}); };
+    return {
+      get busy() { return ['requesting', 'recording', 'transcribing'].includes(phase); },
+      cancel() {
+        serial++; recording?.cancel(); recording = null; abort?.abort(); abort = null;
+        target = null; update('idle');
+      },
+      async start(field) {
+        if (this.busy) return;
+        const id = ++serial; target = field; abort = new AbortController(); update('requesting');
+        try {
+          const session = await capture(() => this.stop(), abort.signal);
+          if (id !== serial) { session.cancel(); return; }
+          recording = session; update('recording');
+        } catch (error) {
+          if (id === serial) update('error', error.name === 'NotAllowedError'
+            ? 'Microphone permission denied. Allow access in browser settings or type your answer.' : error.message);
+        }
+      },
+      async stop() {
+        if (phase !== 'recording') return;
+        const id = serial, field = target, session = recording;
+        abort = new AbortController(); update('transcribing');
+        try {
+          const audio = await session.finish();
+          if (id !== serial) return;
+          recording = null;
+          const text = String(await transcribe(audio, abort.signal)).trim();
+          if (id !== serial) return;
+          if (!text) throw new Error('No speech was recognized. Try again or type your answer.');
+          if (!field.isConnected) { this.cancel(); return; }
+          // Append to the current draft, including edits made while STT was running.
+          const combined = field.value + (field.value && !/\s$/.test(field.value) ? ' ' : '') + text;
+          if (field.maxLength > 0 && combined.length > field.maxLength) {
+            throw new Error('The transcript is too long for this field. Try a shorter recording. Your draft is unchanged.');
+          }
+          field.value = combined;
+          field.dispatchEvent(new Event('input', {bubbles: true}));
+          update('filled', 'Transcript added. Edit it before submitting.');
+          field.focus();
+        } catch (error) {
+          if (id === serial) { session.cancel(); recording = null; update('error', error.message); }
+        }
+      },
+    };
+  }
+
+  /** Same resampling worklet and PCM format used by Dialogue's local speech path. */
+  async function learnCaptureAudio(onLimit, signal) {
+    if (!root.isSecureContext || !root.navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Microphone requires HTTPS or localhost. You can still type your answer.');
+    }
+    let stream, context, source, node, timer, flushTimer, pendingFlush;
+    let frames = [], size = 0;
+    const cleanup = () => {
+      clearTimeout(timer); clearTimeout(flushTimer);
+      signal?.removeEventListener('abort', cancel);
+      stream?.getTracks().forEach(track => { track.onended = null; track.stop(); });
+      if (node) { node.port.onmessage = null; node.disconnect(); }
+      source?.disconnect(); context?.close().catch(() => {});
+    };
+    const cancel = () => { cleanup(); frames = []; pendingFlush?.(new Error('Recording cancelled.')); pendingFlush = null; };
+    signal?.addEventListener('abort', cancel, {once: true});
+    const checkCancelled = () => { if (signal?.aborted) throw new Error('Recording cancelled.'); };
+    try {
+      checkCancelled();
+      stream = await root.navigator.mediaDevices.getUserMedia({audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
+      checkCancelled();
+      context = new root.AudioContext();
+      await context.resume();
+      await context.audioWorklet.addModule('/capture.js');
+      checkCancelled();
+      source = context.createMediaStreamSource(stream);
+      node = new root.AudioWorkletNode(context, 'sail-capture');
+      node.port.onmessage = ({data}) => {
+        if (data?.type === 'flushed') { pendingFlush?.(); pendingFlush = null; return; }
+        if (!(data instanceof ArrayBuffer)) return;
+        if (size + data.byteLength > 16000 * 2 * 60) { onLimit(); return; }
+        frames.push(data); size += data.byteLength;
+      };
+      stream.getTracks().forEach(track => { track.onended = onLimit; });
+      source.connect(node); node.connect(context.destination);
+      // Leave headroom for the final padded 512-sample frame.
+      timer = setTimeout(onLimit, 59000);
+      return {
+        cancel,
+        async finish() {
+          try {
+            await new Promise((resolve, reject) => {
+              pendingFlush = error => error ? reject(error) : resolve();
+              flushTimer = setTimeout(() => reject(new Error('Microphone did not finish recording. Try again.')), 1500);
+              node.port.postMessage({action: 'flush', request_id: 1});
+            });
+            return new Blob(frames, {type: 'application/octet-stream'});
+          } finally { cleanup(); frames = []; }
+        },
+      };
+    } catch (error) { cancel(); throw error; }
+  }
+
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
+      learnCaptureAudio,
+      learnCreateDictation,
       learnParseSse,
       learnStepStates,
       learnStatus,
@@ -413,6 +518,60 @@
     graphPanning: null,
     hoveredGraphNode: null,
   };
+
+  const dictation = learnCreateDictation({
+    capture: learnCaptureAudio,
+    async transcribe(audio, signal) {
+      const headers = {'Content-Type': 'application/octet-stream'};
+      const token = ownerToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const response = await fetch('/api/speech/transcribe', {method: 'POST', headers, body: audio, signal});
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Transcription failed (HTTP ${response.status}). Try again or type your answer.`);
+      return data.text || '';
+    },
+    changed({phase, target, message}) {
+      document.querySelectorAll('.learn-dictate').forEach(button => {
+        const active = target?.id === button.dataset.field;
+        const busy = dictation.busy;
+        button.disabled = busy && !(active && phase === 'recording');
+        button.setAttribute('aria-pressed', String(active && phase === 'recording'));
+        button.textContent = active && phase === 'recording' ? '■ Stop recording' : '🎙 Dictate';
+        button.setAttribute('aria-label', `${active && phase === 'recording' ? 'Stop recording' : 'Dictate'} ${button.dataset.label}`);
+        const status = $(button.dataset.status);
+        if (status) {
+          status.textContent = active ? ({requesting: 'Waiting for microphone permission…', recording: 'Recording… Speak, then select Stop. Stops after one minute.', transcribing: 'Transcribing on your SAIL host…'}[phase] || message) : '';
+          status.dataset.phase = phase;
+        }
+      });
+    },
+  });
+
+  function addDictation(box, field, label) {
+    field.id = `learn-dictation-${field.name}`;
+    field.setAttribute('aria-label', label);
+    const controls = document.createElement('div');
+    controls.className = 'learn-dictation-controls';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'learn-dictate';
+    button.dataset.field = field.id;
+    button.dataset.label = label;
+    button.dataset.status = `${field.id}-status`;
+    button.textContent = '🎙 Dictate';
+    button.setAttribute('aria-label', `Dictate ${label}`);
+    button.setAttribute('aria-pressed', 'false');
+    const status = document.createElement('span');
+    status.id = button.dataset.status;
+    status.className = 'learn-dictation-status';
+    status.setAttribute('role', 'status');
+    field.setAttribute('aria-describedby', status.id);
+    button.addEventListener('click', () => {
+      if (dictation.busy) dictation.stop(); else dictation.start(field);
+    });
+    controls.append(button, status);
+    box.appendChild(controls);
+  }
 
   function ownerToken() {
     try { return (localStorage.getItem('sail_owner_token') || '').trim(); } catch (_) { return ''; }
@@ -1445,6 +1604,7 @@
     const prob = findActiveProblem(view);
 
     if (!q && !prob) {
+      dictation.cancel();
       state.openQuestionId = null;
       state.openProblemId = null;
       form.hidden = true;
@@ -1482,6 +1642,7 @@
   }
 
   function renderQuestionDockContents(form, q) {
+    dictation.cancel();
     form.replaceChildren();
     if (state.dockCollapsed) {
       const bar = document.createElement('div');
@@ -1559,6 +1720,7 @@
       area.className = 'lh-recessed-textarea';
       area.placeholder = 'Explain in your own words…';
       box.append(boxEye, area);
+      addDictation(box, area, 'your answer');
       fieldset.appendChild(box);
     } else {
       const optsWrap = document.createElement('div');
@@ -1643,7 +1805,9 @@
     submit.className = 'lh-btn-primary learn-primary';
     submit.textContent = 'Submit answer';
     foot.append(hint, submit);
-    thinkBox.append(thinkEye, thinkArea, foot);
+    thinkBox.append(thinkEye, thinkArea);
+    addDictation(thinkBox, thinkArea, 'your thinking');
+    thinkBox.appendChild(foot);
     form.appendChild(thinkBox);
 
     const err = document.createElement('p');
@@ -1654,6 +1818,7 @@
   }
 
   function renderPracticeDockContents(form, prob) {
+    dictation.cancel();
     form.replaceChildren();
     const topRow = document.createElement('div');
     topRow.className = 'lh-dock-top-row';
@@ -1835,6 +2000,7 @@
   }
 
   function showHomeView() {
+    dictation.cancel();
     if (state.streamAbort) state.streamAbort.abort();
     state.sessionId = null;
     state.view = null;
@@ -1880,6 +2046,8 @@
   }
 
   async function openSession(id) {
+    dictation.cancel();
+    state.openQuestionId = null;
     state.sessionId = id;
     state.lastAutoTurnSeq = null;
     try {
@@ -2090,6 +2258,10 @@
       const view = state.view;
       if (!view) return;
       const errEl = $('learnDockError');
+      if (dictation.busy) {
+        if (errEl) errEl.textContent = 'Finish dictation and review the transcript before submitting.';
+        return;
+      }
 
       // Case 1: Active Practice Problem
       const prob = findActiveProblem(view);
@@ -2399,7 +2571,10 @@
 
     initGraphCanvasEvents();
     window.addEventListener('resize', () => renderGraphCanvas());
+    window.addEventListener('pagehide', () => dictation.cancel());
+    document.addEventListener('visibilitychange', () => { if (document.hidden) dictation.cancel(); });
     window.addEventListener('hashchange', () => {
+      if (location.hash !== '#arena') dictation.cancel();
       if (location.hash === '#arena') {
         loadSessions();
         refreshGraph();

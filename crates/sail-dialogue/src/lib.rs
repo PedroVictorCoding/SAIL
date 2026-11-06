@@ -6,6 +6,7 @@ pub mod control;
 pub mod conversation_controller;
 #[cfg(test)]
 mod conversation_controller_tests;
+pub mod dictation_http;
 mod execution;
 pub mod learn_http;
 pub mod live_context;
