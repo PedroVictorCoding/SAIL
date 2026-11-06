@@ -260,7 +260,7 @@ const SailReader = (() => {
             details.subjects?.slice(0, 2).join(' · ')].filter(Boolean).join(' · ');
           if (edition) info.append(el('p', edition, 'book-edition muted'));
           if (details.description) about.append(el('p', details.description, 'book-description muted'));
-          const source = el('a', 'Details from Open Library', 'metadata-source');
+          const source = el('a', details.user_edited ? 'Open Library · edited locally' : 'Details from Open Library', 'metadata-source');
           source.href = `https://openlibrary.org${details.work_key}`;
           source.target = '_blank'; source.rel = 'noopener noreferrer'; about.append(source);
         }
@@ -344,20 +344,112 @@ const SailReader = (() => {
         ? 'No books match this search.'
         : 'Your library is empty. Import a book to begin, or drop an EPUB or text file here.';
     }
+    let editorContext = null, previewUrl = null;
+    function resetEditor() {
+      editorContext = null;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+      $('metadata-cover-image').removeAttribute('src');
+      $('metadata-cover-image').hidden = true;
+      $('metadata-editor').hidden = true;
+      $('metadata-form').hidden = false;
+      $('metadata-back').disabled = false;
+    }
+    async function showMetadataEditor(metadata, previewId, book, serial) {
+      resetEditor();
+      editorContext = {previewId, book};
+      $('metadata-results').hidden = true;
+      $('metadata-editor').hidden = false;
+      $('metadata-form').hidden = true;
+      $('edit-title').value = metadata.title;
+      $('edit-authors').value = metadata.authors.join('\n');
+      $('edit-year').value = metadata.first_publish_year ?? '';
+      $('edit-subjects').value = (metadata.subjects || []).join('\n');
+      $('edit-description').value = metadata.description || '';
+      $('metadata-provenance').textContent = previewId ? 'Open Library preview · not saved. Artwork may vary by edition.' : 'Saved details · edits stay local. Search above to choose another book or cover.';
+      $('metadata-back').textContent = previewId ? 'Back to results' : 'Find another match';
+      $('metadata-use-cover').checked = false;
+      $('metadata-use-cover').disabled = true;
+      $('metadata-cover-empty').hidden = false;
+      $('metadata-cover-empty').textContent = metadata.cover_cached ? 'Loading cover preview…' : 'No cover available. You can save the details without a cover.';
+      $('metadata-save').disabled = true;
+      $('edit-title').focus();
+      if (metadata.cover_cached) {
+        try {
+          const path = previewId ? `/books/${key(book)}/metadata/preview/${encodeURIComponent(previewId)}/cover` : `/books/${key(book)}/cover`;
+          const blob = await api.request(path, {binary: true});
+          if (serial !== lookupSerial) return;
+          previewUrl = URL.createObjectURL(blob);
+          const image = $('metadata-cover-image');
+          image.alt = `Cover preview for ${metadata.title}`;
+          image.src = previewUrl;
+          await image.decode();
+          if (serial !== lookupSerial) return;
+          image.hidden = false; $('metadata-cover-empty').hidden = true;
+          $('metadata-use-cover').disabled = false; $('metadata-use-cover').checked = true;
+        } catch (_) {
+          if (serial !== lookupSerial) return;
+          $('metadata-cover-empty').textContent = 'Cover preview unavailable. Save without a cover, or preview the result again.';
+        }
+      }
+      if (serial === lookupSerial) {
+        $('metadata-save').disabled = false;
+        $('metadata-status').textContent = 'Review the cover and edit the fields below. Nothing changes until you save.';
+      }
+    }
     function openMetadata(book) {
-      dialogBook = book; ++lookupSerial;
+      dialogBook = book; const serial = ++lookupSerial;
+      resetEditor();
       $('metadata-title').value = book.title.slice(0, 200);
       $('metadata-author').value = book.authors.join(', ').slice(0, 160);
-      $('metadata-results').replaceChildren(); $('metadata-status').textContent = '';
+      $('metadata-results').replaceChildren(); $('metadata-results').hidden = false;
+      $('metadata-status').textContent = '';
       $('metadata-search').disabled = false;
       $('metadata-dialog').showModal();
-      $('metadata-title').focus();
+      if (book.metadata) showMetadataEditor(book.metadata, null, book, serial);
+      else $('metadata-title').focus();
     }
     $('metadata-close').onclick = () => $('metadata-dialog').close();
-    $('metadata-dialog').addEventListener('close', () => { ++lookupSerial; });
+    $('metadata-dialog').addEventListener('close', () => { ++lookupSerial; resetEditor(); });
+    $('metadata-back').onclick = () => {
+      ++lookupSerial; resetEditor(); $('metadata-results').hidden = false;
+      $('metadata-search').disabled = false;
+      $('metadata-status').textContent = 'Draft discarded. Your saved book is unchanged.';
+      $('metadata-title').focus();
+    };
+    $('metadata-editor').onsubmit = async event => {
+      event.preventDefault();
+      if (!editorContext || $('metadata-save').disabled) return;
+      const context = editorContext, serial = ++lookupSerial;
+      const lines = id => $(id).value.split('\n').map(s => s.trim()).filter(Boolean);
+      const edits = {title: $('edit-title').value, authors: lines('edit-authors'),
+        first_publish_year: $('edit-year').value === '' ? null : Number($('edit-year').value),
+        subjects: lines('edit-subjects'), description: $('edit-description').value || null};
+      if (edits.authors.length > 8 || edits.authors.some(s => s.length > 160) || edits.subjects.length > 4 || edits.subjects.some(s => s.length > 80)) {
+        $('metadata-status').textContent = 'Use up to 8 authors (160 characters each) and 4 subjects (80 characters each).'; return;
+      }
+      $('metadata-save').disabled = true; $('metadata-search').disabled = true; $('metadata-back').disabled = true;
+      $('metadata-status').textContent = 'Saving your reviewed details…';
+      try {
+        const saved = await api.request(`/books/${key(context.book)}/metadata`, {method: 'POST', body: {
+          preview_id: context.previewId, edits, use_cover: $('metadata-use-cover').checked
+        }});
+        state.books = state.books.map(b => b.id === context.book.id ? saved.book : b);
+        renderLibrary();
+        if (serial !== lookupSerial) return;
+        $('metadata-dialog').close();
+        document.querySelector('#continue .book-about summary, #continue .book-detail-actions button')?.focus();
+        status('Your reviewed book details have been saved.');
+      } catch (error) {
+        if (serial === lookupSerial) $('metadata-status').textContent = error.message;
+      } finally {
+        if (serial === lookupSerial) { $('metadata-save').disabled = false; $('metadata-search').disabled = false; $('metadata-back').disabled = false; }
+      }
+    };
     $('metadata-form').onsubmit = async event => {
       event.preventDefault();
       const serial = ++lookupSerial, book = dialogBook;
+      resetEditor(); $('metadata-results').hidden = false;
       $('metadata-search').disabled = true;
       $('metadata-results').replaceChildren();
       $('metadata-status').textContent = 'Searching Open Library…';
@@ -366,29 +458,27 @@ const SailReader = (() => {
           title: $('metadata-title').value, author: $('metadata-author').value
         }});
         if (serial !== lookupSerial) return;
-        $('metadata-status').textContent = data.matches.length ? 'Choose the matching book. Cover artwork may vary by edition.' : 'No matches found. Try another title or author.';
+        $('metadata-status').textContent = data.matches.length ? 'Preview a match to inspect its cover and edit its details.' : 'No matches found. Try another title or author.';
         for (const match of data.matches) {
           const result = el('article', undefined, 'metadata-result');
           result.append(el('h3', match.title), el('p', [match.authors.join(', '), match.first_publish_year].filter(Boolean).join(' · '), 'muted'));
-          result.append(button('Use these details', async () => {
-            const selectionSerial = ++lookupSerial;
+          result.append(button('Preview & edit', async () => {
+            const previewSerial = ++lookupSerial;
             $('metadata-results').querySelectorAll('button').forEach(b => { b.disabled = true; });
             $('metadata-search').disabled = true;
-            $('metadata-status').textContent = 'Saving details and downloading cover…';
+            $('metadata-status').textContent = 'Loading cover and details for preview…';
             try {
-              const saved = await api.request(`/books/${key(book)}/metadata`, {method: 'POST', body: {work_key: match.work_key}});
-              // Accepted writes still refresh the local projection after the sheet closes.
-              state.books = state.books.map(b => b.id === book.id ? saved.book : b);
-              renderLibrary();
-              if (selectionSerial !== lookupSerial) return;
-              $('metadata-dialog').close();
-              document.querySelector('#continue .book-about summary, #continue .book-detail-actions button')?.focus();
-              status(saved.book.metadata?.cover_cached ? 'Book details and cover saved for offline use.' : 'Book details saved. No cover could be downloaded; you can try again later.');
+              const preview = await api.request(`/books/${key(book)}/metadata/preview`, {method: 'POST', body: {work_key: match.work_key}});
+              if (previewSerial !== lookupSerial) return;
+              await showMetadataEditor(preview.metadata, preview.preview_id, book, previewSerial);
             } catch (error) {
-              if (selectionSerial !== lookupSerial) return;
-              $('metadata-status').textContent = error.message;
-              $('metadata-results').querySelectorAll('button').forEach(b => { b.disabled = false; });
-            } finally { if (selectionSerial === lookupSerial) $('metadata-search').disabled = false; }
+              if (previewSerial === lookupSerial) $('metadata-status').textContent = error.message;
+            } finally {
+              if (previewSerial === lookupSerial) {
+                $('metadata-results').querySelectorAll('button').forEach(b => { b.disabled = false; });
+                $('metadata-search').disabled = false;
+              }
+            }
           }));
           $('metadata-results').append(result);
         }

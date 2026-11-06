@@ -20,11 +20,66 @@ pub struct Metadata {
     pub cover_id: Option<u64>,
     pub cover_cached: bool,
     pub retrieved_at: DateTime<Utc>,
+    #[serde(default)]
+    pub user_edited: bool,
 }
 
 impl Metadata {
     pub fn source_url(&self) -> String {
         format!("https://openlibrary.org{}", self.work_key)
+    }
+}
+
+/// Local editable fields. Provider identity and cover URLs are deliberately not editable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetadataEdits {
+    pub title: String,
+    pub authors: Vec<String>,
+    pub first_publish_year: Option<i64>,
+    pub subjects: Vec<String>,
+    pub description: Option<String>,
+}
+impl MetadataEdits {
+    pub fn apply(&self, metadata: &mut Metadata) -> Result<(), String> {
+        if self.title.trim().is_empty()
+            || self.title.chars().count() > 300
+            || self.authors.len() > 8
+            || self.authors.iter().any(|s| s.chars().count() > 160)
+            || self.subjects.len() > 4
+            || self.subjects.iter().any(|s| s.chars().count() > 80)
+            || self
+                .description
+                .as_ref()
+                .is_some_and(|s| s.chars().count() > 1600)
+            || self
+                .first_publish_year
+                .is_some_and(|y| !(-9999..=9999).contains(&y))
+        {
+            return Err("Check the title, authors, year, subjects and description lengths.".into());
+        }
+        let title = self.title.trim().to_string();
+        let authors: Vec<String> = self
+            .authors
+            .iter()
+            .filter_map(|s| text(Some(s), 160))
+            .collect();
+        let subjects: Vec<String> = self
+            .subjects
+            .iter()
+            .filter_map(|s| text(Some(s), 80))
+            .collect();
+        let description = text(self.description.as_deref(), 1600);
+        metadata.user_edited |= metadata.title != title
+            || metadata.authors != authors
+            || metadata.first_publish_year != self.first_publish_year
+            || metadata.subjects != subjects
+            || metadata.description != description;
+        metadata.title = title;
+        metadata.authors = authors;
+        metadata.first_publish_year = self.first_publish_year;
+        metadata.subjects = subjects;
+        metadata.description = description;
+        Ok(())
     }
 }
 
@@ -208,6 +263,7 @@ fn candidate(doc: &Value) -> Option<Metadata> {
         cover_id: doc["cover_i"].as_u64().filter(|id| *id > 0),
         cover_cached: false,
         retrieved_at: Utc::now(),
+        user_edited: false,
     })
 }
 
@@ -240,6 +296,31 @@ fn sanitize_cover(bytes: &[u8]) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn edits_validate_and_preserve_provider_identity() {
+        let mut metadata = candidate(
+            &json!({"key":"/works/OL1W","title":"Provider","author_name":["A"],"cover_i":4}),
+        )
+        .unwrap();
+        let mut edits = MetadataEdits {
+            title: " Local title ".into(),
+            authors: vec!["New author".into()],
+            first_publish_year: Some(1900),
+            subjects: vec![],
+            description: None,
+        };
+        edits.apply(&mut metadata).unwrap();
+        assert_eq!(metadata.title, "Local title");
+        assert!(metadata.user_edited);
+        assert_eq!(metadata.work_key, "/works/OL1W");
+        assert_eq!(metadata.cover_id, Some(4));
+        edits.description = Some("x".repeat(1601));
+        assert!(edits.apply(&mut metadata).is_err());
+        edits.description = None;
+        edits.authors = vec!["A".into(); 9];
+        assert!(edits.apply(&mut metadata).is_err());
+    }
+
     #[test]
     fn redirects_are_limited_to_https_cover_storage() {
         for url in [

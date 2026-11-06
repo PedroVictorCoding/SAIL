@@ -137,7 +137,7 @@ The Library uses static gradients, without blur, continuous animation or new JS 
 only the entered title and optional author to Open Library. It does not send book
 text, source paths, owner tokens or reading history. Opening the Library, importing,
 reading and searching the local shelf never initiate a catalog search. The owner
-chooses a returned match; imported metadata, text and position anchors stay intact.
+previews a returned match, edits a local draft and explicitly saves it; imported metadata, text and position anchors stay intact.
 Selected online title/author appear in the Library, while original fields remain
 available for lookup and removal restores them. **About this book** progressively
 discloses the bounded description, source link and **Remove online details** action.
@@ -169,14 +169,39 @@ private Library, not a public artwork redistribution feature.
 Additional owner-authenticated, `no-store` API routes under `/api/reader`:
 
 - `POST /books/:id/metadata/search` — `{title, author}`, returns at most five matches.
-- `POST /books/:id/metadata` — `{work_key}`, accepts only that book's recent server-held
-  search results (10 minutes, bounded to 16 book searches). Downloads/caches the selection.
+- `POST /books/:id/metadata/preview` — `{work_key}`, accepts a recent server-held search
+  match, downloads its details/validated cover into a volatile preview, and returns
+  `{preview_id, metadata}`. It never writes the Library or its persistent cover.
+- `GET /books/:id/metadata/preview/:preview_id/cover` — owner-authenticated preview JPEG.
+- `POST /books/:id/metadata` — `{preview_id, edits, use_cover}`. Only **Save details**
+  persists the draft and the exact previewed cover, without redownloading. `edits`
+  contains title, authors, first_publish_year, subjects and description. A null
+  preview_id edits already-saved details and their cached cover entirely offline.
+  Provider work/cover IDs cannot be edited or substituted by the client.
 - `DELETE /books/:id/metadata` — removes online details and cached cover.
 - `GET /books/:id/cover` — serves the cached JPEG; no network fetch on this route.
 
-Search/selection bodies are limited to 4KiB, invalid input is rejected, and concurrent
+Search/preview bodies are limited to 4KiB; reviewed edits to 16KiB, invalid input is rejected, and concurrent
 catalog operations return 429. Failed services and empty results have explicit UI
 feedback; the lookup sheet can be closed or retried without affecting reading.
+
+**Preview and edit workflow:** Search → **Preview & edit** → inspect the actual cover
+and editable fields → **Save details**. Before saving, Back, Close and Escape discard the unsaved
+client draft. Existing saved details open directly in the same editor; **Find another
+match** returns to lookup. The cover checkbox can omit the artwork. Missing or failed
+preview images offer explicit text and permit saving details without a cover, rather
+than silently selecting unseen artwork. Failed saves preserve the draft for retry.
+Locally changed values are marked `user_edited` and attributed as edited locally.
+
+Preview images use authenticated same-origin blob URLs, revoked when leaving a draft.
+The server holds at most 16 book previews (one per book, at most 2MiB each); tokens
+are valid for ten minutes, bound to their book and pruned on cache use. Expired or
+replaced previews return 410 and require previewing again. Search matches remain
+bounded to 16 books/five results and expire separately. Old clients that attempt a
+direct `{work_key}` save must reload: selection now requires a reviewed preview or
+an existing saved metadata record. Original imported files, metadata and reading
+positions remain intact. Edits validate title (300 characters), up to 8 authors
+(160 each), year −9999…9999, up to 4 subjects (80 each), and description (1600).
 
 Validation commands:
 
