@@ -3027,6 +3027,47 @@ a.nav-item { text-decoration:none; color:var(--muted) }
   gap: 8px;
 }
 
+/* Teacher diagrams (#255): strict Mermaid output or the source as a text fallback. */
+.lh-diagram-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lh-diagram-source {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--lh-recessed);
+  color: var(--lh-muted);
+  font-family: var(--lh-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.lh-diagram-svg {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.lh-diagram-svg svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.lh-diagram-note {
+  margin: 0;
+  color: var(--lh-amber);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .lh-eyebrow {
   font-family: var(--lh-font-mono);
   font-size: 10px;
