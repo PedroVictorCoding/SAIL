@@ -57,6 +57,9 @@ function handleForgeEvent(data) {
   const state = data.state || data.status?.state || (data.success ? 'completed' : 'active');
 
   updateForgePipeline(state);
+  // Background work: counted by the ambient contract, never drives the shell light.
+  if (data.job_id) window.SailAmbient?.dispatch({ type:'background', id:`forge:${data.job_id}`,
+    active:!['completed','succeeded','failed','cancelled','blocked'].includes(state) });
 
   let jobCard = document.getElementById(`forge-job-${jobId}`);
   if (!jobCard) {

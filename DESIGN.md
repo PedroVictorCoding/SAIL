@@ -58,7 +58,7 @@ In order of priority: **truthful state > readability > latency/battery > interac
   --sail-transition-fast: 140ms;
   --sail-transition-state: 420ms;
   --sail-ease: cubic-bezier(.22, 1, .36, 1);
-  --sail-light-a: #78889d; /* injected from verified state */
+  --sail-light-a: #496f9d; /* written by ambient-state.js from verified state (idle) */
   --sail-light-b: #384257;
   --sail-light-c: #0e121a;
   --sail-illumination: .15;
@@ -77,26 +77,33 @@ Tokens are semantic and CSS custom properties are the public styling interface. 
 
 **State must come from authenticated, authoritative typed SAIL events**, not a model deciding a color or client guessing model activity. The shell surfaces a single primary ambient state and localized status for each active tool/card.
 
-| Semantic state | Visual intent | Suggested colors | Motion | Claim condition |
+This table is the **single canonical state list**. The names are used verbatim in server events where one exists (`idle`, `listening`, `thinking`, `speaking`, `executing`, `approval_required`, `error`), in `data-sail-state`, in CSS and in docs; there are no aliases. The colours below are the values in `crates/sail-dialogue/web/ambient-state.js` (`STATES`), and `scripts/ui/ambient_state.test.js` fails if the two disagree. Rows are in shell precedence order, highest first.
+
+| State | Visual intent | Primary light (a, b, c in code) | Motion | Claim condition |
 | --- | --- | --- | --- | --- |
-| `idle` / `ready` | calm, available | graphite + cool blue `#496f9d` | static or barely breathing | connected, no active interaction |
-| `listening` | focused and receptive | teal/cyan `#19b5bc`, midnight blue | slow inward breathing / reactive mic amplitude | OS mic capture genuinely active |
-| `thinking` / `processing` | computational work | violet/indigo `#8567ff`, blue | gentle directional drift | real active inference/tool task |
-| `speaking` | outward delivery | amber/coral `#ff995d`, magenta `#df6c90` | restrained audio-envelope-reactive pulses | PCM actually playing, not synthesis completed |
-| `executing` | progressing external action | electric blue `#4e91fc`, turquoise | purposeful traveling light, not fake percentage | authorized tool executing |
-| `learning` | active study | purple `#9b7dff`, cyan | soft focus, low motion | active Arena Learn teaching/practice session |
-| `recording` / `listen_only` | consented capture | warm red `#f56b66`, muted amber | measured steady pulse + **unambiguous REC indicator** | audio session capture actual and consented |
-| `completed` | finished | green `#5ccda4`, gold | one gentle confirmation; then settle | confirmed completed receipt |
-| `warning` | attention needed | amber `#f3b05a` | static emphasis, no distracting animation | credible warning event |
-| `error` / `disconnected` | blocked/unavailable | desaturated red `#ed7275` / slate | no rhythmic animation; direct diagnostic label | actual error/disconnection |
+| `disconnected` | unavailable, honest | dim slate `#566078` | none; direct "Offline" label | `/ws/voice` closed or not yet open |
+| `error` | blocked | desaturated red `#ed7275` | none; readable diagnostic | actual error event; transient light, message stays in the error box |
+| `approval_required` | action needed | muted amber `#e5be79` + explicit badge | static | outstanding Guardian approval |
+| `speaking` | outward delivery | amber/coral `#ff7a45`, magenta | restrained audio-envelope pulses | PCM actually playing (or on-device TTS playing) |
+| `recording` | consented capture (listen-only context) | muted warm red `#f56b66`, muted amber | measured steady pulse + **persistent REC indicator** | mic capture active **and** owner-consented listening context enabled |
+| `listening` | focused and receptive | teal/cyan `#19b5bc` | slow inward breathing / mic amplitude | mic capture genuinely active; never when permission is denied |
+| `executing` | progressing external action | electric blue `#4e91fc`, turquoise | purposeful traveling light, no fake percentage | foreground tool with an `executing` receipt |
+| `thinking` | computational work | violet/indigo `#8567ff` | gentle directional drift | real transcription, inference or vision work for the current turn |
+| `learning` | active study | violet `#9b7dff`, cyan | soft focus, low motion | Arena Learn session open |
+| `warning` | attention | amber `#f3b05a` | static emphasis | credible warning event (e.g. capture limit reached) |
+| `completed` | finished | green `#5ccda4`, gold | one gentle confirmation, then settle | confirmed `completed` tool receipt; transient |
+| `idle` | calm, available (label "Ready") | graphite + cool blue `#496f9d` | static or barely breathing | connected, nothing above applies |
+
+Fine-grained voice phases (`holding`, `transcribing`, `generating`, `seeing`, `watching`, `working`, `interrupted`) remain labels for the Orb and status text only; the reducer maps each to one of the states above (`ambient-state.js` `PHASES`). Background Forge/Flow/Life jobs are counted but never claim a shell state.
 
 Color is **never the sole status indicator**: icon, label, speech capture indicator and proper aria-live/status semantics remain required. `thinking` is not an excuse to hallucinate hidden work. `listening` is not permitted when mic permission is denied; `speaking` requires playback acknowledgment; recording must be visible independent of ambient animation.
 
 ### Arbitration / priority
 - Explicit errors, permission requests and active recording indicators cannot be suppressed by decorative states.
 - Localized audio state (speaking/listening) wins shell's ambient visual when currently active; background Forge/Flow tasks appear only in Activity/project surfaces.
-- The single global shell ambient state is selected by a typed reducer from **live active session state**, with monotonic sequence/session identity. Stale/out-of-order messages must not reanimate obsolete states.
-- A current foreground user action supersedes ambient proactive background work. `completed` is a transient *confirmed* phase followed by ready, not a permanent green shell.
+- The single global shell ambient state is selected by a typed reducer (`ambient-state.js`) from **live active session state**: events carry the socket generation and the server turn `epoch` (stamped on every turn-scoped `/ws/voice` message), and older ones are dropped. On reconnect the session snapshot resets voice state. Stale/out-of-order messages must not reanimate obsolete states.
+- Outputs are presentation only: `data-sail-state`, `data-sail-recording`, `data-sail-approval` and `data-sail-connected` on `<html>`, plus `--sail-light-a/b/c`. No other script sets these.
+- A current foreground user action supersedes ambient proactive background work. `completed` is a transient *confirmed* phase followed by `idle`, not a permanent green shell.
 - User-selected quiet mode reduces motion/illumination without changing semantic labels or suppressing privacy indicators.
 
 ### Transition principles

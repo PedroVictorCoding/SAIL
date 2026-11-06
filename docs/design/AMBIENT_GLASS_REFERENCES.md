@@ -2,13 +2,13 @@
 
 **Reference set:** eight image uploads provided in ChatGPT conversation on 2026-11-06. These are *references*, not runtime assets and not a grant to copy third-party branded visuals. Production implementation must follow [DESIGN.md](../../DESIGN.md).
 
-The eight images belong in `docs/design/references/ambient-glass/` with filenames below. Owner-supplied reference assets are stored in `docs/design/references/ambient-glass/`.
+**This is the only reference folder:** `docs/design/references/ambient-glass/`, with the filenames below. The former `assets/UI references/` inventory (seven different names) is retired and now only points here. Six of the eight PNGs are committed; `02` and `03` are **missing until the owner adds them**, so do not claim a visual comparison against them. Reference images are never part of a shipped bundle: `docs/` is not served by SAIL.
 
 | Filename | Reference Image | Contents to interpret | Intended SAIL application |
 | --- | --- | --- | --- |
 | `01-day-phase-timeline.png` | ![Day phase timeline](references/ambient-glass/01-day-phase-timeline.png) | Four tall black phone screens, chromatic gradient light at bottom, schedule timeline | Life / Pulse day phases, structured actionable tasks, quiet ambient time |
-| `02-luminous-feature-panels.png` | *(Inspiration concept)* | Four sparse black cards with bright bottom glow and minimal text | Feature onboarding, one important active insight per card |
-| `03-progress-project-cards.png` | *(Inspiration concept)* | Dark projects with small tint, progress bars, remaining-time chips | Forge / Continuity tasks and verifiable progress; no fabricated percentages |
+| `02-luminous-feature-panels.png` | *Missing — owner to add* | Four sparse black cards with bright bottom glow and minimal text | Feature onboarding, one important active insight per card |
+| `03-progress-project-cards.png` | *Missing — owner to add* | Dark projects with small tint, progress bars, remaining-time chips | Forge / Continuity tasks and verifiable progress; no fabricated percentages |
 | `04-device-status-capsules.png` | ![Device status capsules](references/ambient-glass/04-device-status-capsules.png) | Compact horizontal light-filled hardware status strips | Orb state, recording/playback/connection indicators |
 | `05-dotted-measurement-tiles.png` | ![Dotted measurement tiles](references/ambient-glass/05-dotted-measurement-tiles.png) | Black dotted measurement UI, colorful panels, circular indicators | Health readings + Arena Learn progress, real provenance, not bogus clinical values |
 | `06-gradient-alarm-analytics.png` | ![Gradient alarm analytics](references/ambient-glass/06-gradient-alarm-analytics.png) | Light mint/green gradient alarm, glassy dark analytics cards | Wake/alarm/shortcuts, responsive time ruler; low clutter |

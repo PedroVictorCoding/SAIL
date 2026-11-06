@@ -55,7 +55,7 @@ See [Ambient Glass References](design/AMBIENT_GLASS_REFERENCES.md) for the eight
 Prefer precomputed gradients with opacity cross-fading instead of animating several filter layers. `backdrop-filter` is optional. The reference aesthetic is an accent, not an excuse for slow pages.
 
 ## State integration
-Every main app/root surface sets `data-sail-state` from authenticated UI state (not from a generative model): `ready`, `listening`, `speaking`, `thinking`, `recording`, `executing`, `learning`, `completed`, `warning`, `error`, `disconnected`. CSS semantic vars map to color channels; Audio and Guardian privacy indicators remain literal.
+`crates/sail-dialogue/web/ambient-state.js` is the only writer of `data-sail-state` (on `<html>`) and of `--sail-light-a/b/c`. It reduces real events (socket, voice phases with turn epoch, mic capture and denial, consented listening context, Guardian approvals, foreground tool receipts, Arena Learn session) into one of the canonical states in [DESIGN.md §3](../DESIGN.md#3-state-driven-chromatic-language): `idle`, `listening`, `thinking`, `speaking`, `executing`, `learning`, `recording`, `approval_required`, `completed`, `warning`, `error`, `disconnected`. There are no aliases. Views read `data-sail-state` / `--sail-light-*` or call `SailAmbient.subscribe(view => …)`; they never set colours themselves. It also publishes `data-sail-recording`, `data-sail-approval` and `data-sail-connected`, which stay visible whatever the shell colour is. Tests: `node --test scripts/ui/*.test.js`.
 - Inbound mic frame/capture means listening; pending mic request means awaiting permission, not listening.
 - Audio PCM playback clock means speaking; synthesis buffered without playback means buffering/processing, not speaking.
 - Real `Mind` inference/task state means thinking; no arbitrary spinner when idle.
@@ -67,7 +67,7 @@ Every main app/root surface sets `data-sail-state` from authenticated UI state (
 
 ## QA per feature
 - Web + Android narrow/wide comparisons, screenshot references and real accessibility contrast tests.
-- Real state transition trace ready → listen → process → speak → ready; off/permission denied/recording/error states.
+- Real state transition trace idle → listening → thinking → speaking → idle; off/permission denied/recording/error states.
 - Reduced-motion, reduced-transparency and forced-color fallback.
 - Real CPU/GPU frame time and battery profiling; no client model slowdown or dropped speech.
 - Focus rings, accessible labels, noncolor indicators, usable forms and input feedback.
