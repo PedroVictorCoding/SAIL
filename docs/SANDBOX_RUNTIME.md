@@ -110,8 +110,8 @@ Guarantees that are implemented and tested:
   (no IDNA/homograph widening in this slice);
 - port and protocol match, with allow rules required to state ports;
 - literal IP and resolved-IP validation against loopback, private, link-local, CGNAT,
-  documentation, benchmark, multicast, broadcast, reserved, IPv4-mapped, NAT64, 6to4 and
-  Teredo ranges;
+  IETF protocol-assignment, documentation, benchmark, multicast, broadcast, reserved,
+  IPv4-mapped, NAT64, 6to4 and Teredo ranges;
 - **DNS rebinding resistance**: the resolver is called once, every answer is checked, and the
   proxy must connect to a returned address rather than resolving again;
 - monotonic policy versions; an in-flight grant stays on the version it was issued under;

@@ -551,7 +551,9 @@ fn is_blocked_v4(ip: Ipv4Addr) -> bool {
         || (value & 0xffff_0000) == 0xc0a8_0000
         || (value & 0xffc0_0000) == 0x6440_0000
         || (value & 0xfffe_0000) == 0xc612_0000
+        || (value & 0xffff_ff00) == 0xc000_0000
         || (value & 0xffff_ff00) == 0xc000_0200
+        || (value & 0xffff_ff00) == 0xc058_6300
         || (value & 0xffff_ff00) == 0xc633_6400
         || (value & 0xffff_ff00) == 0xcb00_7100
         || value >= 0xf000_0000
@@ -569,7 +571,8 @@ fn is_blocked_v6(ip: Ipv6Addr) -> bool {
         || (segments[0] & 0xffc0) == 0xfe80
         || (segments[0] == 0x2001 && segments[1] == 0x0db8)
         || (segments[0] == 0x2001 && segments[1] == 0x0000)
-        || (segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2..6] == [0, 0, 0, 0])
+        || (segments[0] == 0x2001 && segments[1] == 0x0002 && segments[2] == 0)
+        || (segments[0] == 0x0064 && segments[1] == 0xff9b)
         || (segments[0] == 0x2002)
 }
 
@@ -944,14 +947,18 @@ mod tests {
             "169.254.169.254",
             "100.64.0.1",
             "0.0.0.0",
+            "192.0.0.1",
+            "192.88.99.1",
             "224.0.0.1",
             "::1",
             "fe80::1",
             "fc00::1",
             "ff02::1",
             "2001:db8::1",
+            "2001:2::1",
             "::ffff:127.0.0.1",
             "64:ff9b::7f00:1",
+            "64:ff9b:1::1",
             "2002:7f00:1::",
         ] {
             let ip: IpAddr = value.parse().unwrap();
