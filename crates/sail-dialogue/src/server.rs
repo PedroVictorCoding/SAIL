@@ -343,6 +343,14 @@ struct Outbound {
     value: Value,
     wire: Option<Message>,
 }
+/// Tells the browser which turn a turn-scoped event belongs to, so its ambient-state
+/// reducer can drop anything older (DESIGN.md §3). Session-scoped events carry none.
+fn stamp_epoch(mut value: Value, epoch: Option<u64>) -> Value {
+    if let (Some(epoch), Some(map)) = (epoch, value.as_object_mut()) {
+        map.entry("epoch").or_insert(json!(epoch));
+    }
+    value
+}
 async fn emit(tx: &mpsc::Sender<Outbound>, epoch: u64, value: Value) {
     let _ = tx
         .send(Outbound {
@@ -444,7 +452,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
             trace!(epoch=?out.epoch,event_type=?out.value["type"],"Sending voice event to browser");
             let message = out
                 .wire
-                .unwrap_or_else(|| Message::Text(out.value.to_string()));
+                .unwrap_or_else(|| Message::Text(stamp_epoch(out.value, out.epoch).to_string()));
             let sent =
                 tokio::time::timeout(std::time::Duration::from_secs(3), sender.send(message)).await;
             if !matches!(sent, Ok(Ok(()))) {
@@ -2576,6 +2584,20 @@ fn generate_and_persist_token(token_path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn turn_events_carry_their_epoch_and_session_events_do_not() {
+        let turn = super::stamp_epoch(json!({"type":"turn_started"}), Some(7));
+        assert_eq!(turn["epoch"], json!(7));
+        let session = super::stamp_epoch(json!({"type":"forge_jobs"}), None);
+        assert!(session.get("epoch").is_none());
+        let existing = super::stamp_epoch(json!({"type":"x","epoch":3}), Some(7));
+        assert_eq!(
+            existing["epoch"],
+            json!(3),
+            "an explicit epoch is never overwritten"
+        );
+        assert_eq!(super::stamp_epoch(Value::Null, Some(7)), Value::Null);
+    }
     use super::*;
     /// `GuardianSubsystem::new()` installs a process-wide broker. Tests that create one and
     /// grant it capabilities must not overlap, or a later test replaces the broker holding an

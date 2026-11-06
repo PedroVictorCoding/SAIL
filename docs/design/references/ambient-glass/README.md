@@ -1,6 +1,6 @@
 # Ambient Glass UI References
 
-This directory holds the eight owner-supplied visual reference images for SAIL's ambient-glass, living-light, and motion system:
+This directory is the single home for the eight owner-supplied visual reference images for SAIL's ambient-glass, living-light, and motion system. Six are committed; **`02` and `03` are missing** until the owner adds them under exactly these names. These images are design references only: do not copy, bundle or serve them.
 
 1. `01-day-phase-timeline.png` — Four tall black phone screens, chromatic gradient light at bottom, schedule timeline.
 2. `02-luminous-feature-panels.png` — Four sparse black cards with bright bottom glow and minimal text.

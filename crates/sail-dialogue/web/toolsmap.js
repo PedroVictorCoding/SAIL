@@ -1143,6 +1143,12 @@
     if (state.on) return;
     state.on = true;
     build();
+    // The Dialogue station carries the foreground voice state from the ambient contract;
+    // its colour is the shell light (--sail-light-a), so there is no second colour source.
+    // Other stations keep their own polled status: background work never lights the shell.
+    window.SailAmbient?.subscribe((view) => {
+      svgRoot?.querySelector('[data-station="dialogue"]')?.setAttribute('data-sail-state', view.state);
+    });
     root.hidden = false;
     document.documentElement.classList.add('tm-active');
     showChat();
