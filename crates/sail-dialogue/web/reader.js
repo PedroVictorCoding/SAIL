@@ -77,6 +77,11 @@ const SailReader = (() => {
       }
     }
   }
+  // Inside SAIL's Entertainment pane the Library fills the frame edge to edge and the
+  // pane provides navigation; standalone it keeps a home link (reader.css).
+  try { if (window.top !== window.self) document.documentElement.dataset.embedded = 'true'; } catch (_) {
+    document.documentElement.dataset.embedded = 'true';
+  }
   function start() {
     const $ = id => document.getElementById(id), api = new Api(fetch.bind(window), localStorage);
     const state = {
