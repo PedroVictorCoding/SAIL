@@ -205,12 +205,14 @@ impl CourseEngine {
             })
             .collect();
         let diagnostic = p.diagnostic.as_ref().map(|d| {
-            let state = match open_or_last_diagnostic(&p.id, &events) {
+            let last = open_or_last_diagnostic(&p.id, &events);
+            let state = match &last {
                 None => "not_started",
                 Some((_, true)) => "done",
                 Some((_, false)) => "in_progress",
             };
-            json!({ "id": d.id, "state": state })
+            // `session_id` is what `/diagnostics/:id/report` and `…/attempt` take.
+            json!({ "id": d.id, "session_id": last.map(|(id, _)| id), "state": state })
         });
         Ok(json!({
             "course": summary,

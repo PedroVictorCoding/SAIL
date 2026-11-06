@@ -95,6 +95,21 @@ async fn courses_api_contract() {
     assert_eq!(g["result"], "correct");
     assert_eq!(g["next"]["id"], "d-copy");
     sample.insert("POST /diagnostics/:id/attempt".into(), g);
+    let (_, course) = call(&app, "GET", "/courses/rust-systems", None, true).await;
+    assert_eq!(course["diagnostic"]["session_id"], json!(diag));
+    let (status, _) = call(
+        &app,
+        "GET",
+        &format!("/diagnostics/{diag}/report"),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "course.diagnostic.session_id is reportable"
+    );
 
     let (_, lesson) = call(&app, "GET", "/lessons/rust-own-move", None, true).await;
     let text = lesson.to_string();
