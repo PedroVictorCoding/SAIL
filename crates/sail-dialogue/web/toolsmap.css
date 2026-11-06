@@ -458,17 +458,43 @@ html.tm-active, html.tm-active body { overflow: hidden; }
   .tm-media-tabs [aria-selected="true"] { border: 2px solid Highlight; }
 }
 
-/* Return briefing ("While You Were Away"), mounted on the map stage by toolsmap.js.
-   A contextual glass sheet over the map; it scrolls inside and stays clear of the
-   bottom map controls. Dismissing it reveals the map. */
-.tm-stage .return-briefing-deck.tm-briefing {
-  position: absolute; z-index: 4; top: 14px; left: 14px; right: 14px;
-  max-height: calc(100% - 84px); overflow: auto; margin: 0;
-  padding: 16px 20px; border-radius: 14px;
-  background: linear-gradient(145deg, #19202c, #0d1119);
-  backdrop-filter: none;
+/* "While You Were Away" view (data-mode="away"): the return briefing replaces the map
+   on the stage; the other views never show it. */
+.tm-seg { white-space: nowrap; }
+/* Five views no longer fit beside the Live and zoom groups: on a narrower stage the
+   switcher takes its own row above them (the Away view hides both groups). */
+.tm-stage { container-type: inline-size; }
+.tm-ctl-mid { max-width: calc(100% - 28px); overflow-x: auto; }
+@container (max-width: 1120px) {
+  .tm-root:not([data-mode="away"]) .tm-ctl-mid { bottom: 62px; }
 }
-.tm-stage .return-briefing-deck.tm-briefing[hidden] { display: none; }
-@media (max-width: 760px) {
-  .tm-stage .return-briefing-deck.tm-briefing { top: 8px; left: 8px; right: 8px; padding: 12px; }
+.tm-seg-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tm-accent); }
+.tm-seg-dot[hidden] { display: none; }
+.tm-briefing, .tm-away-empty { display: none; }
+.tm-root[data-mode="away"] .tm-viewport, .tm-root[data-mode="away"] .tm-title,
+.tm-root[data-mode="away"] .tm-ctl-left, .tm-root[data-mode="away"] .tm-ctl-right { display: none; }
+.tm-root[data-mode="away"] .tm-stage .return-briefing-deck.tm-briefing:not([hidden]) {
+  display: block; position: absolute; z-index: 4; inset: 0 0 64px; overflow: auto; margin: 0;
+  padding: 20px 22px; border: 0; border-radius: 0; background: none; box-shadow: none; backdrop-filter: none;
+}
+.tm-root[data-mode="away"] .tm-briefing[hidden] + .tm-away-empty {
+  display: grid; place-content: center; justify-items: center; gap: 12px; position: absolute; inset: 0 0 64px; color: var(--tm-muted);
+}
+.tm-away-empty p { margin: 0; }
+.tm-briefing .briefing-deck-header { gap: 12px; flex-wrap: nowrap; align-items: flex-start; }
+.tm-briefing .briefing-deck-meta { min-width: 0; }
+.tm-briefing .briefing-deck-actions { flex: none; }
+.tm-briefing .briefing-cards-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); align-items: start; }
+.tm-briefing .briefing-card { min-width: 0; overflow-wrap: anywhere; backdrop-filter: none; }
+.tm-briefing .briefing-card-top { flex-wrap: wrap; row-gap: 4px; }
+.tm-briefing .briefing-event-header { align-items: flex-start; }
+.tm-briefing .briefing-event-title { white-space: normal; }
+.tm-briefing .briefing-news-tag { line-height: 1.35; }
+.tm-briefing .briefing-sentinel-stats { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 12px; }
+.tm-briefing .briefing-sentinel-stats small { white-space: normal; }
+.tm-briefing .tactile-action-btn { margin-top: 12px; }
+@media (max-width: 860px) {
+  .tm-root[data-mode="away"] .tm-ctl-mid { bottom: 8px; }
+  .tm-root[data-mode="away"] .tm-stage .return-briefing-deck.tm-briefing:not([hidden]) { padding: 12px; bottom: 58px; }
+  .tm-root[data-mode="away"] .tm-briefing[hidden] + .tm-away-empty { bottom: 58px; }
 }
