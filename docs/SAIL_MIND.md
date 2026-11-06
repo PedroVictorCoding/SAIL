@@ -60,7 +60,8 @@ while Forge runs. Forge therefore never selects a model of its own.
 Forge and `run.sh`: `SAIL_MODEL_PATH` if set, else the primary model in `models/` or
 `$SAIL_RUNTIME/models`. It never falls back to another model; missing weights produce an
 error that names the file to install. A different model is a deliberate change of
-`SAIL_MODEL_PATH`, measured with Forge's eval before adoption.
+`SAIL_MODEL_PATH`, measured before adoption with the [model eval](MODEL_EVAL.md) (voice tools,
+Learn judge, grounded answers) and Forge's eval.
 
 ## Host admission and voice priority
 

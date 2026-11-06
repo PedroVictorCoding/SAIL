@@ -11,6 +11,7 @@ mod execution;
 pub mod learn_http;
 pub mod live_context;
 pub mod memory_http;
+pub mod model_eval;
 pub mod music_fastpath;
 pub mod orb;
 pub mod pipeline;

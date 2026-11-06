@@ -1,8 +1,8 @@
 //! Integration test for the Return Briefing HTTP API (`/api/briefing`).
 
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
-use serde_json::{Value, json};
 
 use sail_bridge::spotify::Spotify;
 use sail_dialogue::briefing::BriefingEngine;
@@ -12,7 +12,8 @@ use sail_guardian::authority::ApprovalAuthority;
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
 
 async fn setup_test_server() -> (String, PathBuf, tokio::task::JoinHandle<()>) {
-    let tmp = std::env::temp_dir().join(format!("sail-briefing-http-test-{}", uuid::Uuid::new_v4()));
+    let tmp =
+        std::env::temp_dir().join(format!("sail-briefing-http-test-{}", uuid::Uuid::new_v4()));
     let spotify = Arc::new(Spotify::open(tmp.join("spotify")));
     let engine = Arc::new(BriefingEngine::new(spotify, None, None, None, tmp.clone()));
     let authority = Some(ApprovalAuthority::new(TOKEN).unwrap());
