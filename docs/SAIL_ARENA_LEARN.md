@@ -234,6 +234,14 @@ Full history remains in the store and the UI transcript. The cut is never inside
 tool-call/result pair. The view exposes prompt/completion totals and a context fraction; the
 UI shows a compact meter and no cost estimate.
 
+The history budget is 9,216 tokens: Mind's default 16k window minus a 7k reserve for the
+system prompt (session state, a 40-node plan, picked propositions), the role's tool schemas,
+the chat template and the reply. A unit test checks the reserve against a maximal plan, so
+a compacted lesson fits the window. Propositions picked as session context are limited to
+4,000 bytes in total. They are sent with every turn, and a larger set is refused at session
+creation with a "pick fewer" error. If Mind shrinks the window under RAM pressure, the turn
+still halves its history window and retries.
+
 ### 9.5 Diagrams, dictation and reminders (#255, #256, #257)
 
 - The teacher may call `show_diagram` (Mermaid source ≤ 8 KiB). The browser renders it with

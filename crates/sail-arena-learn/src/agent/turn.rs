@@ -32,7 +32,7 @@ use crate::core::view::{
     CONTEXT_BUDGET_TOKENS, Mode, PendingJudgment, SessionView, latest_plan, pending_judgment,
     project_view, question_spec, recorded_answer,
 };
-use crate::core::{Invalid, MAX_SHORT, MAX_TEXT, bounded};
+use crate::core::{Invalid, MAX_GRAPH_CONTEXT_BYTES, MAX_SHORT, MAX_TEXT, bounded};
 use sail_protocol::{Generation, InferenceRequest, ToolChoice};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -326,6 +326,17 @@ impl Engine {
     ) -> Result<SessionView, TurnError> {
         let is_practice = kind.eq_ignore_ascii_case("practice");
         bounded(if is_practice { "topic" } else { "goal" }, goal, MAX_SHORT)?;
+        let context_bytes: usize = graph_context
+            .iter()
+            .map(|p| p.name.len() + p.statement.len())
+            .sum();
+        if context_bytes > MAX_GRAPH_CONTEXT_BYTES {
+            return Err(TurnError::Invalid(format!(
+                "the {} picked propositions are too long for the model's context \
+                 ({context_bytes} bytes, max {MAX_GRAPH_CONTEXT_BYTES}); pick fewer",
+                graph_context.len()
+            )));
+        }
         let id = new_id(if is_practice { "practice" } else { "learn" });
         let created = self.store.create(&id, goal.trim(), (self.clock)())?;
         self.publish(std::slice::from_ref(&created));

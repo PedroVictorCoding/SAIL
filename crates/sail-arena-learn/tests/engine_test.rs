@@ -541,3 +541,33 @@ async fn diagram_arguments_cannot_smuggle_html() {
         .collect();
     assert!(errors.iter().any(|e| e.contains("must not contain HTML")));
 }
+
+#[tokio::test]
+async fn picked_context_too_large_for_the_model_window_is_refused() {
+    use sail_arena_learn::core::MAX_GRAPH_CONTEXT_BYTES;
+    use sail_arena_learn::core::graph::GraphContextProp;
+
+    let (engine, store) = engine(Arc::new(Scripted::new(Vec::new())));
+    let prop = |i: usize| GraphContextProp {
+        name: format!("p{i}"),
+        statement: "x".repeat(400),
+    };
+    let fits: Vec<_> = (0..MAX_GRAPH_CONTEXT_BYTES / 410).map(prop).collect();
+    assert!(
+        engine
+            .create_session_with_options("goal", "practice", fits)
+            .is_ok()
+    );
+
+    let sessions = store.sessions(100).unwrap().len();
+    let too_many: Vec<_> = (0..MAX_GRAPH_CONTEXT_BYTES / 400 + 1).map(prop).collect();
+    let err = engine
+        .create_session_with_options("goal", "practice", too_many)
+        .unwrap_err();
+    assert!(
+        matches!(&err, TurnError::Invalid(m) if m.contains("pick fewer")),
+        "{err}"
+    );
+    // Refused before anything is stored.
+    assert_eq!(store.sessions(100).unwrap().len(), sessions);
+}

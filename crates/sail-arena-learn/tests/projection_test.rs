@@ -208,7 +208,8 @@ fn the_view_exposes_a_context_meter_without_a_cost_estimate() {
         },
     ]);
     let view = project_view("s", &events);
-    assert_eq!(view.context_budget_tokens, 24_000);
+    // The meter's budget leaves room for the prompt and reply inside the default window.
+    assert_eq!(view.context_budget_tokens, 9_216);
     assert!(view.context_fraction > 0.0 && view.context_fraction <= 1.0);
     let json = serde_json::to_string(&view).unwrap();
     assert!(json.contains("context_fraction"));

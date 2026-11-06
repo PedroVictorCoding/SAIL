@@ -27,6 +27,9 @@ impl Invalid {
 /// Bounds on model-supplied text, in bytes.
 pub const MAX_TEXT: usize = 8_000;
 pub const MAX_SHORT: usize = 300;
+/// Propositions picked as session context are re-sent in every system prompt, so their
+/// total size must fit [`view::PROMPT_RESERVE_TOKENS`] beside the plan and tool schemas.
+pub const MAX_GRAPH_CONTEXT_BYTES: usize = 4_000;
 
 pub(crate) fn bounded(field: &str, text: &str, max: usize) -> Result<(), Invalid> {
     if text.trim().is_empty() {
