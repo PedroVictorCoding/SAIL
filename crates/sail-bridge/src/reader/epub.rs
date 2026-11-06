@@ -541,6 +541,15 @@ impl Flatten {
                 self.buffer.push_str(text);
                 continue;
             }
+            // A drop cap drawn as an image carries its letter in `alt`; keep it so the first
+            // word reads "When", not "hen". Other images are dropped.
+            if child.has_tag_name("img")
+                && let Some(alt) = child.attribute("alt").map(str::trim)
+                && (1..=2).contains(&alt.chars().count())
+            {
+                self.buffer.push_str(alt);
+                continue;
+            }
             if !child.is_element() || skipped(child) {
                 continue;
             }
@@ -706,7 +715,7 @@ mod tests {
     }
 
     const COVER: &[u8] = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="cover.jpg" alt="Cover"/></body></html>"#;
-    const CH1: &[u8] = br##"<?xml version="1.0"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>x</title><style>p{color:red}</style><script>alert('x')</script></head><body onload="evil()"><h1>Chapter&nbsp;One</h1><p>It was a <em>dark</em>
+    const CH1: &[u8] = br##"<?xml version="1.0"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>x</title><style>p{color:red}</style><script>alert('x')</script></head><body onload="evil()"><h1>Chapter&nbsp;One</h1><p><span class="letra"><img alt="I" src="i.png"/></span>t was a <em>dark</em>
       and stormy night.<a epub:type="noteref" href="#n1">1</a> The end&hellip;</p><p>Line one<br/>line two</p><aside epub:type="footnote" id="n1"><p>A footnote.</p></aside><blockquote><p>Quoted words.</p></blockquote><ul><li>First</li><li>Sec&shy;ond</li></ul><hr/><pre>  code
   block</pre><iframe src="https://evil.example/"></iframe></body></html>"##;
     const CH2: &[u8] = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><section><h2>Chapter Two</h2><div id="later">Bare div text <span>with inline</span> parts.</div></section></body></html>"#;
