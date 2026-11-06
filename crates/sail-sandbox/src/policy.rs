@@ -88,7 +88,7 @@ impl ProfilePolicy {
                 ),
                 PolicyProfile::ResearchFetch => (
                     system.iter().copied().chain(["/work"]).collect::<Vec<_>>(),
-                    vec!["/work/scratch", "/tmp"],
+                    vec!["/work", "/tmp"],
                     Some(NetworkPolicyRef {
                         policy_id: "research".into(),
                         policy_version: 1,
