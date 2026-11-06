@@ -111,6 +111,21 @@ cargo test --workspace
 .venv-voice/bin/python scripts/voice/e2e.py 8088
 ```
 
+### Interface hot reload
+
+The browser interface (`crates/sail-dialogue/web/`) is compiled into the binary, so a normal run serves what was built. While working on the interface, start SAIL with `SAIL_WEB_DEV` to edit files without rebuilding:
+
+```bash
+SAIL_WEB_DEV=1 ./run.sh                              # serve from this checkout
+SAIL_WEB_DEV=/home/main/SAIL/.worktrees/my-branch ./run.sh   # or from another worktree
+```
+
+- Saving a `.css` file swaps the stylesheet in place, so the conversation, the map and open panels keep their state.
+- Saving a page or script reloads only the open pages that use it.
+- When the server restarts (for example after a Rust change), open pages reload once it is back.
+
+Only the interface files listed in `crates/sail-dialogue/src/ui_assets.rs` are served from disk. New files must be added there, and a test fails if `index.html` references a file that is not listed. Rust changes still need a rebuild and restart.
+
 VAD latency is measured per frame, including separate inference and worker round-trip timings; <3ms is a hardware-dependent target. Whisper partial hypotheses can be revised; TTS streams ordered 100ms audio packets as sentence fragments are synthesized. Runtime model loading is offline and missing models produce explicit errors.
 
 See [the voice architecture and protocol](Docs/ARCHITECTURE/Realtime_Voice_Pipeline.md) for configuration, boundaries and verification.

@@ -233,6 +233,7 @@ pub fn authorize_voice_operation(tool: &str) -> sail_common::error::Result<&'sta
         "forge:clear" | "forge_clear" => Ok("forge:clear"),
         "github:issues" | "github_issues" => Ok("github:issues"),
         "web:read" | "web_read" => Ok("web:read"),
+        "web:speak" | "web_speak" => Ok("web:speak"),
         "studio:audio_analyze" | "studio_audio_analyze" => Ok("studio:audio_analyze"),
         "pulse:create" | "pulse_create" => Ok("pulse:create"),
         "pulse:list" | "pulse_list" => Ok("pulse:list"),

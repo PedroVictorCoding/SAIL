@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 /// Bodies shorter than this are stored raw; compression does not pay off below it.
 const COMPRESS_MIN_BYTES: usize = 512;
 const CODEC_RAW: i64 = 0;
@@ -413,6 +413,7 @@ const MIGRATIONS: &[&str] = &[
     crate::knowledge::schema::V3,
     crate::knowledge::schema::V4,
     crate::knowledge::schema::V5,
+    crate::knowledge::schema::V6,
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> StoreResult<()> {
@@ -530,8 +531,8 @@ const STOPWORDS: &[&str] = &[
 /// words, because entity names such as "Go", "AI" or "λ" are often that short.
 const SHORT_STOPWORDS: &[&str] = &[
     "a", "an", "i", "is", "am", "my", "me", "to", "of", "in", "on", "at", "do", "be", "it", "or",
-    "as", "so", "we", "us", "if", "no", "by", "up", "de", "da", "e", "o", "os", "em", "eu", "se",
-    "na", "ao", "é", "um",
+    "as", "so", "we", "us", "if", "no", "by", "up", "s", "t", "de", "da", "e", "o", "os", "em",
+    "eu", "se", "na", "ao", "é", "um",
 ];
 
 /// Words that make a whole message an acknowledgement rather than a request.

@@ -104,14 +104,16 @@ async fn send(req: reqwest::RequestBuilder) -> (u16, Value) {
 
 /// Polls the view until `ready` holds (turns run in the background).
 async fn wait(base: &str, id: &str, ready: impl Fn(&Value) -> bool) -> Value {
+    let mut last = Value::Null;
     for _ in 0..400 {
         let (_, view) = send(client().get(format!("{base}/sessions/{id}"))).await;
         if ready(&view) {
             return view;
         }
+        last = view;
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    panic!("view never became ready");
+    panic!("view never became ready; last view: {last}");
 }
 
 fn settled_with_question(v: &Value) -> bool {
@@ -288,6 +290,179 @@ async fn learn_loop_over_http_survives_reconnect_and_restart() {
     assert_eq!(status, 200);
     let (status, _) = send(client().get(format!("{base}/sessions/{id}"))).await;
     assert_eq!(status, 404);
+    server.task.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn learnharness_practice_graph_rename_and_markdown_over_http() {
+    let path = std::env::temp_dir().join(format!(
+        "sail-learnharness-acceptance-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let script = vec![
+        tool(&[(
+            "problem",
+            json!({
+                "statement": "If cwnd is 32 MSS and 3 duplicate ACKs arrive, what is the new ssthresh?",
+                "solution": "16 MSS",
+                "hints": ["Recall multiplicative decrease on triple dup-ACK."],
+                "mode": "apply",
+                "target": ["ssthresh = cwnd / 2"]
+            }),
+        )]),
+        tool(&[(
+            "conclude",
+            json!({
+                "outcome": "solved",
+                "verdict": "Correctly halved cwnd to 16 MSS.",
+                "rung": 1
+            }),
+        )]),
+    ];
+    let server = serve(&path, script).await;
+    let base = server.base.clone();
+
+    // 1. Import notes into the Knowledge Graph and verify snapshot.
+    let (status, imported) = send(
+        client()
+            .post(format!("{base}/graph/import"))
+            .json(&json!({
+                "file_name": "tcp_notes.md",
+                "content": "# TCP Fast Recovery\n\nTriple duplicate ACKs halve the congestion window because packets are still flowing.\nTherefore ssthresh becomes cwnd / 2 and cwnd enters fast recovery."
+            })),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(imported["propositions"].as_array().unwrap().len() >= 2);
+
+    let (status, graph) = send(client().get(format!("{base}/graph"))).await;
+    assert_eq!(status, 200);
+    let props = graph["propositions"].as_array().unwrap();
+    assert!(!props.is_empty());
+    let first_prop_id = props[0]["id"].as_str().unwrap().to_string();
+    let first_prop_name = props[0]["name"].as_str().unwrap().to_string();
+
+    // 2. Create a Practice session seeded with graph_context.
+    let (status, created) = send(client().post(format!("{base}/sessions")).json(&json!({
+        "goal": "Drill TCP Fast Recovery",
+        "kind": "practice",
+        "graph_context": [{
+            "name": first_prop_name,
+            "statement": props[0]["statement"]
+        }]
+    })))
+    .await;
+    assert_eq!(status, 201);
+    let id = created["session"].as_str().unwrap().to_string();
+
+    // Wait for practitioner to pose problem.
+    let v = wait(&base, &id, |v| {
+        v["running"] == false
+            && v["practice"]["problems"]
+                .as_array()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false)
+    })
+    .await;
+    assert_eq!(v["kind"], "practice");
+    assert_eq!(v["mode"], "practice");
+    let pid = v["practice"]["problems"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(v["practice"]["problems"][0]["mode"], "apply");
+
+    // 3. Request a hint, then submit an attempt, which triggers practitioner `conclude`.
+    let (status, hinted) = send(
+        client()
+            .post(format!("{base}/sessions/{id}/hint"))
+            .json(&json!({"problem_id": pid, "index": 0})),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        hinted["practice"]["problems"][0]["hints"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let (status, _) = send(
+        client()
+            .post(format!("{base}/sessions/{id}/attempt"))
+            .json(&json!({"problem_id": pid, "text": "ssthresh = 16 MSS"})),
+    )
+    .await;
+    assert_eq!(status, 202);
+
+    let v = wait(&base, &id, |v| {
+        v["running"] == false && v["practice"]["problems"][0]["outcome"] == "solved"
+    })
+    .await;
+    assert_eq!(
+        v["practice"]["problems"][0]["verdict"],
+        "Correctly halved cwnd to 16 MSS."
+    );
+
+    // 4. Rename session and export Markdown.
+    let (status, _) = send(
+        client()
+            .put(format!("{base}/sessions/{id}"))
+            .json(&json!({"title": "TCP Fast Recovery Drill"})),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let md_resp = client()
+        .get(format!("{base}/sessions/{id}/markdown"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(md_resp.status().as_u16(), 200);
+    let md_text = md_resp.text().await.unwrap();
+    assert!(md_text.contains("# TCP Fast Recovery Drill"));
+    assert!(md_text.contains("32 MSS"));
+
+    // 5. Extract session into Knowledge Graph and test position & settings persistence.
+    let (status, extracted) = send(
+        client()
+            .post(format!("{base}/graph/extract"))
+            .json(&json!({"session_id": id})),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(!extracted["propositions"].as_array().unwrap().is_empty());
+
+    let (status, _) = send(
+        client()
+            .put(format!("{base}/graph/positions"))
+            .json(&json!({"positions": {first_prop_id: {"x": 42.0, "y": -18.5}}})),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let (status, _) = send(client().put(format!("{base}/graph/settings")).json(&json!({
+        "node_size": 1.2,
+        "edge_width": 1.1,
+        "arrow_size": 1.0,
+        "label_size": 1.0,
+        "label_zoom": 0.9,
+        "show_cluster_labels": true
+    })))
+    .await;
+    assert_eq!(status, 200);
+
+    let (status, _) = send(
+        client()
+            .post(format!("{base}/graph/delete-nodes"))
+            .json(&json!({"names": [first_prop_name]})),
+    )
+    .await;
+    assert_eq!(status, 200);
+
     server.task.abort();
     let _ = std::fs::remove_file(&path);
 }

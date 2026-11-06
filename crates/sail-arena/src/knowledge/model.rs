@@ -255,10 +255,13 @@ impl Access {
 
     pub fn allows(&self, scope: &str, sensitivity: Sensitivity) -> bool {
         sensitivity <= self.max_sensitivity
-            && self
-                .scopes
-                .as_ref()
-                .is_none_or(|s| s.iter().any(|x| x == scope))
+            && self.scopes.as_ref().is_none_or(|scopes| {
+                scopes.iter().any(|pattern| {
+                    pattern
+                        .strip_suffix('*')
+                        .map_or(pattern == scope, |prefix| scope.starts_with(prefix))
+                })
+            })
     }
 }
 
@@ -511,6 +514,9 @@ mod tests {
         assert!(!forge.allows("life", Sensitivity::Normal));
         assert!(!forge.allows("project:sail", Sensitivity::Private));
         assert!(Access::owner().allows("life", Sensitivity::Sensitive));
+        let learn = Access::scoped(&["learning:*"], Sensitivity::Private);
+        assert!(learn.allows("learning:tcp", Sensitivity::Private));
+        assert!(!learn.allows("voice", Sensitivity::Private));
     }
 
     #[test]

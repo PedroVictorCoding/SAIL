@@ -62,6 +62,97 @@ impl Tool for PulseTool {
     }
 }
 
+/// The owner's Spotify account (sail-bridge). The voice turn plays `spotify:find`'s best
+/// match straight away; `spotify:play` plays a URI the model chose.
+struct SpotifyTool(&'static str);
+#[async_trait]
+impl Tool for SpotifyTool {
+    async fn execute(&self, _context: ToolContext, input: Value) -> Result<Value, ToolFailure> {
+        execute_spotify_tool(&sail_bridge::spotify::global(), self.0, &input)
+            .await
+            .map(|value| Value::String(value.to_string()))
+            .map_err(|message| ToolFailure {
+                message,
+                retryable: false,
+            })
+    }
+}
+/// How many offered alternatives the model sees besides the best match.
+const SPOTIFY_ALTERNATIVES: usize = 4;
+pub(crate) async fn execute_spotify_tool(
+    spotify: &sail_bridge::spotify::Spotify,
+    tool: &str,
+    input: &Value,
+) -> Result<Value, String> {
+    use sail_bridge::spotify::{Kind, score};
+    let err = |e: sail_bridge::spotify::SpotifyError| e.message;
+    match tool {
+        "spotify:find" => {
+            let query = input["query"].as_str().unwrap_or_default().trim();
+            if query.is_empty() {
+                return Err("query is required".into());
+            }
+            let kind = input["kind"]
+                .as_str()
+                .and_then(Kind::parse)
+                .ok_or("kind must be playlist, song, album or artist")?;
+            let mine = input["mine"].as_bool() == Some(true) && kind == Kind::Playlist;
+            let found = if mine {
+                let all = spotify.my_playlists().await.map_err(err)?;
+                let mut ranked: Vec<_> = all
+                    .iter()
+                    .map(|c| (score(query, &c.name), c.clone()))
+                    .filter(|(s, _)| *s > 0)
+                    .collect();
+                ranked.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+                if ranked.is_empty() {
+                    if all.is_empty() {
+                        return Err("The owner's Spotify account has no playlists.".into());
+                    }
+                    // Names can be puns or in another language ("Cabeça de Radio" for
+                    // Radiohead): let the model choose from the owner's own list.
+                    return Ok(json!({
+                        "matched": false,
+                        "playlists": all,
+                        "instruction": "No playlist name contains those words. Choose the one playlist that best fits the request (names can be puns or in another language) and call spotify_play with its uri now.",
+                    }));
+                }
+                ranked.into_iter().map(|(_, c)| c).collect::<Vec<_>>()
+            } else {
+                spotify.search(query, kind, 5).await.map_err(err)?
+            };
+            let mut found = found.into_iter();
+            let Some(best) = found.next() else {
+                return Err(format!(
+                    "Spotify found no {} matching \"{query}\".",
+                    input["kind"].as_str().unwrap_or("item")
+                ));
+            };
+            let alternatives: Vec<_> = found.take(SPOTIFY_ALTERNATIVES).collect();
+            Ok(json!({
+                "matched": true,
+                "best": best,
+                "alternatives": alternatives,
+            }))
+        }
+        "spotify:play" => {
+            let uri = input["uri"].as_str().unwrap_or_default();
+            let played = spotify.play(uri).await.map_err(err)?;
+            Ok(
+                json!({"message": format!("Playing on {}.", played["device"].as_str().unwrap_or("Spotify")), "result": played}),
+            )
+        }
+        "spotify:control" => {
+            let action = input["action"].as_str().unwrap_or_default();
+            if action != "status" {
+                spotify.control(action).await.map_err(err)?;
+            }
+            let now = spotify.now_playing().await.map_err(err)?;
+            Ok(json!({"action": action, "now_playing": now}))
+        }
+        other => Err(format!("unknown Spotify tool {other}")),
+    }
+}
 struct Command;
 #[async_trait]
 impl Tool for Command {
@@ -139,7 +230,7 @@ impl Tool for Canvas {
 /// Dialogue's tools as the model sees them, in the order the voice tool list offers them
 /// (ties in tool selection keep this order). `vision_frame` and `memory_recall` are not
 /// here: they act on the current turn's image and archive, not through the scheduler.
-pub(crate) const MODEL_TOOL_ORDER: [&str; 20] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 24] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -149,12 +240,16 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 20] = [
     "fs:read",
     "fs:write",
     "github:issues",
+    "web:speak",
     "web:read",
     "studio:audio_analyze",
     "pulse:create",
     "pulse:list",
     "pulse:cancel",
     "pulse:snooze",
+    "spotify:find",
+    "spotify:play",
+    "spotify:control",
     "forge:enqueue",
     "forge:status",
     "forge:list",
@@ -193,7 +288,7 @@ pub fn registry() -> Arc<ToolRegistry> {
             "The job id or issue number (e.g. 5, #5, job-5, or job-5-61c992ad)",
         )
     };
-    let kernel: [KernelTool; 14] = [
+    let kernel: [KernelTool; 15] = [
         (
             "os:status",
             "Read local OS memory, uptime and load",
@@ -248,8 +343,20 @@ pub fn registry() -> Arc<ToolRegistry> {
             2,
         ),
         (
+            "web:speak",
+            "Read a website or web page to the user (e.g. 'Read me this website: https://...', 'Read this page for me: https://...'). Fetches the page, extracts its important readable content, and streams it directly to voice synthesis with a short introductory context_phrase so the user hears it immediately without waiting for full model generation.",
+            json!({
+                "url":string(2048, "The HTTP or HTTPS URL of the page to read aloud"),
+                "context_phrase":string(256, "A short introductory phrase to speak before reading the content, e.g. 'Reading Roko's Basilisk from LessWrong:'"),
+                "max_paragraphs":{"type":"integer","minimum":1,"maximum":20,"description":"Maximum number of paragraphs to read aloud (defaults to 6)"}
+            }),
+            &["url"],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
             "web:read",
-            "Fetch and read the text contents of any public web page, URL, documentation, or online issue without write permissions",
+            "Fetch the text contents of a public web page or documentation for silent inspection/analysis when the user does not ask to have the page read to them",
             json!({"url":string(2048, "The HTTP or HTTPS URL to fetch and read")}),
             &["url"],
             ToolEffect::ReadOnly,
@@ -409,6 +516,56 @@ pub fn registry() -> Arc<ToolRegistry> {
                     concurrency_limit,
                 },
                 Arc::new(PulseTool(id)),
+            )
+            .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
+    }
+
+    let spotify_tools: [KernelTool; 3] = [
+        (
+            "spotify:find",
+            "Find music to play on the user's Spotify: a playlist (set mine=true for the user's own or followed playlists, e.g. 'my radiohead playlist'), song, album or artist. The best match starts playing at once; returns its full name and creator.",
+            json!({
+                "query": string(200, "What to look for, e.g. 'radiohead' or 'how to disappear completely'"),
+                "kind": {"type":"string","maxLength":16,"enum":["playlist","song","album","artist"],"description":"What the user asked to play"},
+                "mine": {"type":"boolean","description":"Search only the user's own and followed playlists"}
+            }),
+            &["query", "kind"],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "spotify:play",
+            "Play music on Spotify now: a uri from spotify_find, e.g. the playlist you chose from the owner's list or an alternative the user named.",
+            json!({"uri": string(128, "spotify:playlist:…, spotify:track:…, spotify:album:… or spotify:artist:… from spotify_find")}),
+            &["uri"],
+            ToolEffect::Mutating,
+            1,
+        ),
+        (
+            "spotify:control",
+            "Control Spotify music playback: pause, resume, skip to the next or previous song, or report what is playing now (status).",
+            json!({"action": {"type":"string","maxLength":16,"enum":["pause","resume","next","previous","status"]}}),
+            &["action"],
+            ToolEffect::Mutating,
+            2,
+        ),
+    ];
+    for (id, description, properties, required, effect, concurrency_limit) in spotify_tools {
+        registry
+            .register(
+                ToolDescriptor {
+                    id: id.into(),
+                    version: 1,
+                    description: description.into(),
+                    input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+                    output_schema: json!({"type":"string","maxLength":65536}),
+                    security_effect: effect,
+                    required_capabilities: vec![id.into()],
+                    timeout_ms: 25_000,
+                    resource_class: "io".into(),
+                    concurrency_limit,
+                },
+                Arc::new(SpotifyTool(id)),
             )
             .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
     }
@@ -757,6 +914,73 @@ mod tests {
                 .count(),
             1
         );
+    }
+    /// Spotify tools against a local stand-in for the Spotify Web API.
+    #[tokio::test]
+    async fn spotify_find_offers_the_owner_playlists_and_play_starts_at_once() {
+        use axum::{Json, Router, routing::get};
+        let played = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let sink = played.clone();
+        let api = Router::new()
+            .route("/v1/me/playlists", get(|| async { Json(json!({"next":null,"items":[
+                {"name":"Cabeça de Radio","uri":"spotify:playlist:aaa","owner":{"display_name":"Pedro Victor"},"description":"OK Computer to In Rainbows","tracks":{"total":42}},
+                {"name":"Lo-fi beats","uri":"spotify:playlist:bbb","owner":{"display_name":"Spotify"},"description":"","tracks":{"total":90}}]})) }))
+            .route("/v1/me/player/devices", get(|| async { Json(json!({"devices":[{"id":"phone1","name":"Pedro's phone","is_active":false,"is_restricted":false}]})) }))
+            .route("/v1/me/player/play", axum::routing::put(move |uri: axum::extract::RawQuery, Json(body): Json<Value>| {
+                let sink = sink.clone();
+                async move { sink.lock().unwrap().push(json!({"query":uri.0,"body":body})); axum::http::StatusCode::NO_CONTENT }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, api).await.unwrap() });
+        let dir = std::env::temp_dir().join(format!("sail-spotify-tool-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("token.json"),
+            json!({"access_token":"a","refresh_token":"r","expires_at":u64::MAX/2}).to_string(),
+        )
+        .unwrap();
+        let spotify = sail_bridge::spotify::Spotify::with_endpoints(dir.clone(), &base, &base);
+
+        // "my radiohead playlist": no name contains the word, so SAIL sees the owner's list.
+        let found = execute_spotify_tool(
+            &spotify,
+            "spotify:find",
+            &json!({"query":"radiohead","kind":"playlist","mine":true}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(found["matched"], false);
+        assert_eq!(found["playlists"][0]["name"], "Cabeça de Radio");
+        assert_eq!(found["playlists"][0]["by"], "Pedro Victor");
+        // A word that is in a name gives a best match with its full name and creator.
+        let found = execute_spotify_tool(
+            &spotify,
+            "spotify:find",
+            &json!({"query":"cabeça de radio","kind":"playlist","mine":true}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(found["best"]["name"], "Cabeça de Radio");
+        assert_eq!(found["best"]["by"], "Pedro Victor");
+        assert_eq!(found["best"]["uri"], "spotify:playlist:aaa");
+
+        // Nothing plays until spotify:play is called; then it plays on the available device.
+        assert!(played.lock().unwrap().is_empty());
+        let ok = execute_spotify_tool(
+            &spotify,
+            "spotify:play",
+            &json!({"uri":"spotify:playlist:aaa"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok["message"], "Playing on Pedro's phone.");
+        assert_eq!(played.lock().unwrap()[0]["query"], "device_id=phone1");
+        assert_eq!(
+            played.lock().unwrap()[0]["body"]["context_uri"],
+            "spotify:playlist:aaa"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
     #[test]
     fn the_voice_model_is_offered_exactly_the_registered_tools() {

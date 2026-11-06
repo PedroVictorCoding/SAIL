@@ -41,11 +41,33 @@ pub struct QuestionSpec {
     /// never sent to the learner's view.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rubric: Option<String>,
+    /// Originating tool name (`probe`, `recall`, `quiz`, `explain`, `ask_user_question`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// Subtype for quizzes (`predict` vs `check`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_type: Option<String>,
+    /// Optional supporting context or code snippet displayed below the prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+    /// Optional explanation revealed after the learner answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
 }
 
 impl QuestionSpec {
     pub fn validate(&self) -> Result<(), Invalid> {
         bounded("prompt", &self.prompt, MAX_TEXT)?;
+        if let Some(details) = &self.details
+            && details.len() > MAX_TEXT
+        {
+            return Err(Invalid::new("`details` is too long"));
+        }
+        if let Some(explanation) = &self.explanation
+            && explanation.len() > MAX_TEXT
+        {
+            return Err(Invalid::new("`explanation` is too long"));
+        }
         match self.kind {
             QuestionKind::FreeRecall => {
                 if !self.options.is_empty() || !self.correct.is_empty() {
@@ -109,6 +131,9 @@ impl QuestionSpec {
     }
 
     pub fn grade(&self, answer: &Answer) -> Result<Grade, Invalid> {
+        if answer.dont_know {
+            return Ok(Grade::Incorrect);
+        }
         match self.kind {
             QuestionKind::FreeRecall => {
                 let text = answer.text.as_deref().unwrap_or_default();
@@ -116,6 +141,16 @@ impl QuestionSpec {
                 Ok(Grade::NeedsJudgment)
             }
             QuestionKind::Single | QuestionKind::Multiple => {
+                if let Some(other) = &answer.other
+                    && !other.trim().is_empty()
+                {
+                    bounded("other", other, MAX_TEXT)?;
+                    return Ok(if self.tool.as_deref() == Some("ask_user_question") {
+                        Grade::Correct
+                    } else {
+                        Grade::Incorrect
+                    });
+                }
                 let chosen: BTreeSet<&str> = answer.choices.iter().map(String::as_str).collect();
                 if chosen.is_empty() || chosen.len() != answer.choices.len() {
                     return Err(Invalid::new("choose at least one option, each once"));
@@ -140,7 +175,7 @@ impl QuestionSpec {
     }
 }
 
-/// The learner's answer. `confidence` (1–5) and `thinking` are signals, not proof.
+/// The learner's answer. `confidence` (1–5), `confidence_pct` (0–100) and `thinking` are signals, not proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Answer {
@@ -151,7 +186,13 @@ pub struct Answer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence_pct: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dont_know: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other: Option<String>,
 }
 
 impl Answer {
@@ -161,10 +202,20 @@ impl Answer {
         {
             return Err(Invalid::new("`confidence` must be 1 to 5"));
         }
+        if let Some(pct) = self.confidence_pct
+            && pct > 100
+        {
+            return Err(Invalid::new("`confidence_pct` must be 0 to 100"));
+        }
         if let Some(t) = &self.thinking
             && t.len() > MAX_TEXT
         {
             return Err(Invalid::new("`thinking` is too long"));
+        }
+        if let Some(other) = &self.other
+            && other.len() > MAX_TEXT
+        {
+            return Err(Invalid::new("`other` is too long"));
         }
         if self.choices.len() > 6 {
             return Err(Invalid::new("too many choices"));
@@ -200,6 +251,10 @@ mod tests {
             correct: correct.iter().map(|s| s.to_string()).collect(),
             node_id: None,
             rubric: None,
+            tool: None,
+            question_type: None,
+            details: None,
+            explanation: None,
         }
     }
 
@@ -283,6 +338,7 @@ mod tests {
         answer.confidence = Some(6);
         assert!(answer.validate().is_err());
         answer.confidence = Some(3);
+        answer.confidence_pct = Some(80);
         answer.validate().unwrap();
     }
 }

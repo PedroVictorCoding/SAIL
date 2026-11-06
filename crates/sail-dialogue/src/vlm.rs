@@ -45,7 +45,7 @@ impl LocalKernelToolBroker {
                 sail_guardian::Capability::System(sail_guardian::SystemCapability::OsTelemetry)
             }
             "proc:list" | "forge:enqueue" | "forge:cancel" | "forge:clear" | "github:issues"
-            | "web:read" => {
+            | "web:read" | "web:speak" | "web_speak" => {
                 sail_guardian::capability::bound_tool_invocation(&call.tool, &call.params)
             }
             "fs:query" | "fs:read" => {
@@ -255,6 +255,7 @@ impl LocalKernelToolBroker {
             "forge:clear" => Self::tool_forge_clear(&call.params),
             "github:issues" => Self::tool_github_issues(&call.params),
             "web:read" => Self::tool_web_read(&call.params),
+            "web:speak" | "web_speak" => Self::tool_web_speak(&call.params),
             "studio:audio_analyze" => Self::tool_studio_audio_analyze(&call.params),
             unknown => KernelToolResult {
                 tool: unknown.to_string(),
@@ -996,13 +997,26 @@ impl LocalKernelToolBroker {
         match output {
             Ok(out) if out.status.success() => {
                 let raw_content = String::from_utf8_lossy(&out.stdout);
-                let clean = Self::extract_text_from_html(&raw_content);
+                let title = Self::extract_html_title(&raw_content).unwrap_or_else(|| {
+                    url.split('/')
+                        .next_back()
+                        .unwrap_or("the webpage")
+                        .replace('-', " ")
+                });
+                let paragraphs = Self::extract_paragraphs_from_html(&raw_content, 12);
+                let clean = if !paragraphs.is_empty() {
+                    format!("{title}\n\n{}", paragraphs.join("\n\n"))
+                } else {
+                    Self::extract_text_from_html(&raw_content)
+                };
                 let capped: String = clean.chars().take(24000).collect();
                 KernelToolResult {
                     tool: "web:read".into(),
                     success: true,
                     output: serde_json::json!({
                         "url": url,
+                        "title": title,
+                        "paragraphs": paragraphs,
                         "bytes": raw_content.len(),
                         "content": capped,
                     }),
@@ -1016,34 +1030,254 @@ impl LocalKernelToolBroker {
         }
     }
 
+    /// web:speak — Read-only HTTP/HTTPS web fetcher that extracts readable article paragraphs
+    /// and formats them for direct-to-voice streaming.
+    fn tool_web_speak(params: &serde_json::Value) -> KernelToolResult {
+        let url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim();
+
+        if url.is_empty() {
+            return Self::error(
+                "web:speak",
+                "Parameter 'url' is required (e.g. https://...)",
+            );
+        }
+
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Self::error("web:speak", "URL must start with http:// or https://");
+        }
+
+        // Restrict loopback and private address probing
+        if url.contains("://127.")
+            || url.contains("://localhost")
+            || url.contains("://0.0.0.0")
+            || url.contains("://[::1]")
+        {
+            return Self::error(
+                "web:speak",
+                "Loopback and local addresses are restricted for web reading.",
+            );
+        }
+
+        let max_paragraphs = params
+            .get("max_paragraphs")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(6)
+            .clamp(1, 20) as usize;
+
+        let output = std::process::Command::new("curl")
+            .args([
+                "-sL",
+                "--max-time",
+                "10",
+                "--max-filesize",
+                "5000000",
+                "-H",
+                "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+                url,
+            ])
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let raw_content = String::from_utf8_lossy(&out.stdout);
+                let title = Self::extract_html_title(&raw_content).unwrap_or_else(|| {
+                    url.split('/')
+                        .next_back()
+                        .unwrap_or("the webpage")
+                        .replace('-', " ")
+                });
+                let paragraphs = Self::extract_paragraphs_from_html(&raw_content, max_paragraphs);
+                let context_phrase = params
+                    .get("context_phrase")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("Reading {title}:"));
+
+                KernelToolResult {
+                    tool: "web:speak".into(),
+                    success: true,
+                    output: serde_json::json!({
+                        "url": url,
+                        "title": title,
+                        "context_phrase": context_phrase,
+                        "paragraphs": paragraphs,
+                        "bytes": raw_content.len(),
+                    }),
+                }
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                Self::error("web:speak", &format!("HTTP request failed: {stderr}"))
+            }
+            Err(e) => Self::error("web:speak", &format!("Failed to execute curl: {e}")),
+        }
+    }
+
+    fn decode_html_entities(text: &str) -> String {
+        text.replace("&#x27;", "'")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'")
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&mdash;", "—")
+            .replace("&ndash;", "–")
+            .replace("&nbsp;", " ")
+    }
+
+    fn strip_tag_blocks(html: &str, tag: &str) -> String {
+        let open_pat = format!("<{tag}");
+        let close_pat = format!("</{tag}>");
+        let lower = html.to_ascii_lowercase();
+        let mut out = String::with_capacity(html.len());
+        let mut pos = 0;
+        while let Some(rel_start) = lower[pos..].find(&open_pat) {
+            let start = pos + rel_start;
+            let after_open = start + open_pat.len();
+            let valid_tag = lower[after_open..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_ascii_whitespace() || c == '>' || c == '/');
+            if !valid_tag {
+                out.push_str(&html[pos..after_open]);
+                pos = after_open;
+                continue;
+            }
+            out.push_str(&html[pos..start]);
+            if let Some(rel_end) = lower[after_open..].find(&close_pat) {
+                pos = after_open + rel_end + close_pat.len();
+            } else {
+                pos = html.len();
+                break;
+            }
+        }
+        out.push_str(&html[pos..]);
+        out
+    }
+
+    fn extract_html_title(html: &str) -> Option<String> {
+        let lower = html.to_ascii_lowercase();
+        let start_tag = lower.find("<title")?;
+        let open_end = lower[start_tag..].find('>')?;
+        let content_start = start_tag + open_end + 1;
+        let end = lower[content_start..].find("</title>")?;
+        let title_raw = &html[content_start..content_start + end];
+        let title = Self::decode_html_entities(title_raw)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if title.is_empty() { None } else { Some(title) }
+    }
+
+    fn extract_paragraphs_from_html(html: &str, max_paragraphs: usize) -> Vec<String> {
+        let mut cleaned = html.to_string();
+        for tag in [
+            "script", "style", "svg", "noscript", "nav", "header", "footer",
+        ] {
+            cleaned = Self::strip_tag_blocks(&cleaned, tag);
+        }
+        let lower = cleaned.to_ascii_lowercase();
+        let mut paragraphs = Vec::new();
+        let mut pos = 0;
+        while let Some(rel_p) = lower[pos..].find("<p") {
+            let p_start = pos + rel_p;
+            let after_p = p_start + 2;
+            let is_p_tag = lower[after_p..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_whitespace() || c == '>');
+            if !is_p_tag {
+                pos = after_p;
+                continue;
+            }
+            let Some(rel_gt) = lower[after_p..].find('>') else {
+                break;
+            };
+            let content_start = after_p + rel_gt + 1;
+            let Some(rel_end) = lower[content_start..].find("</p>") else {
+                break;
+            };
+            let inner = &cleaned[content_start..content_start + rel_end];
+            let p_text = Self::extract_text_from_html(inner)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if p_text.chars().count() >= 45 && !paragraphs.contains(&p_text) {
+                paragraphs.push(p_text);
+                if paragraphs.len() >= max_paragraphs {
+                    return paragraphs;
+                }
+            }
+            pos = content_start + rel_end + 4;
+        }
+        if !paragraphs.is_empty() {
+            return paragraphs;
+        }
+
+        let text = Self::extract_text_from_html(&cleaned);
+        let mut current = String::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                if current.len() >= 40 {
+                    paragraphs.push(current.trim().to_string());
+                    current.clear();
+                    if paragraphs.len() >= max_paragraphs {
+                        break;
+                    }
+                }
+            } else {
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(line);
+                if current.len() >= 350 {
+                    paragraphs.push(current.trim().to_string());
+                    current.clear();
+                    if paragraphs.len() >= max_paragraphs {
+                        break;
+                    }
+                }
+            }
+        }
+        if !current.trim().is_empty() && paragraphs.len() < max_paragraphs && current.len() >= 30 {
+            paragraphs.push(current.trim().to_string());
+        }
+        paragraphs
+    }
+
     fn extract_text_from_html(html: &str) -> String {
+        let mut cleaned = html.to_string();
+        for tag in ["script", "style", "svg", "noscript"] {
+            cleaned = Self::strip_tag_blocks(&cleaned, tag);
+        }
         let mut in_tag = false;
-        let mut in_script = false;
-        let mut in_style = false;
-        let mut result = String::with_capacity(html.len());
+        let mut result = String::with_capacity(cleaned.len());
         let mut tag_name = String::new();
 
-        for ch in html.chars() {
+        for ch in cleaned.chars() {
             if ch == '<' {
                 in_tag = true;
                 tag_name.clear();
             } else if ch == '>' {
                 in_tag = false;
-                let lower = tag_name.to_ascii_lowercase();
-                if lower.starts_with("script") {
-                    in_script = true;
-                } else if lower.starts_with("/script") {
-                    in_script = false;
-                } else if lower.starts_with("style") {
-                    in_style = true;
-                } else if lower.starts_with("/style") {
-                    in_style = false;
-                } else if matches!(
+                let lower = tag_name
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if matches!(
                     lower.as_str(),
                     "p" | "/p"
                         | "div"
                         | "/div"
                         | "br"
+                        | "br/"
                         | "h1"
                         | "/h1"
                         | "h2"
@@ -1057,12 +1291,13 @@ impl LocalKernelToolBroker {
                 }
             } else if in_tag {
                 tag_name.push(ch);
-            } else if !in_script && !in_style {
+            } else {
                 result.push(ch);
             }
         }
 
-        result
+        let decoded = Self::decode_html_entities(&result);
+        decoded
             .lines()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty())
@@ -1239,6 +1474,34 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
         let search = ranked.remove(pos);
         ranked.insert(usize::from(has_handles), search);
     }
+    // Always offer visual_snapshot, as realtime voice assistants do: the model decides when
+    // to look, and the user approves each capture. It follows the memory tools.
+    if let Some(pos) = ranked
+        .iter()
+        .position(|(_, _, tool)| tool["function"]["name"] == crate::visual_snapshot::TOOL)
+    {
+        let snapshot = ranked.remove(pos);
+        ranked.insert(
+            usize::from(has_handles) + usize::from(more_knowledge),
+            snapshot,
+        );
+    }
+    // spotify_play goes right after spotify_find. When no playlist name matches, the model
+    // has to pick one from the list and play it, and "put on something by X" shares no
+    // words with spotify_play.
+    let position = |ranked: &[(usize, usize, serde_json::Value)], name: &str| {
+        ranked
+            .iter()
+            .position(|(_, _, tool)| tool["function"]["name"] == name)
+    };
+    if let (Some(find), Some(play)) = (
+        position(&ranked, "spotify_find"),
+        position(&ranked, "spotify_play"),
+    ) && play > find + 1
+    {
+        let play = ranked.remove(play);
+        ranked.insert(find + 1, play);
+    }
     let mut bytes = 2;
     let mut selected = Vec::new();
     for (_, _, tool) in ranked {
@@ -1258,6 +1521,7 @@ pub fn tool_definitions() -> serde_json::Value {
         6,
         serde_json::json!({"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}}),
     );
+    tools.push(crate::visual_snapshot::tool_definition());
     tools.push(serde_json::json!({"type":"function","function":{"name":MEMORY_RECALL_TOOL,"description":"Read this conversation's archived memory: an earlier turn or a full tool result by id (mem:N), optionally only the parts matching query or a page from offset; or search the archive by query alone.","parameters":{"type":"object","properties":{"id":{"type":"string","description":"Archive handle such as mem:12"},"query":{"type":"string","maxLength":500,"description":"Words to look for"},"offset":{"type":"integer","minimum":0,"description":"Character offset to page through a long record"},"max_chars":{"type":"integer","minimum":200,"maximum":6000}},"additionalProperties":false}}}));
     tools.push(serde_json::json!({"type":"function","function":{"name":MEMORY_SEARCH_TOOL,"description":"Search what SAIL remembers long-term about the user: people, preferences, projects, decisions and facts from earlier conversations. Returns one fact per line.","parameters":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":500,"description":"Names or words to look for"},"limit":{"type":"integer","minimum":1,"maximum":20}},"required":["query"],"additionalProperties":false}}}));
     serde_json::Value::Array(tools)
@@ -1317,6 +1581,33 @@ pub fn raw_vision_frame(frame: &VisionFrameInput) -> Result<VisionFrameInput> {
 #[cfg(test)]
 mod schema_selection_tests {
     #[test]
+    fn spotify_play_is_offered_whenever_spotify_find_is() {
+        for prompt in [
+            "Play my radiohead playlist",
+            "put on something by radiohead",
+            "play some jazz",
+        ] {
+            let tools = super::selected_tool_definitions(&[
+                serde_json::json!({"role":"user","content":prompt}),
+            ]);
+            let names: Vec<_> = tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["function"]["name"].as_str().unwrap().to_string())
+                .collect();
+            assert!(
+                names.iter().any(|n| n == "spotify_find"),
+                "{prompt}: {names:?}"
+            );
+            assert!(
+                names.iter().any(|n| n == "spotify_play"),
+                "{prompt}: {names:?}"
+            );
+        }
+    }
+
+    #[test]
     fn selection_keeps_forge_tools_within_mind_limits() {
         let tools = super::selected_tool_definitions(&[
             serde_json::json!({"role":"user","content":"Enqueue Forge to solve GitHub issue 90"}),
@@ -1336,7 +1627,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 23);
+        assert_eq!(tools.len(), 28);
 
         let names: Vec<_> = tools
             .iter()
@@ -1354,6 +1645,7 @@ mod schema_selection_tests {
         assert!(names.contains(&"vision_frame"));
         assert!(names.contains(&"github_issues"));
         assert!(names.contains(&"web_read"));
+        assert!(names.contains(&"web_speak"));
         assert!(names.contains(&"studio_audio_analyze"));
         assert!(names.contains(&"forge_enqueue"));
         assert!(names.contains(&"forge_status"));
@@ -1362,8 +1654,12 @@ mod schema_selection_tests {
         assert!(names.contains(&"forge_clear"));
         assert!(names.contains(&"memory_recall"));
         assert!(names.contains(&"memory_search"));
+        assert!(names.contains(&"visual_snapshot"));
         for pulse in ["pulse_create", "pulse_list", "pulse_cancel", "pulse_snooze"] {
             assert!(names.contains(&pulse), "{pulse}");
+        }
+        for spotify in ["spotify_find", "spotify_play", "spotify_control"] {
+            assert!(names.contains(&spotify), "{spotify}");
         }
     }
 
@@ -1414,5 +1710,61 @@ mod schema_selection_tests {
             plain[0].clone(),
         ];
         assert_eq!(offered(&with_handles)[0], "memory_recall");
+    }
+
+    #[test]
+    fn web_speak_extracts_title_and_paragraphs_from_html() {
+        let sample_html = r#"
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Roko's Basilisk - LessWrong</title>
+                <style>body { font-family: sans-serif; }</style>
+                <script>console.log("analytics");</script>
+            </head>
+            <body>
+                <header><nav><a href="/">Home</a></nav></header>
+                <h1>Roko's Basilisk</h1>
+                <p>Roko's basilisk is a thought experiment about the potential risks involved in developing artificial intelligence.</p>
+                <p>The premise is that an otherwise benevolent AI could punish those who knew about its development but failed to help create it.</p>
+                <footer><p>© 2026 LessWrong</p></footer>
+            </body>
+            </html>
+        "#;
+        let title = super::LocalKernelToolBroker::extract_html_title(sample_html);
+        assert_eq!(title.as_deref(), Some("Roko's Basilisk - LessWrong"));
+
+        let paragraphs = super::LocalKernelToolBroker::extract_paragraphs_from_html(sample_html, 5);
+        assert!(!paragraphs.is_empty());
+        assert!(paragraphs[0].contains("thought experiment"));
+    }
+
+    #[test]
+    fn web_speak_rejects_loopback_and_invalid_urls() {
+        let loopback = super::LocalKernelToolBroker::execute_scheduled(&super::KernelToolCall {
+            tool: "web:speak".into(),
+            params: serde_json::json!({"url": "http://127.0.0.1:8080/secrets"}),
+        });
+        assert!(!loopback.success);
+        assert!(loopback.output.to_string().contains("restricted"));
+
+        let invalid_scheme =
+            super::LocalKernelToolBroker::execute_scheduled(&super::KernelToolCall {
+                tool: "web:speak".into(),
+                params: serde_json::json!({"url": "file:///etc/passwd"}),
+            });
+        assert!(!invalid_scheme.success);
+        assert!(
+            invalid_scheme
+                .output
+                .to_string()
+                .contains("must start with http")
+        );
+
+        let missing = super::LocalKernelToolBroker::execute_scheduled(&super::KernelToolCall {
+            tool: "web:speak".into(),
+            params: serde_json::json!({}),
+        });
+        assert!(!missing.success);
     }
 }

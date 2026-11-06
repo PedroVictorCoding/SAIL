@@ -134,9 +134,17 @@ impl GemmaRunner {
         tx: tokio::sync::mpsc::Sender<String>,
     ) -> Result<Value> {
         let service = self.service().map_err(legacy)?;
+        // Replies from this method carry `finish_reason` (see below) and callers append
+        // them to the history verbatim. It is response metadata, not part of a message,
+        // and the protocol rejects unknown message fields, so drop it here.
         let messages = messages
             .into_iter()
-            .map(serde_json::from_value)
+            .map(|mut m| {
+                if let Some(obj) = m.as_object_mut() {
+                    obj.remove("finish_reason");
+                }
+                serde_json::from_value(m)
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let tools = serde_json::from_value(tools)?;
         let mut request = InferenceRequest {
@@ -176,6 +184,8 @@ impl GemmaRunner {
             .await
             .map_err(legacy)?;
         let _ = (&mut forward.0).await;
-        Ok(serde_json::to_value(response.message)?)
+        let mut value = serde_json::to_value(response.message)?;
+        value["finish_reason"] = serde_json::json!(response.finish_reason);
+        Ok(value)
     }
 }

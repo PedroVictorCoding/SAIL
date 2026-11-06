@@ -17,6 +17,15 @@ cd /home/main/SAIL
 
 Keep the terminal open while using SAIL. If an older SAIL process is already running, `./run.sh --restart` stops it before starting the new version (or stop it with **Ctrl+C in its terminal**).
 
+The model stays loaded between runs. **Ctrl+C** stops SAIL but leaves the model server (llama-server) running, so the next `./run.sh` or `./run.sh --restart` is ready in seconds instead of reloading the model. If you change model settings (backend, GPU layers, context, threads), SAIL replaces the warm server by itself.
+
+| To | Run |
+|---|---|
+| Stop SAIL and unload the model (frees its memory) | `./run.sh --stop` |
+| Unload only the model | `./run.sh --stop-model` |
+| See what is running | `./run.sh --status` |
+| Stop the model together with SAIL every time | `./run.sh --no-persist` (or `SAIL_LLAMA_PERSIST=0`) |
+
 1. Open **http://localhost:8088** on this computer.
 2. Wait for the page to show that it is connected.
 3. Open **Settings** and choose **Check local model status**. The first check loads the speech workers and may take longer than subsequent checks.
@@ -133,7 +142,7 @@ SAIL streams its response into the conversation. Fenced Mermaid diagrams and JSO
 2. Type a specific question, such as “Describe the main elements of this diagram.”
 3. Send your question, or choose **Capture frame** in the camera preview.
 
-The image is shown in Canvas and sent to the local Gemma vision service with your question. Camera access begins only after choosing Vision, shows an active indicator and preview, and can be stopped from that preview. An image attachment is cleared after sending; attach it again for a follow-up that requires examining its pixels.
+The image is shown in Canvas and analyzed locally with your question. If the main model has no vision projector, the small local vision model (see below) describes the image in text first. Camera access begins only after choosing Vision, shows an active indicator and preview, and can be stopped from that preview. An image attachment is cleared after sending; attach it again for a follow-up that requires examining its pixels.
 
 For measured image statistics, select an image and ask SAIL to inspect the frame. This reports dimensions, luminance and edge density. Use a conversational image question for semantic reasoning.
 
@@ -157,6 +166,23 @@ times), and **Cancel** stops the plan.
 Plans continue after a restart. If SAIL stopped while a step that changes something was
 running, the card says it needs your attention: check whether the change happened, then
 choose **It did not happen: retry** or **Cancel plan**.
+
+## Watch your world on the Tracker board
+
+Choose **Tracker** in the side rail (or open `/tracker`) for a live situation room: one dense board that updates in place.
+
+- **Anomalies** lists what is deviating from its own baseline right now, strongest first. Select one to jump to its panel. A market move is compared with that symbol's usual daily move, weather with the same hour over the past week, and air traffic and news volume with the same time on earlier days. Those last two baselines need a few days of use before they report anything.
+- **Tape**, **Markets** and **Numbers** show prices, currency rates and the figures you pin with ☆, as changes rather than plain levels.
+- **News** merges headlines from your feeds and topic searches. One story carried by several outlets appears once, with a count of the other sources. Filter by topic or type to search.
+- **Odds**, **Conditions**, **Routes & traffic**, **Hazards**, **Clock** and **Map** cover prediction markets, weather and air quality, road corridors and aircraft overhead, earthquakes, local times with your countdowns, and a map of your places.
+
+Choose **Watchlists** to set your places, routes, tickers, news topics and feeds, prediction markets, currencies and countdowns. Choose **Edit layout** (or press `E`) to move, resize or hide panels. Your changes are saved on this SAIL host.
+
+All sources are free and need no account or key. SAIL fetches them only while a board is open, and keeps the history it uses for baselines in its local data directory. Road times are free-flow estimates; live road delays would need a traffic provider key, which the Tracker does not use yet. Quotes and other figures are unofficial and may be delayed.
+
+## Switch to the Tools Map interface
+
+In **Settings → General → Interface style**, choose **Tools Map** to replace the card dashboard with a live map of SAIL's subsystems. Each station shows whether it is active; select one to see host metrics, its connections, tasks, recent events and configuration, or choose **Open in Workspace** to jump to its classic page. The top bar shows CPU, GPU, RAM and the fullest disk, and **Live Activity** lists Guardian decisions, plan changes and model events as they happen. Type in **Ask SAIL** (or press `Ctrl K`) to send a message, or type a station name such as `Guardian` to select it. Choose **Classic view** in the sidebar, or switch back in Settings, to return. The choice is remembered by this browser.
 
 ## Hear the reply before all the text is finished
 
@@ -301,22 +327,23 @@ This generates speech, detects it with Silero, transcribes it with Whisper, and 
 
 ## End your session
 
-Use **Stop Microphone** when you no longer want capture. Use **Interrupt** if you also want the current reply to stop. Close the tab when finished, then press **Ctrl+C** in the SAIL terminal to shut down the runtime. A llama-server that SAIL started is stopped with it; a model server that was already running remains independently managed.
+Use **Stop Microphone** when you no longer want capture. Use **Interrupt** if you also want the current reply to stop. Close the tab when finished, then press **Ctrl+C** in the SAIL terminal to shut down the runtime. The model stays loaded for a fast next start; run `./run.sh --stop` to unload it and free its memory.
 
-### Capture a picture or screenshot during conversation
+### Let SAIL look at your camera or screen
 
-Say or type “Take a screenshot and explain this error” for the screen, or
-“Take a camera picture and tell me what you see” for the camera. SAIL pauses
-reasoning until the browser captures an image. Click the capture button to open
-the browser permission picker. Screen capture lets you choose a screen, window,
-or tab; camera capture takes one frame. Both require HTTPS or localhost and
-browser support. Capture stops immediately after the frame is obtained.
+Ask naturally: "What does this error say?", "Can you read this label?", "What am I holding?". When SAIL needs to see something, the model takes a snapshot itself. It chooses the **camera** for the physical world and the **screen** for what is on your computer.
 
-“Capture an image and tell me what you see” uses the previous user message to
-resolve screen/camera context when possible; otherwise SAIL asks which source
-you mean. Permission denial or cancellation never submits an imageless request.
-The original request and captured image are sent together to the local model.
-Existing uploaded images are analyzed directly without requesting device capture.
+- **You approve every look.** If you are already sharing that source live (**Spaces → Vision**), SAIL uses the current frame from that preview. Otherwise a dialog asks you to allow one camera picture or one screenshot. You can pick the other source or **Cancel**; SAIL is then told you declined and answers without the image.
+- Capture takes a single frame (up to 768 px, JPEG) and stops the camera or screen share right after. It needs HTTPS or localhost.
+- A request waits up to 90 seconds for your choice.
+
+**Seeing with a text-only main model.** If the main model has no vision projector (the default Qwen3.6 setup), a small local vision model, LiquidAI **LFM3-Omni-2B**, describes the image in up to about 70 words, focused on what SAIL asked. The main model gets that text instead of pixels. Install it once (about 1.6 GB, LFM Open License v1.0), then restart SAIL:
+
+```bash
+./scripts/fetch-vision-model.sh
+```
+
+It starts on port 8082 the first time an image needs describing (about 2–3 s to load) and then takes roughly 9–11 s per image on CPU. It stays loaded like the main model and is stopped by `./run.sh --stop`. Override the files with `SAIL_VISION_MODEL` / `SAIL_VISION_MMPROJ`, or point at your own server with `SAIL_VISION_URL`.
 
 
 ### Authorize and continue a tool operation

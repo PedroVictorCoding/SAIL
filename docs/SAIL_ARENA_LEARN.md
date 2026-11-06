@@ -193,3 +193,81 @@ Upstream:
 - [License](https://github.com/amosblomqvist/learnharness/blob/main/LICENSE)
 
 The UI strategy above is a SAIL proposal inspired by these public concepts; it is not a claim of faithful binary or source-level LearnHarness integration. Audit upstream assets and AGPL obligations before reuse.
+
+## 9. Implemented contracts and deliberate decisions (November 2026)
+
+These are the shipped contracts in `sail-arena-learn`, `sail-arena` and `sail-dialogue`, checked
+by tests. They refine, rather than replace, the milestones above.
+
+### 9.1 Practice (#244)
+
+- A practice session is a separate session kind (`mode: "practice"`, `Mode::Practice`), not
+  more quiz inside a lesson.
+- `problem` commits the statement and the full solution together. The solution is stored in
+  the event log but is absent from every learner-facing view until `conclude` reveals it.
+- Only one problem may be active. A second `problem` call returns a correctable error.
+- Hints are revealed one at a time, only when the learner asks (`POST /sessions/:id/hint`),
+  and each request is stored. Attempts are stored as practice evidence.
+- `conclude` records `solved`, `solved_with_hints` or `not_solved` and reveals the solution.
+  Practice outcomes never change plan progress, plan revisions or the learning graph.
+
+### 9.2 Role prompts (#245)
+
+Prompts are SAIL-authored. `arena/learn/prompts/<role>.md` (or `SAIL_LEARN_PROMPTS`) may
+override `common`, `prober`, `teacher`, `practitioner` and `judge` individually. An override
+that is invalid UTF-8, empty or over 16 KiB is ignored with a warning and the default is used.
+`GET /api/learn/prompts` returns the effective prompts to the owner.
+
+### 9.3 Model slots (#253)
+
+`SAIL_LEARN_MODEL_{PROBER,TEACHER,PRACTITIONER,JUDGE,EXTRACTOR}` map individual slots to a
+registered Mind model id. Unset slots use the resident model. A configured id is sent to Mind
+verbatim; an unregistered model is refused by Mind (`UnknownModel`) and the turn records the
+failure. There is no hosted-provider fallback. `TurnSettled` records tokens with the role.
+
+### 9.4 Context compaction and meter (#252, #254)
+
+When projected history exceeds the context budget, the turn appends a `ContextCompacted`
+event at an input-message boundary. Earlier events are replaced in the model request by a
+deterministic digest (goal, plan, visited/current/upcoming, last answers, last explanation).
+Full history remains in the store and the UI transcript. The cut is never inside a
+tool-call/result pair. The view exposes prompt/completion totals and a context fraction; the
+UI shows a compact meter and no cost estimate.
+
+The history budget is 9,216 tokens: Mind's default 16k window minus a 7k reserve for the
+system prompt (session state, a 40-node plan, picked propositions), the role's tool schemas,
+the chat template and the reply. A unit test checks the reserve against a maximal plan, so
+a compacted lesson fits the window. Propositions picked as session context are limited to
+4,000 bytes in total. They are sent with every turn, and a larger set is refused at session
+creation with a "pick fewer" error. If Mind shrinks the window under RAM pressure, the turn
+still halves its history window and retries.
+
+### 9.5 Diagrams, dictation and reminders (#255, #256, #257)
+
+- The teacher may call `show_diagram` (Mermaid source ≤ 8 KiB). The browser renders it with
+  Mermaid `securityLevel: 'strict'`; a render failure is a text fallback and is posted back,
+  becoming a tool-error note in the next prompt. HTML/script payloads are rejected.
+- The free-text and reasoning fields in the question dock have an explicit dictation button.
+  Audio is processed by the existing on-device speech pipeline; the transcript is inserted
+  for the learner to edit and is never submitted automatically.
+- After practice, the learner may opt into one Pulse reminder at 1, 3 or 7 days. It is off by
+  default and can be cancelled from the session view. Pulse owns quiet-hour timing.
+
+### 9.6 Learning graph, extraction, imports and retrieval (#248–#251)
+
+- `sail-arena` stores propositions and typed chains under `learning:<topic>` scopes, with
+  per-session and per-source provenance. Guardian's `MemoryPurpose::Learn` grant sees only
+  `learning:*`; Dialogue and Forge do not. Forget bumps the deletion generation and writes a
+  tombstone; deleting an imported source removes only propositions that source alone
+  supported. A chain whose premise is forgotten is removed rather than left dangling.
+- Post-lesson extraction runs after a turn once uncovered session text exceeds the threshold
+  (`SAIL_LEARN_EXTRACT_TOKENS`, default 4096, minimum 500). Each proposition must cite a
+  verbatim quote or it is rejected; merging is deterministic; a coverage ledger makes replay
+  safe.
+- `POST /api/learn/sources` imports `.md`/`.txt` notes up to 5 MiB with a content hash and
+  runs extraction in the background. Sources are listable and deletable.
+- **Parity decision (#293):** retrieval is an **explicit, gated agent tool**
+  (`search_knowledge`), not automatic prompt injection. This matches upstream LearnHarness's
+  documented gated graph-read tools. Results are bounded (`SAIL_LEARN_MEMORY_BYTES`, default
+  1500), labelled untrusted data, and never presented as mastery. Automatic injection remains
+  an explicit non-goal unless a future ADR reverses this decision.

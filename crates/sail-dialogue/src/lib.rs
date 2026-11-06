@@ -1,27 +1,37 @@
 pub mod approval_http;
+pub mod briefing;
+pub mod briefing_http;
 pub mod connection_controller;
 pub mod control;
 pub mod conversation_controller;
 #[cfg(test)]
 mod conversation_controller_tests;
+pub mod dictation_http;
 mod execution;
 pub mod learn_http;
 pub mod live_context;
 pub mod memory_http;
+pub mod music_fastpath;
 pub mod orb;
 pub mod pipeline;
 pub mod plans;
+pub mod prompt;
 pub mod pulse_http;
+pub mod reader_http;
 pub mod server;
 mod speech;
+pub mod spotify_http;
 pub mod staged_ack;
 pub mod stt;
+pub mod system_http;
 pub mod terminal;
 mod tool_policy;
+pub mod tracker_http;
 pub mod tts;
 pub mod turn_coordinator;
+pub mod ui_assets;
 pub mod vad;
-mod visual_capture;
+pub mod visual_snapshot;
 pub mod vlm;
 pub mod web_assets;
 
@@ -74,7 +84,7 @@ impl DialogueSubsystem {
                     .expect("Invalid SAIL_VOICE_BIND"),
             ),
             services: sail_mind::VoiceModelServices::new(),
-            arena: Arc::new(sail_arena::ArenaSubsystem::new()),
+            arena: Arc::new(sail_arena::ArenaSubsystem::open_default()),
             plans: None,
             pulse: None,
         }

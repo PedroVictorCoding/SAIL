@@ -1,6 +1,6 @@
 'use strict';
 let liveContextEnabled = false, liveContextReplyPending = false;
-let learningSession = null, learningEnabled = false, learningBusy = false;
+let learningSession = null, learningEnabled = true, learningBusy = false;
 let ws, audioCtx, micStream, processor, micSource;
 let workletLoaded=false;
 const playbackTimers=new Set();
@@ -47,7 +47,7 @@ function showError(error) {
 function normalizeToolName(name) { return String(name || '').replaceAll('_', ':'); }
 function toolCard(tool) {
   const name = normalizeToolName(tool);
-  if (name.startsWith('vision:')) return document.getElementById('canvasCard');
+  if (name.startsWith('vision:') || name === 'visual:snapshot') return document.getElementById('canvasCard');
   if (name === 'os:status') return document.getElementById('systemCard');
   if (name.startsWith('proc:') || name.startsWith('fs:') || name.startsWith('github:')) return document.getElementById('toolsCard');
   if (name.startsWith('forge:')) return document.getElementById('forgeCard');
@@ -73,11 +73,13 @@ function syncActivityPill() {
     'fs:read':'Reading workspace file',
     'fs:write':'Writing workspace file',
     'vision:frame':'Analyzing image',
+    'visual:snapshot':'Looking',
     'forge:enqueue':'Dispatching Forge task',
     'forge:status':'Checking Forge job',
     'forge:list':'Listing Forge tasks',
     'github:issues':'Checking GitHub repo',
     'web:read':'Reading web page',
+    'web:speak':'Reading web page aloud',
   };
   document.getElementById('activityText').textContent = activeTools.size ? labels[[...activeTools.keys()].at(-1)] || 'Using a local tool' : stateLabels[orbState] || '';
 }
@@ -101,7 +103,7 @@ function connectWs() {
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
     liveContextReplyPending = false; liveContextEnabled = false; renderLiveContext(); document.getElementById('liveContextBtn').disabled = true;
-    learningSession = null; learningEnabled = false; renderLearning();
+    learningSession = null; learningEnabled = true; renderLearning();
     pendingApprovalActions.clear(); lastToolCalls.clear();
     cancelVisualCapture(); captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
     setTimeout(connectWs, 2000);
@@ -110,12 +112,12 @@ function connectWs() {
     let data;
     try { data = JSON.parse(event.data); } catch { showError('Invalid server message'); return; }
     switch (data.type) {
-      case 'capture_required':
-        setCaptureHeld(false); turnInProgress = false; stopPlayback(); requestVisualCapture(data); break;
+      case 'snapshot_request':
+        requestVisualCapture(data); break;
       case 'session':
-        learningSession = data.session_id; learningEnabled = data.learning === true; renderLearning();
+        learningSession = data.session_id; learningEnabled = data.learning !== false; renderLearning();
         cancelVisualCapture();
-        document.getElementById('conversation').replaceChildren(); responseNode = null;
+        document.getElementById('conversation').replaceChildren(); responseNode = null; chatFollow.resume();
         applyControl(data.control); announceClientSpeech(); break;
       case 'live_context_state':
         discardListeningCapture(); liveContextReplyPending = false;
@@ -123,7 +125,7 @@ function connectWs() {
       case 'live_context_observed':
         transcriptBox.textContent = `Context · ${data.text}`; break;
       case 'learning_state':
-        learningEnabled = data.enabled === true; renderLearning(); break;
+        learningEnabled = data.enabled !== false; renderLearning(); break;
       case 'telemetry':
         document.getElementById('sessionConfidence').textContent = `${(data.confidence * 100).toFixed(0)}%`;
         document.getElementById('sessionRms').textContent = Number(data.rms).toFixed(3);
@@ -290,8 +292,35 @@ function appendConversation(role, text) {
   const label = document.createElement('span'); label.className = 'message-label'; label.textContent = role;
   const content = document.createElement('div'); content.className = 'message-body';
   node.append(label, content); setMessageText(node, text);
-  document.getElementById('conversation').append(node); node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return node;
+  if (role === 'You') chatFollow.resume();
+  document.getElementById('conversation').append(node); return node;
 }
+// Keeps the conversation pinned to the newest text while replies stream in, until the
+// owner scrolls away from the bottom; scrolling back to the bottom resumes following.
+const chatFollow = (() => {
+  const box = document.getElementById('conversation');
+  let follow = true, queued = false;
+  const atBottom = () => box.scrollHeight - box.scrollTop - box.clientHeight <= 4;
+  const stick = () => {
+    queued = false;
+    // Hidden (e.g. behind another tab in the Dialogue column): nothing to scroll yet.
+    if (follow && box.clientHeight) box.scrollTop = box.scrollHeight;
+  };
+  const schedule = () => { if (follow && !queued) { queued = true; requestAnimationFrame(stick); } };
+  // Upward intent stops following at once, before a pending stick can pull the view back.
+  const leave = () => { if (box.scrollHeight > box.clientHeight) follow = false; };
+  box.addEventListener('wheel', (e) => { if (e.deltaY < 0) leave(); }, { passive: true });
+  box.addEventListener('keydown', (e) => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key)) leave(); });
+  let touchY = null;
+  box.addEventListener('touchstart', (e) => { touchY = e.touches[0]?.clientY ?? null; }, { passive: true });
+  box.addEventListener('touchmove', (e) => { const y = e.touches[0]?.clientY; if (touchY !== null && y > touchY) leave(); touchY = y; }, { passive: true });
+  // Scrollbar drags and everything else: follow exactly when the view is at the bottom.
+  box.addEventListener('scroll', () => { if (box.clientHeight) follow = atBottom(); }, { passive: true });
+  // Streamed tokens, Markdown/diagram renders and cards all grow the log.
+  new MutationObserver(schedule).observe(box, { childList: true, subtree: true, characterData: true });
+  new ResizeObserver(schedule).observe(box);
+  return { resume() { follow = true; schedule(); } };
+})();
 // Assistant replies are Markdown; user turns (mostly speech transcripts) stay plain text.
 function setMessageText(node, text) {
   const content = node.lastChild;
@@ -344,6 +373,7 @@ function renderToolResult(result) {
   else if (output?.issue && output?.title) summary.textContent = `GitHub Issue #${output.number || output.issue.number}: ${output.title} (${output.state || 'OPEN'})`;
   else if (Array.isArray(output?.issues)) summary.textContent = `${output.count} GitHub issues retrieved (sorted by priority)`;
   else if (result?.tool === 'web:read' && output?.url) summary.textContent = `Fetched ${output.bytes || output.content?.length || 0} bytes from ${output.url}`;
+  else if ((result?.tool === 'web:speak' || result?.tool === 'web_speak') && output?.url) summary.textContent = `Streamed ${output.paragraphs?.length || 0} paragraphs from ${output.title || output.url} directly to voice`;
   else if (result?.tool === 'forge:enqueue' && output?.job_id) summary.textContent = `Forge job enqueued: ${output.job_id} (Issue #${output.issue_number || '—'})`;
   else if (result?.tool === 'forge:status' && output?.job_id) summary.textContent = `Forge job ${output.job_id}: ${output.state || 'active'} (${output.diff_stat || output.current_step || '—'})`;
   else if (output?.job_id) summary.textContent = `Forge job ${output.job_id}: ${output.state || 'active'}`;
@@ -555,7 +585,7 @@ function queueAudio(data) {
 // actually playing, not packets received early.
 function schedulePlayback(context, buffer, generation, telemetry) {
   const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination);
-  const when = Math.max(context.currentTime + 0.015, nextAudioTime); nextAudioTime = when + buffer.duration;
+  const when = nextAudioTime > context.currentTime ? nextAudioTime : context.currentTime + 0.06; nextAudioTime = when + buffer.duration;
   playingSources.add(source);
   const timer = setTimeout(() => {
     playbackTimers.delete(timer);
@@ -721,9 +751,7 @@ function updateState(state) {
   statusBadge.textContent = labels[state] || 'Ready'; document.getElementById('appShell').dataset.state = state;
   const palette = statePalette(paletteState(state));
   ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, [palette.primary,palette.secondary,palette.tertiary][index]));
-  document.getElementById('sessionState').textContent = labels[state] || 'Ready';
-  const liveState = document.getElementById('sessionLiveState');
-  if (liveState) liveState.textContent = detailedLabels[state] || labels[state] || state || 'Ready';
+  document.getElementById('sessionState').textContent = detailedLabels[state] || labels[state] || 'Ready';
   if (changed && reduceMotion.matches && !document.hidden) renderVisuals();
   syncActivityPill();
   document.getElementById('interruptBtn').hidden = !['thinking','speaking','working','transcribing','generating'].includes(state);

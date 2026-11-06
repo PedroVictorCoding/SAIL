@@ -1,7 +1,30 @@
 :root {
   color-scheme: dark;
 
-  /* SAIL UI Design Tokens — Dark Tactile Neumorphism */
+  /* SAIL Design System — Ambient Glass, Living Light & State-Driven Motion (DESIGN.md) */
+  --sail-base: #0a0c10;
+  --sail-surface: #141820;
+  --sail-surface-raised: #1d232c;
+  --sail-glass-fill: rgb(22 29 40 / .65);
+  --sail-glass-border: rgb(222 238 255 / .13);
+  --sail-glass-highlight: rgb(255 255 255 / .12);
+  --sail-text: #f2f5fa;
+  --sail-text-muted: #aeb8c8;
+  --sail-text-subtle: #8592a6;
+  --sail-focus-ring: #ffd69f;
+  --sail-radius-control: 14px;
+  --sail-radius-card: 24px;
+  --sail-radius-sheet: 30px;
+  --sail-blur-supported: 12px;
+  --sail-transition-fast: 140ms;
+  --sail-transition-state: 420ms;
+  --sail-ease: cubic-bezier(.22, 1, .36, 1);
+  --sail-light-a: #78889d; /* injected from verified state */
+  --sail-light-b: #384257;
+  --sail-light-c: #0e121a;
+  --sail-illumination: .15;
+
+  /* Backward-compatible base tokens */
   --bg: #1C2023;
   --panel: #24292D;
   --surface: #24292D;
@@ -74,4 +97,33 @@
 
 :root {
   transition: --ambient-one 720ms var(--ease-out), --ambient-two 720ms var(--ease-out), --ambient-three 720ms var(--ease-out);
+}
+
+/* Ambient Glass & Living Light primitives (DESIGN.md / docs/SAIL_UI_DESIGN_GUIDE.md) */
+.sail-glass {
+  position: relative;
+  isolation: isolate;
+  background: linear-gradient(145deg, rgb(31 41 57 / .82), rgb(11 16 25 / .90));
+  border: 1px solid var(--sail-glass-border, rgb(222 238 255 / .13));
+  border-radius: var(--sail-radius-card, 24px);
+  box-shadow: 0 16px 48px rgb(0 0 0 / .22), inset 0 1px var(--sail-glass-highlight, rgb(255 255 255 / .09));
+}
+@supports (backdrop-filter: blur(12px)) {
+  .sail-glass[data-blur="allowed"] { backdrop-filter: blur(var(--sail-blur-supported, 12px)); }
+}
+.sail-light {
+  pointer-events: none; position: absolute; inset: -18%;
+  background: radial-gradient(ellipse at 70% 80%, var(--sail-light-a) 0, transparent 60%);
+  opacity: var(--sail-illumination, .15);
+  filter: blur(28px);
+  transform: translate3d(0, 0, 0);
+  transition: opacity var(--sail-transition-state, 420ms) ease,
+              transform var(--sail-transition-state, 420ms) ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sail-light, .sail-glass { animation: none !important; transition-duration: 0ms !important; }
+}
+@media (forced-colors: active) {
+  .sail-glass { background: Canvas; border: 1px solid CanvasText; }
+  .sail-light { display: none; }
 }

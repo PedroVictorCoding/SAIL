@@ -175,12 +175,12 @@
     const startMin = settings.quiet_start_minute % 60;
     const endHour = Math.floor(settings.quiet_end_minute / 60);
     const endMin = settings.quiet_end_minute % 60;
-
+    
     const quietStart = document.getElementById('pulseQuietStart');
     const quietEnd = document.getElementById('pulseQuietEnd');
     const quietEnabled = document.getElementById('pulseQuietEnabled');
     const spokenEnabled = document.getElementById('pulseSpokenEnabled');
-
+    
     if (quietStart) quietStart.value = `${String(startHour).padStart(2,'0')}:${String(startMin).padStart(2,'0')}`;
     if (quietEnd) quietEnd.value = `${String(endHour).padStart(2,'0')}:${String(endMin).padStart(2,'0')}`;
     if (quietEnabled) quietEnabled.checked = settings.quiet_hours_enabled;
@@ -191,13 +191,13 @@
     const textInput = document.getElementById('pulseText');
     const dueInput = document.getElementById('pulseDue');
     if (!textInput || !dueInput) return;
-
+    
     const text = textInput.value.trim();
     if (!text) { status('Reminder text is required.', true); return; }
-
+    
     const dueDate = new Date(dueInput.value);
     if (Number.isNaN(dueDate.getTime())) { status('Invalid due time.', true); return; }
-
+    
     try {
       await request('/reminders', {
         text,
@@ -219,13 +219,13 @@
     const quietEnd = document.getElementById('pulseQuietEnd')?.value;
     const quietEnabled = document.getElementById('pulseQuietEnabled')?.checked;
     const spokenEnabled = document.getElementById('pulseSpokenEnabled')?.checked;
-
+    
     try {
       const parseTime = (str) => {
         const [h, m] = str.split(':').map(Number);
         return h * 60 + m;
       };
-
+      
       const newSettings = {
         ...settings,
         quiet_hours_enabled: quietEnabled ?? settings.quiet_hours_enabled,
@@ -235,7 +235,7 @@
         timezone,
         utc_offset_minutes: offsetMinutes
       };
-
+      
       await request('/settings', newSettings);
       settings = newSettings;
       settingStatus('Settings saved.');
@@ -250,17 +250,17 @@
     const settingsForm = document.getElementById('pulseSettingsForm');
     const presetButtons = document.querySelectorAll('[data-pulse-preset]');
     const refreshBtn = document.getElementById('pulseRefreshBtn');
-
+    
     if (form) form.addEventListener('submit', (e) => {
       e.preventDefault();
       createReminder();
     });
-
+    
     if (settingsForm) settingsForm.addEventListener('submit', (e) => {
       e.preventDefault();
       saveSettings();
     });
-
+    
     presetButtons.forEach(btn => {
       btn.addEventListener('click', () => {
         const minutes = parseInt(btn.dataset.pulsePreset, 10);
@@ -270,21 +270,18 @@
         }
       });
     });
-
+    
     if (refreshBtn) refreshBtn.addEventListener('click', load);
-
-    if (createBtn) createBtn.addEventListener('click', createReminder);
-    if (saveSettingsBtn) saveSettingsBtn.addEventListener('click', saveSettings);
-
+    
     // Set default due time to 20 minutes from now
     defaultDue();
-
+    
     // Load initial data
     load();
-
+    
     // Refresh every 10 seconds to check for new due reminders
     setInterval(load, 10000);
-
+    
     // Refresh when the page becomes visible
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) load();
@@ -297,7 +294,7 @@
   } else {
     init();
   }
-
+  
   window.addEventListener('sail:page', (event) => {
     if (event.detail === 'pulse') {
       setTimeout(load, 100);

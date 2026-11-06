@@ -1,13 +1,16 @@
 //! The learning event log (#233). Session state is a projection of these events; the
 //! browser never owns transcript truth.
+use super::graph::GraphContextProp;
 use super::judgment::Judgment;
 use super::plan::LessonPlan;
+use super::practice::{PracticeOutcome, ProblemSpec};
 use super::question::{Answer, Grade, QuestionSpec};
 use serde::{Deserialize, Serialize};
 
 /// Bumped when an event changes shape. Stores refuse envelopes from a newer version.
 /// 2: `AnswerJudged` and `QuestionAsked.follow_up_of` (#243).
-pub const SCHEMA_VERSION: u16 = 2;
+/// 3: practice, diagrams, compaction and review scheduling (#244, #252, #255, #257).
+pub const SCHEMA_VERSION: u16 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,6 +58,12 @@ pub enum LearningEvent {
     SessionCreated {
         goal: String,
     },
+    SessionRenamed {
+        title: String,
+    },
+    GraphContextAttached {
+        propositions: Vec<GraphContextProp>,
+    },
     LearnerMessage {
         text: String,
     },
@@ -84,6 +93,9 @@ pub enum LearningEvent {
         answer: Answer,
         grade: Grade,
     },
+    QuestionDismissed {
+        call_id: String,
+    },
     /// The judge's verdict on a free-recall answer (#243). Recorded before the tutor
     /// replies, so the reply and the learner's view agree on it.
     AnswerJudged {
@@ -107,6 +119,66 @@ pub enum LearningEvent {
         /// Explanation text for `explain`; the question prompt for `quiz`.
         text: String,
     },
+    /// A teacher-requested diagram. The browser renders it with Mermaid strict mode.
+    DiagramShown {
+        call_id: String,
+        node_id: String,
+        mermaid: String,
+        caption: String,
+    },
+    /// The browser could not render a diagram; the next turn sees this as a tool error.
+    DiagramRenderFailed {
+        call_id: String,
+        message: String,
+    },
+    /// Starts a practice-only session. `topic` is both the goal shown to the learner and
+    /// the graph topic practice may draw on.
+    PracticeStarted {
+        topic: String,
+    },
+    /// A problem tool call. Its result is the learner's attempt, recorded later.
+    ProblemAsked {
+        call_id: String,
+        problem_id: String,
+        spec: ProblemSpec,
+    },
+    /// A learner attempt. Session evidence only; it changes no plan or graph state.
+    PracticeAttempted {
+        problem_id: String,
+        text: String,
+    },
+    /// The learner asked for the hint at `index` (0-based). Recorded per problem.
+    HintRequested {
+        problem_id: String,
+        index: u32,
+    },
+    /// The practitioner concluded a problem; this reveals its solution.
+    PracticeConcluded {
+        problem_id: String,
+        outcome: PracticeOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        verdict: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rung: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        miss_class: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retest: Option<String>,
+    },
+    /// The learner cancelled the opt-in review reminder (#257).
+    PracticeReviewCancelled,
+    /// Opt-in spaced practice reminder, scheduled through Pulse (#257).
+    PracticeReviewScheduled {
+        problem_id: Option<String>,
+        days: u8,
+        due_at_ms: i64,
+        reminder_id: String,
+    },
+    /// A compaction cut (#252). Events up to `up_to_seq` are represented by `digest`.
+    ContextCompacted {
+        up_to_seq: u64,
+        digest: String,
+    },
     TurnSettled {
         role: AgentRole,
         outcome: TurnOutcome,
@@ -126,6 +198,9 @@ impl LearningEvent {
                 | Self::LearnerMessage { .. }
                 | Self::Answered { .. }
                 | Self::ProbeDone { .. }
+                | Self::PracticeStarted { .. }
+                | Self::PracticeAttempted { .. }
+                | Self::PracticeConcluded { .. }
                 | Self::Resumed
         )
     }

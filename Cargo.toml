@@ -15,8 +15,10 @@ members = [
     "crates/sail-runner",
     "crates/sail-continuity",
     "crates/sail-pulse",
+    "crates/sail-tracker",
     "crates/sail-forge",
     "crates/sail-core",
+    "crates/sail-ui",
 ]
 resolver = "2"
 
@@ -64,4 +66,6 @@ sail-flow = { path = "crates/sail-flow" }
 sail-guardian = { path = "crates/sail-guardian" }
 sail-continuity = { path = "crates/sail-continuity" }
 sail-pulse = { path = "crates/sail-pulse" }
+sail-tracker = { path = "crates/sail-tracker" }
 sail-forge = { path = "crates/sail-forge" }
+sail-ui = { path = "crates/sail-ui" }

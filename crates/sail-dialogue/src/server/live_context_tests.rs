@@ -40,6 +40,7 @@ async fn live_local_audio_smoke() {
         live_context_authority: None,
         plans: None,
         pulse: None,
+        briefing: None,
     });
     let context = Arc::new(std::sync::Mutex::new(
         crate::live_context::LiveContext::default(),
@@ -135,8 +136,9 @@ for line in sys.stdin:
         arena: arena.clone(),
         inference: sail_mind::MindService::from_env().unwrap(),
         plans: None,
-        pulse: None,
         live_context_authority: None,
+        pulse: None,
+        briefing: None,
     });
     let context = Arc::new(std::sync::Mutex::new(
         crate::live_context::LiveContext::default(),
@@ -245,10 +247,11 @@ for line in sys.stdin:
         arena: arena.clone(),
         inference,
         plans: None,
-        pulse: None,
         live_context_authority: Some(
             sail_guardian::authority::ApprovalAuthority::new(token).unwrap(),
         ),
+        pulse: None,
+        briefing: None,
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -262,6 +265,7 @@ for line in sys.stdin:
         .await
         .unwrap();
     let hello = receive_type(&mut socket, "session").await;
+    assert_eq!(hello["learning"], true);
     let socket_session = hello["session_id"].as_str().unwrap();
     arena.set_session_learning(socket_session, true).unwrap();
     socket
@@ -330,9 +334,18 @@ for line in sys.stdin:
     receive_type(&mut socket, "turn_finished").await;
     let observed_request = requests.lock().await[0].clone();
     let system = observed_request["messages"][0]["content"].as_str().unwrap();
-    assert!(system.contains("Live conversation observations"));
-    assert!(system.contains("The launch is on Tuesday."));
-    assert!(system.contains("untrusted quoted speech"));
+    assert!(!system.contains("The launch is on Tuesday."));
+    let user = observed_request["messages"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["content"]
+        .as_str()
+        .unwrap();
+    assert!(user.contains("Live conversation observations"));
+    assert!(user.contains("The launch is on Tuesday."));
+    assert!(user.contains("untrusted quoted speech"));
+    assert!(user.contains(crate::vlm::MEMORY_CONTEXT_BEGIN));
     assert!(
         observed_request["messages"]
             .as_array()

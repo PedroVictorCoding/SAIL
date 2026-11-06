@@ -7,6 +7,8 @@ use sail_protocol::memory::{MemoryGrant, MemoryPurpose, MemorySensitivity, VERSI
 pub const DIALOGUE_SCOPES: &[&str] = &["voice", "bus", "user", "life"];
 /// Archive scopes that background maintenance consolidates and expires.
 pub const MAINTENANCE_SCOPES: &[&str] = &["voice", "bus"];
+/// Arena Learn sees only its own topic scopes.
+pub const LEARN_SCOPES: &[&str] = &["learning:*"];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MemoryGrantError {
@@ -21,6 +23,7 @@ pub fn memory_grant(purpose: &MemoryPurpose) -> Result<MemoryGrant, MemoryGrantE
     let (scopes, max_sensitivity) = match purpose {
         MemoryPurpose::Dialogue => (owned(DIALOGUE_SCOPES), MemorySensitivity::Private),
         MemoryPurpose::Maintenance => (owned(MAINTENANCE_SCOPES), MemorySensitivity::Private),
+        MemoryPurpose::Learn => (owned(LEARN_SCOPES), MemorySensitivity::Private),
         MemoryPurpose::Forge { repo } => (
             vec![format!("project:{}", repository_key(repo)?)],
             MemorySensitivity::Private,
@@ -76,6 +79,16 @@ mod tests {
         assert_eq!(g.scopes, vec!["project:pedrovictorcoding/sail".to_string()]);
         assert_eq!(g.max_sensitivity, MemorySensitivity::Private);
         for scope in DIALOGUE_SCOPES {
+            assert!(!g.scopes.iter().any(|s| s == scope));
+        }
+    }
+
+    #[test]
+    fn learn_sees_only_learning_scopes() {
+        let g = memory_grant(&MemoryPurpose::Learn).unwrap();
+        assert_eq!(g.scopes, LEARN_SCOPES);
+        assert_eq!(g.max_sensitivity, MemorySensitivity::Private);
+        for scope in DIALOGUE_SCOPES.iter().chain(MAINTENANCE_SCOPES) {
             assert!(!g.scopes.iter().any(|s| s == scope));
         }
     }

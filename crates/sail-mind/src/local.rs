@@ -1,4 +1,7 @@
-use crate::{backend::InferenceBackend, config::LocalModelConfig, validation::validate_request};
+use crate::{
+    backend::InferenceBackend, config::LocalModelConfig, persist::PersistedServer,
+    validation::validate_request,
+};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use sail_common::resources::{self, GIB, MIB, ResourceClaim, ResourceLease, ResourceScheduler};
@@ -7,7 +10,10 @@ use sail_protocol::*;
 use serde_json::{Value, json};
 use std::{
     process::Stdio,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::{
@@ -35,6 +41,22 @@ impl std::ops::DerefMut for OwnedModel {
         &mut self.child
     }
 }
+/// How long to wait for a killed llama-server to exit. A process stuck in the GPU driver
+/// (for example after a failed GPU reset) cannot exit until the driver lets go of it, so
+/// never wait for it without a limit.
+const KILL_WAIT: Duration = Duration::from_secs(5);
+async fn kill_bounded(child: &mut Child) -> std::io::Result<()> {
+    child.start_kill()?;
+    if tokio::time::timeout(KILL_WAIT, child.wait()).await.is_err() {
+        tracing::warn!(
+            pid = child.id(),
+            "llama-server did not exit after SIGKILL; it may be stuck in the GPU driver"
+        );
+    }
+    Ok(())
+}
+/// How long shutdown waits for a model start in progress before stopping without it.
+const SHUTDOWN_STARTUP_WAIT: Duration = Duration::from_secs(5);
 pub struct LocalGemmaBackend {
     config: LocalModelConfig,
     client: reqwest::Client,
@@ -44,6 +66,8 @@ pub struct LocalGemmaBackend {
     startup: AsyncMutex<()>,
     snapshot: Arc<Mutex<ModelStatus>>,
     parallel: usize,
+    /// Whether a server persisted by a previous run has been checked against this config.
+    persisted_checked: AtomicBool,
 }
 fn unavailable(message: impl Into<String>) -> InferenceError {
     InferenceError::new(ErrorCode::BackendUnavailable, message)
@@ -102,6 +126,7 @@ impl LocalGemmaBackend {
             startup: AsyncMutex::new(()),
             snapshot: Arc::new(Mutex::new(snapshot)),
             parallel,
+            persisted_checked: AtomicBool::new(false),
         })
     }
     fn snapshot(&self) -> ModelStatus {
@@ -112,6 +137,49 @@ impl LocalGemmaBackend {
     }
     fn update(&self, update: impl FnOnce(&mut ModelStatus)) {
         update(&mut self.snapshot.lock().unwrap_or_else(|p| p.into_inner()));
+    }
+    fn persist_record_path(&self) -> std::path::PathBuf {
+        crate::persist::record_path(self.endpoint.port_or_known_default().unwrap_or(0))
+    }
+    fn forget_persisted(&self) {
+        if self.config.persist {
+            let _ = std::fs::remove_file(self.persist_record_path());
+        }
+    }
+    /// Once per process: a server kept warm by a previous run is adopted when it was launched
+    /// with this exact binary and arguments, and replaced when the settings have changed.
+    async fn retire_stale_persisted_server(&self) {
+        if !self.config.persist
+            || !self.config.managed
+            || self.persisted_checked.swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        let path = self.persist_record_path();
+        let Some(record) = PersistedServer::read(&path) else {
+            return;
+        };
+        if !record.is_alive() {
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+        let current = self.config.launch_args(self.parallel);
+        if current
+            .as_ref()
+            .is_ok_and(|args| record.same_launch(&self.config.server_binary, args))
+        {
+            tracing::info!(
+                pid = record.pid,
+                "Adopting llama-server kept warm by a previous SAIL run"
+            );
+            return;
+        }
+        tracing::info!(
+            pid = record.pid,
+            "Model launch settings changed since the warm llama-server started; restarting it"
+        );
+        record.terminate(Duration::from_secs(10)).await;
+        let _ = std::fs::remove_file(&path);
     }
     fn url(&self, path: &str) -> reqwest::Url {
         self.endpoint.join(path).expect("static local route")
@@ -184,6 +252,7 @@ impl LocalGemmaBackend {
     }
     async fn start_inner(&self) -> Result<ModelStatus> {
         let _start = self.startup.lock().await;
+        self.retire_stale_persisted_server().await;
         {
             let mut child = self.process.lock().await;
             if child
@@ -292,6 +361,7 @@ impl LocalGemmaBackend {
                     .append(true)
                     .open(".local/llama-server.log")
                     .map_err(|e| unavailable(e.to_string()))?;
+                let record_args = self.config.launch_args(self.parallel)?;
                 let mut launch_config = self.config.clone();
                 let weights = std::fs::metadata(&launch_config.model_path)
                     .map_err(|e| unavailable(e.to_string()))?
@@ -353,15 +423,41 @@ impl LocalGemmaBackend {
                     )
                     .map_err(|e| InferenceError::new(ErrorCode::ResourceLimit, e.to_string()))?;
                 tracing::info!(model=%launch_config.name,backend=?launch_config.compute,threads=launch_config.threads,args=?args,"Starting Rust-supervised local model");
-                let mut child = Command::new(&launch_config.server_binary)
+                let mut command = Command::new(&launch_config.server_binary);
+                command
                     .args(args)
                     .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::piped())
-                    .kill_on_drop(true)
-                    .spawn()
-                    .map_err(|e| unavailable(e.to_string()))?;
-                if let Some(stderr) = child.stderr.take() {
+                    .stdout(Stdio::null());
+                let mut log = Some(log);
+                if self.config.persist {
+                    // Outlive SAIL: own process group (a terminal Ctrl+C does not reach it),
+                    // no kill on drop, and stderr straight to the log so it never writes to
+                    // a closed pipe after SAIL exits.
+                    command
+                        .stderr(Stdio::from(log.take().expect("log file")))
+                        .process_group(0)
+                        .kill_on_drop(false);
+                } else {
+                    command.stderr(Stdio::piped()).kill_on_drop(true);
+                }
+                let mut child = command.spawn().map_err(|e| unavailable(e.to_string()))?;
+                if self.config.persist
+                    && let Some(pid) = child.id()
+                    && let Some(start_ticks) = crate::persist::process_start_ticks(pid)
+                {
+                    let record = PersistedServer {
+                        pid,
+                        start_ticks,
+                        binary: self.config.server_binary.clone(),
+                        args: record_args,
+                    };
+                    if let Err(error) = record.write(&self.persist_record_path()) {
+                        tracing::warn!(%error, "Could not record the warm llama-server; ./run.sh --stop still stops it");
+                    }
+                }
+                if let Some(stderr) = child.stderr.take()
+                    && let Some(log) = log
+                {
                     tokio::spawn(async move {
                         use std::io::Write;
                         let mut log = log;
@@ -419,6 +515,7 @@ impl LocalGemmaBackend {
                 .is_some_and(|p| p.try_wait().ok().flatten().is_some());
             if exited {
                 self.process.lock().await.take();
+                self.forget_persisted();
                 self.update(|s| {
                     s.owned_process = false;
                     s.process_id = None;
@@ -431,7 +528,8 @@ impl LocalGemmaBackend {
             if Instant::now() >= deadline {
                 // Only kill processes owned by this adapter, never an external service.
                 if let Some(mut child) = self.process.lock().await.take() {
-                    let _ = child.kill().await;
+                    let _ = kill_bounded(&mut child).await;
+                    self.forget_persisted();
                 }
                 self.update(|s| {
                     s.owned_process = false;
@@ -814,14 +912,33 @@ impl InferenceBackend for LocalGemmaBackend {
         }=>result}
     }
     async fn shutdown(&self) -> Result<()> {
-        let _start = self.startup.lock().await;
+        // A start in progress holds this lock for up to the startup timeout, or longer while
+        // it waits on a wedged process; do not let it block shutdown.
+        let _start = tokio::time::timeout(SHUTDOWN_STARTUP_WAIT, self.startup.lock())
+            .await
+            .inspect_err(|_| {
+                tracing::warn!("A model start is still in progress; stopping without waiting for it")
+            })
+            .ok();
         if let Some(mut child) = self.process.lock().await.take()
             && child
                 .try_wait()
                 .map_err(|e| unavailable(e.to_string()))?
                 .is_none()
         {
-            child.kill().await.map_err(|e| unavailable(e.to_string()))?;
+            if self.config.persist {
+                // Detach: the model stays loaded for the next run (spawned without
+                // kill-on-drop). Its residency lease is released with this handle.
+                tracing::info!(
+                    pid = child.id(),
+                    "Leaving llama-server running with the model loaded; stop it with ./run.sh --stop"
+                );
+                drop(child);
+            } else {
+                kill_bounded(&mut child)
+                    .await
+                    .map_err(|e| unavailable(e.to_string()))?;
+            }
         }
         self.update(|s| {
             s.state = ModelState::Stopped;

@@ -62,6 +62,10 @@ pub struct LocalModelConfig {
     pub endpoint: String,
     pub projector: Option<PathBuf>,
     pub managed: bool,
+    /// Keep a managed llama-server running after SAIL exits so the next run adopts the
+    /// already-loaded model instead of reloading it. Set by `SAIL_LLAMA_PERSIST=1`
+    /// (`run.sh` enables it by default); stop it with `./run.sh --stop`.
+    pub persist: bool,
     pub compute: ComputeBackend,
     pub device: String,
     pub gpu_layers: u32,
@@ -119,6 +123,9 @@ impl Default for LocalModelConfig {
             endpoint,
             projector: std::env::var("SAIL_MMPROJ").map(PathBuf::from).ok(),
             managed,
+            persist: std::env::var("SAIL_LLAMA_PERSIST")
+                .map(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+                .unwrap_or(false),
             compute: ComputeBackend::Cpu,
             device: "Vulkan0".into(),
             gpu_layers: 8,
@@ -302,6 +309,8 @@ impl LocalModelConfig {
             endpoint,
             projector: None,
             managed,
+            // Profile benchmarks launch short-lived servers; never leave them running.
+            persist: false,
             compute: profile.backend,
             device: profile.device.clone(),
             gpu_layers: profile.gpu_layers,
@@ -433,9 +442,11 @@ impl LocalModelConfig {
         if !self.cache_type_v.is_empty() {
             args.extend(["-ctv".into(), self.cache_type_v.clone()]);
         }
-        if self.flash_attn {
-            args.extend(["-fa".into(), "on".into()]);
-        }
+        // Omission means auto in llama.cpp, so false must explicitly disable it.
+        args.extend([
+            "-fa".into(),
+            if self.flash_attn { "on" } else { "off" }.into(),
+        ]);
         if self.cache_reuse > 0 {
             args.extend(["--cache-reuse".into(), self.cache_reuse.to_string()]);
         }

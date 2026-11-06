@@ -228,6 +228,147 @@ fn retrieval_is_relevant_compact_and_bounded() {
     assert!(ctx.contains("200 euros"), "{ctx}");
 }
 
+#[test]
+fn website_conversation_adds_learned_knowledge_once_and_reuses_when_context_wills() {
+    let dir = TempDb(std::env::temp_dir().join(format!("sail-mem-web-{}", uuid::Uuid::new_v4())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let (store, arena) = open(&dir.0.join("arena.db"));
+
+    let user_prompt = "Read me this website: https://www.lesswrong.com/w/rokos-basilisk";
+    let assistant_reply = "Here is the content of the page:\n\n---\n\n## Rokos Basilisk\n\n**Rokos Basilisk** is a thought experiment proposed in 2010 by the user Roko on the LessWrong community blog about a future superintelligent AI.";
+
+    assert!(!arena.has_learned_knowledge(
+        "voice",
+        "Roko's Basilisk",
+        Some("https://www.lesswrong.com/w/rokos-basilisk")
+    ));
+
+    // 1. First conversation turn learns the concept and adds it to memory once.
+    let (claim_id, added) = arena
+        .learn_from_conversation_turn("voice", user_prompt, assistant_reply)
+        .expect("learned knowledge should be extracted");
+    assert!(added, "first occurrence should be newly added to memory");
+    assert!(arena.has_learned_knowledge(
+        "voice",
+        "Roko's Basilisk",
+        Some("https://www.lesswrong.com/w/rokos-basilisk")
+    ));
+    assert!(arena.has_learned_knowledge("voice", "Rokos Basilisk", None));
+
+    // 2. Repeating the conversation or web tool check sees it is already in memory and does not duplicate it.
+    let (second_id, second_added) = arena
+        .learn_from_conversation_turn(
+            "voice",
+            "Read this page for me: https://www.lesswrong.com/w/rokos-basilisk",
+            "The page at https://www.lesswrong.com/w/rokos-basilisk is titled **\"Roko's Basilisk\"** and is a wiki entry on LessWrong. It explains the thought experiment originally posted on LessWrong by a user named \"Roko\" in 2010.",
+        )
+        .expect("existing claim should be found");
+    assert_eq!(second_id, claim_id);
+    assert!(
+        !second_added,
+        "already-learned concept must not be added twice"
+    );
+
+    let entities = store.knowledge().entities(&Access::owner(), 50).unwrap();
+    assert_eq!(
+        entities.len(),
+        1,
+        "only one entity should exist: {entities:?}"
+    );
+    let claims = store
+        .knowledge()
+        .claims_about(entities[0].0.id, &Access::owner(), false)
+        .unwrap();
+    assert_eq!(
+        claims.len(),
+        1,
+        "only one active claim should exist: {claims:?}"
+    );
+
+    // 3. Reused later when context wills it (both with and without apostrophe, or by URL).
+    let ctx_apostrophe = owner_knowledge_context(&arena, "What do you know about Roko's Basilisk?")
+        .expect("relevant memory context should be supplied for Roko's Basilisk");
+    assert!(ctx_apostrophe.contains("Basilisk"), "{ctx_apostrophe}");
+    assert!(ctx_apostrophe.contains("LessWrong"), "{ctx_apostrophe}");
+
+    let ctx_plain = owner_knowledge_context(&arena, "Explain Rokos Basilisk to me")
+        .expect("relevant memory context should be supplied for Rokos Basilisk");
+    assert!(ctx_plain.contains("Basilisk"), "{ctx_plain}");
+
+    // 4. Not included when context is unrelated.
+    assert!(owner_knowledge_context(&arena, "What is the weather forecast tomorrow?").is_none());
+
+    // 5. Existing memories expand in the future when substantive new details are learned.
+    let (expanded_id, expanded_added) = arena
+        .learn_from_conversation_turn(
+            "voice",
+            "How does Roko's Basilisk relate to decision theory?",
+            "## Roko's Basilisk\n\n**Roko's Basilisk** relies on timeless decision theory and Newcomb's paradox, where a precommitted agent cooperates across acausal trade simulations, and was banned on LessWrong by Eliezer Yudkowsky as an information hazard.",
+        )
+        .expect("expanded claim should be created");
+    assert!(
+        expanded_added,
+        "substantive novel facts should expand the existing memory"
+    );
+    assert_ne!(expanded_id, claim_id);
+
+    let entities_after = store.knowledge().entities(&Access::owner(), 50).unwrap();
+    assert_eq!(
+        entities_after.len(),
+        1,
+        "expansion must reuse the existing entity: {entities_after:?}"
+    );
+    let active_claims = store
+        .knowledge()
+        .claims_about(entities_after[0].0.id, &Access::owner(), false)
+        .unwrap();
+    assert_eq!(
+        active_claims.len(),
+        1,
+        "expanded claim should supersede the previous summary so one active summary remains"
+    );
+    assert_eq!(active_claims[0].id, expanded_id);
+    let ClaimObject::Value(ref expanded_value) = active_claims[0].object else {
+        panic!("expected value claim");
+    };
+    assert!(expanded_value.contains("2010"), "{expanded_value}");
+    assert!(expanded_value.contains("Newcomb"), "{expanded_value}");
+    assert!(
+        expanded_value.contains("Eliezer Yudkowsky"),
+        "{expanded_value}"
+    );
+    let evidence = store
+        .knowledge()
+        .evidence(expanded_id, &Access::owner())
+        .unwrap();
+    assert_eq!(
+        evidence.len(),
+        2,
+        "expanded claim should preserve prior evidence and attach new evidence"
+    );
+
+    let ctx_expanded = owner_knowledge_context(
+        &arena,
+        "How does Roko's Basilisk relate to Newcomb's paradox and Eliezer Yudkowsky?",
+    )
+    .expect("expanded memory should be retrievable via newly added terms");
+    assert!(ctx_expanded.contains("2010"), "{ctx_expanded}");
+    assert!(
+        ctx_expanded.contains("timeless decision theory"),
+        "{ctx_expanded}"
+    );
+
+    if std::env::var_os("SAIL_ARENA_DB").is_none()
+        && std::env::var_os("SAIL_DATA").is_none()
+        && std::path::Path::new("/srv/sail-data").is_dir()
+    {
+        assert_eq!(
+            sail_arena::default_store_path(),
+            std::path::PathBuf::from("/srv/sail-data/arena/arena.db")
+        );
+    }
+}
+
 trait TestLearning {
     fn ensure_test_learning(&self, session: &str);
 }
