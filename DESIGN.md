@@ -172,7 +172,7 @@ Required ADR compares runtime size, Dioxus interop, license, Android WebView sup
 - Respect OS high contrast, accessible hit areas and screen-reader semantics; avoid high-frequency flashes (>3/sec) or oscillation/vertigo effects.
 - Blur/fog never over readable book text (Reader #333), lesson text (Arena Learn #215), private recording controls or evidence citations.
 - Feature flag: `ambient_visuals = off | subtle | expressive` with persistent owner choice and reliable static fallback.
-- No third-party graphics/font CDN runtime requests in private deployment #334; all assets packaged/served locally and subject to authorized access.
+- No third-party graphics/font CDN runtime requests in private deployment #334; all assets packaged/served locally and subject to authorized access. One documented exception: the music player (`/music`) loads Spotify's Web Playback SDK from `sdk.scdn.co` once Spotify is connected, because Spotify only distributes it that way (docs/SAIL_ENTERTAINMENT.md §7a-2).
 
 ## 7. Implementation contract / verification
 

@@ -1,5 +1,6 @@
 pub mod aistudio;
 pub mod browser;
+pub mod music;
 pub mod reader;
 pub mod spotify;
 pub mod studio_audio;

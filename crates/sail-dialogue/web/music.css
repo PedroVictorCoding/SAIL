@@ -1,0 +1,157 @@
+/* SAIL Music: one player for uploads and Spotify. Dark glass over the ambient backdrop,
+   which the current track's cover lights (ambient-backdrop.js). */
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--sail-base, #0a0c10); color: var(--sail-text, #f2f5fa); font: 15px/1.45 system-ui, sans-serif; overflow: hidden; }
+html.sail-backdrop-on body { background: transparent; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--sail-focus-ring, #ffd69f); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.mp-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.mp-muted { color: var(--sail-text-muted, #aeb8c8); }
+.mp-eyebrow { margin: 0; font-size: 10px; letter-spacing: .14em; color: var(--sail-text-muted, #aeb8c8); }
+
+.mp {
+  --edge: rgb(255 255 255 / .1);
+  --glass: rgb(9 10 14 / .55);
+  --spotify: #1ed760;
+  --upload: #ffb27a;
+  display: grid; height: 100dvh;
+  grid-template-columns: 220px minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas: "side main queue" "bar bar bar";
+  background: var(--glass);
+  backdrop-filter: blur(30px) saturate(150%); -webkit-backdrop-filter: blur(30px) saturate(150%);
+}
+.mp.dragging { outline: 2px dashed var(--upload); outline-offset: -8px; }
+
+/* Sidebar */
+.mp-side { grid-area: side; display: flex; flex-direction: column; gap: 10px; min-height: 0; padding: 22px 16px; border-right: 1px solid var(--edge); background: rgb(5 6 9 / .3); overflow-y: auto; scrollbar-width: none; }
+.mp-home { color: var(--sail-text-muted, #aeb8c8); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-decoration: none; }
+html[data-embedded=true] .mp-home { display: none; }
+.mp-side h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -.04em; }
+.mp-nav, .mp-playlists { display: grid; gap: 4px; }
+.mp-nav button, .mp-playlists button, .mp-spotify-state button {
+  text-align: left; padding: 9px 10px; border: 1px solid transparent; border-radius: 12px; background: transparent;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mp-nav button:hover, .mp-playlists button:hover { background: rgb(255 255 255 / .07); }
+.mp-nav button[aria-pressed=true] { background: rgb(255 255 255 / .11); border-color: var(--edge); font-weight: 700; }
+.mp-section { margin: 14px 0 0; font-size: 12px; color: var(--sail-text-muted, #aeb8c8); font-weight: 600; }
+.mp-spotify-state p { margin: 0; font-size: 12px; }
+.mp-spotify-state button { margin-top: 6px; border-color: color-mix(in srgb, var(--spotify) 50%, transparent); color: var(--spotify); }
+.mp-playlists { font-size: 13px; }
+.mp-upload { margin-top: auto; padding-top: 14px; }
+.mp-upload-button { display: flex; justify-content: center; padding: 10px; border: 1px solid var(--edge); border-radius: 14px; background: rgb(255 255 255 / .08); cursor: pointer; font-weight: 600; }
+.mp-upload-button:hover { background: rgb(255 255 255 / .14); }
+.mp-upload-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.mp-upload-button:focus-within { outline: 2px solid var(--sail-focus-ring, #ffd69f); }
+.mp-upload p { margin: 8px 0 0; font-size: 11px; }
+
+/* Main list */
+.mp-main { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 22px 26px 0; }
+.mp-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.mp-head h2 { margin: 4px 0 0; font-size: clamp(26px, 3vw, 40px); letter-spacing: -.045em; line-height: 1.1; }
+.mp-search input { width: min(340px, 60vw); padding: 10px 14px; border: 1px solid var(--edge); border-radius: 14px; background: rgb(0 0 0 / .3); }
+.mp-status { min-height: 20px; margin: 8px 0 0; font-size: 13px; color: var(--sail-text-muted, #aeb8c8); }
+.mp-status.error { color: #ffb4a8; }
+.mp-actions { display: flex; gap: 8px; margin: 6px 0 12px; }
+.mp-actions button { padding: 8px 16px; border: 1px solid var(--edge); border-radius: 999px; background: rgb(255 255 255 / .08); font-weight: 600; }
+.mp-actions .mp-primary { background: #f2f5fa; color: #0b0d12; border-color: transparent; }
+.mp-lists { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgb(255 255 255 / .2) transparent; padding-bottom: 16px; }
+.mp-group h3 { margin: 18px 0 8px; font-size: 13px; letter-spacing: .04em; }
+.mp-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.mp-row { display: flex; align-items: center; gap: 4px; border-radius: 14px; }
+.mp-row:hover, .mp-row:focus-within { background: rgb(255 255 255 / .06); }
+.mp-row.is-current { background: rgb(255 255 255 / .1); }
+.mp-row.is-current { box-shadow: inset 3px 0 0 var(--sail-light-a, #9cc2ff); }
+.mp-row.is-current strong { color: #fff; }
+.mp-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 7px 10px; text-align: left; border: 0; background: none; border-radius: 14px; }
+.mp-row-text { display: grid; min-width: 0; flex: 1; }
+.mp-row-text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-row-text .mp-muted { font-size: 12px; }
+.mp-time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--sail-text-muted, #aeb8c8); }
+.mp-row-tool { flex: none; width: 34px; height: 34px; border: 0; border-radius: 10px; background: none; color: var(--sail-text-muted, #aeb8c8); opacity: 0; }
+.mp-row:hover .mp-row-tool, .mp-row:focus-within .mp-row-tool, .mp-row-tool:focus-visible { opacity: 1; }
+.mp-row-tool:hover { background: rgb(255 255 255 / .1); color: var(--sail-text, #f2f5fa); }
+.mp-empty { color: var(--sail-text-muted, #aeb8c8); font-size: 13px; margin: 4px 0 8px; }
+.mp-thumb, .mp-art-inner {
+  position: relative; flex: none; display: grid; place-items: center; overflow: hidden;
+  width: 40px; height: 40px; border-radius: 8px; font-weight: 800; color: rgb(255 255 255 / .8);
+  background: linear-gradient(145deg, #3a2a52, #15121c);
+}
+.mp-thumb[data-source=spotify], .mp-art-inner[data-source=spotify] { background: linear-gradient(145deg, #1d4d32, #0d1711); }
+.mp-thumb img, .mp-art-inner img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.mp-badge { flex: none; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; border: 1px solid currentColor; }
+.mp-badge[data-source=spotify] { color: var(--spotify); }
+.mp-badge[data-source=local] { color: var(--upload); }
+
+/* Queue */
+.mp-queue { grid-area: queue; width: 300px; display: flex; flex-direction: column; min-height: 0; padding: 22px 14px; border-left: 1px solid var(--edge); background: rgb(5 6 9 / .32); }
+.mp-queue header { display: flex; justify-content: space-between; align-items: center; }
+.mp-queue h2 { margin: 0; font-size: 18px; }
+.mp-queue header button { border: 0; background: none; width: 34px; height: 34px; border-radius: 10px; }
+.mp-queue ol { list-style: none; margin: 12px 0 0; padding: 0; overflow-y: auto; scrollbar-width: none; display: grid; gap: 2px; }
+.mp-queue li button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 0; border-radius: 12px; background: none; text-align: left; font-size: 13px; }
+.mp-queue li button:hover { background: rgb(255 255 255 / .07); }
+.mp-queue li.is-current button { background: rgb(255 255 255 / .11); font-weight: 700; }
+.mp-queue .mp-thumb { width: 32px; height: 32px; }
+
+/* Player bar */
+.mp-bar {
+  grid-area: bar; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 1.4fr) minmax(0, 1fr); align-items: center; gap: 18px;
+  margin: 0 12px 12px; padding: 12px 16px; border: 1px solid rgb(255 255 255 / .13); border-radius: 22px;
+  background: rgb(6 7 10 / .62); box-shadow: 0 18px 50px rgb(0 0 0 / .45), inset 0 1px rgb(255 255 255 / .08);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+}
+.mp-now { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mp-art { flex: none; }
+.mp-art-inner { width: 56px; height: 56px; border-radius: 12px; font-size: 20px; box-shadow: 0 8px 22px rgb(0 0 0 / .4); }
+.mp-now-text { display: grid; min-width: 0; }
+.mp-now-text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-now-text .mp-muted { font-size: 12px; }
+.mp-transport { display: grid; gap: 4px; justify-items: center; }
+.mp-buttons { display: flex; align-items: center; gap: 10px; }
+.mp-buttons button { width: 40px; height: 40px; border: 0; border-radius: 50%; background: none; font-size: 16px; }
+.mp-buttons button:hover { background: rgb(255 255 255 / .1); }
+.mp-buttons .mp-play { width: 46px; height: 46px; background: #f2f5fa; color: #0b0d12; font-size: 18px; }
+.mp-buttons .mp-play:hover { background: #fff; }
+.mp-seek { display: flex; align-items: center; gap: 10px; width: 100%; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--sail-text-muted, #aeb8c8); }
+.mp-seek input { flex: 1; accent-color: var(--sail-light-a, #9cc2ff); }
+.mp-extra { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.mp-extra button { padding: 8px 12px; border: 1px solid var(--edge); border-radius: 12px; background: rgb(255 255 255 / .06); font-size: 13px; }
+.mp-extra button[aria-expanded=true] { background: rgb(255 255 255 / .14); }
+.mp-volume input { width: 110px; accent-color: #f2f5fa; }
+
+@media (max-width: 1000px) {
+  .mp { grid-template-columns: 180px minmax(0, 1fr) auto; }
+  .mp-side { padding: 18px 12px; }
+  .mp-main { padding: 18px 18px 0; }
+  .mp-bar { grid-template-columns: minmax(0, 1fr) minmax(240px, 1.6fr) auto; gap: 12px; }
+  .mp-volume input { width: 80px; }
+  .mp-queue { position: fixed; z-index: 5; top: 0; right: 0; bottom: 104px; width: min(320px, 90vw); background: rgb(6 7 10 / .94); }
+}
+@media (max-width: 700px) {
+  .mp { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; grid-template-areas: "side" "main" "bar"; }
+  .mp-side { flex-direction: row; flex-wrap: wrap; align-items: center; padding: 12px 14px; border-right: 0; border-bottom: 1px solid var(--edge); max-height: 40dvh; }
+  .mp-side h1, .mp-side .mp-eyebrow, .mp-home, .mp-upload p { display: none; }
+  .mp-nav { display: flex; gap: 4px; }
+  .mp-section, .mp-playlists { flex-basis: 100%; }
+  .mp-playlists { display: flex; overflow-x: auto; }
+  .mp-playlists button { flex: none; max-width: 180px; }
+  .mp-upload { margin: 0; padding: 0; }
+  .mp-main { padding: 14px 14px 0; }
+  .mp-queue { position: fixed; z-index: 5; inset: 0 0 110px 0; width: auto; background: rgb(6 7 10 / .94); }
+  .mp-bar { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "now extra" "transport transport"; gap: 8px 12px; margin: 0 8px 8px; padding: 10px 12px; }
+  .mp-now { grid-area: now; } .mp-transport { grid-area: transport; } .mp-extra { grid-area: extra; }
+  .mp-volume { display: none; }
+  .mp-row-tool { opacity: 1; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .mp, .mp-bar { background: #0b0d12; backdrop-filter: none; }
+}
+@media (forced-colors: active) {
+  .mp-badge, .mp-bar, .mp-row { border: 1px solid CanvasText; }
+}

@@ -65,6 +65,54 @@ SAIL plays the owner's own Spotify music as soon as it is asked for, and says wh
 - **Setup:** Set up Spotify → create an app at developer.spotify.com → add the Redirect URI shown (`https://<SAIL address>/api/spotify/callback`) → paste the Client ID → Save and connect. `SAIL_SPOTIFY_CLIENT_ID` and `SAIL_SPOTIFY_REDIRECT_URI` override the saved values.
 - **Limits:** playback control needs Spotify Premium and an available Spotify Connect device (phone, desktop app or speaker). SAIL uses the active device, otherwise one whose name contains "SAIL", otherwise the first available. The SAIL host has no sound card, so it cannot be a player itself yet.
 
+## 7a-2. Implemented: one music player for uploads and Spotify (2026-11-06)
+
+`/music` (Entertainment → **Music player**) plays the owner's own uploaded music and Spotify from one
+list, one queue and one player bar, all in the browser.
+
+- **Uploads** (`crates/sail-bridge/src/music.rs`, `crates/sail-dialogue/src/music_http.rs`): DRM-free MP3,
+  M4A/AAC (ALAC accepted; Chromium may not play it), FLAC, Ogg and WAV up to 300 MB, from purchases such as
+  Bandcamp, iTunes Plus, Qobuz or 7digital. The container is recognised from its bytes. FairPlay `.m4p`
+  (`M4P` brand) and MP4s with `drms`/`drmi`/`enca` sample entries are refused. Tags, track/disc numbers, year
+  and duration come from `lofty` (MIT/Apache); embedded artwork is decoded with 4096px/64MiB limits and
+  re-encoded as a JPEG of at most 600px. Storage is `<data root>/music/library.json` and
+  `tracks/<id>/{audio.<ext>,cover.jpg}`, atomic and mode 0600; the id is the file's SHA-256, so a
+  re-import finds the existing track. Removing a track deletes SAIL's copy only.
+- **API** under `/api/music` (owner token, `no-store`): `GET /library`, `POST /import` (raw bytes,
+  percent-encoded `X-Filename`), `DELETE /tracks/:id`, `GET /tracks/:id/cover`, `POST /tracks/:id/stream`.
+  An `<audio>` element cannot send the owner token, so `POST …/stream` returns a ticket URL
+  (`GET /stream/:ticket`): random, bound to one track, valid 12 hours, at most 256 live, revoked when the
+  track is removed. Streams support single HTTP Ranges, so seeking works.
+- **Spotify in the browser:** the player loads Spotify's Web Playback SDK and registers this page as the
+  Spotify Connect device **"SAIL Player"**. SAIL asks Spotify to play exactly one track URI on that device
+  (`POST /api/spotify/player/play`), so SAIL's queue, not Spotify's, decides what comes next; a finished
+  track is detected from the SDK state and the queue advances. Other routes: `POST /player/token` (an access
+  token for the SDK, owner only, never cached), `GET /player/search?q=`, `GET /player/tracks?uri=` (album or
+  playlist, first 100), `GET /player/playlists`. The connection now asks for `streaming user-read-email
+  user-read-private`; connections made earlier must be reconnected once, and the player offers
+  **Reconnect Spotify**. Requires Premium and a browser with Widevine (EME); otherwise the player says so.
+  Voice requests ("play my X playlist") still use Spotify Connect, and will pick "SAIL Player" when no other
+  device is active.
+- **One engine at a time:** starting an item pauses the other engine. Pause, seek and volume go to whichever
+  is current; volume applies to both. Media Session metadata and actions are set for OS media keys.
+- **Cross-origin isolation:** SAIL's pages are `COEP: require-corp` (on-device speech needs
+  SharedArrayBuffer), which would block Spotify's script and iframe. Only the `/music` document is served
+  without isolation, and SAIL embeds it as a `credentialless` iframe (set before `src`), so the app around
+  it stays isolated. Browsers without credentialless iframes get an **Open the music player** link instead.
+  This is the one documented exception to "no third-party scripts at runtime": `sdk.scdn.co`, loaded only
+  by `/music` and only once Spotify is connected with the streaming scope. Spotify album art is shown from
+  Spotify's image host, as in the Now Playing card.
+- **Interface:** sources (All music, Uploads, Spotify), the owner's Spotify playlists, upload (button or drop),
+  search across uploads and Spotify, per-source badges, Play/Shuffle, add to queue, remove upload, an Up next
+  panel and a player bar. The ambient backdrop is lit by the current track's cover.
+- **Verified:** Rust tests for import (WAV, hand-built MP3 with ID3 + cover, FLAC), DRM refusal, de-duplication,
+  ranges, tickets and the Spotify player routes against a fake Web API; a browser test with fixture APIs and a
+  fake SDK for the mixed queue, uploads, Spotify states, phone layout and the credentialless embed in an
+  isolated page (`scripts/ui/music_player_browser_test.py`).
+- **Not verified here:** real Spotify playback (needs Widevine and Premium, which the test browser lacks),
+  real Ogg/M4A files, and Android WebView. The sidebar Now Playing card shows Spotify (including SAIL Player)
+  but not uploads yet.
+
 ## 7b. Implemented: SAIL Reader, first slice (2026-11-06, issue #333)
 
 A local book library at `/reader` with a paginated reader and on-device read-aloud whose pages turn

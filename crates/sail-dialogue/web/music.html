@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en" data-sail-backdrop="library">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <title>Music · SAIL</title>
+    <link rel="stylesheet" href="/tokens.css">
+    <link rel="stylesheet" href="/ambient-backdrop.css">
+    <link rel="stylesheet" href="/music.css">
+  </head>
+  <body>
+    <main class="mp" id="player">
+      <aside class="mp-side" aria-label="Music sources">
+        <a class="mp-home" href="/" target="_top">← SAIL</a>
+        <p class="mp-eyebrow">YOUR MUSIC</p>
+        <h1>Music</h1>
+        <nav class="mp-nav" aria-label="Views">
+          <button type="button" data-view="all" aria-pressed="true">All music</button>
+          <button type="button" data-view="local" aria-pressed="false">Uploads</button>
+          <button type="button" data-view="spotify" aria-pressed="false">Spotify</button>
+        </nav>
+        <h2 class="mp-section">Spotify playlists</h2>
+        <div id="spotifyState" class="mp-spotify-state" role="status" aria-live="polite"></div>
+        <nav id="playlists" class="mp-playlists" aria-label="Spotify playlists"></nav>
+        <div class="mp-upload">
+          <label class="mp-upload-button">
+            + Upload music
+            <input id="upload" type="file" multiple accept=".mp3,.m4a,.aac,.mp4,.flac,.ogg,.oga,.opus,.wav,audio/*" aria-label="Upload music files">
+          </label>
+          <p class="mp-muted">DRM-free MP3, M4A/AAC, FLAC, Ogg or WAV you own. Stored on your SAIL host.</p>
+        </div>
+      </aside>
+
+      <section class="mp-main" aria-labelledby="viewTitle">
+        <header class="mp-head">
+          <div>
+            <p class="mp-eyebrow" id="viewEyebrow">LIBRARY</p>
+            <h2 id="viewTitle">All music</h2>
+          </div>
+          <label class="mp-search">
+            <span class="mp-sr">Search uploads and Spotify</span>
+            <input id="search" type="search" placeholder="Search uploads and Spotify" autocomplete="off">
+          </label>
+        </header>
+        <p id="status" class="mp-status" role="status" aria-live="polite"></p>
+        <div class="mp-actions">
+          <button type="button" id="playAll" class="mp-primary">Play</button>
+          <button type="button" id="shuffleAll">Shuffle</button>
+        </div>
+        <div id="lists" class="mp-lists"></div>
+      </section>
+
+      <aside class="mp-queue" id="queuePanel" aria-label="Up next" hidden>
+        <header><h2>Up next</h2><button type="button" id="queueClose" aria-label="Close queue">✕</button></header>
+        <ol id="queue"></ol>
+      </aside>
+
+      <footer class="mp-bar" aria-label="Player">
+        <div class="mp-now">
+          <div class="mp-art" id="nowArt" aria-hidden="true"></div>
+          <div class="mp-now-text">
+            <strong id="nowTitle">Nothing playing</strong>
+            <span id="nowArtist" class="mp-muted">Choose a song from uploads or Spotify</span>
+          </div>
+          <span id="nowSource" class="mp-badge" hidden></span>
+        </div>
+        <div class="mp-transport">
+          <div class="mp-buttons">
+            <button type="button" id="prev" aria-label="Previous">⏮</button>
+            <button type="button" id="toggle" class="mp-play" aria-label="Play">▶</button>
+            <button type="button" id="next" aria-label="Next">⏭</button>
+          </div>
+          <div class="mp-seek">
+            <span id="elapsed">0:00</span>
+            <input id="seek" type="range" min="0" max="0" step="1" value="0" aria-label="Seek" disabled>
+            <span id="total">0:00</span>
+          </div>
+        </div>
+        <div class="mp-extra">
+          <button type="button" id="queueButton" aria-controls="queuePanel" aria-expanded="false">Queue</button>
+          <label class="mp-volume"><span class="mp-sr">Volume</span><input id="volume" type="range" min="0" max="100" value="80" aria-label="Volume"></label>
+        </div>
+      </footer>
+    </main>
+    <script src="/vendor/paper-shaders.js"></script>
+    <script src="/ambient-backdrop.js"></script>
+    <script src="/music.js"></script>
+  </body>
+</html>

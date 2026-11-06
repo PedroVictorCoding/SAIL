@@ -13,6 +13,7 @@ pub mod live_context;
 pub mod memory_http;
 pub mod model_eval;
 pub mod music_fastpath;
+pub mod music_http;
 pub mod orb;
 pub mod pipeline;
 pub mod plans;

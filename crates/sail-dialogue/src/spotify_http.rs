@@ -33,6 +33,11 @@ pub fn router_with(spotify: Arc<Spotify>, authority: Option<ApprovalAuthority>) 
         .route("/callback", get(callback))
         .route("/control", post(control))
         .route("/disconnect", post(disconnect))
+        .route("/player/token", post(player_token))
+        .route("/player/play", post(player_play))
+        .route("/player/search", get(player_search))
+        .route("/player/tracks", get(player_tracks))
+        .route("/player/playlists", get(player_playlists))
         .layer(axum::extract::DefaultBodyLimit::max(4_096))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
@@ -68,9 +73,8 @@ fn authorize(state: &HttpState, headers: &HeaderMap) -> Result<(), (StatusCode, 
 fn failure(error: SpotifyError) -> (StatusCode, Json<Value>) {
     let status = match error.code {
         "invalid" => StatusCode::BAD_REQUEST,
-        "not_configured" | "not_connected" | "no_device" | "premium_required" | "expired" => {
-            StatusCode::CONFLICT
-        }
+        "not_configured" | "not_connected" | "no_device" | "premium_required" | "expired"
+        | "reconnect" => StatusCode::CONFLICT,
         "rate_limited" => StatusCode::TOO_MANY_REQUESTS,
         "auth" | "forbidden" => StatusCode::FORBIDDEN,
         _ => StatusCode::BAD_GATEWAY,
@@ -105,6 +109,7 @@ async fn status(State(state): State<Arc<HttpState>>, uri: Uri, headers: HeaderMa
         "connected": connected,
         "redirect_uri": if configured { spotify.redirect_uri() } else { callback_uri(&uri, &headers).unwrap_or_default() },
         "now_playing": Value::Null,
+        "can_stream": connected && spotify.can_stream().await,
     });
     if connected {
         match spotify.now_playing().await {
@@ -396,6 +401,302 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+// ---------------------------------------------------------------- the SAIL music player
+// The in-browser player (Spotify Web Playback SDK) needs an access token in the browser; it
+// is handed only to the owner, never cached by the browser (`no-store`), and refused when
+// the sign-in lacks the `streaming` scope. Playback targets only the device id the browser
+// player registered, with explicit track URIs, so SAIL's queue decides what plays next.
+
+async fn player_token(State(state): State<Arc<HttpState>>, headers: HeaderMap) -> Reply {
+    authorize(&state, &headers)?;
+    let (token, expires_at) = state.spotify.player_token().await.map_err(failure)?;
+    Ok(Json(
+        json!({"access_token": token, "expires_at": expires_at}),
+    ))
+}
+
+#[derive(Deserialize)]
+struct PlayOn {
+    device_id: String,
+    uris: Vec<String>,
+    #[serde(default)]
+    position_ms: u64,
+}
+
+async fn player_play(
+    State(state): State<Arc<HttpState>>,
+    headers: HeaderMap,
+    Json(body): Json<PlayOn>,
+) -> Reply {
+    authorize(&state, &headers)?;
+    state
+        .spotify
+        .play_on(&body.device_id, &body.uris, body.position_ms)
+        .await
+        .map_err(failure)?;
+    Ok(Json(json!({"playing": body.uris})))
+}
+
+#[derive(Deserialize)]
+struct Search {
+    q: String,
+}
+
+async fn player_search(
+    State(state): State<Arc<HttpState>>,
+    headers: HeaderMap,
+    Query(query): Query<Search>,
+) -> Reply {
+    authorize(&state, &headers)?;
+    let q = query.q.trim();
+    if q.is_empty() || q.chars().count() > 200 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"Search for 1 to 200 characters."})),
+        ));
+    }
+    let tracks = state.spotify.search_tracks(q, 20).await.map_err(failure)?;
+    Ok(Json(json!({"tracks": tracks})))
+}
+
+#[derive(Deserialize)]
+struct Of {
+    uri: String,
+}
+
+async fn player_tracks(
+    State(state): State<Arc<HttpState>>,
+    headers: HeaderMap,
+    Query(query): Query<Of>,
+) -> Reply {
+    authorize(&state, &headers)?;
+    let tracks = state.spotify.tracks_of(&query.uri).await.map_err(failure)?;
+    Ok(Json(json!({"tracks": tracks})))
+}
+
+async fn player_playlists(State(state): State<Arc<HttpState>>, headers: HeaderMap) -> Reply {
+    authorize(&state, &headers)?;
+    let lists = state.spotify.my_playlists().await.map_err(failure)?;
+    Ok(Json(json!({"playlists": lists})))
+}
+
+#[cfg(test)]
+mod player_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use std::sync::Mutex as StdMutex;
+    use tower::ServiceExt;
+
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// A fake Spotify Web API that records play requests.
+    async fn fake_api(seen: Arc<StdMutex<Vec<(String, Value)>>>) -> String {
+        let record = seen.clone();
+        let api = Router::new()
+            .route(
+                "/me/player/play",
+                axum::routing::put(move |uri: Uri, body: Json<Value>| {
+                    let record = record.clone();
+                    async move {
+                        record.lock().unwrap().push((uri.to_string(), body.0));
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            )
+            .route(
+                "/search",
+                get(|| async {
+                    Json(json!({"tracks": {"items": [
+                        {"uri": "spotify:track:4uLU6hMCjMI75M1A2tKUQC", "name": "Song", "duration_ms": 200000,
+                         "artists": [{"name": "A"}, {"name": "B"}], "album": {"name": "LP", "images": [{"url": "https://i.scdn.co/image/big"}, {"url": "https://i.scdn.co/image/small"}]}},
+                        {"uri": "spotify:episode:xyz", "name": "Podcast"},
+                        {"uri": "spotify:local:a:b:c:1", "name": "Local", "is_local": true}
+                    ]}}))
+                }),
+            )
+            .route(
+                "/albums/:id",
+                get(|| async {
+                    Json(json!({"name": "LP", "images": [{"url": "https://i.scdn.co/image/lp"}], "tracks": {"items": [
+                        {"uri": "spotify:track:1111111111111111111111", "name": "One", "duration_ms": 1000, "artists": [{"name": "A"}]},
+                        {"uri": "spotify:track:2222222222222222222222", "name": "Two", "duration_ms": 2000, "artists": [{"name": "A"}]}
+                    ]}}))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, api).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    fn connected(dir: &std::path::Path, scope: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("config.json"), r#"{"client_id":"672012510a8c4af3979634a778f2f939","redirect_uri":"https://sail.test/api/spotify/callback"}"#).unwrap();
+        let expires = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3000;
+        std::fs::write(
+            dir.join("token.json"),
+            json!({"access_token": "access-1", "refresh_token": "refresh-1", "expires_at": expires, "scope": scope}).to_string(),
+        )
+        .unwrap();
+    }
+
+    async fn send(app: &Router, request: Request<Body>) -> (StatusCode, Value) {
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    fn owner(method: &str, uri: &str, body: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn browser_player_token_needs_owner_and_streaming_scope() {
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let api = fake_api(seen).await;
+        let dir =
+            std::env::temp_dir().join(format!("sail-spotify-player-{}", uuid::Uuid::new_v4()));
+        connected(&dir, "user-read-playback-state user-modify-playback-state");
+        let app = router_with(
+            Arc::new(Spotify::with_endpoints(dir.clone(), &api, &api)),
+            ApprovalAuthority::new(TOKEN).ok(),
+        );
+        let (status, _) = send(
+            &app,
+            Request::post("/player/token").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, body) = send(&app, owner("POST", "/player/token", "")).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "reconnect");
+        let (_, body) = send(
+            &app,
+            Request::get("/status")
+                .header("host", "sail.test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(body["can_stream"], false);
+
+        connected(
+            &dir,
+            "user-read-playback-state streaming user-read-email user-read-private",
+        );
+        let app = router_with(
+            Arc::new(Spotify::with_endpoints(dir.clone(), &api, &api)),
+            ApprovalAuthority::new(TOKEN).ok(),
+        );
+        let (status, body) = send(&app, owner("POST", "/player/token", "")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["access_token"], "access-1");
+        assert!(body["expires_at"].as_u64().unwrap() > 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn plays_tracks_on_the_browser_device_and_maps_search_and_albums() {
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let api = fake_api(seen.clone()).await;
+        let dir =
+            std::env::temp_dir().join(format!("sail-spotify-player-{}", uuid::Uuid::new_v4()));
+        connected(&dir, "streaming");
+        let app = router_with(
+            Arc::new(Spotify::with_endpoints(dir.clone(), &api, &api)),
+            ApprovalAuthority::new(TOKEN).ok(),
+        );
+
+        let (status, body) = send(
+            &app,
+            owner("POST", "/player/play", r#"{"device_id":"abc123def456","uris":["spotify:track:4uLU6hMCjMI75M1A2tKUQC"],"position_ms":5000}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let calls = seen.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0]
+                .0
+                .ends_with("/me/player/play?device_id=abc123def456"),
+            "{}",
+            calls[0].0
+        );
+        assert_eq!(
+            calls[0].1,
+            json!({"uris": ["spotify:track:4uLU6hMCjMI75M1A2tKUQC"], "position_ms": 5000})
+        );
+        // Only track URIs, only a plausible device id.
+        for bad in [
+            r#"{"device_id":"abc123def456","uris":["spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"]}"#,
+            r#"{"device_id":"../../me","uris":["spotify:track:4uLU6hMCjMI75M1A2tKUQC"]}"#,
+            r#"{"device_id":"abc123def456","uris":[]}"#,
+        ] {
+            let (status, _) = send(&app, owner("POST", "/player/play", bad)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        assert_eq!(seen.lock().unwrap().len(), 1);
+
+        let (status, body) = send(&app, owner("GET", "/player/search?q=song", "")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let tracks = body["tracks"].as_array().unwrap();
+        assert_eq!(
+            tracks.len(),
+            1,
+            "episodes and local files are skipped: {body}"
+        );
+        assert_eq!(
+            tracks[0],
+            json!({"source": "spotify", "id": "spotify:track:4uLU6hMCjMI75M1A2tKUQC", "title": "Song",
+            "artist": "A, B", "album": "LP", "duration_ms": 200000, "art": "https://i.scdn.co/image/big"})
+        );
+
+        let (status, body) = send(
+            &app,
+            owner(
+                "GET",
+                "/player/tracks?uri=spotify:album:4aawyAB9vmqN3uQ7FjRGTy",
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let tracks = body["tracks"].as_array().unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[1]["title"], "Two");
+        assert_eq!(tracks[1]["album"], "LP");
+        assert_eq!(tracks[1]["art"], "https://i.scdn.co/image/lp");
+        let (status, _) = send(
+            &app,
+            owner(
+                "GET",
+                "/player/tracks?uri=spotify:track:4uLU6hMCjMI75M1A2tKUQC",
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
