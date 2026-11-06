@@ -360,7 +360,7 @@
       svg('radialGradient', {id: 'tmHalo'}, svg('stop', {offset: 0, 'stop-color': 'var(--sail-light-a, #496f9d)', 'stop-opacity': '.22'}), svg('stop', {offset: 1, 'stop-color': 'var(--sail-light-a, #496f9d)', 'stop-opacity': '0'}))));
     svgRoot.append(svg('rect', {x: minX, y: minY, width: W, height: H, fill: 'url(#tmDots)'}));
     const [hx, hy] = P(byId.core.gx, byId.core.gy, 0);
-    svgRoot.append(svg('ellipse', {cx: hx, cy: hy, rx: 380, ry: 220, fill: 'url(#tmHalo)'}));
+    svgRoot.append(svg('ellipse', {class: 'tm-halo', cx: hx, cy: hy, rx: 380, ry: 220, fill: 'url(#tmHalo)'}));
 
     const gLinks = svg('g', {class: 'tm-links'});
     packets = [];
@@ -403,6 +403,8 @@
     objects.sort((a, b) => a.depth - b.depth).forEach((o) => o.draw(gObj));
     svgRoot.append(gObj);
     world.append(svgRoot);
+    // Ambient light drifting over the blocks (toolsmap.css, "Map light response").
+    world.append(el('div', {class: 'tm-sheen', 'aria-hidden': 'true'}));
 
     const labels = el('div', {class: 'tm-labels'});
     for (const s of STATIONS) {

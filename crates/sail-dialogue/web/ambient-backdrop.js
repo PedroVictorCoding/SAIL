@@ -141,13 +141,17 @@
     }
     const paintCss = colors => colors.slice(1).forEach((c, i) => layer.style.setProperty(`--sail-backdrop-${i}`, c));
     paintCss(current);
+    publish((lights || cssLights(html)).map(String));
 
     // Cooldown: after the light changes it holds for COOLDOWN_MS. Changes arriving in
     // that window are coalesced and only the latest is shown when it ends, so quick
     // state flips (thinking → executing → thinking → speaking) never strobe the page.
-    let tween = 0, hold = 0, pending = null, shown = current, changedAt = -Infinity;
-    function show(target) {
-      shown = target; changedAt = performance.now();
+    let tween = 0, hold = 0, pending = null, pendingRaw = null, shown = current, changedAt = -Infinity;
+    // Publish the light actually on screen (after the cooldown) for other surfaces,
+    // such as the Tools Map blocks, so everything changes colour together.
+    function publish(raw) { raw?.forEach((c, i) => html.style.setProperty(`--sail-shown-${'abc'[i]}`, c)); }
+    function show(target, raw) {
+      shown = target; changedAt = performance.now(); publish(raw);
       paintCss(target);
       cancelAnimationFrame(tween);
       if (!shader) { current = target; return; }
@@ -163,19 +167,19 @@
     }
     function release() {
       hold = 0;
-      const next = pending; pending = null;
-      if (next && next.join() !== shown.join()) show(next);
+      const next = pending, raw = pendingRaw; pending = pendingRaw = null;
+      if (next && next.join() !== shown.join()) show(next, raw);
     }
     function setLights(next) {
       const target = palette(next, mode);
       if (!target) return;
       const wait = changedAt + COOLDOWN_MS - performance.now();
       if (wait > 0 || hold) {
-        pending = target;
+        pending = target; pendingRaw = next;
         if (!hold) hold = setTimeout(release, Math.max(0, wait));
         return;
       }
-      if (target.join() !== shown.join()) show(target);
+      if (target.join() !== shown.join()) show(target, next);
     }
 
     // Liquid glass: an empty lens in the backdrop layer tracks a real element above it,
