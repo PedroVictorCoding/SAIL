@@ -75,7 +75,9 @@ Rules enforced by `ExecutionPlan::validate(now_ms)`:
 - executable is an absolute sandbox path and a lowercase SHA-256 digest;
 - argv and mount counts/bytes are bounded; no NULs;
 - sandbox paths are absolute, canonical-looking, and reject `.`/`..`/empty segments;
-- read roots cannot include `/home` or `/root`; write roots stay under `/work`, `/cache` or
+- read roots cannot include, or broadly contain, `/home`, `/root`, `/etc/ssh`,
+  `/etc/gitconfig`, `/etc/docker`, `/etc/apt/auth.conf`, `/run/secrets`,
+  `/var/run/secrets` or `/var/lib/sail`; write roots stay under `/work`, `/cache` or
   `/tmp`;
 - `cwd` must be inside a declared read or write root;
 - credentials are opaque vault handles plus a plain purpose label, never secret material;
@@ -119,7 +121,8 @@ For v2 the runner:
 - mounts exactly the declared writable roots as per-job tmpfs mounts, collapsing overlapping
   declarations (for example `/work` covers `/work/scratch`);
 - runs with `--chdir` set to the plan's sandbox cwd, preserving the existing
-  `--unshare-all`/`--disable-userns`/`--cap-drop ALL`/`--clearenv`/cgroup/rlimit boundary;
+  `--unshare-all`/`--disable-userns`/`--cap-drop ALL`/`--clearenv`/cgroup/rlimit boundary,
+  and closes every inherited descriptor above stdio with `close_range` before exec;
 - returns the same correlated `CommandResult`.
 
 `capability_plan` hashes the full v2 frame, so a changed mount, argv, limit, network ref or

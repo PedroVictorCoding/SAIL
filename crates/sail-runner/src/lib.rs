@@ -438,6 +438,12 @@ async fn execute_spec(
                     return Err(io::Error::last_os_error());
                 }
             }
+            // Close every inherited descriptor above stdio, including the cgroup membership
+            // file. close_range is required (Ubuntu 22.04+); a missing syscall fails the spawn
+            // rather than leaking a daemon or runner descriptor into the sandbox.
+            if libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32) != 0 {
+                return Err(io::Error::last_os_error());
+            }
             Ok(())
         });
     }
