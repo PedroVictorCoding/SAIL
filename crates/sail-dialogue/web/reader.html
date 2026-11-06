@@ -82,6 +82,20 @@
         <div id="reading-activity"></div>
       </aside>
     </main>
+    <dialog id="metadata-dialog" aria-labelledby="metadata-heading">
+      <div class="metadata-heading">
+        <div><p class="eyebrow">OPEN LIBRARY</p><h2 id="metadata-heading">Find a cover &amp; book details</h2></div>
+        <button id="metadata-close" type="button">Close</button>
+      </div>
+      <p class="muted">Search sends the title and author below to Open Library. Book text and reading history stay on your host. Choose a match to save its details and cover for offline use.</p>
+      <form id="metadata-form">
+        <label>Title<input id="metadata-title" required maxlength="200"></label>
+        <label>Author <span class="muted">(optional)</span><input id="metadata-author" maxlength="160"></label>
+        <button id="metadata-search" type="submit">Search Open Library</button>
+      </form>
+      <p id="metadata-status" role="status" aria-live="polite"></p>
+      <div id="metadata-results"></div>
+    </dialog>
     <section id="reader" aria-label="Book reader" hidden>
       <aside id="toc" class="drawer" hidden aria-label="Table of contents">
         <h2>
