@@ -24,7 +24,19 @@ pub const MAX_EXECUTABLE_BYTES: usize = 4_096;
 pub const WRITABLE_PREFIXES: [&str; 3] = ["/work", "/cache", "/tmp"];
 
 /// Read roots that would leak the owner's credentials or private data if mounted by mistake.
-pub const FORBIDDEN_READ_PREFIXES: [&str; 2] = ["/home", "/root"];
+/// A root is rejected when it is inside one of these paths **or contains** one of them, so a
+/// broad `/etc` or `/var` read cannot smuggle `/etc/ssh` or `/var/lib/sail` in.
+pub const FORBIDDEN_READ_PREFIXES: [&str; 9] = [
+    "/home",
+    "/root",
+    "/etc/ssh",
+    "/etc/gitconfig",
+    "/etc/docker",
+    "/etc/apt/auth.conf",
+    "/run/secrets",
+    "/var/run/secrets",
+    "/var/lib/sail",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -270,7 +282,7 @@ fn validate_mounts(read: &[MountRoot], write: &[MountRoot]) -> Result<(), PlanEr
         validate_path(&root.path)?;
         if FORBIDDEN_READ_PREFIXES
             .iter()
-            .any(|prefix| path_within(&root.path, prefix))
+            .any(|prefix| path_within(&root.path, prefix) || path_within(prefix, &root.path))
         {
             return Err(PlanError::ForbiddenReadRoot(root.path.clone()));
         }
@@ -434,6 +446,22 @@ mod tests {
             home.validate(now),
             Err(PlanError::ForbiddenReadRoot("/home/main".into()))
         );
+
+        for forbidden in ["/etc", "/var", "/run", "/var/lib/sail", "/etc/ssh"] {
+            let mut broad = plan(now);
+            broad.read_roots.push(MountRoot {
+                path: forbidden.into(),
+            });
+            assert!(
+                broad.validate(now).is_err(),
+                "{forbidden} should be rejected as a read root"
+            );
+        }
+        let mut ssl = plan(now);
+        ssl.read_roots.push(MountRoot {
+            path: "/etc/ssl".into(),
+        });
+        ssl.validate(now).unwrap();
 
         let mut system_write = plan(now);
         system_write.write_roots.push(MountRoot {

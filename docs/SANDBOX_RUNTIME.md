@@ -1,9 +1,10 @@
 # Unified SAIL Sandbox Runtime (ADR and P0 foundation)
 
-Status: **Phase 1 implemented; not yet wired into production execution.** This document is the
-authority map and threat model for issue #379. The new `sail-sandbox` crate provides the typed
-plan, checked profiles, default-deny network policy and CONNECT broker core. The runner, Forge,
-Bridge and credential mediation still need to be migrated in the follow-up slices listed below.
+Status: **Phases 1–2 foundations implemented; not yet wired into Forge or a production
+network path.** This document is the authority map and threat model for issue #379. The new
+`sail-sandbox` crate provides the typed plan, checked profiles, default-deny network policy and
+CONNECT broker core. `sail-runner` now accepts the typed plan on a v2 frame and enforces its
+digest and writable roots; Forge, Bridge and credential mediation still need to be migrated.
 
 This is not a claim of Anthropic `srt` parity. The implementation is Rust-native and keeps the
 existing Bubblewrap/runner boundary.
@@ -50,8 +51,8 @@ flowchart LR
 ```
 
 The current implementation adds the `ExecutionPlan`, profile and broker components on the right.
-The arrows through `sail-runner` and the sandbox are the migration target; they are not yet
-active for Forge or Dialogue.
+`sail-runner` accepts the plan and enforces its digest and writable roots, but no production
+caller sends that frame yet; Forge still uses its own offline Bubblewrap path.
 
 ## 3. `ExecutionPlan` (implemented in `crates/sail-sandbox/src/plan.rs`)
 
@@ -74,7 +75,9 @@ Rules enforced by `ExecutionPlan::validate(now_ms)`:
 - executable is an absolute sandbox path and a lowercase SHA-256 digest;
 - argv and mount counts/bytes are bounded; no NULs;
 - sandbox paths are absolute, canonical-looking, and reject `.`/`..`/empty segments;
-- read roots cannot include `/home` or `/root`; write roots stay under `/work`, `/cache` or
+- read roots cannot include, or broadly contain, `/home`, `/root`, `/etc/ssh`,
+  `/etc/gitconfig`, `/etc/docker`, `/etc/apt/auth.conf`, `/run/secrets`,
+  `/var/run/secrets` or `/var/lib/sail`; write roots stay under `/work`, `/cache` or
   `/tmp`;
 - `cwd` must be inside a declared read or write root;
 - credentials are opaque vault handles plus a plain purpose label, never secret material;
@@ -92,7 +95,7 @@ nothing.
 | `inspect` | system read-only + `/work` read-only | none | no |
 | `build_offline` | system read-only, `/work` + `/tmp` write | none | no |
 | `fetch_dependencies` | system read-only, `/work`/`/cache`/`/tmp` write | `registry` | no |
-| `research_fetch` | system read-only, `/work/scratch` + `/tmp` write | `research` | no |
+| `research_fetch` | system read-only, `/work` + `/tmp` write | `research` | no |
 | `coding_networked` | system read-only, `/work` write | `task` | yes |
 | `privileged_approved` | explicit only | explicit only | yes |
 
@@ -100,6 +103,34 @@ Profiles are Rust defaults, not YAML interpreted by a model. `ProfilePolicy::val
 narrows a plan; it never authorizes one. The built-in `registry` policy allows `crates.io`,
 `index.crates.io`, `static.crates.io` and strict `*.crates.io` subdomains on 443 only; it is a
 starting point for the dependency vertical slice, not a private-registry policy.
+
+## 4a. Runner v2 (implemented in `crates/sail-runner/src/lib.rs`)
+
+The runner accepts two framed protocols on the same dedicated-UID socket:
+
+- v1 `CommandPlan` (legacy command tool, unchanged);
+- v2 `{"protocol": "execution-plan-v1", "plan": ExecutionPlan}`.
+
+For v2 the runner:
+
+- validates the plan with the trusted supervisor clock;
+- denies plans requesting network (`network: Some`) or credential refs until the broker and
+  provider bridge are actually wired — it never silently ignores them;
+- verifies the executable is a regular (non-symlink) file inside the trusted rootfs and that
+  its SHA-256 equals `executable.sha256`;
+- mounts exactly the declared writable roots as per-job tmpfs mounts, collapsing overlapping
+  declarations (for example `/work` covers `/work/scratch`);
+- runs with `--chdir` set to the plan's sandbox cwd, preserving the existing
+  `--unshare-all`/`--disable-userns`/`--cap-drop ALL`/`--clearenv`/cgroup/rlimit boundary,
+  and closes every inherited descriptor above stdio with `close_range` before exec;
+- returns the same correlated `CommandResult`.
+
+`capability_plan` hashes the full v2 frame, so a changed mount, argv, limit, network ref or
+audit correlation changes the Guardian capability. `dispatch_plan`/`dispatch_plan_authorized`
+are the trusted adapter entries; no client route exposes them.
+
+Read roots are validated but not narrowed: the runner already exposes the whole trusted rootfs
+read-only, and host paths are never mounted. Exact per-root read mounts remain follow-up work.
 
 ## 5. Network broker (implemented in `crates/sail-sandbox/src/network.rs` and `proxy.rs`)
 
@@ -248,6 +279,7 @@ Implemented in `crates/sail-sandbox/src/{plan,network,policy,proxy}.rs`:
 | DNS rebinding | mixed public/private answers denied; connection uses validated addresses |
 | Grants | expiry, revocation, unknown token, DNS budget, version pinning |
 | Proxy | allowed tunnel, missing/unknown auth, forbidden port, header limits, peer UID requirement (production path) |
+| Runner v2 | valid plan reaches the fail-closed UID boundary; network/credential plans denied before spawn; expired plans denied; digest mismatch and symlink executables rejected; overlapping write roots collapsed; capability covers mounts/argv/audit fields |
 
 Still required (from #379 E) before release: real Ubuntu kernel + CI enforcement record, direct
 TCP/UDP/raw and inherited-FD attempts inside the actual runner namespace, cgroup fork/reparent

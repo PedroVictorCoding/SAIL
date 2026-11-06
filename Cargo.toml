@@ -65,6 +65,7 @@ sail-canvas = { path = "crates/sail-canvas" }
 sail-discovery = { path = "crates/sail-discovery" }
 sail-flow = { path = "crates/sail-flow" }
 sail-guardian = { path = "crates/sail-guardian" }
+sail-sandbox = { path = "crates/sail-sandbox" }
 sail-continuity = { path = "crates/sail-continuity" }
 sail-pulse = { path = "crates/sail-pulse" }
 sail-tracker = { path = "crates/sail-tracker" }
