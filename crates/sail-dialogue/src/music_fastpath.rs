@@ -357,6 +357,7 @@ async fn own_playlist(spotify: &Arc<Spotify>, query: &str) -> Option<Vec<Candida
         // Not indexed yet (being built now): names alone can still be enough.
         None => PlaylistIndex {
             built_at: 0,
+            version: sail_bridge::spotify::INDEX_VERSION,
             playlists: spotify
                 .my_playlists()
                 .await
@@ -435,20 +436,21 @@ mod tests {
         })
     }
 
-    /// The owner's example conversation, end to end against a stand-in Spotify Web API.
+    /// The owner's example conversation, end to end against a stand-in Spotify Web API
+    /// (February 2026 shape: `/playlists/{id}/items`, rows hold `item`).
     #[tokio::test]
     async fn the_radiohead_conversation_runs_without_the_model() {
         use axum::{Json, Router, routing::get};
         use serde_json::Value;
         let played = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
         let sink = played.clone();
-        let tracks = |artists: &'static [&'static str]| json!({"next": null, "items": artists.iter().map(|a| json!({"track":{"artists":[{"name":a}]}})).collect::<Vec<_>>()});
+        let tracks = |artists: &'static [&'static str]| json!({"next": null, "items": artists.iter().map(|a| json!({"item":{"type":"track","artists":[{"name":a}]}})).collect::<Vec<_>>()});
         let api = Router::new()
             .route("/v1/me/playlists", get(|| async { Json(json!({"next":null,"items":[
                 {"name":"Road trip","uri":"spotify:playlist:road","owner":{"display_name":"Pedro Victor"},"tracks":{"total":4}},
                 {"name":"Cabeça de Radio","uri":"spotify:playlist:cabeca","owner":{"display_name":"Pedro Victor"},"tracks":{"total":4}}]})) }))
-            .route("/v1/playlists/road/tracks", get(move || async move { Json(tracks(&["Blur", "Oasis", "Pulp", "Radiohead"])) }))
-            .route("/v1/playlists/cabeca/tracks", get(move || async move { Json(tracks(&["Radiohead", "Radiohead", "Radiohead", "Thom Yorke"])) }))
+            .route("/v1/playlists/road/items", get(move || async move { Json(tracks(&["Blur", "Oasis", "Pulp", "Radiohead"])) }))
+            .route("/v1/playlists/cabeca/items", get(move || async move { Json(tracks(&["Radiohead", "Radiohead", "Radiohead", "Thom Yorke"])) }))
             .route("/v1/me/player/devices", get(|| async { Json(json!({"devices":[{"id":"phone1","name":"Pedro's phone","is_active":true,"is_restricted":false}]})) }))
             .route("/v1/me/player/play", axum::routing::put(move |Json(body): Json<Value>| {
                 let sink = sink.clone();

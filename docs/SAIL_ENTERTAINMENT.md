@@ -93,6 +93,14 @@ list, one queue and one player bar, all in the browser.
   **Reconnect Spotify**. Requires Premium and a browser with Widevine (EME); otherwise the player says so.
   Voice requests ("play my X playlist") still use Spotify Connect, and will pick "SAIL Player" when no other
   device is active.
+- **Spotify's February 2026 Development Mode rules** (in force for SAIL's app since 2026-03-09):
+  playlist songs come only from `GET /playlists/{id}/items` (the old `/tracks` returns 403), rows hold the
+  track in `item`, and only for playlists the owner created or collaborates on. Followed playlists return
+  403; the player says so and offers **Play this playlist**, which plays it as a whole on SAIL Player
+  (`context_uri`; Spotify decides the order, and next/previous move within it). `/search` accepts at most
+  `limit=10` (`SEARCH_LIMIT`). The voice playlist index reads `/items` too (index version 2; older
+  indexes are rebuilt), so followed playlists are matched by name only. Spotify answers 503
+  intermittently: reads retry once after 0.7 s; changes are never repeated.
 - **One engine at a time:** starting an item pauses the other engine. Pause, seek and volume go to whichever
   is current; volume applies to both. Media Session metadata and actions are set for OS media keys.
 - **Cross-origin isolation:** SAIL's pages are `COEP: require-corp` (on-device speech needs

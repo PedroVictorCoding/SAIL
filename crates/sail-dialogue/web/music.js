@@ -48,7 +48,7 @@
   // ------------------------------------------------------------------ state
   const state = {
     view: 'all', query: '', local: [], spotify: {configured: false, connected: false, can_stream: false},
-    playlists: [], results: null, listTracks: null, listTitle: '',
+    playlists: [], results: null, listTracks: null, listTitle: '', listContext: null,
     queue: [], index: -1, playing: false, position: 0, duration: 0, volume: 0.8,
   };
   try { state.volume = Math.min(1, Math.max(0, +(localStorage.getItem('sail.music.volume') ?? 0.8))); } catch (_) {}
@@ -147,14 +147,20 @@
     },
     state(s) {
       if (player.engine !== this || !s || !this.current) return;
+      this.last = s;
       const track = s.track_window?.current_track;
-      const ours = track && (track.uri === this.current.id || track.linked_from?.uri === this.current.id);
-      // Spotify reports the finished track in previous_tracks and pauses at 0.
-      const finished = s.paused && s.position === 0 && (
-        s.track_window?.previous_tracks?.some(t => t.uri === this.current.id || t.linked_from?.uri === this.current.id)
-        || (this.lastDuration && this.lastPos > this.lastDuration - 2500));
+      const context = !!this.current.context;
+      // A whole playlist (context) is ours whatever song Spotify is on; a single item must match.
+      const ours = track && (context || track.uri === this.current.id || track.linked_from?.uri === this.current.id);
+      // Spotify reports a finished track in previous_tracks and pauses at 0; a finished
+      // playlist also has nothing left in next_tracks.
+      const finished = s.paused && s.position === 0 && (context
+        ? !s.track_window?.next_tracks?.length && this.lastDuration && this.lastPos > this.lastDuration - 2500
+        : (s.track_window?.previous_tracks?.some(t => t.uri === this.current.id || t.linked_from?.uri === this.current.id)
+          || (this.lastDuration && this.lastPos > this.lastDuration - 2500)));
       if (finished && this.started) { this.started = false; player.ended(); return; }
       if (!ours) return;
+      if (context && track.uri !== this.trackUri) { this.trackUri = track.uri; player.showContextTrack(this.current, track); }
       this.started = true;
       this.lastPos = s.position; this.lastDuration = s.duration;
       player.progress(s.position, s.duration);
@@ -171,12 +177,13 @@
       }
     },
     async load(item, autoplay = true) {
-      this.current = item; this.started = false; this.lastPos = 0; this.lastDuration = item.duration_ms;
+      this.current = item; this.started = false; this.lastPos = 0; this.lastDuration = item.duration_ms; this.trackUri = null; this.last = null;
       const device = this.deviceId || await this.connect();
       if (player.current() !== item) return;
       // Activating the element inside the user gesture lets the SDK start audio (autoplay rules).
       this.player.activateElement?.();
-      await api.request('/api/spotify/player/play', {method: 'POST', body: {device_id: device, uris: [item.id], position_ms: 0}});
+      const body = item.context ? {device_id: device, context_uri: item.id} : {device_id: device, uris: [item.id], position_ms: 0};
+      await api.request('/api/spotify/player/play', {method: 'POST', body});
       if (!autoplay) await this.player.pause();
     },
     pause() { clearInterval(this.ticking); return this.player?.pause(); },
@@ -217,14 +224,32 @@
       catch (e) { status(e.message, true); }
     },
     async next() {
+      const item = this.current();
+      if (this.engine === spotify && item?.context && spotify.last?.track_window?.next_tracks?.length) { await spotify.player.nextTrack(); return; }
       if (state.index < state.queue.length - 1) { state.index++; await this.load(); }
       else { await Promise.resolve(this.engine?.stop()); this.setPlaying(false); status('End of the queue.'); }
     },
     async previous() {
+      const item = this.current();
+      if (this.engine === spotify && item?.context && state.position <= 3000 && spotify.last?.track_window?.previous_tracks?.length) { await spotify.player.previousTrack(); return; }
       if (state.position > 3000 || state.index === 0) { this.seek(0); return; }
       state.index--; await this.load();
     },
     seek(ms) { this.engine?.seek(ms); this.progress(ms, state.duration); },
+    // A song inside a whole-playlist item: show it, keep the playlist as the source line.
+    showContextTrack(item, track) {
+      const artists = (track.artists || []).map(a => a.name).join(', ');
+      $('nowTitle').textContent = track.name || item.title;
+      $('nowArtist').textContent = [artists, item.title].filter(Boolean).join(' · ');
+      const art = track.album?.images?.[0]?.url;
+      if (art) {
+        const node = artNode({source: 'spotify', title: track.name || item.title, art}, 'mp-art-inner');
+        $('nowArt').replaceChildren(node);
+      }
+      if ('mediaSession' in navigator) {
+        try { navigator.mediaSession.metadata = new MediaMetadata({title: track.name || '', artist: artists, album: item.title, artwork: art ? [{src: art}] : []}); } catch (_) {}
+      }
+    },
     volume(v) {
       state.volume = v;
       local.volume(v); spotify.volume(v);
@@ -334,6 +359,18 @@
     if (state.listTracks) {
       $('viewEyebrow').textContent = 'SPOTIFY PLAYLIST';
       $('viewTitle').textContent = state.listTitle;
+      if (state.listContext) {
+        const {p, message} = state.listContext;
+        const box = document.createElement('section'); box.className = 'mp-context';
+        const text = document.createElement('p'); text.className = 'mp-muted'; text.textContent = message;
+        const play = document.createElement('button'); play.type = 'button'; play.className = 'mp-primary';
+        play.textContent = 'Play this playlist';
+        play.addEventListener('click', () => player.start([{source: 'spotify', context: true, id: p.uri, title: p.name,
+          artist: p.by || 'Spotify playlist', album: 'Spotify playlist', duration_ms: 0, art: ''}]));
+        box.append(text, play);
+        lists.append(box);
+        return;
+      }
       lists.append(section('Tracks', state.listTracks, state.listTracks, 0, 'This playlist has no playable tracks.'));
       return;
     }
@@ -439,10 +476,17 @@
 
   async function openList(p) {
     status(`Opening “${p.name}”…`);
+    state.listContext = null;
     try {
       const {tracks} = await api.request(`/api/spotify/player/tracks?uri=${encodeURIComponent(p.uri)}`);
       state.listTracks = tracks; state.listTitle = p.name; render(); status('');
-    } catch (e) { status(e.message, true); }
+    } catch (e) {
+      if (e.code !== 'not_owner') { status(e.message, true); return; }
+      // Spotify shares the songs only of playlists you created or collaborate on; this one
+      // can still be played as a whole, in Spotify's order.
+      state.listTracks = []; state.listTitle = p.name; state.listContext = {p, message: e.message};
+      render(); status('');
+    }
   }
 
   // ------------------------------------------------------------------ data

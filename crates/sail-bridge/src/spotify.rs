@@ -28,6 +28,11 @@ const LOGIN_TTL: Duration = Duration::from_secs(600);
 const MAX_OWN_PLAYLISTS: usize = 200;
 /// The playlist index is rebuilt in the background when older than this.
 const INDEX_TTL_SECS: u64 = 6 * 3600;
+/// 2: playlist contents come from `/playlists/{id}/items` (Spotify, February 2026). Version 1
+/// indexes were built with the removed `/tracks` endpoint and hold no artists.
+pub const INDEX_VERSION: u32 = 2;
+/// Spotify's maximum `limit` for `/search` for Development Mode apps (February 2026).
+pub const SEARCH_LIMIT: usize = 10;
 /// Tracks read per playlist for its artist profile.
 const INDEX_TRACKS_PER_PLAYLIST: usize = 300;
 /// An artist this share of a playlist's tracks makes it "their" playlist.
@@ -629,8 +634,12 @@ impl Spotify {
         path: &str,
         body: Option<Value>,
     ) -> Result<Option<Value>> {
-        for attempt in 0..2 {
-            let access = self.access_token(attempt == 1).await?;
+        // Refreshes once on 401. Reads (GET) also retry once on a transient 502/503/504,
+        // which Spotify returns intermittently; changes are never repeated.
+        let mut refreshed = false;
+        let mut retried = method != reqwest::Method::GET;
+        for _ in 0..3 {
+            let access = self.access_token(refreshed).await?;
             let mut request = self
                 .http
                 .request(method.clone(), format!("{}{path}", self.api))
@@ -644,7 +653,13 @@ impl Spotify {
                 SpotifyError::new("unavailable", format!("Spotify is unreachable: {e}"))
             })?;
             let status = response.status();
-            if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
+            if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
+                refreshed = true;
+                continue;
+            }
+            if matches!(status.as_u16(), 502..=504) && !retried {
+                retried = true;
+                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
                 continue;
             }
             let retry_after = response
@@ -712,7 +727,7 @@ impl Spotify {
                 ),
             });
         }
-        unreachable!("the second attempt always returns")
+        unreachable!("the last attempt always returns")
     }
 
     async fn get(&self, path: &str) -> Result<Value> {
@@ -747,7 +762,7 @@ impl Spotify {
         url.query_pairs_mut()
             .append_pair("q", query)
             .append_pair("type", kind.api())
-            .append_pair("limit", &limit.clamp(1, 10).to_string());
+            .append_pair("limit", &limit.clamp(1, SEARCH_LIMIT).to_string());
         let path = format!("/search?{}", url.query().unwrap_or_default());
         let body = self.get(&path).await?;
         Ok(body[format!("{}s", kind.api())]["items"]
@@ -877,13 +892,38 @@ impl Spotify {
         .map(|_| ())
     }
 
+    /// Play a whole album or playlist on one device (the browser player). Used for playlists
+    /// whose songs Spotify does not share; Spotify then decides the order within it.
+    pub async fn play_context_on(&self, device_id: &str, uri: &str) -> Result<()> {
+        if !valid_device_id(device_id) {
+            return Err(SpotifyError::new(
+                "invalid",
+                "That is not a Spotify device id.",
+            ));
+        }
+        if !matches!(Kind::of_uri(uri), Some(Kind::Album | Kind::Playlist)) {
+            return Err(SpotifyError::new(
+                "invalid",
+                "Send a Spotify album or playlist URI.",
+            ));
+        }
+        let path = format!("/me/player/play?device_id={device_id}");
+        self.call(
+            reqwest::Method::PUT,
+            &path,
+            Some(json!({"context_uri": uri})),
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Track search for the music player: up to `limit` tracks, as player items.
     pub async fn search_tracks(&self, query: &str, limit: usize) -> Result<Vec<Value>> {
         let mut url = url::Url::parse("http://x/search").expect("search URL");
         url.query_pairs_mut()
             .append_pair("q", query)
             .append_pair("type", "track")
-            .append_pair("limit", &limit.clamp(1, 20).to_string());
+            .append_pair("limit", &limit.clamp(1, SEARCH_LIMIT).to_string());
         let body = self
             .get(&format!("/search?{}", url.query().unwrap_or_default()))
             .await?;
@@ -921,14 +961,32 @@ impl Spotify {
                 })
                 .collect());
         }
+        // Spotify returns playlist contents only for playlists the owner created or
+        // collaborates on; rows hold the track in `item` (formerly `track`).
         let page = self
-            .get(&format!("/playlists/{id}/tracks?limit=100"))
-            .await?;
+            .get(&format!("/playlists/{id}/items?limit=100"))
+            .await
+            .map_err(|e| {
+                if e.code == "forbidden" {
+                    SpotifyError::new(
+                        "not_owner",
+                        "Spotify only shares the songs of playlists you created or collaborate on. You can still play this playlist as a whole.",
+                    )
+                } else {
+                    e
+                }
+            })?;
         Ok(page["items"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|i| player_track(&i["track"]))
+            .filter_map(|i| {
+                player_track(if i["item"].is_object() {
+                    &i["item"]
+                } else {
+                    &i["track"]
+                })
+            })
             .collect())
     }
 
@@ -973,7 +1031,7 @@ impl Spotify {
         let mut offset = 0;
         while (tracks as usize) < INDEX_TRACKS_PER_PLAYLIST {
             let path = format!(
-                "/playlists/{id}/tracks?limit=100&offset={offset}&fields=items(track(artists(name)),item(artists(name))),next"
+                "/playlists/{id}/items?limit=100&offset={offset}&fields=items(track(artists(name)),item(artists(name))),next"
             );
             let page = self.get(&path).await?;
             let items = page["items"].as_array().cloned().unwrap_or_default();
@@ -1015,8 +1073,8 @@ impl Spotify {
         let playlists = self.my_playlists().await?;
         let profiles: Vec<IndexedPlaylist> = futures_util::stream::iter(playlists)
             .map(|playlist| async move {
-                // Some playlists (for example Spotify's own mixes) cannot be read; their
-                // names still count.
+                // Spotify shares the contents only of playlists the owner created or
+                // collaborates on (February 2026); followed playlists count by name.
                 let (tracks, artists) = self
                     .playlist_artists(&playlist.uri)
                     .await
@@ -1033,6 +1091,7 @@ impl Spotify {
         let index = PlaylistIndex {
             built_at: now(),
             playlists: profiles,
+            version: INDEX_VERSION,
         };
         let _ = write_private(&self.dir.join("playlist_index.json"), &index);
         *self.index.lock().expect("spotify index") = Some(index.clone());
@@ -1042,9 +1101,9 @@ impl Spotify {
     /// The saved playlist index, if any; starts a background rebuild when missing or stale.
     pub fn playlist_index(self: &Arc<Self>) -> Option<PlaylistIndex> {
         let current = self.index.lock().expect("spotify index").clone();
-        let stale = current
-            .as_ref()
-            .is_none_or(|i| now().saturating_sub(i.built_at) > INDEX_TTL_SECS);
+        let stale = current.as_ref().is_none_or(|i| {
+            i.version < INDEX_VERSION || now().saturating_sub(i.built_at) > INDEX_TTL_SECS
+        });
         if stale
             && !self
                 .indexing
@@ -1076,6 +1135,9 @@ pub struct PlaylistIndex {
     /// Unix seconds.
     pub built_at: u64,
     pub playlists: Vec<IndexedPlaylist>,
+    /// [`INDEX_VERSION`] when built; older indexes are rebuilt.
+    #[serde(default)]
+    pub version: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1215,6 +1277,7 @@ mod tests {
     fn a_playlist_full_of_an_artist_is_found_without_its_name() {
         let index = PlaylistIndex {
             built_at: 0,
+            version: INDEX_VERSION,
             playlists: vec![
                 indexed(
                     "Road trip",
@@ -1242,6 +1305,7 @@ mod tests {
         // A matching name still comes first.
         let named = PlaylistIndex {
             built_at: 0,
+            version: INDEX_VERSION,
             playlists: vec![
                 index.playlists[1].clone(),
                 indexed("Radiohead live", "spotify:playlist:d", 10, &[]),
