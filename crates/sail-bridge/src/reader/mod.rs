@@ -13,6 +13,7 @@
 //!
 //! The book id is derived from the SHA-256 of the imported bytes, so importing the same file
 //! twice finds the existing book. Removing a book deletes only SAIL's copy.
+pub mod catalog;
 mod epub;
 mod zip;
 
@@ -168,6 +169,10 @@ pub struct Book {
     pub opened_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub section_info: Vec<SectionInfo>,
+    #[serde(default)]
+    pub metadata: Option<catalog::Metadata>,
+    #[serde(default)]
+    cover_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -326,6 +331,8 @@ impl Library {
                 .collect(),
             opened_at: None,
             section_info,
+            metadata: None,
+            cover_file: None,
         };
         let content = Content {
             sections: parsed.sections,
@@ -401,6 +408,70 @@ impl Library {
         book.position = Some(position.clone());
         self.save(&index)?;
         Ok(position)
+    }
+
+    /// Persist owner-selected online details without changing imported text or reading anchors.
+    pub fn set_metadata(
+        &self,
+        id: &str,
+        metadata: Option<catalog::Metadata>,
+        cover: Option<&[u8]>,
+    ) -> Result<Book, ReaderError> {
+        let mut index = self.index.lock().unwrap();
+        let position = index
+            .books
+            .iter()
+            .position(|b| b.id == id)
+            .ok_or(ReaderError::NotFound)?;
+        let old = index.books[position].metadata.clone();
+        let old_file = index.books[position].cover_file.clone();
+        let dir = self.root.join("books").join(id);
+        let new_file = cover.map(|_| format!("cover-{}.jpg", uuid::Uuid::new_v4()));
+        if let Some(ref m) = metadata {
+            if !catalog::valid_work_key(&m.work_key)
+                || m.cover_cached != cover.is_some()
+                || cover.is_some_and(|b| b.len() > catalog::MAX_COVER)
+            {
+                return Err(ReaderError::Invalid("Invalid book details.".into()));
+            }
+        } else if cover.is_some() {
+            return Err(ReaderError::Invalid("A cover needs book details.".into()));
+        }
+        if let (Some(bytes), Some(name)) = (cover, &new_file) {
+            write_private(&dir.join(name), bytes)?;
+        }
+        index.books[position].metadata = metadata;
+        index.books[position].cover_file = new_file.clone();
+        if let Err(error) = self.save(&index) {
+            index.books[position].metadata = old;
+            index.books[position].cover_file = old_file;
+            if let Some(name) = new_file {
+                let _ = std::fs::remove_file(dir.join(name));
+            }
+            return Err(error);
+        }
+        if let Some(name) = old_file {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+        Ok(index.books[position].clone())
+    }
+
+    pub fn cover(&self, id: &str) -> Result<Vec<u8>, ReaderError> {
+        let index = self.index.lock().unwrap();
+        let book = index
+            .books
+            .iter()
+            .find(|b| b.id == id)
+            .ok_or(ReaderError::NotFound)?;
+        if !book.metadata.as_ref().is_some_and(|m| m.cover_cached) {
+            return Err(ReaderError::NotFound);
+        }
+        let name = book.cover_file.as_ref().ok_or(ReaderError::NotFound)?;
+        // The filename is created here, never from a query or remote metadata field.
+        if !name.starts_with("cover-") || !name.ends_with(".jpg") || name.contains(['/', '\\']) {
+            return Err(ReaderError::NotFound);
+        }
+        Ok(std::fs::read(self.root.join("books").join(id).join(name))?)
     }
 
     /// Remove SAIL's copy of a book. The owner's original file is never touched.
@@ -581,6 +652,65 @@ mod tests {
     }
 
     const TXT: &str = "Chapter 1\nThe Clocks\n\nIt was a bright cold day in April,\nand the clocks were striking.\n\nShort line\nanother short\nthird line\n\nChapter 2\n\nThe end.\n";
+
+    #[test]
+    fn selected_metadata_and_cover_survive_reload_without_changing_text_or_position() {
+        let (library, dir) = temp_library();
+        let book = library.import("original.txt", TXT.as_bytes()).unwrap().book;
+        let anchor = Anchor {
+            section: 0,
+            block: 0,
+            char: 0,
+        };
+        let position = library.set_position(&book.id, anchor, 35.0, 0).unwrap();
+        let metadata = catalog::Metadata {
+            work_key: "/works/OL123W".into(),
+            title: "Online title".into(),
+            authors: vec!["An author".into()],
+            first_publish_year: Some(1900),
+            edition_count: Some(2),
+            subjects: vec![],
+            description: None,
+            cover_id: Some(123),
+            cover_cached: true,
+            retrieved_at: Utc::now(),
+        };
+        library
+            .set_metadata(&book.id, Some(metadata), Some(b"cached raster"))
+            .unwrap();
+        let reopened = Library::open(&dir).unwrap();
+        let cached = reopened.book(&book.id).unwrap();
+        assert_eq!(cached.title, book.title);
+        assert_eq!(cached.position, Some(position));
+        assert_eq!(cached.metadata.as_ref().unwrap().title, "Online title");
+        assert_eq!(reopened.cover(&book.id).unwrap(), b"cached raster");
+        assert_eq!(reopened.content(&book.id).unwrap().sections.len(), 2);
+        // Older library files without the new optional field still deserialize.
+        let mut old = serde_json::to_value(&cached).unwrap();
+        old.as_object_mut().unwrap().remove("metadata");
+        assert!(
+            serde_json::from_value::<Book>(old)
+                .unwrap()
+                .metadata
+                .is_none()
+        );
+        reopened.set_metadata(&book.id, None, None).unwrap();
+        assert!(reopened.book(&book.id).unwrap().metadata.is_none());
+        assert!(matches!(
+            reopened.cover(&book.id),
+            Err(ReaderError::NotFound)
+        ));
+        assert!(
+            !std::fs::read_dir(dir.join("books").join(&book.id))
+                .unwrap()
+                .any(|f| f
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("cover-"))
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn imports_txt_with_chapters_dedupes_and_persists() {

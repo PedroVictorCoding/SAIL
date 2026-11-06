@@ -16,17 +16,24 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use sail_bridge::reader::catalog::{Catalog, Metadata};
 use sail_bridge::reader::{Anchor, Book, Library, ReaderError};
 use sail_guardian::authority::ApprovalAuthority;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+type Matches = HashMap<String, (Instant, Vec<Metadata>)>;
 
 struct ReaderState {
     library: Arc<Library>,
     authority: Option<ApprovalAuthority>,
     speech: Option<Arc<dyn Narrator>>,
     speaking: tokio::sync::Semaphore,
+    catalog: Result<Catalog, String>,
+    lookup_busy: tokio::sync::Semaphore,
+    matches: Mutex<Matches>,
 }
 
 /// Speaks text literally with a local voice. Implemented by the host voice services; tests
@@ -169,6 +176,17 @@ pub fn router_with_speech(
         .route("/books/:id", get(book).delete(remove))
         .route("/books/:id/sections/:index", get(section))
         .route("/books/:id/position", get(position).put(save_position))
+        .route(
+            "/books/:id/metadata/search",
+            post(search_metadata).layer(axum::extract::DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/books/:id/metadata",
+            post(select_metadata)
+                .delete(clear_metadata)
+                .layer(axum::extract::DefaultBodyLimit::max(4096)),
+        )
+        .route("/books/:id/cover", get(cover))
         .layer(axum::extract::DefaultBodyLimit::max(
             sail_bridge::reader::MAX_IMPORT_BYTES + 1,
         ))
@@ -186,6 +204,9 @@ pub fn router_with_speech(
             authority,
             speech,
             speaking: tokio::sync::Semaphore::new(1),
+            catalog: Catalog::new(),
+            lookup_busy: tokio::sync::Semaphore::new(1),
+            matches: Mutex::new(HashMap::new()),
         }))
 }
 
@@ -241,6 +262,11 @@ fn public(book: &Book) -> Value {
         "opened_at": book.opened_at,
         "source_name": book.source_name,
         "position": book.position,
+        "metadata": book.metadata.as_ref().map(|m| {
+            let mut value = serde_json::to_value(m).expect("metadata is serializable");
+            value["source_url"] = json!(m.source_url());
+            value
+        }),
     })
 }
 
@@ -362,6 +388,137 @@ async fn save_position(
     .map_err(|_| failure(ReaderError::NotFound))?
     .map_err(failure)?;
     Ok(Json(json!({ "position": position })))
+}
+
+#[derive(Deserialize)]
+struct MetadataQuery {
+    title: String,
+    #[serde(default)]
+    author: String,
+}
+#[derive(Deserialize)]
+struct MetadataSelection {
+    work_key: String,
+}
+fn lookup_error(message: String) -> Failure {
+    (StatusCode::BAD_GATEWAY, Json(json!({"error": message})))
+}
+fn lookup_busy() -> Failure {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({"error":"Another book lookup is running. Please try again shortly."})),
+    )
+}
+async fn search_metadata(
+    State(state): State<Arc<ReaderState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<MetadataQuery>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<Value>, Failure> {
+    authorize(&state, &headers)?;
+    state.library.book(&id).map_err(failure)?;
+    let Json(query) = body.map_err(|_| {
+        failure(ReaderError::Invalid(
+            "Enter a title and optional author.".into(),
+        ))
+    })?;
+    if query.title.trim().is_empty()
+        || query.title.chars().count() > 200
+        || query.author.chars().count() > 160
+    {
+        return Err(failure(ReaderError::Invalid(
+            "Enter a title (up to 200 characters) and optional author (up to 160 characters)."
+                .into(),
+        )));
+    }
+    let _permit = state.lookup_busy.try_acquire().map_err(|_| lookup_busy())?;
+    let results = state
+        .catalog
+        .as_ref()
+        .map_err(|e| lookup_error(e.clone()))?
+        .search(&query.title, &query.author)
+        .await
+        .map_err(lookup_error)?;
+    let mut matches = state.matches.lock().unwrap();
+    matches.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(600));
+    if matches.len() >= 16 {
+        matches.clear();
+    }
+    matches.insert(id, (Instant::now(), results.clone()));
+    Ok(Json(json!({"matches": results})))
+}
+async fn select_metadata(
+    State(state): State<Arc<ReaderState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<MetadataSelection>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<Value>, Failure> {
+    authorize(&state, &headers)?;
+    state.library.book(&id).map_err(failure)?;
+    let Json(selection) =
+        body.map_err(|_| failure(ReaderError::Invalid("Choose a search result.".into())))?;
+    let candidate = state
+        .matches
+        .lock()
+        .unwrap()
+        .get(&id)
+        .filter(|(at, _)| at.elapsed() < Duration::from_secs(600))
+        .and_then(|(_, candidates)| candidates.iter().find(|c| c.work_key == selection.work_key))
+        .cloned()
+        .ok_or_else(|| {
+            failure(ReaderError::Invalid(
+                "Search again, then choose one of the returned matches.".into(),
+            ))
+        })?;
+    let _permit = state.lookup_busy.try_acquire().map_err(|_| lookup_busy())?;
+    let (metadata, cover) = state
+        .catalog
+        .as_ref()
+        .map_err(|e| lookup_error(e.clone()))?
+        .enrich(candidate)
+        .await
+        .map_err(lookup_error)?;
+    let library = state.library.clone();
+    let book = tokio::task::spawn_blocking(move || {
+        library.set_metadata(&id, Some(metadata), cover.as_deref())
+    })
+    .await
+    .map_err(|_| failure(ReaderError::NotFound))?
+    .map_err(failure)?;
+    Ok(Json(json!({"book": public(&book)})))
+}
+async fn clear_metadata(
+    State(state): State<Arc<ReaderState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, Failure> {
+    authorize(&state, &headers)?;
+    let library = state.library.clone();
+    let book = tokio::task::spawn_blocking(move || library.set_metadata(&id, None, None))
+        .await
+        .map_err(|_| failure(ReaderError::NotFound))?
+        .map_err(failure)?;
+    Ok(Json(json!({"book": public(&book)})))
+}
+async fn cover(
+    State(state): State<Arc<ReaderState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, Failure> {
+    authorize(&state, &headers)?;
+    let library = state.library.clone();
+    let bytes = tokio::task::spawn_blocking(move || library.cover(&id))
+        .await
+        .map_err(|_| failure(ReaderError::NotFound))?
+        .map_err(failure)?;
+    Ok((
+        [
+            ("content-type", "image/jpeg"),
+            ("x-content-type-options", "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 async fn speech_info(
@@ -516,6 +673,179 @@ mod tests {
             .method(method)
             .uri(uri)
             .header("authorization", format!("Bearer {TOKEN}"))
+    }
+
+    /// Explicit smoke test against the real service, never part of offline CI.
+    #[tokio::test]
+    #[ignore = "uses the real Open Library service"]
+    async fn live_open_library_lookup_roundtrip() {
+        let (app, dir) = app();
+        let (_, imported) = call(
+            &app,
+            request("POST", "/import")
+                .header("x-filename", "The Time Machine.txt")
+                .body(Body::from(
+                    "Chapter one\n\nThe Time Traveller was expounding a recondite matter to us.",
+                ))
+                .unwrap(),
+        )
+        .await;
+        let id = imported["book"]["id"].as_str().unwrap();
+        let (status, result) = call(
+            &app,
+            request("POST", &format!("/books/{id}/metadata/search"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"title":"The Time Machine","author":"H. G. Wells"}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        let candidate = &result["matches"][0];
+        assert_eq!(candidate["title"], "The Time Machine");
+        let (status, result) = call(
+            &app,
+            request("POST", &format!("/books/{id}/metadata"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"work_key":candidate["work_key"]}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        assert_eq!(result["book"]["metadata"]["cover_cached"], true, "{result}");
+        let response = app
+            .oneshot(
+                request("GET", &format!("/books/{id}/cover"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert!(image::load_from_memory(&bytes).is_ok());
+        let cached = Library::open(&dir).unwrap();
+        assert_eq!(cached.cover(id).unwrap(), bytes.as_ref());
+        assert!(cached.book(id).unwrap().metadata.is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn metadata_and_cover_require_owner_and_confirmed_search_match() {
+        let (app, dir) = app();
+        let (_, body) = call(
+            &app,
+            request("POST", "/import")
+                .header("x-filename", "sample.txt")
+                .body(Body::from("A sample book."))
+                .unwrap(),
+        )
+        .await;
+        let id = body["book"]["id"].as_str().unwrap();
+        for (method, suffix) in [
+            ("POST", "metadata/search"),
+            ("POST", "metadata"),
+            ("DELETE", "metadata"),
+            ("GET", "cover"),
+        ] {
+            let path = format!("/books/{id}/{suffix}");
+            let (status, _) = call(
+                &app,
+                Request::builder()
+                    .method(method)
+                    .uri(&path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+        }
+        let (status, _) = call(
+            &app,
+            request("POST", &format!("/books/{id}/metadata"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"work_key":"/works/OL1W"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "unconfirmed matches never trigger a network request"
+        );
+        let (status, _) = call(
+            &app,
+            request("POST", &format!("/books/{id}/metadata/search"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"title":"","author":""}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = call(
+            &app,
+            request("GET", &format!("/books/{id}/cover"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        // Cached art is available only through the same owner-authenticated local route.
+        let library = Library::open(&dir).unwrap();
+        library
+            .set_metadata(
+                id,
+                Some(Metadata {
+                    work_key: "/works/OL1W".into(),
+                    title: "A sample".into(),
+                    authors: vec![],
+                    first_publish_year: None,
+                    edition_count: None,
+                    subjects: vec![],
+                    description: None,
+                    cover_id: Some(1),
+                    cover_cached: true,
+                    retrieved_at: chrono::Utc::now(),
+                }),
+                Some(b"cached jpeg"),
+            )
+            .unwrap();
+        let cached_app = router(Arc::new(library), ApprovalAuthority::new(TOKEN).ok());
+        let response = cached_app
+            .clone()
+            .oneshot(
+                request("GET", &format!("/books/{id}/cover"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "image/jpeg");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap()
+                .as_ref(),
+            b"cached jpeg"
+        );
+        let (status, body) = call(
+            &cached_app,
+            request("DELETE", &format!("/books/{id}/metadata"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["book"]["metadata"].is_null());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

@@ -29,6 +29,7 @@ reqwest.workspace = true
 base64.workspace = true
 flate2 = "1"
 crc32fast = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 roxmltree = "0.20"
 
 [dev-dependencies]

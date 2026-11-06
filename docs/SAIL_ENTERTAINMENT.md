@@ -123,29 +123,79 @@ when the narration reaches them. **Reading and read-aloud never call Mind, Agent
   which pauses between sentences on slow devices (and the reader says so). Background or lock-screen playback and Android WebView are untested. Bookmarks, highlights, notes,
   collections, cover images, in-book search and Relay handoff are the next phases of #333.
 
-### Library composition (ambient-glass design)
+### Library composition and online book details
 
-The Library uses the design system introduced in #339: a book navigator on the left,
-featured reading and shelf in the center, and saved reading places on the right.
-Below 1180px the activity moves beneath the shelf; on phones the regions stack.
-Shared `--sail-*` tokens supply the dark material, typography colors, radii and focus.
-The featured book has a static, localized cool tint; there is no new activity reducer,
-blur, continuous animation, external artwork or runtime dependency.
+The Library follows the ambient-glass guide (#339): a compact book navigator, a
+cover-led selected book, measured progress, chapter/collection counts, shelf and
+saved reading activity. Sidebar selection updates the featured book; Continue
+Reading opens it. Below 980px the activity moves beneath the shelf, and below
+700px the regions stack. `--sail-*` tokens supply the shared material and focus.
+Reading surfaces remain opaque, and the reader's theme and narration are independent.
+The Library uses static gradients, without blur, continuous animation or new JS dependencies.
 
-Progress is the API's saved percentage **by text**, and the collection count and
-finished count derive from actual library records. Activity shows saved-position
-timestamps, not a synthetic event log. Reading time, streaks, badges and social
-rankings remain absent because the backend does not measure them. Search, imports,
-removal and reader/narration behavior keep their existing endpoints and permissions.
-The reader's light/dark preference remains independent of the dark Library.
+**Find cover & details** opens a searchable match picker. Search explicitly sends
+only the entered title and optional author to Open Library. It does not send book
+text, source paths, owner tokens or reading history. Opening the Library, importing,
+reading and searching the local shelf never initiate a catalog search. The owner
+chooses a returned match; imported metadata, text and position anchors stay intact.
+Selected online title/author appear in the Library, while original fields remain
+available for lookup and removal restores them. **About this book** progressively
+discloses the bounded description, source link and **Remove online details** action.
+The work-level first-publication year and cover may represent a different edition;
+no exact edition or page-count match is claimed. Reading time, streaks, badges and
+social rankings are not fabricated.
 
-Browser regression: `node crates/sail-dialogue/tests/library_browser_test.cjs`
-requires an existing Playwright installation (`PLAYWRIGHT_MODULE` can select its
-module path). It uses intercepted fixture responses, checks desktop/mobile widths,
-search, keyboard navigation, resume, raw import, removal, empty/error states, and
-forced-color/reduced-motion rendering. Fixture books are never shipped as library data.
-Actual Android/WebView, battery profiling and assistive-technology testing remain
-separate device checks.
+Bridge owns the adapter (`reader/catalog.rs`), using the documented
+[Search](https://openlibrary.org/dev/docs/api/search) and
+[Covers](https://openlibrary.org/dev/docs/api/covers) APIs plus the selected work's
+JSON description. Production URLs are fixed HTTPS hosts, with a narrow allowlist
+for Open Library's verified Internet Archive cover-storage redirect chain. Requests
+have 4s connect/12s total timeouts, are serialized with at least 1.1s between starts,
+and are bounded to 512KiB JSON / 2MiB cover responses. Images are decoded with
+4096px/64MiB limits, resized to at most 600×900 without upscaling, and re-encoded as
+JPEG in a blocking worker. The existing image dependency is reused. Details and
+artwork are best effort; missing covers retain a typographic fallback.
+
+Confirmed details persist in `<data root>/reader/library.json`, and validated cover
+files are private atomic writes in `books/<id>/cover-<uuid>.jpg`. The index is updated
+only after the new cover is written; replaced/removed covers are cleaned up. Old
+libraries deserialize without metadata. Cached details and covers work offline and
+are removed with the book. No third-party image URL, CDN or API key reaches the
+browser. Thumbnails use one authenticated same-origin fetch per cover version and
+shared session object URLs, loaded only near the viewport and revoked when obsolete.
+Open Library attribution links remain available; cached art is for the owner's
+private Library, not a public artwork redistribution feature.
+
+Additional owner-authenticated, `no-store` API routes under `/api/reader`:
+
+- `POST /books/:id/metadata/search` — `{title, author}`, returns at most five matches.
+- `POST /books/:id/metadata` — `{work_key}`, accepts only that book's recent server-held
+  search results (10 minutes, bounded to 16 book searches). Downloads/caches the selection.
+- `DELETE /books/:id/metadata` — removes online details and cached cover.
+- `GET /books/:id/cover` — serves the cached JPEG; no network fetch on this route.
+
+Search/selection bodies are limited to 4KiB, invalid input is rejected, and concurrent
+catalog operations return 429. Failed services and empty results have explicit UI
+feedback; the lookup sheet can be closed or retried without affecting reading.
+
+Validation commands:
+
+- `cargo test -p sail-bridge reader:: --lib`
+- `cargo test -p sail-dialogue reader_http::tests --lib`
+- `node crates/sail-dialogue/tests/reader_ui_test.cjs`
+- `node crates/sail-dialogue/tests/library_browser_test.cjs` (existing Playwright,
+  or `PLAYWRIGHT_MODULE` selecting its module path). Intercepted fixtures cover
+  metadata search/confirmation/caching/fallback/removal, search, keyboard, resume,
+  import/removal, empty/error states, four widths, reduced motion and forced colors.
+- Explicit opt-in real service smoke test:
+  `cargo test -p sail-dialogue reader_http::tests::live_open_library_lookup_roundtrip --lib -- --ignored`
+  searches *The Time Machine* by H. G. Wells, confirms a match, validates a downloaded
+  raster, reopens its local library and checks authenticated cover delivery. Network
+  unavailability or catalog changes may fail it; it is excluded from normal CI.
+
+Desktop/mobile browser screenshots have been reviewed, including a real downloaded
+cover used only in the local preview. Actual Android/WebView, battery profiling and
+assistive-technology device testing remain separate checks.
 
 ### Entertainment workspace
 
