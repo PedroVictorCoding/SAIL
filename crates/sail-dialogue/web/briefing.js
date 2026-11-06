@@ -86,9 +86,12 @@
     }
   }
 
+  // Closing marks the briefing read (the Tools Map returns to the map); it stays
+  // available in the "While You Were Away" view.
   async function dismissBriefing() {
     const deck = document.getElementById('returnBriefingDeck');
     if (deck) deck.hidden = true;
+    document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'false');
     try {
       await fetch('/api/briefing/actions/dismiss', {
         method: 'POST',
@@ -102,12 +105,15 @@
     const deck = document.getElementById('returnBriefingDeck');
     if (!deck) return;
 
-    if (!briefing || briefing.dismissed) {
+    announce({ fresh: !!briefing && !briefing.dismissed });
+    if (!briefing) {
       deck.hidden = true;
+      document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'false');
       return;
     }
 
     deck.hidden = false;
+    document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'true');
 
     // Greeting & headline
     const headlineEl = document.getElementById('briefingHeadline');
@@ -141,13 +147,7 @@
       document.getElementById('briefingLearnEstimate').textContent = `~${l.estimated_minutes} min lesson`;
       const learnBtn = document.getElementById('briefingStartLearnBtn');
       if (learnBtn) {
-        learnBtn.onclick = () => {
-          if (window.location.hash !== '#arena') {
-            window.location.hash = '#arena';
-          }
-          const memoryCard = document.getElementById('memoryCard');
-          if (memoryCard) memoryCard.scrollIntoView({ behavior: 'smooth' });
-        };
+        learnBtn.onclick = () => openPage('arena');
       }
     }
 
@@ -168,10 +168,7 @@
       });
       const eventsBtn = document.getElementById('briefingEventsBtn');
       if (eventsBtn) {
-        eventsBtn.onclick = () => {
-          const pulseCard = document.getElementById('pulseCard');
-          if (pulseCard) pulseCard.scrollIntoView({ behavior: 'smooth' });
-        };
+        eventsBtn.onclick = () => openPage('pulse');
       }
     }
 
@@ -205,6 +202,16 @@
     }
   }
 
+  function announce(detail) {
+    window.dispatchEvent(new CustomEvent('sail:briefing', { detail }));
+  }
+
+  // Open a SAIL page (Arena, Reminders) through the shared router the Tools Map follows.
+  function openPage(id) {
+    if (window.sailNavigate) window.sailNavigate(id);
+    else window.location.hash = `#${id}`;
+  }
+
   function escapeHtml(str) {
     if (!str) return '';
     return String(str)
@@ -213,6 +220,8 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
+
+  window.sailBriefing = { refresh: () => refreshBriefing(document.getElementById('briefingRefreshBtn')) };
 
   window.addEventListener('DOMContentLoaded', async () => {
     // Bind deck controls

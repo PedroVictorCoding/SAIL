@@ -10,130 +10,24 @@
 </head>
 <body>
 <main class="app-shell" id="appShell" data-state="idle">
-  <header class="dashboard-header">
-    <a class="brand" href="#home" aria-label="SAIL Home"><span class="brand-orb" aria-hidden="true"></span><span><strong>SAIL</strong><small>LOCAL ASSISTANT</small></span></a>
-    <div class="top-actions">
-      <span class="privacy-indicator" id="learningIndicator" role="status" hidden>Learning enabled</span>
-      <span class="privacy-indicator" id="micLiveIndicator" hidden><i></i><span>Mic on</span></span>
-      <span class="loading-indicator" id="speechLoadIndicator" hidden><span class="loading-short" aria-hidden="true">Voice</span><span id="speechLoadLabel">Loading voice models</span><progress id="speechLoadBar" max="100" aria-labelledby="speechLoadLabel" aria-describedby="speechLoadValue"></progress><span id="speechLoadValue" aria-live="off"></span></span>
-      <span class="loading-indicator" id="modelLoadIndicator" hidden><span class="loading-short" aria-hidden="true">Model</span><span id="modelLoadLabel">Loading model</span><progress id="modelLoadBar" max="100" aria-labelledby="modelLoadLabel" aria-describedby="modelLoadValue"></progress><span id="modelLoadValue" aria-live="off"></span></span>
-      <span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span>
-      <button class="icon-button mobile-only" id="terminalHeaderBtn" type="button" aria-label="Open Terminal" title="Terminal (Ctrl+`)"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#terminal"></use></svg></button>
-      <button class="icon-button mobile-only" id="spacesTop" type="button" aria-label="Open Spaces"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#spaces"></use></svg></button>
-      <button class="icon-button mobile-only" id="settingsOpen" type="button" aria-label="Open settings" title="Settings"><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#settings"></use></svg></button>
-    </div>
-  </header>
+  <div class="top-actions" id="topIndicators" hidden>
+    <span class="privacy-indicator" id="learningIndicator" role="status" hidden>Learning enabled</span>
+    <span class="privacy-indicator" id="micLiveIndicator" hidden><i></i><span>Mic on</span></span>
+    <span class="loading-indicator" id="speechLoadIndicator" hidden><span class="loading-short" aria-hidden="true">Voice</span><span id="speechLoadLabel">Loading voice models</span><progress id="speechLoadBar" max="100" aria-labelledby="speechLoadLabel" aria-describedby="speechLoadValue"></progress><span id="speechLoadValue" aria-live="off"></span></span>
+    <span class="loading-indicator" id="modelLoadIndicator" hidden><span class="loading-short" aria-hidden="true">Model</span><span id="modelLoadLabel">Loading model</span><progress id="modelLoadBar" max="100" aria-labelledby="modelLoadLabel" aria-describedby="modelLoadValue"></progress><span id="modelLoadValue" aria-live="off"></span></span>
+    <span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span>
+    <button class="icon-button" id="terminalHeaderBtn" type="button" aria-label="Open Terminal" title="Terminal (Ctrl+`)" hidden><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#terminal"></use></svg></button>
+    <button class="icon-button" id="spacesTop" type="button" aria-label="Open Spaces" hidden><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#spaces"></use></svg></button>
+    <button class="icon-button" id="settingsOpen" type="button" aria-label="Open settings" title="Settings" hidden><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#settings"></use></svg></button>
+  </div>
 
-  <div class="dashboard-layout">
-    <nav class="side-rail" aria-label="Main navigation">
-      <a class="quiet-button nav-item selected" id="homeNav" href="#home" data-page="home" aria-current="page"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#home"></use></svg></span><span>Home</span></a>
-      <button class="quiet-button nav-item" id="terminalRailBtn" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#terminal"></use></svg></span><span>Terminal</span></button>
-      <a class="quiet-button nav-item" id="trackerNav" href="#tracker"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#sense"></use></svg></span><span>Tracker</span></a>
-      <button class="quiet-button nav-item" id="spacesOpen" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#spaces"></use></svg></span><span>Spaces</span></button>
-      <div class="subsystem-nav" id="subsystemNav" aria-label="Subsystem pages"></div>
-      <button class="quiet-button nav-item nav-settings" id="settingsRail" type="button"><span class="nav-icon" aria-hidden="true"><svg><use href="/icons.svg#settings"></use></svg></span><span>Settings</span></button>
-    </nav>
+  <div id="homePage" hidden></div>
+  <div id="workspace" hidden></div>
+  <span id="welcomeGreeting" hidden></span>
+  <span id="localDateTime" hidden></span>
+  <div id="subsystemNav" hidden></div>
 
-    <section class="workspace" id="workspace" aria-label="Home workspace">
-      <div id="homePage">
-      <article class="welcome-card" aria-labelledby="welcomeGreeting">
-        <div class="welcome-copy"><h1 id="welcomeGreeting" tabindex="-1">Good day</h1><time id="localDateTime">Local time</time></div>
-        <div class="welcome-art" aria-hidden="true"><svg viewBox="0 0 640 160" preserveAspectRatio="none"><defs><linearGradient id="horizonLine" x1="0" x2="1"><stop stop-color="#8174d4" stop-opacity="0"/><stop offset=".48" stop-color="#d080ac" stop-opacity=".32"/><stop offset=".72" stop-color="#e7a290" stop-opacity=".42"/><stop offset="1" stop-color="#6488ce" stop-opacity="0"/></linearGradient><radialGradient id="horizonSun"><stop stop-color="#f2b39d" stop-opacity=".75"/><stop offset="1" stop-color="#e58b9c" stop-opacity="0"/></radialGradient></defs><path d="M0 127 C70 130 90 101 148 114 S226 144 288 116 374 95 423 119 511 149 558 119 614 105 640 112" fill="none" stroke="url(#horizonLine)" stroke-width="2"/><path d="M0 145 C90 140 125 120 190 132 S280 155 350 130 450 118 503 135 585 147 640 131" fill="none" stroke="url(#horizonLine)" stroke-width="1"/><circle cx="476" cy="112" r="58" fill="url(#horizonSun)"/></svg></div>
-      </article>
-
-      <!-- Return Briefing & Session Staging Deck ("While Away" Intelligence Layer) -->
-      <section class="return-briefing-deck" id="returnBriefingDeck" aria-label="Return Briefing Deck" hidden>
-        <header class="briefing-deck-header">
-          <div class="briefing-deck-meta">
-            <span class="briefing-badge">While You Were Away</span>
-            <h2 id="briefingHeadline" class="briefing-headline">SAIL prepared your return deck.</h2>
-            <time id="briefingLocalTime" class="briefing-time"></time>
-          </div>
-          <div class="briefing-deck-actions">
-            <button class="tactile-btn briefing-refresh-btn" id="briefingRefreshBtn" type="button" aria-label="Refresh briefing">↻ Refresh</button>
-            <button class="tactile-btn briefing-dismiss-btn" id="briefingDismissBtn" type="button" aria-label="Dismiss briefing">✕</button>
-          </div>
-        </header>
-
-        <div class="briefing-cards-grid">
-          <!-- 1. Staged Music Card -->
-          <article class="briefing-card briefing-music-card" id="briefingMusicCard">
-            <div class="briefing-card-top">
-              <span class="briefing-category-tag tag-music">Music Staging</span>
-              <span class="briefing-slot-badge" id="briefingMusicSlot">Focus Flow</span>
-            </div>
-            <div class="briefing-card-body">
-              <h3 id="briefingMusicTitle" class="briefing-item-title">Loading track…</h3>
-              <p id="briefingMusicArtist" class="briefing-item-sub"></p>
-              <p id="briefingMusicRationale" class="briefing-item-desc"></p>
-            </div>
-            <button class="tactile-btn tactile-action-btn music-action-btn" id="briefingPlayMusicBtn" type="button">▶ Play Staged Music</button>
-          </article>
-
-          <!-- 2. Adaptive Learning Card -->
-          <article class="briefing-card briefing-learn-card" id="briefingLearnCard">
-            <div class="briefing-card-top">
-              <span class="briefing-category-tag tag-learn">Adaptive Learning</span>
-              <span class="briefing-slot-badge" id="briefingLearnDomain">Arena Learn</span>
-            </div>
-            <div class="briefing-card-body">
-              <h3 id="briefingLearnTopic" class="briefing-item-title">Loading lesson…</h3>
-              <p id="briefingLearnEstimate" class="briefing-item-sub">~15 min lesson</p>
-              <p id="briefingLearnRationale" class="briefing-item-desc"></p>
-            </div>
-            <button class="tactile-btn tactile-action-btn learn-action-btn" id="briefingStartLearnBtn" type="button">✦ Continue Lesson</button>
-          </article>
-
-          <!-- 3. Vigilance Events Card -->
-          <article class="briefing-card briefing-events-card" id="briefingEventsCard">
-            <div class="briefing-card-top">
-              <span class="briefing-category-tag tag-events">Events & Vigilance</span>
-              <span class="briefing-slot-badge" id="briefingEventsCount">Schedule</span>
-            </div>
-            <div class="briefing-card-body">
-              <ul class="briefing-events-list" id="briefingEventsList">
-                <li class="briefing-event-item">Scanning schedule…</li>
-              </ul>
-            </div>
-            <button class="tactile-btn tactile-action-btn events-action-btn" id="briefingEventsBtn" type="button">View Reminders</button>
-          </article>
-
-          <!-- 4. News & Tech Radar Card -->
-          <article class="briefing-card briefing-news-card" id="briefingNewsCard">
-            <div class="briefing-card-top">
-              <span class="briefing-category-tag tag-news">Interest Radar</span>
-              <span class="briefing-slot-badge">Curated</span>
-            </div>
-            <div class="briefing-card-body">
-              <ul class="briefing-news-list" id="briefingNewsList">
-                <li class="briefing-news-item">Gathering radar updates…</li>
-              </ul>
-            </div>
-          </article>
-
-          <!-- 5. Continuity & Sentinel Card -->
-          <article class="briefing-card briefing-continuity-card" id="briefingContinuityCard">
-            <div class="briefing-card-top">
-              <span class="briefing-category-tag tag-continuity">Continuity & Host</span>
-              <span class="briefing-slot-badge">Healthy</span>
-            </div>
-            <div class="briefing-card-body">
-              <div class="briefing-continuity-block">
-                <span>Workspace:</span>
-                <strong id="briefingContinuityWorkspace">SAIL</strong>
-              </div>
-              <p id="briefingContinuityForge" class="briefing-item-sub">Background tasks idle.</p>
-              <p id="briefingContinuityAction" class="briefing-item-desc"></p>
-              <div class="briefing-sentinel-stats">
-                <div><span>Storage</span><small id="briefingSentinelStorage">—</small></div>
-                <div><span>Memory</span><small id="briefingSentinelMemory">—</small></div>
-              </div>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section class="workspace-grid" aria-label="Live system and session cards">
+  <div id="subsystemStore" hidden aria-hidden="true">
         <article class="workspace-card system-card" id="systemCard" data-card="systemCard">
           <header class="card-heading">
             <div class="card-title"><span class="card-icon" aria-hidden="true">⌁</span><div><h3 id="systemCardHeading">System</h3><p id="systemCardSub">Local device status</p></div></div>
@@ -477,24 +371,8 @@
             <p class="card-footnote">Interactive PTY shell running in host workspace. Supports Tab completion, ANSI colors, and Ctrl+C.</p>
           </div>
         </article>
-      </section>
-      </div>
-      <section class="subsystem-page" id="subsystemPage" aria-labelledby="subsystemTitle" hidden>
-        <header class="subsystem-header">
-          <a href="#home" class="quiet-button subsystem-back">← Home</a>
-          <p class="subsystem-eyebrow" id="subsystemEyebrow"></p>
-          <h1 id="subsystemTitle" tabindex="-1"></h1>
-          <p id="subsystemDescription"></p>
-          <button class="quiet-button" id="subsystemSettings" type="button" hidden>Open preferences</button>
-        </header>
-        <p class="subsystem-notice" id="subsystemNotice" role="status" hidden></p>
-        <div class="subsystem-content" id="subsystemContent"></div>
-        <section class="subsystem-about" aria-labelledby="subsystemAboutTitle"><h2 id="subsystemAboutTitle">Responsibilities</h2><ul id="subsystemCapabilities"></ul></section>
-      </section>
-    </section>
 
-    <div id="memoryParking" hidden>
-      <article class="workspace-card memory-card" id="memoryCard">
+        <article class="workspace-card memory-card" id="memoryCard">
         <header class="card-heading learn-card-tabs">
           <div class="card-title"><h2 class="sr-only">Arena</h2></div>
           <div class="card-heading-actions">
@@ -844,12 +722,26 @@
         <div class="card-tab-panel" id="memoryPanelMain" role="tabpanel" aria-labelledby="memoryTab" hidden>
           <header class="card-heading"><div class="card-title"><h2>Remembered knowledge</h2></div><div class="card-heading-actions"><button class="quiet-button" id="memoryRefresh" type="button">Refresh</button><button class="quiet-button" id="memoryExport" type="button">Export</button></div></header>
           <form id="memorySearch" class="memory-search"><label for="memoryQuery">Search memory</label><input id="memoryQuery" maxlength="1000" placeholder="Names, preferences, facts…"><button class="quiet-button" type="submit">Search</button></form>
-          <p id="memoryStatus" role="status">Open Arena to load memory.</p>
+          <p id="memoryStatus" role="status">Open Memory to load what SAIL remembers.</p>
           <div class="memory-layout"><div id="memoryEntities" aria-label="Remembered entities"></div><section id="memoryDetail" aria-label="Memory details"></section></div>
           <details><summary>Change history</summary><ol id="memoryHistory"></ol></details>
         </div>
       </article>
     </div>
+
+    <section class="subsystem-page" id="subsystemPage" aria-labelledby="subsystemTitle" hidden>
+      <header class="subsystem-header">
+        <a href="#home" class="quiet-button subsystem-back">← Home</a>
+        <p class="subsystem-eyebrow" id="subsystemEyebrow"></p>
+        <h1 id="subsystemTitle" tabindex="-1"></h1>
+        <p id="subsystemDescription"></p>
+        <button class="quiet-button" id="subsystemSettings" type="button" hidden>Open preferences</button>
+      </header>
+      <p class="subsystem-notice" id="subsystemNotice" role="status" hidden></p>
+      <div class="subsystem-content" id="subsystemContent"></div>
+      <section class="subsystem-about" aria-labelledby="subsystemAboutTitle"><h2 id="subsystemAboutTitle">Responsibilities</h2><ul id="subsystemCapabilities"></ul></section>
+    </section>
+
     <aside class="assistant-panel" id="homeView" aria-label="SAIL assistant">
       <div class="assistant-topline"><span class="assistant-presence" id="activityPill" hidden><i class="activity-dot"></i><span id="activityText">Working</span></span></div>
       <div class="assistant-identity">
@@ -879,8 +771,100 @@
         <button class="composer-action send-action" id="sendBtn" type="submit" aria-label="Send message" title="Send"><span aria-hidden="true">↑</span></button>
       </form>
     </aside>
-  </div>
 </main>
+
+  <!-- Return Briefing ("While You Were Away"). Lives outside the classic layout: the Tools Map
+     (toolsmap.js) moves it onto the map stage; briefing.js fills it. -->
+  <section class="return-briefing-deck" id="returnBriefingDeck" aria-label="Return Briefing Deck" hidden>
+    <header class="briefing-deck-header">
+      <div class="briefing-deck-meta">
+        <span class="briefing-badge">While You Were Away</span>
+        <h2 id="briefingHeadline" class="briefing-headline">SAIL prepared your return deck.</h2>
+        <time id="briefingLocalTime" class="briefing-time"></time>
+      </div>
+      <div class="briefing-deck-actions">
+        <button class="tactile-btn briefing-refresh-btn" id="briefingRefreshBtn" type="button" aria-label="Refresh briefing">↻ Refresh</button>
+        <button class="tactile-btn briefing-dismiss-btn" id="briefingDismissBtn" type="button" aria-label="Close briefing" title="Close (back to the map)">✕</button>
+      </div>
+    </header>
+
+    <div class="briefing-cards-grid">
+      <!-- 1. Staged Music Card -->
+      <article class="briefing-card briefing-music-card" id="briefingMusicCard">
+        <div class="briefing-card-top">
+          <span class="briefing-category-tag tag-music">Music Staging</span>
+          <span class="briefing-slot-badge" id="briefingMusicSlot">Focus Flow</span>
+        </div>
+        <div class="briefing-card-body">
+          <h3 id="briefingMusicTitle" class="briefing-item-title">Loading track…</h3>
+          <p id="briefingMusicArtist" class="briefing-item-sub"></p>
+          <p id="briefingMusicRationale" class="briefing-item-desc"></p>
+        </div>
+        <button class="tactile-btn tactile-action-btn music-action-btn" id="briefingPlayMusicBtn" type="button">▶ Play Staged Music</button>
+      </article>
+
+      <!-- 2. Adaptive Learning Card -->
+      <article class="briefing-card briefing-learn-card" id="briefingLearnCard">
+        <div class="briefing-card-top">
+          <span class="briefing-category-tag tag-learn">Adaptive Learning</span>
+          <span class="briefing-slot-badge" id="briefingLearnDomain">Arena Learn</span>
+        </div>
+        <div class="briefing-card-body">
+          <h3 id="briefingLearnTopic" class="briefing-item-title">Loading lesson…</h3>
+          <p id="briefingLearnEstimate" class="briefing-item-sub">~15 min lesson</p>
+          <p id="briefingLearnRationale" class="briefing-item-desc"></p>
+        </div>
+        <button class="tactile-btn tactile-action-btn learn-action-btn" id="briefingStartLearnBtn" type="button">✦ Continue Lesson</button>
+      </article>
+
+      <!-- 3. Vigilance Events Card -->
+      <article class="briefing-card briefing-events-card" id="briefingEventsCard">
+        <div class="briefing-card-top">
+          <span class="briefing-category-tag tag-events">Events & Vigilance</span>
+          <span class="briefing-slot-badge" id="briefingEventsCount">Schedule</span>
+        </div>
+        <div class="briefing-card-body">
+          <ul class="briefing-events-list" id="briefingEventsList">
+            <li class="briefing-event-item">Scanning schedule…</li>
+          </ul>
+        </div>
+        <button class="tactile-btn tactile-action-btn events-action-btn" id="briefingEventsBtn" type="button">View Reminders</button>
+      </article>
+
+      <!-- 4. News & Tech Radar Card -->
+      <article class="briefing-card briefing-news-card" id="briefingNewsCard">
+        <div class="briefing-card-top">
+          <span class="briefing-category-tag tag-news">Interest Radar</span>
+          <span class="briefing-slot-badge">Curated</span>
+        </div>
+        <div class="briefing-card-body">
+          <ul class="briefing-news-list" id="briefingNewsList">
+            <li class="briefing-news-item">Gathering radar updates…</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- 5. Continuity & Sentinel Card -->
+      <article class="briefing-card briefing-continuity-card" id="briefingContinuityCard">
+        <div class="briefing-card-top">
+          <span class="briefing-category-tag tag-continuity">Continuity & Host</span>
+          <span class="briefing-slot-badge">Healthy</span>
+        </div>
+        <div class="briefing-card-body">
+          <div class="briefing-continuity-block">
+            <span>Workspace:</span>
+            <strong id="briefingContinuityWorkspace">SAIL</strong>
+          </div>
+          <p id="briefingContinuityForge" class="briefing-item-sub">Background tasks idle.</p>
+          <p id="briefingContinuityAction" class="briefing-item-desc"></p>
+          <div class="briefing-sentinel-stats">
+            <div><span>Storage</span><small id="briefingSentinelStorage">—</small></div>
+            <div><span>Memory</span><small id="briefingSentinelMemory">—</small></div>
+          </div>
+        </div>
+      </article>
+    </div>
+  </section>
 
 <div class="scrim" id="scrim" hidden></div>
 <aside class="sheet spaces-sheet" id="spacesSheet" role="dialog" aria-modal="true" aria-labelledby="spacesTitle" hidden>
@@ -947,14 +931,13 @@
           <p class="vscode-category-desc">Manage runtime session state, hardware compute profile, and environment.</p>
         </div>
 
-        <div class="vscode-setting-item" data-search-terms="workspace factory tools map isometric classic dashboard">
+        <div class="vscode-setting-item" data-search-terms="workspace factory tools map isometric spatial">
           <div class="vscode-setting-info">
             <label class="vscode-setting-name" id="factoryMapLabel">Workspace</label>
-            <p class="vscode-setting-desc" id="factoryMapDesc">The Tools Map is your workspace: systems open in a large popup, with Dialogue beside the map. The classic card dashboard is still available.</p>
+            <p class="vscode-setting-desc" id="factoryMapDesc">The Tools Map is SAIL’s unified spatial workspace: inspect subsystems, explore connections, view session staging, and orchestrate dialogue.</p>
           </div>
           <div class="vscode-setting-control">
             <button class="quiet-button" type="button" id="openFactorySettings" aria-describedby="factoryMapDesc">Open Tools Map</button>
-            <a class="quiet-button" href="#classic" id="openClassicSettings">Classic dashboard</a>
           </div>
         </div>
 

@@ -142,9 +142,10 @@
       }
 
       this.socket.binaryType = 'arraybuffer';
-      this.socket.onopen = () => {
-        this.updateStatus('connected');
-        this.updateTerminalSize();
+      this.socket.onopen = async () => {
+        // The server spawns no shell until the first message carries the owner token.
+        const token = await this.ownerToken();
+        this.sendRaw({type: 'auth', token});
       };
 
       this.socket.onmessage = (event) => {
@@ -171,6 +172,16 @@
         this.updateStatus('disconnected');
         if (!this.exited) this.scheduleReconnect();
       };
+    }
+
+    async ownerToken() {
+      try {
+        if (typeof window.getOrFetchOwnerToken === 'function') {
+          const token = await window.getOrFetchOwnerToken();
+          if (token) return token;
+        }
+      } catch (_) {}
+      try { return localStorage.getItem('sail_owner_token') || ''; } catch (_) { return ''; }
     }
 
     scheduleReconnect() {
@@ -218,6 +229,13 @@
           break;
         case 'error':
           this.appendOutput(`\r\nError: ${msg.message}\r\n`);
+          break;
+        case 'locked':
+          // No shell was opened; do not retry until the owner token is set.
+          this.exited = true;
+          this.term.options.disableStdin = true;
+          this.updateStatus('disconnected');
+          this.appendOutput(`\r\n[Terminal locked: ${msg.reason}]\r\n`);
           break;
       }
     }

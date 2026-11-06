@@ -38,6 +38,7 @@ async fn live_local_audio_smoke() {
         arena: arena.clone(),
         inference: sail_mind::MindService::from_env().unwrap(),
         live_context_authority: None,
+        owner_token: None,
         plans: None,
         pulse: None,
         briefing: None,
@@ -135,6 +136,7 @@ for line in sys.stdin:
         services: services.clone(),
         arena: arena.clone(),
         inference: sail_mind::MindService::from_env().unwrap(),
+        owner_token: None,
         plans: None,
         live_context_authority: None,
         pulse: None,
@@ -246,6 +248,7 @@ for line in sys.stdin:
         services: services.clone().with_inference(inference.clone()),
         arena: arena.clone(),
         inference,
+        owner_token: None,
         plans: None,
         live_context_authority: Some(
             sail_guardian::authority::ApprovalAuthority::new(token).unwrap(),

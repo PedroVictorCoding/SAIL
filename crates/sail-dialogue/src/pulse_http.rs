@@ -178,7 +178,9 @@ async fn snooze(
 
 async fn settings(State(state): State<Arc<HttpState>>, headers: HeaderMap) -> Reply {
     authorize(&state, &headers)?;
-    Ok(Json(json!({"settings": state.pulse.settings().map_err(failure)?})))
+    Ok(Json(
+        json!({"settings": state.pulse.settings().map_err(failure)?}),
+    ))
 }
 
 async fn update_settings(

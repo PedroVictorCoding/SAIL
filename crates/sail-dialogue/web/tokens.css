@@ -24,29 +24,32 @@
   --sail-light-c: #0e121a;
   --sail-illumination: .15;
 
-  /* Backward-compatible base tokens */
-  --bg: #1C2023;
-  --panel: #24292D;
-  --surface: #24292D;
-  --surface-hover: #292F33;
-  --control: #292F33;
-  --control-hover: #30373C;
-  --recessed: #191D20;
+  /* Core base tokens mapped to Ambient Glass */
+  --bg: var(--sail-base);
+  --panel: var(--sail-surface);
+  --surface: var(--sail-surface);
+  --surface-hover: var(--sail-surface-raised);
+  --control: var(--sail-surface-raised);
+  --control-hover: #232c37;
+  --recessed: #0e121a;
 
-  --text: #F0F2F3;
-  --muted: #B5BEC5;
-  --accent: #FF8A32;
-  --focus: #FFC184;
+  --text: var(--sail-text);
+  --muted: var(--sail-text-muted);
+  --accent: var(--sail-light-a, #496f9d);
+  --focus: var(--sail-focus-ring);
 
-  --stroke: rgba(255, 255, 255, 0.06);
+  --stroke: var(--sail-glass-border);
   --border: 1px solid var(--stroke);
 
-  /* Semantic status colors with restrained illumination */
-  --good: #7DCBB2;
-  --warning: #E5BE79;
-  --listening: #88C8C4;
-  --thinking: #A99AE3;
-  --speaking: #FF8A32;
+  /* Semantic status colors with authentic ambient glow */
+  --good: #00b894;
+  --warning: #e5be79;
+  --listening: #19b5bc;
+  --thinking: #6c5ce7;
+  --speaking: #ff7a45;
+  --executing: #2d7ff9;
+  --recording: #e84118;
+  --error: #e17055;
 
   /* Spacing Scale: 4, 8, 12, 16, 24, 32, 48px */
   --space-1: 4px;
@@ -58,26 +61,27 @@
   --space-12: 48px;
 
   /* Corner Radii */
-  --radius-control: 12px;
+  --radius-control: var(--sail-radius-control);
   --radius-sm: 12px;
-  --radius-card: 20px;
+  --radius-card: var(--sail-radius-card);
   --radius-panel: 28px;
+  --radius-sheet: var(--sail-radius-sheet);
   --radius-pill: 999px;
 
-  /* Consistent Upper-Left Lighting Depth System */
-  /* 1. Base: Page background (no shadow) */
+  /* Ambient Glass & Living Light Depth System */
+  /* 1. Base: Deep canvas */
   --depth-base: none;
 
-  /* 2. Panel: Subtle elevation for grouped containers */
-  --depth-panel: 2px 4px 12px rgba(0, 0, 0, 0.5), -1px -1px 2px rgba(255, 255, 255, 0.04);
+  /* 2. Panel: Translucent elevation with soft ambient glow */
+  --depth-panel: 0 16px 48px rgba(0, 0, 0, 0.40), inset 0 1px 0 var(--sail-glass-highlight);
 
-  /* 3. Raised Control: Tactile depth for buttons and clickable controls */
-  --depth-control: 2px 3px 6px rgba(0, 0, 0, 0.55), -1px -1px 2px rgba(255, 255, 255, 0.07);
-  --depth-control-hover: 2px 4px 8px rgba(0, 0, 0, 0.65), -1px -1px 2.5px rgba(255, 255, 255, 0.1);
-  --depth-control-pressed: 1px 1px 2px rgba(0, 0, 0, 0.5), inset 1px 1px 2px rgba(0, 0, 0, 0.35);
+  /* 3. Control: Luminous interactive glass capsules */
+  --depth-control: 0 4px 14px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --depth-control-hover: 0 6px 20px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+  --depth-control-pressed: inset 0 2px 4px rgba(0, 0, 0, 0.45);
 
-  /* 4. Inset: Recessed fields, tracks, and selected segments */
-  --depth-inset: inset 2px 2px 5px rgba(0, 0, 0, 0.65), inset -1px -1px 2px rgba(255, 255, 255, 0.03);
+  /* 4. Inset: Recessed fields, tracks, and input wells */
+  --depth-inset: inset 0 2px 6px rgba(0, 0, 0, 0.55), inset 0 -1px 0 rgba(255, 255, 255, 0.03);
 
   /* Motion & transitions (120-200ms) */
   --ease-out: cubic-bezier(.22, 1, .36, 1);

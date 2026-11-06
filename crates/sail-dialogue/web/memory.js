@@ -75,5 +75,5 @@
     try {const data=await request('read',{action:'search',query:{version:1,text:document.getElementById('memoryQuery').value,limit:100,token_budget:0,expand_graph:true}});if(ticket!==serial)return;generation=data.generation;entities.replaceChildren();for(const hit of data.hits||[])entities.append(button(`${hit.entity_name}: ${hit.predicate} ${hit.value} · ${hit.status}`,()=>showEntity(hit.entity_id)));status.textContent=`${(data.hits||[]).length} matching claims.`;} catch(error){fail(error);}
   });
   document.getElementById('memoryExport').addEventListener('click',async()=>{try {const data=await request('read',{action:'export'});const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=node('a');a.href=url;a.download='sail-knowledge.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(error){fail(error);}});
-  window.addEventListener('sail:page',event=>{if(event.detail==='arena')load().catch(fail);});
+  window.addEventListener('sail:page',event=>{if(event.detail==='memory')load().catch(fail);});
 })();

@@ -55,9 +55,10 @@ def check_pages(page, url, screenshots=None):
     assert page.locator("#subsystemNav a").count() == len(ids)
     ids = [subsystem for subsystem in ids if subsystem != "factory"]
     # Card tabs follow the WAI-ARIA tabs pattern; arrow keys replace the old cycle buttons.
-    # The card dashboard is the #classic route; the default workspace is the Tools Map.
-    page.goto(url + "/#classic")
-    expect(page.locator("#homePage")).to_be_visible()
+    # The default workspace is the Tools Map.
+    page.goto(url + "/#core")
+    expect(page.locator("#tmPane #subsystemPage")).to_be_visible()
+    expect(page.locator("#systemCard")).to_be_visible()
     assert page.locator(".card-cycle-btn").count() == 0
     first = page.locator('#systemCard [role="tab"]').first
     first.focus()
@@ -67,24 +68,12 @@ def check_pages(page, url, screenshots=None):
     assert page.evaluate("document.activeElement.getAttribute('aria-controls')") == "systemPanelGuardian"
     page.keyboard.press("Home")
     expect(page.locator("#systemPanelMetrics")).to_be_visible()
-    # Tab strips sit on their own row and never overlap the card title.
-    assert page.evaluate("""[...document.querySelectorAll('.workspace-grid .card-heading')].every(h => {
-      const title = h.querySelector('.card-title').getBoundingClientRect();
-      const tabs = h.querySelector('.card-tabs')?.getBoundingClientRect();
-      return !tabs || tabs.top >= title.bottom - 1;
-    })""")
-    page.evaluate("""window.originalCards = [...document.querySelectorAll('.workspace-grid > article')];""")
+    page.evaluate("""window.originalCards = [...document.querySelectorAll('#subsystemStore > article, #subsystemContent > article')];""")
     # Every subsystem replaces the map in the workspace centre, keeping the original cards.
     for subsystem in ids:
-        link = page.locator(f'#subsystemNav a[href="#{subsystem}"]')
-        if page.locator("#homePage").is_visible():
-            link.focus()
-            page.keyboard.press("Enter")
-        else:
-            page.evaluate(f"sailNavigate('{subsystem}')")
+        page.evaluate(f"sailNavigate('{subsystem}')")
         expect(page.locator("#subsystemTitle")).to_have_text(subsystem.title())
         expect(page.locator("#tmPane #subsystemPage")).to_be_visible()
-        expect(page.locator("#homePage")).to_be_hidden()
         assert page.evaluate("document.activeElement.id") == "subsystemTitle"
         assert page.locator('#subsystemNav [aria-current="page"]').count() == 1
         assert page.evaluate("""originalCards.every(card =>
@@ -101,9 +90,9 @@ def check_pages(page, url, screenshots=None):
     expect(page.locator("#tmPane")).to_be_hidden()
     expect(page.locator("#tmViewport")).to_be_visible()
     page.goto(url + "/#classic")
-    expect(page.locator("#homePage")).to_be_visible()
-    assert page.evaluate("originalCards.every(card => card.parentElement.matches('.workspace-grid'))")
-    page.locator('#subsystemNav a[href="#forge"]').click()
+    expect(page.locator("#toolsMap")).to_be_visible()
+    expect(page.locator("#tmViewport")).to_be_visible()
+    page.locator('.tm-nav-item[data-nav="forge"]').click()
     expect(page.locator("#subsystemContent #forgeCard")).to_be_visible()
     page.locator("#forgeQuickEnqueueBtn").click()
     expect(page.locator("#forgeEnqueueDialog")).to_be_visible()
@@ -133,8 +122,8 @@ def check_pages(page, url, screenshots=None):
     if screenshots:
         page.screenshot(path=str(screenshots / "guardian-desktop.png"))
     # Spaces (classic dashboard) still routes into the workspace centre, including card panels.
-    page.goto(url + "/#classic")
-    page.locator("#spacesOpen").click()
+    page.goto(url + "/#home")
+    page.evaluate("openSheet(document.getElementById('spacesSheet'))")
     page.locator('#spaceList [data-space="vision"]').click()
     expect(page.locator("#subsystemTitle")).to_have_text("Canvas")
     expect(page.locator("#canvasPanelCamera")).to_be_visible()
@@ -142,11 +131,9 @@ def check_pages(page, url, screenshots=None):
     assert page.locator("#subsystemDirectory").count() == 0
     for width in (390, 820):
         page.set_viewport_size({"width": width, "height": 844})
-        for subsystem in [*ids, "home", "classic"]:
+        for subsystem in [*ids, "home"]:
             page.evaluate(f"sailNavigate('{subsystem}')")
-            if subsystem == "classic":
-                expect(page.locator("#homePage")).to_be_visible()
-            elif subsystem == "home":
+            if subsystem == "home":
                 expect(page.locator("#tmPane")).to_be_hidden()
                 expect(page.locator("#toolsMap")).to_be_visible()
             else:
@@ -155,7 +142,7 @@ def check_pages(page, url, screenshots=None):
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), page.evaluate("""({route:location.hash, width:innerWidth, scroll:document.documentElement.scrollWidth, wide:[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+1).map(el=>[el.id,el.className,el.getBoundingClientRect().right]).slice(0,15)})""")
     if screenshots:
         page.set_viewport_size({"width": 390, "height": 844})
-        page.evaluate("sailNavigate('classic')")
+        page.evaluate("sailNavigate('home')")
         page.screenshot(path=str(screenshots / "home-mobile.png"), full_page=True)
         page.evaluate("sailNavigate('guardian')")
         expect(page.locator("#toolsPanelSafetyReview")).to_be_visible()

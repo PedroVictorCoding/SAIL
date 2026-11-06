@@ -180,9 +180,9 @@ Choose **Watchlists** to set your places, routes, tickers, news topics and feeds
 
 All sources are free and need no account or key. SAIL fetches them only while a board is open, and keeps the history it uses for baselines in its local data directory. Road times are free-flow estimates; live road delays would need a traffic provider key, which the Tracker does not use yet. Quotes and other figures are unofficial and may be delayed.
 
-## Switch to the Tools Map interface
+## Explore the Tools Map workspace
 
-In **Settings → General → Interface style**, choose **Tools Map** to replace the card dashboard with a live map of SAIL's subsystems. Each station shows whether it is active; select one to see host metrics, its connections, tasks, recent events and configuration, or choose **Open in Workspace** to jump to its classic page. The top bar shows CPU, GPU, RAM and the fullest disk, and **Live Activity** lists Guardian decisions, plan changes and model events as they happen. Type in **Ask SAIL** (or press `Ctrl K`) to send a message, or type a station name such as `Guardian` to select it. Choose **Classic view** in the sidebar, or switch back in Settings, to return. The choice is remembered by this browser.
+The **Tools Map** is SAIL's unified spatial workspace: a live isometric map of SAIL's subsystems. Each station shows whether it is active; select one to inspect host metrics, connections, tasks, recent events, and configuration, or choose **Open in Workspace** to open its full subsystem controls in the center pane. The Return Briefing Deck appears on Home with staged music, adaptive learning, vigilance events, curated interest radar, and system continuity. The top bar displays live connection status, host resources, voice/model load progress, and **Live Activity** tracks real-time events across SAIL. Type in **Ask SAIL** (or press `Ctrl K`) to send a message or run a command.
 
 ## Hear the reply before all the text is finished
 

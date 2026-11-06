@@ -103,6 +103,25 @@
     }
   }
 
+  // Teacher diagrams (#255): Mermaid source only, never raw HTML, with an honest
+  // text fallback when the browser cannot render it.
+  function learnDiagram(entry) {
+    const source = entry && typeof entry.mermaid === 'string' ? entry.mermaid.trim() : '';
+    const caption = String((entry && (entry.caption || entry.node_id)) || 'Diagram');
+    const unsafe = /<\s*(script|html|iframe|object|embed)\b|javascript:/i.test(source);
+    const tooLarge = source.length > 8 * 1024;
+    const error = String((entry && entry.error) || '');
+    return {
+      caption,
+      mermaid: source,
+      usable: Boolean(source) && !unsafe && !tooLarge && !error,
+      error: error
+        || (unsafe ? 'The diagram contained HTML or script, so only its source is shown.'
+          : tooLarge ? 'The diagram is larger than 8 KiB, so only its source is shown.'
+            : !source ? 'This diagram has no source.' : ''),
+    };
+  }
+
   function learnSnapConfidence(value) {
     const num = Number(value);
     if (!Number.isFinite(num)) return 50;
@@ -481,6 +500,7 @@
       learnContextMeter,
       learnPracticeText,
       learnPracticeLink,
+      learnDiagram,
     };
   }
   if (!root || !root.document) return;
@@ -1494,6 +1514,55 @@
     return wrap;
   }
 
+  // Rendered diagrams are cached by session/call so a view update does not re-run
+  // Mermaid. A render failure is reported once and keeps the source visible.
+  const diagramSvgCache = new Map();
+  const diagramFailuresReported = new Set();
+  let diagramSerial = 0;
+
+  async function paintDiagram(info, callId, host) {
+    const sessionId = state.sessionId;
+    const key = `${sessionId || ''}:${callId || ''}`;
+    const cached = diagramSvgCache.get(key);
+    if (cached) {
+      host.replaceChildren(cached);
+      return;
+    }
+    const lib = root && root.mermaid;
+    if (!lib || typeof lib.render !== 'function') return;
+    try {
+      if (typeof lib.initialize === 'function') {
+        lib.initialize({startOnLoad: false, securityLevel: 'strict', theme: 'dark'});
+      }
+      const rendered = await lib.render(`learn-diagram-${++diagramSerial}`, info.mermaid);
+      const svg = typeof rendered === 'string' ? rendered : rendered && rendered.svg;
+      if (!svg) throw new Error('Mermaid returned no diagram.');
+      if (!/^\s*<svg[\s>]/i.test(svg) || /<script[\s>]/i.test(svg)) {
+        throw new Error('Mermaid returned unsafe markup.');
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'lh-diagram-svg';
+      wrap.setAttribute('role', 'img');
+      wrap.setAttribute('aria-label', info.caption);
+      wrap.innerHTML = svg;
+      diagramSvgCache.set(key, wrap);
+      if (host.isConnected) host.replaceChildren(wrap);
+    } catch (err) {
+      const message = String((err && err.message) || 'Mermaid could not render this diagram.').slice(0, 400);
+      if (!diagramFailuresReported.has(key) && sessionId && callId) {
+        diagramFailuresReported.add(key);
+        try {
+          await api(`/sessions/${encodeURIComponent(sessionId)}/diagram-error`, 'POST', {
+            call_id: callId,
+            message,
+          });
+        } catch (_) {
+          // The text fallback still shows the source; the failure note is best effort.
+        }
+      }
+    }
+  }
+
   function renderTranscript(view) {
     const list = $('learnTranscript');
     if (!list) return;
@@ -1517,15 +1586,27 @@
       } else if (entry.type === 'problem') {
         li.appendChild(renderPracticeProblemEntry(entry, view));
       } else if (entry.type === 'diagram') {
+        const info = learnDiagram(entry);
         const card = document.createElement('div');
-        card.className = 'lh-card';
+        card.className = 'lh-card lh-diagram';
         const cap = document.createElement('span');
         cap.className = 'lh-eyebrow';
-        cap.textContent = `DIAGRAM · ${entry.caption || entry.node_id}`;
+        cap.textContent = `DIAGRAM · ${info.caption}`;
+        const host = document.createElement('div');
+        host.className = 'lh-diagram-body';
         const pre = document.createElement('pre');
-        pre.textContent = entry.mermaid;
-        card.append(cap, pre);
+        pre.className = 'lh-diagram-source';
+        pre.textContent = info.mermaid || 'No diagram source.';
+        host.appendChild(pre);
+        if (info.error) {
+          const note = document.createElement('p');
+          note.className = 'lh-diagram-note';
+          note.textContent = info.error;
+          host.appendChild(note);
+        }
+        card.append(cap, host);
         li.appendChild(card);
+        if (info.usable) paintDiagram(info, entry.call_id, host);
       } else if (entry.type === 'notice') {
         if (entry.text && entry.text.startsWith('Lesson plan revision') && view.plan && !planRenderedInline) {
           planRenderedInline = true;

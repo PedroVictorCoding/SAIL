@@ -22,7 +22,7 @@
       about: 'Voice and text conversation: listening, transcription, replies and speech.'},
     {id: 'mind', name: 'Mind', sub: 'Model Hub', u: -2.4, v: 7.8, icon: 'mind', page: 'mind', endpoint: '/api/mind/status',
       about: 'Local language and speech models, compute routing and resource admission.'},
-    {id: 'memory', name: 'Memory', sub: 'Vector · Knowledge', u: 3.2, v: 8.6, icon: 'mesh', page: 'arena',
+    {id: 'memory', name: 'Memory', sub: 'Vector · Knowledge', u: 3.2, v: 8.6, icon: 'mesh', page: 'memory',
       about: 'Episodic memory and the associative knowledge graph SAIL learns from conversation.'},
     {id: 'system', name: 'System', sub: 'OS · Resources', u: 10.4, v: 10.4, icon: 'sense', page: 'core', endpoint: '/api/system/metrics',
       about: 'The host: CPU, GPU, memory, storage and throughput that every subsystem shares.'},
@@ -33,7 +33,7 @@
     {id: 'canvas', name: 'Canvas', sub: 'Projects · Notes', u: -5, v: 21.2, icon: 'canvas', page: 'canvas',
       about: 'Visual answers, diagrams and structured results from conversations.'},
     {id: 'arena', name: 'Arena', sub: 'Learn · Eval', u: -0.4, v: 21.6, icon: 'arena', page: 'arena',
-      about: 'Arena Learn teaches step by step; Arena keeps what SAIL remembers.'},
+      about: 'Arena Learn teaches step by step, from an assessment to a lesson map.'},
     {id: 'forge', name: 'Forge', sub: 'Build · Agents · Tools', u: 4.2, v: 18.6, kind: 'forge', page: 'forge', endpoint: '/api/plans/',
       about: 'Development, build and tool orchestration: plans, agents, skills and system tools.'},
     {id: 'guardian', name: 'Guardian', sub: 'Safety · Policy', u: 10.6, v: 15.4, icon: 'guardian', page: 'guardian', endpoint: '/api/guardian/status',
@@ -95,6 +95,7 @@
     const s = svg('svg', {class: 'tm-icon', 'aria-hidden': 'true', viewBox: '0 0 24 24'});
     const stroke = {fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round'};
     if (name === 'forge') { s.append(svg('path', {d: 'M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16', ...stroke})); return s; }
+    if (name === 'away') { s.append(svg('path', {d: 'M3 12a9 9 0 1 0 2.6-6.4L3 8M3 3v5h5M12 7v5l3 2', ...stroke})); return s; }
     if (name === 'tasks') { s.append(svg('path', {d: 'M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01', ...stroke})); return s; }
     s.removeAttribute('viewBox');
     s.append(svg('use', {href: `/icons.svg#${name}`}));
@@ -197,15 +198,14 @@
         navItem('entertainment', 'Entertainment', 'entertainment'), navItem('guardian', 'Guardian', 'guardian')),
       el('ul', {class: 'tm-nav tm-nav-2'},
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: (e) => openStation('forge', e.currentTarget, 'tasks')}, icon('tasks'), 'Tasks')),
-        el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: () => document.getElementById('terminalRailBtn')?.click()}, icon('terminal'), 'Terminal')),
+        el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', id: 'terminalRailBtn', onclick: () => window.sailTerminal ? window.sailTerminal.focusTerminal() : document.getElementById('terminalCard')?.classList.toggle('terminal-fullscreen')}, icon('terminal'), 'Terminal')),
         navItem('tracker', 'Tracker', 'sense')),
       el('section', {class: 'tm-np', id: 'tmNowPlaying', 'aria-label': 'Now playing', hidden: true}),
       el('div', {class: 'tm-sidecard'},
         el('p', {class: 'tm-sidecard-title'}, el('span', {class: 'tm-status', id: 'tmCoreDot'}), el('span', {id: 'tmCoreState', text: 'Connecting…'})),
         el('p', {class: 'tm-sidecard-sub', id: 'tmUptime', text: ''}),
         el('div', {class: 'tm-sidecard-actions'},
-          el('button', {class: 'tm-btn', type: 'button', onclick: openSettings}, icon('settings'), 'Settings'),
-          el('button', {class: 'tm-btn', type: 'button', onclick: () => window.sailNavigate?.('classic')}, 'Classic view'))));
+          el('button', {class: 'tm-btn', type: 'button', onclick: openSettings}, icon('settings'), 'Settings'))));
 
     const top = el('header', {class: 'tm-top'},
       el('div', {class: 'tm-crumbs'},
@@ -216,6 +216,7 @@
         el('label', {class: 'tm-sr', for: 'tmAskInput', text: 'Ask SAIL or run a command'}),
         el('input', {id: 'tmAskInput', type: 'search', placeholder: 'Ask SAIL or run a command…', autocomplete: 'off', maxlength: '2000'}),
         el('kbd', {text: 'Ctrl K'})),
+      el('div', {class: 'tm-indicators', id: 'tmTopIndicators'}),
       el('ul', {class: 'tm-meters', id: 'tmMeters', 'aria-label': 'Host resources'}),
       el('button', {class: 'tm-bell', type: 'button', id: 'tmBell', 'aria-label': 'Approvals', onclick: (e) => openStation('guardian', e.currentTarget)},
         icon('guardian'), el('span', {class: 'tm-badge', id: 'tmBellCount', hidden: true})),
@@ -228,16 +229,26 @@
         world = el('div', {class: 'tm-world'})),
       el('div', {class: 'tm-ctl tm-ctl-left'},
         el('button', {class: 'tm-btn', type: 'button', id: 'tmLive', 'aria-pressed': 'true', onclick: toggleLive}, el('span', {class: 'tm-status on', 'aria-hidden': 'true'}), 'Live'),
+        el('button', {class: 'tm-btn', type: 'button', id: 'tmBriefingBtn', 'aria-label': 'Session briefing deck', 'aria-pressed': 'false', onclick: toggleBriefing}, icon('discovery'), 'Briefing'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', id: 'tmPause', 'aria-pressed': 'false', 'aria-label': 'Pause animation', onclick: togglePause}, '❚❚'),
         el('label', {class: 'tm-sr', for: 'tmSpeed', text: 'Animation speed'}),
         el('select', {class: 'tm-btn', id: 'tmSpeed', onchange: (e) => { state.speed = Number(e.target.value); }},
           el('option', {value: '0.5', text: '0.5x'}), el('option', {value: '1', text: '1x', selected: true}), el('option', {value: '2', text: '2x'}))),
       el('div', {class: 'tm-ctl tm-ctl-mid', role: 'group', 'aria-label': 'Map view'},
-        modeBtn('topology', 'Topology'), modeBtn('map', 'Tools Map'), modeBtn('flows', 'Flows'), modeBtn('resources', 'Resources')),
+        modeBtn('topology', 'Topology'), modeBtn('map', 'Tools Map'), modeBtn('flows', 'Flows'), modeBtn('resources', 'Resources'),
+        modeBtn('away', 'While You Were Away')),
       el('div', {class: 'tm-ctl tm-ctl-right'},
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Fit map', onclick: fit}, '⛶'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom out', onclick: () => zoom(1 / 1.2)}, '−'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoom(1.2)}, '+')));
+
+    // The return briefing is the "While You Were Away" view of the map stage (data-mode
+    // "away"); briefing.js fills it by id and hides it when there is no briefing.
+    const briefing = document.getElementById('returnBriefingDeck');
+    if (briefing) { briefing.classList.add('tm-briefing'); stage.append(briefing); }
+    stage.append(el('div', {class: 'tm-away-empty'},
+      el('p', {text: 'Nothing new since you were away.'}),
+      el('button', {class: 'tm-btn', type: 'button', onclick: () => window.sailBriefing?.refresh(), text: 'Prepare a briefing'})));
 
     // Right column: the live Dialogue panel (#homeView, moved in by showChat()) and, behind
     // the other tabs, the status of the open system (SAIL Core on the map).
@@ -277,6 +288,13 @@
     syncTabs();
     const page = document.getElementById('subsystemPage');
     if (page) paneMain.prepend(page);
+    const briefingDeck = document.getElementById('returnBriefingDeck');
+    if (briefingDeck) stage.append(briefingDeck);
+    const indicators = document.getElementById('topIndicators');
+    if (indicators) {
+      indicators.hidden = false;
+      top.querySelector('#tmTopIndicators')?.append(indicators);
+    }
     buildWorld();
     bindViewport();
     document.addEventListener('keydown', (e) => {
@@ -285,11 +303,14 @@
     });
   }
   function navItem(target, label, ic) {
-    return el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', 'data-nav': target, onclick: (e) => navTo(target, e.currentTarget)}, icon(ic), label));
+    const attrs = {class: 'tm-nav-item', type: 'button', 'data-nav': target, onclick: (e) => navTo(target, e.currentTarget)};
+    if (target === 'home') attrs.id = 'homeNav';
+    return el('li', {}, el('button', attrs, icon(ic), label));
   }
   function modeBtn(mode, label) {
     return el('button', {class: 'tm-seg', type: 'button', 'data-mode': mode, 'aria-pressed': state.mode === mode ? 'true' : 'false', onclick: () => setMode(mode)},
-      icon({topology: 'mesh', map: 'spaces', flows: 'flow', resources: 'sense'}[mode]), label);
+      icon({topology: 'mesh', map: 'spaces', flows: 'flow', resources: 'sense', away: 'away'}[mode]), label,
+      mode === 'away' ? el('span', {class: 'tm-seg-dot', id: 'tmAwayDot', hidden: !state.awayFresh, title: 'New briefing'}) : null);
   }
 
   function buildWorld() {
@@ -299,11 +320,11 @@
     state.world = {minX, minY, W, H};
     svgRoot = svg('svg', {class: 'tm-svg', viewBox: `${minX} ${minY} ${W} ${H}`, width: W, height: H, 'aria-hidden': 'true'});
     svgRoot.append(svg('defs', {},
-      svg('pattern', {id: 'tmDots', width: 22, height: 22, patternUnits: 'userSpaceOnUse'}, svg('circle', {cx: 2, cy: 2, r: 1, fill: '#3a3f45'})),
+      svg('pattern', {id: 'tmDots', width: 22, height: 22, patternUnits: 'userSpaceOnUse'}, svg('circle', {cx: 2, cy: 2, r: 1, fill: 'rgba(222, 238, 255, 0.08)'})),
       svg('filter', {id: 'tmGlow', x: '-50%', y: '-50%', width: '200%', height: '200%'},
         svg('feGaussianBlur', {stdDeviation: '3', result: 'b'}),
         svg('feMerge', {}, svg('feMergeNode', {in: 'b'}), svg('feMergeNode', {in: 'SourceGraphic'}))),
-      svg('radialGradient', {id: 'tmHalo'}, svg('stop', {offset: 0, 'stop-color': '#ff8a32', 'stop-opacity': '.22'}), svg('stop', {offset: 1, 'stop-color': '#ff8a32', 'stop-opacity': '0'}))));
+      svg('radialGradient', {id: 'tmHalo'}, svg('stop', {offset: 0, 'stop-color': 'var(--sail-light-a, #496f9d)', 'stop-opacity': '.22'}), svg('stop', {offset: 1, 'stop-color': 'var(--sail-light-a, #496f9d)', 'stop-opacity': '0'}))));
     svgRoot.append(svg('rect', {x: minX, y: minY, width: W, height: H, fill: 'url(#tmDots)'}));
     const [hx, hy] = P(byId.core.gx, byId.core.gy, 0);
     svgRoot.append(svg('ellipse', {cx: hx, cy: hy, rx: 380, ry: 220, fill: 'url(#tmHalo)'}));
@@ -783,7 +804,7 @@
       const btn = (key, label, glyph) => el('button', {class: 'tm-np-btn', type: 'button', 'data-key': key, 'aria-label': label, title: label, onclick: () => spotifyControl(key)}, glyph);
       kids = [
         el('div', {class: 'tm-np-row'},
-          now.image ? el('img', {class: 'tm-np-art', src: now.image, alt: '', width: 44, height: 44, referrerpolicy: 'no-referrer'}) : el('span', {class: 'tm-np-art', 'aria-hidden': 'true'}),
+          now.image ? el('img', {class: 'tm-np-art', src: now.image, alt: '', width: 44, height: 44, crossorigin: 'anonymous', referrerpolicy: 'no-referrer'}) : el('span', {class: 'tm-np-art', 'aria-hidden': 'true'}),
           el('div', {class: 'tm-np-text'},
             el('p', {class: 'tm-np-label', text: now.is_playing ? 'Now Playing' : 'Paused'}),
             el('p', {class: 'tm-np-name', text: now.name, title: now.name}),
@@ -1070,10 +1091,17 @@
   }
 
   // ------------------------------------------------------------------ Dialogue column
-  function showChat(on) {
+  function showChat() {
     const panel = document.getElementById('homeView'); if (!panel) return;
-    if (!chatMarker) { chatMarker = document.createComment('homeView classic position'); panel.before(chatMarker); }
-    if (on) chatSlot.append(panel); else chatMarker.after(panel);
+    chatSlot.append(panel);
+  }
+  function toggleBriefing() {
+    const deck = document.getElementById('returnBriefingDeck');
+    if (!deck) return;
+    deck.hidden = !deck.hidden;
+    const btn = document.getElementById('tmBriefingBtn');
+    if (btn) btn.setAttribute('aria-pressed', String(!deck.hidden));
+    if (!deck.hidden) deck.focus?.();
   }
   function toggleLive() {
     state.live = !state.live;
@@ -1095,44 +1123,41 @@
     if (!text) return;
     const match = STATIONS.find((s) => s.name.toLowerCase() === text.toLowerCase().replace(/^(open|go to|show)\s+/, ''));
     if (match) { input.value = ''; openStation(match.id, input); return; }
-    const classic = document.getElementById('textInput'), form = document.getElementById('textForm');
-    if (classic && form) {
+    const composerInput = document.getElementById('textInput'), form = document.getElementById('textForm');
+    if (composerInput && form) {
       setTab('chat');
-      classic.value = text;
+      composerInput.value = text;
       form.requestSubmit();
       log('dialogue', `You asked: ${text.length > 80 ? `${text.slice(0, 80)}…` : text}`);
       input.value = '';
-      classic.focus();
+      composerInput.focus();
     }
   }
-  function openSettings() { (document.getElementById('settingsOpen') || document.getElementById('settingsRail'))?.click(); }
+  function openSettings() {
+    if (window.openSheet && window.contextSheet) window.openSheet(window.contextSheet);
+    else (document.getElementById('settingsOpen') || document.getElementById('settingsRail'))?.click();
+  }
 
   // ------------------------------------------------------------------ routing
-  function apply(on) {
-    if (on === state.on) return;
-    state.on = on;
-    if (on) {
-      build();
-      root.hidden = false;
-      document.documentElement.classList.add('tm-active');
-      showChat(true);
-      // The classic layout stays mounted underneath; keep it out of the tab order.
-      for (const n of document.querySelectorAll('.dashboard-header, .dashboard-layout')) n.inert = true;
-      setMode(state.mode);
-      requestAnimationFrame(() => { if (state.on) { fit(); select(state.selected); } });
-      lastFrame = 0; requestAnimationFrame(frame);
-      if (state.live) startPolling();
-    } else {
-      stopPolling();
-      if (root) { hidePane(); root.hidden = true; }
-      showChat(false);
-      for (const n of document.querySelectorAll('.dashboard-header, .dashboard-layout')) n.inert = false;
-      document.documentElement.classList.remove('tm-active');
-    }
+  function apply() {
+    if (state.on) return;
+    state.on = true;
+    build();
+    root.hidden = false;
+    document.documentElement.classList.add('tm-active');
+    showChat();
+    setMode(state.mode);
+    requestAnimationFrame(() => { if (state.on) { fit(); select(state.selected); } });
+    lastFrame = 0; requestAnimationFrame(frame);
+    if (state.live) startPolling();
   }
   function route(page) {
-    apply(page !== 'classic');
-    if (!state.on) return;
+    apply();
+    if (page === 'classic') {
+      if (window.sailNavigate) window.sailNavigate('home');
+      else location.hash = '#home';
+      return;
+    }
     if (page === 'home') { state.pending = null; hidePane(); return; }
     if (page === 'entertainment') {
       state.pending = null; showEntertainment();
@@ -1151,10 +1176,16 @@
     showStation(pending || shown || PAGE_STATION[page] || 'core', true);
   }
   const show = () => window.sailNavigate?.('home');
-  const hide = () => window.sailNavigate?.('classic');
+  const hide = () => window.sailNavigate?.('home');
   window.sailToolsMap = {show, hide, open: (id) => openStation(id)};
   window.sailFactory = window.sailToolsMap;
   window.addEventListener('sail:page', (event) => route(event.detail));
+  // A fresh briefing marks its view; closing the briefing returns to the map.
+  window.addEventListener('sail:briefing', (event) => {
+    state.awayFresh = !!event.detail?.fresh;
+    const dot = document.getElementById('tmAwayDot'); if (dot) dot.hidden = !state.awayFresh;
+    if (event.detail?.closed && state.mode === 'away' && root) setMode('map');
+  });
   document.getElementById('openFactorySettings')?.addEventListener('click', show);
   // Retire the browser-wide style preference; the map is now the workspace.
   try { localStorage.removeItem('sail_ui_style'); } catch (_) {}

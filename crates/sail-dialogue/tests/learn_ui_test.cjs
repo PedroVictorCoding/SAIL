@@ -92,6 +92,27 @@ test('practice reminders carry the topic into a new practice session', () => {
   assert.equal(ui.learnPracticeLink(`#arena?practice=${'x'.repeat(400)}`).length, 300);
 });
 
+test('diagrams render only bounded Mermaid and fall back honestly', () => {
+  const good = ui.learnDiagram({mermaid: 'flowchart TD\n  a-->b', caption: 'A to B', node_id: 'ack'});
+  assert.deepEqual([good.usable, good.caption, good.error], [true, 'A to B', '']);
+  assert.equal(ui.learnDiagram({mermaid: 'graph LR\n  x-->y', node_id: 'ack'}).caption, 'ack');
+
+  const failed = ui.learnDiagram({mermaid: 'graph LR\n  x-->y', error: 'strict Mermaid parse error'});
+  assert.equal(failed.usable, false);
+  assert.equal(failed.error, 'strict Mermaid parse error');
+
+  const script = ui.learnDiagram({mermaid: '<script>alert(1)</script>'});
+  assert.equal(script.usable, false);
+  assert.match(script.error, /HTML or script/);
+
+  const huge = ui.learnDiagram({mermaid: 'x'.repeat(8 * 1024 + 1)});
+  assert.equal(huge.usable, false);
+  assert.match(huge.error, /8 KiB/);
+
+  assert.equal(ui.learnDiagram({mermaid: '   '}).usable, false);
+  assert.match(ui.learnDiagram(null).error, /no source/);
+});
+
 test('LearnHarness confidence stop snapping, session filtering, and Sugiyama DAG layout work cleanly', () => {
   assert.equal(ui.learnSnapConfidence(0), 0);
   assert.equal(ui.learnSnapConfidence(22), 20);

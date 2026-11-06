@@ -14,21 +14,23 @@ const lastToolCalls = new Map();
 const pendingApprovalActions = new Map();
 const tiers = ['Balanced', 'HighPerformance', 'LowPower']; let tierIdx = 0;
 const ambientPalettes = {
-  idle:{ primary:'#9180E8', secondary:'#D080AC', tertiary:'#E7A290', glow:'rgba(208,128,172,.30)' },
-  listening:{ primary:'#28B7AC', secondary:'#58BFD1', tertiary:'#6488CE', glow:'rgba(40,183,172,.34)' },
-  understanding:{ primary:'#5167C9', secondary:'#8268CC', tertiary:'#A172B3', glow:'rgba(81,103,201,.34)' },
-  thinking:{ primary:'#5167C9', secondary:'#8268CC', tertiary:'#A172B3', glow:'rgba(81,103,201,.38)' },
-  tool_execution:{ primary:'#557FD1', secondary:'#66B4C9', tertiary:'#BA9672', glow:'rgba(85,127,209,.36)' },
-  searching:{ primary:'#37AAB5', secondary:'#549CCB', tertiary:'#478FA2', glow:'rgba(55,170,181,.34)' },
-  speaking:{ primary:'#E58B9C', secondary:'#E3A17C', tertiary:'#BC74B5', glow:'rgba(229,139,156,.42)' },
-  creating:{ primary:'#916BD4', secondary:'#CA80BA', tertiary:'#D6A073', glow:'rgba(145,107,212,.38)' },
-  success:{ primary:'#4FAF9C', secondary:'#83B999', tertiary:'#74AAB4', glow:'rgba(79,175,156,.34)' },
-  approval:{ primary:'#C59C62', secondary:'#AA82AC', tertiary:'#8875BA', glow:'rgba(197,156,98,.34)' },
-  error:{ primary:'#B45A69', secondary:'#834C72', tertiary:'#6A486F', glow:'rgba(180,90,105,.34)' },
-  offline:{ primary:'#566078', secondary:'#424C63', tertiary:'#4B4C60', glow:'rgba(86,96,120,.24)' },
+  idle:{ primary:'#496f9d', secondary:'#384257', tertiary:'#0e121a', glow:'rgba(73,111,157,.32)' },
+  listening:{ primary:'#19b5bc', secondary:'#104f55', tertiary:'#0a2a2f', glow:'rgba(25,181,188,.38)' },
+  understanding:{ primary:'#5b82d7', secondary:'#4834d4', tertiary:'#2c1b4d', glow:'rgba(91,130,215,.35)' },
+  thinking:{ primary:'#6c5ce7', secondary:'#4834d4', tertiary:'#2c1b4d', glow:'rgba(108,92,231,.38)' },
+  tool_execution:{ primary:'#2d7ff9', secondary:'#1e40af', tertiary:'#172554', glow:'rgba(45,127,249,.36)' },
+  searching:{ primary:'#19b5bc', secondary:'#2d7ff9', tertiary:'#141820', glow:'rgba(25,181,188,.34)' },
+  speaking:{ primary:'#ff7a45', secondary:'#ffbe76', tertiary:'#78350f', glow:'rgba(255,122,69,.42)' },
+  creating:{ primary:'#6c5ce7', secondary:'#a29bfe', tertiary:'#1e293b', glow:'rgba(108,92,231,.38)' },
+  learning:{ primary:'#00b894', secondary:'#065f46', tertiary:'#022c22', glow:'rgba(0,184,148,.36)' },
+  recording:{ primary:'#e84118', secondary:'#991b1b', tertiary:'#450a0a', glow:'rgba(232,65,24,.40)' },
+  success:{ primary:'#00b894', secondary:'#55efc4', tertiary:'#141820', glow:'rgba(0,184,148,.34)' },
+  approval:{ primary:'#e5be79', secondary:'#b28900', tertiary:'#1e1b18', glow:'rgba(229,190,121,.34)' },
+  error:{ primary:'#e17055', secondary:'#834c72', tertiary:'#3b1d24', glow:'rgba(225,112,85,.34)' },
+  offline:{ primary:'#566078', secondary:'#334155', tertiary:'#0f172a', glow:'rgba(86,96,120,.24)' },
 };
 const statePalette = state => ambientPalettes[state] || ambientPalettes.idle;
-const paletteState = state => ({ transcribing:'understanding', seeing:'searching', watching:'searching', disconnected:'offline', approval_required:'approval', interrupted:'idle', working:'tool_execution' })[state] || state;
+const paletteState = state => ({ transcribing:'understanding', seeing:'searching', watching:'searching', disconnected:'offline', approval_required:'approval', interrupted:'idle', working:'tool_execution', learning:'learning', recording:'recording' })[state] || state;
 const orbCanvas = document.getElementById('orbCanvas'), ctx = orbCanvas.getContext('2d');
 const statusBadge = document.getElementById('statusBadge'), transcriptBox = document.getElementById('transcript');
 const micBtn = document.getElementById('micBtn'), muteBtn = document.getElementById('muteBtn'), tierBtn = document.getElementById('tierBtn');
@@ -748,9 +750,17 @@ function updateState(state) {
     working:'Executing tool…', seeing:'Analyzing image…', watching:'Analyzing video…',
     interrupted:'Interrupted', disconnected:'Offline', approval_required:'Approval needed', error:'Attention needed'
   };
-  statusBadge.textContent = labels[state] || 'Ready'; document.getElementById('appShell').dataset.state = state;
+  statusBadge.textContent = labels[state] || 'Ready';
+  const shell = document.getElementById('appShell');
+  if (shell) {
+    shell.dataset.state = state;
+    shell.dataset.sailState = state;
+  }
   const palette = statePalette(paletteState(state));
   ['--ambient-one','--ambient-two','--ambient-three'].forEach((property,index) => document.documentElement.style.setProperty(property, [palette.primary,palette.secondary,palette.tertiary][index]));
+  document.documentElement.style.setProperty('--sail-light-a', palette.primary);
+  document.documentElement.style.setProperty('--sail-light-b', palette.secondary);
+  document.documentElement.style.setProperty('--sail-light-c', palette.tertiary);
   document.getElementById('sessionState').textContent = detailedLabels[state] || labels[state] || 'Ready';
   if (changed && reduceMotion.matches && !document.hidden) renderVisuals();
   syncActivityPill();

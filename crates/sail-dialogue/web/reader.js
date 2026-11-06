@@ -44,7 +44,7 @@ const SailReader = (() => {
       }
       return this.token;
     }
-    async request(path, { method = 'GET', body, filename, keepalive = false } = {}) {
+    async request(path, { method = 'GET', body, filename, keepalive = false, binary = false } = {}) {
       for (let attempt = 0; attempt < 2; attempt++) {
         const token = await this.getToken(attempt > 0);
         const response = await this.fetcher(`/api/reader${path}`, {
@@ -64,6 +64,8 @@ const SailReader = (() => {
         }
         if (response.status === 204)
           return null;
+        if (response.ok && binary)
+          return response.blob();
         const data = await response.json();
         if (!response.ok) {
           const error = new Error(data.error || 'Reader request failed.');
@@ -152,19 +154,64 @@ const SailReader = (() => {
       catch (_) {
       }
     }
+    const titleOf = book => book.metadata?.title || book.title;
+    const authorsOf = book => book.metadata?.authors?.length ? book.metadata.authors : book.authors;
+    let featuredId = null, dialogBook = null, lookupSerial = 0;
+    const coverCache = new Map();
+    const imageObserver = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
+      for (const entry of entries) if (entry.isIntersecting) {
+        imageObserver.unobserve(entry.target);
+        entry.target.loadCover?.();
+      }
+    }, {rootMargin: '200px'}) : null;
+    function coverImage(book) {
+      if (!book.metadata?.cover_cached) return null;
+      const image = el('img', undefined, 'cover-image');
+      image.alt = ''; image.decoding = 'async'; image.style.opacity = '0';
+      const cacheKey = `${book.id}:${book.metadata.retrieved_at}`;
+      image.loadCover = async () => {
+        try {
+          if (!coverCache.has(cacheKey)) {
+            const pending = api.request(`/books/${key(book)}/cover`, {binary: true})
+              .then(blob => URL.createObjectURL(blob));
+            coverCache.set(cacheKey, pending);
+          }
+          const url = await coverCache.get(cacheKey);
+          if (!image.isConnected) return;
+          image.onload = () => { image.style.opacity = '1'; };
+          image.onerror = () => { image.hidden = true; };
+          image.src = url;
+        } catch (_) { image.hidden = true; }
+      };
+      if (imageObserver) imageObserver.observe(image);
+      else setTimeout(image.loadCover, 0);
+      return image;
+    }
+    function thumbnail(book) {
+      const node = el('span', undefined, 'book-thumbnail');
+      node.append(el('span', book.format.toUpperCase()));
+      const image = coverImage(book); if (image) node.append(image);
+      return node;
+    }
     function cover(book) {
       const node = button('', () => openBook(book));
       node.className = 'cover';
-      node.append(el('strong', book.title), el('span', book.authors.join(', ') || 'Unknown author'));
-      node.setAttribute('aria-label', `Open ${book.title}`);
+      node.append(el('strong', titleOf(book)), el('span', authorsOf(book).join(', ') || 'Unknown author'));
+      const image = coverImage(book); if (image) node.append(image);
+      node.setAttribute('aria-label', `Open ${titleOf(book)}`);
       return node;
     }
     function renderLibrary() {
+      imageObserver?.disconnect();
+      const activeCoverKeys = new Set(state.books.filter(b => b.metadata?.cover_cached).map(b => `${b.id}:${b.metadata.retrieved_at}`));
+      for (const [key, pending] of coverCache) if (!activeCoverKeys.has(key)) {
+        pending.then(url => URL.revokeObjectURL(url)).catch(() => {}); coverCache.delete(key);
+      }
       $('shelf').replaceChildren();
       $('continue').replaceChildren();
       const query = $('search').value.trim().toLocaleLowerCase();
       const books = state.books.filter(book => {
-        const description = `${book.title} ${book.authors.join(' ')}`;
+        const description = `${book.title} ${titleOf(book)} ${authorsOf(book).join(' ')}`;
         return description.toLocaleLowerCase().includes(query);
       });
       $('book-list').replaceChildren();
@@ -172,22 +219,49 @@ const SailReader = (() => {
       $('library-summary').replaceChildren();
       $('book-count').textContent = `${books.length} of ${state.books.length} books`;
       for (const book of books) {
-        const entry = button('', () => openBook(book));
+        const entry = button('', () => {
+          featuredId = book.id; renderLibrary();
+          document.querySelector(`#book-list button[data-book-id="${CSS.escape(book.id)}"]`)?.focus();
+        });
         entry.className = 'book-list-entry';
-        entry.append(el('span', book.format.toUpperCase(), 'book-format'), el('span', book.title));
+        entry.dataset.bookId = book.id;
+        entry.setAttribute('aria-pressed', String(book.id === (featuredId || state.books.find(b => b.position && b.position.percent < 100)?.id || state.books[0]?.id)));
+        entry.append(thumbnail(book), el('span', titleOf(book)));
         $('book-list').append(entry);
       }
-      const recent = state.books.find(book => book.position && book.position.percent < 100)
+      const recent = state.books.find(book => book.id === featuredId)
+        || state.books.find(book => book.position && book.position.percent < 100)
         || state.books[0];
       if (recent && !query) {
         const card = el('div', undefined, 'continue-card'), info = el('div');
         const progress = recent.position?.percent;
         info.append(
           el('p', progress === undefined ? 'YOUR NEXT CHAPTER' : 'CONTINUE READING', 'eyebrow'),
-          el('h2', recent.title),
-          el('p', recent.authors.join(', ') || 'Unknown author', 'muted'),
+          el('h2', titleOf(recent)),
+          el('p', authorsOf(recent).join(', ') || 'Unknown author', 'muted'),
           button(progress === undefined ? 'Start reading →' : 'Continue reading →', () => openBook(recent))
         );
+        const details = recent.metadata;
+        const about = el('details', undefined, 'book-about');
+        about.append(el('summary', 'About this book'));
+        if (details) {
+          const edition = [details.first_publish_year ? `First published ${details.first_publish_year}` : '',
+            details.subjects?.slice(0, 2).join(' · ')].filter(Boolean).join(' · ');
+          if (edition) info.append(el('p', edition, 'book-edition muted'));
+          if (details.description) about.append(el('p', details.description, 'book-description muted'));
+          const source = el('a', 'Details from Open Library', 'metadata-source');
+          source.href = `https://openlibrary.org${details.work_key}`;
+          source.target = '_blank'; source.rel = 'noopener noreferrer'; about.append(source);
+        }
+        const actions = el('div', undefined, 'book-detail-actions');
+        const lookup = button(details ? 'Change book details' : 'Find cover & details', () => openMetadata(recent));
+        if (details) about.append(lookup); else actions.append(lookup);
+        if (details) about.append(button('Remove online details', async () => {
+          const data = await api.request(`/books/${key(recent)}/metadata`, {method: 'DELETE'});
+          state.books = state.books.map(b => b.id === recent.id ? data.book : b); renderLibrary();
+        }));
+        if (!details) info.append(actions);
+        if (details) info.append(about);
         card.append(cover(recent), info);
         $('continue').append(card);
         const panel = el('div', undefined, 'reading-progress');
@@ -197,9 +271,15 @@ const SailReader = (() => {
         const meter = el('progress');
         meter.max = 100;
         meter.value = progress ?? 0;
-        meter.setAttribute('aria-label', `Reading progress for ${recent.title}`);
+        meter.setAttribute('aria-label', `Reading progress for ${titleOf(recent)}`);
         panel.append(meter);
         $('library-summary').append(panel);
+      }
+      if (recent && !query) {
+        const chapters = el('div', undefined, 'chapter-summary');
+        chapters.append(el('p', 'CHAPTERS', 'eyebrow'), el('strong', String(recent.sections)),
+          el('p', `${recent.format.toUpperCase()} · ${recent.language || 'Language not specified'}`, 'muted'));
+        $('library-summary').append(chapters);
       }
       const collection = el('div', undefined, 'collection-summary');
       const finished = state.books.filter(book => book.position?.percent >= 100).length;
@@ -216,7 +296,7 @@ const SailReader = (() => {
         time.textContent = Number.isNaN(saved.getTime()) ? 'Saved position' : saved.toLocaleString(undefined, {
           month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
         });
-        item.append(el('p', 'SAVED PLACE', 'eyebrow'), button(book.title, () => openBook(book)),
+        item.append(thumbnail(book), el('p', 'SAVED PLACE', 'eyebrow'), button(titleOf(book), () => openBook(book)),
           el('p', `${book.position.percent.toFixed(1)}% by text`, 'muted'), time);
         $('reading-activity').append(item);
       }
@@ -224,7 +304,7 @@ const SailReader = (() => {
         $('reading-activity').append(el('p', 'Your saved reading places will appear here once you start a book.', 'muted'));
       for (const book of books) {
         const item = el('article', undefined, 'book');
-        item.append(cover(book), el('p', `${book.format.toUpperCase()} · ${book.position
+        item.append(cover(book), el('h3', titleOf(book), 'shelf-title'), el('p', authorsOf(book).join(', ') || 'Unknown author', 'shelf-author'), el('p', `${book.format.toUpperCase()} · ${book.position
           ? `${book.position.percent.toFixed(1)}% by text`
           : 'Not started'}`));
         const remove = button('Remove from library', async () => {
@@ -244,6 +324,57 @@ const SailReader = (() => {
         ? 'No books match this search.'
         : 'Your library is empty. Import a book to begin, or drop an EPUB or text file here.';
     }
+    function openMetadata(book) {
+      dialogBook = book; ++lookupSerial;
+      $('metadata-title').value = book.title.slice(0, 200);
+      $('metadata-author').value = book.authors.join(', ').slice(0, 160);
+      $('metadata-results').replaceChildren(); $('metadata-status').textContent = '';
+      $('metadata-search').disabled = false;
+      $('metadata-dialog').showModal();
+      $('metadata-title').focus();
+    }
+    $('metadata-close').onclick = () => $('metadata-dialog').close();
+    $('metadata-dialog').addEventListener('close', () => { ++lookupSerial; });
+    $('metadata-form').onsubmit = async event => {
+      event.preventDefault();
+      const serial = ++lookupSerial, book = dialogBook;
+      $('metadata-search').disabled = true;
+      $('metadata-results').replaceChildren();
+      $('metadata-status').textContent = 'Searching Open Library…';
+      try {
+        const data = await api.request(`/books/${key(book)}/metadata/search`, {method: 'POST', body: {
+          title: $('metadata-title').value, author: $('metadata-author').value
+        }});
+        if (serial !== lookupSerial) return;
+        $('metadata-status').textContent = data.matches.length ? 'Choose the matching book. Cover artwork may vary by edition.' : 'No matches found. Try another title or author.';
+        for (const match of data.matches) {
+          const result = el('article', undefined, 'metadata-result');
+          result.append(el('h3', match.title), el('p', [match.authors.join(', '), match.first_publish_year].filter(Boolean).join(' · '), 'muted'));
+          result.append(button('Use these details', async () => {
+            const selectionSerial = ++lookupSerial;
+            $('metadata-results').querySelectorAll('button').forEach(b => { b.disabled = true; });
+            $('metadata-search').disabled = true;
+            $('metadata-status').textContent = 'Saving details and downloading cover…';
+            try {
+              const saved = await api.request(`/books/${key(book)}/metadata`, {method: 'POST', body: {work_key: match.work_key}});
+              // Accepted writes still refresh the local projection after the sheet closes.
+              state.books = state.books.map(b => b.id === book.id ? saved.book : b);
+              renderLibrary();
+              if (selectionSerial !== lookupSerial) return;
+              $('metadata-dialog').close();
+              document.querySelector('#continue .book-about summary, #continue .book-detail-actions button')?.focus();
+              status(saved.book.metadata?.cover_cached ? 'Book details and cover saved for offline use.' : 'Book details saved. No cover could be downloaded; you can try again later.');
+            } catch (error) {
+              if (selectionSerial !== lookupSerial) return;
+              $('metadata-status').textContent = error.message;
+              $('metadata-results').querySelectorAll('button').forEach(b => { b.disabled = false; });
+            } finally { if (selectionSerial === lookupSerial) $('metadata-search').disabled = false; }
+          }));
+          $('metadata-results').append(result);
+        }
+      } catch (error) { if (serial === lookupSerial) $('metadata-status').textContent = error.message; }
+      finally { if (serial === lookupSerial) $('metadata-search').disabled = false; }
+    };
     async function library() {
       status('Loading library…');
       try {
