@@ -68,6 +68,7 @@
     on: false, built: false, selected: null, popup: null, tracker: false, pending: null, trigger: null, tab: 'chat', info: 'overview', chatScroll: null, mode: 'map',
     live: true, paused: false, speed: 1, k: 1, tx: 0, ty: 0,
     metrics: null, mind: null, health: null, guardian: null, approvals: 0, plans: [], reminders: [],
+    activityCollapsed: (() => { try { return localStorage.getItem('sail_tm_activity_collapsed') !== 'false'; } catch (_) { return true; } })(),
     latency: {}, history: {cpu: [], gpu: [], ram: [], io: []},
     activity: [], seen: new Set(), modelStates: {}, planStates: {}, version: '',
     online: null,
@@ -187,7 +188,10 @@
   function build() {
     if (state.built) return;
     state.built = true;
-    root = el('div', {class: 'tm-root', id: 'toolsMap', role: 'region', 'aria-label': 'SAIL Tools Map'});
+    root = el('div', {
+      class: 'tm-root', id: 'toolsMap', role: 'region', 'aria-label': 'SAIL Tools Map',
+      'data-activity-collapsed': state.activityCollapsed ? 'true' : 'false',
+    });
     const nav = el('nav', {class: 'tm-side', 'aria-label': 'Main navigation'},
       el('div', {class: 'tm-brand'}, logo(), el('div', {}, el('strong', {text: 'SAIL'}), el('span', {class: 'tm-version', id: 'tmVersion', text: 'local'}))),
       el('ul', {class: 'tm-nav'},
@@ -276,11 +280,40 @@
           el('p', {class: 'tm-empty', text: 'This system has no controls in SAIL yet.'}))),
       trackerHost = el('div', {class: 'tm-pane-tracker', hidden: true}),
       entertainmentHost = el('div', {class: 'tm-pane-entertainment', hidden: true}));
-    const activity = el('section', {class: 'tm-activity', 'aria-label': 'Live activity'},
-      el('div', {class: 'tm-activity-head'}, el('span', {class: 'tm-bolt', 'aria-hidden': 'true', text: '⚡'}),
-        el('div', {}, el('h2', {text: 'Live Activity'}), el('p', {text: 'Real-time events across SAIL'}))),
+    const activityToggle = el('button', {
+      class: 'tm-btn tm-activity-toggle', type: 'button', id: 'tmActivityToggle',
+      'aria-expanded': state.activityCollapsed ? 'false' : 'true', 'aria-controls': 'tmActivity',
+      title: state.activityCollapsed ? 'Expand Live Activity' : 'Collapse Live Activity',
+      'aria-label': state.activityCollapsed ? 'Expand Live Activity' : 'Collapse Live Activity',
+      onclick: toggleActivityCollapsed,
+    },
+      el('span', {class: 'tm-sr', text: 'Toggle Live Activity'}),
+      svg('svg', {class: `tm-icon tm-activity-toggle-icon${state.activityCollapsed ? '' : ' expanded'}`, viewBox: '0 0 24 24', 'aria-hidden': 'true'},
+        svg('path', {d: 'm18 15-6-6-6 6', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round'})));
+
+    const activityHead = el('div', {
+      class: 'tm-activity-head', onclick: toggleActivityCollapsed, role: 'button', tabindex: '0',
+      'aria-expanded': state.activityCollapsed ? 'false' : 'true', title: 'Toggle Live Activity',
+    },
+      el('span', {class: 'tm-bolt', 'aria-hidden': 'true', text: '⚡'}),
+      el('div', {class: 'tm-activity-titles'},
+        el('h2', {text: 'Live Activity'}),
+        el('p', {text: 'Real-time events across SAIL'})));
+
+    activityHead.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleActivityCollapsed(); }
+    });
+
+    const activitySummary = el('div', {class: 'tm-activity-summary', id: 'tmActivitySummary', 'aria-hidden': 'true'},
+      el('span', {class: 'tm-status on small'}),
+      el('span', {class: 'tm-activity-summary-text', id: 'tmActivitySummaryText', text: 'Active · Listening for events'}));
+
+    const activity = el('section', {class: `tm-activity${state.activityCollapsed ? ' collapsed' : ''}`, 'aria-label': 'Live activity', id: 'tmActivitySection'},
+      activityHead,
+      activitySummary,
       el('ol', {class: 'tm-activity-list', id: 'tmActivity'}),
-      el('div', {class: 'tm-histo', id: 'tmHisto', 'aria-hidden': 'true'}));
+      el('div', {class: 'tm-histo', id: 'tmHisto', 'aria-hidden': 'true'}),
+      activityToggle);
 
     root.append(nav, top, stage, pane, chat, activity);
     // Inside #appShell so the moved Dialogue panel keeps its state-driven styles.
@@ -904,6 +937,36 @@
     for (const a of state.activity) { const i = 39 - Math.floor((now - a.at) / 60000); if (i >= 0 && i < 40) bins[i]++; }
     const hi = Math.max(1, ...bins);
     $('#tmHisto').replaceChildren(...bins.map((b) => el('span', {style: `height:${Math.max(4, b / hi * 100)}%`, class: b ? 'on' : ''})));
+    const latest = state.activity[0];
+    const summaryText = document.getElementById('tmActivitySummaryText');
+    if (summaryText) {
+      summaryText.textContent = latest
+        ? `${hhmmss(latest.at)} · ${byId[latest.station]?.name || latest.station}: ${latest.text}`
+        : 'Active · Listening for events';
+    }
+  }
+
+  function toggleActivityCollapsed() {
+    setActivityCollapsed(!state.activityCollapsed);
+  }
+  function setActivityCollapsed(collapsed) {
+    state.activityCollapsed = !!collapsed;
+    try { localStorage.setItem('sail_tm_activity_collapsed', state.activityCollapsed ? 'true' : 'false'); } catch (_) {}
+    if (root) {
+      root.setAttribute('data-activity-collapsed', state.activityCollapsed ? 'true' : 'false');
+      const btn = root.querySelector('#tmActivityToggle');
+      if (btn) {
+        btn.setAttribute('aria-expanded', state.activityCollapsed ? 'false' : 'true');
+        btn.setAttribute('title', state.activityCollapsed ? 'Expand Live Activity' : 'Collapse Live Activity');
+        btn.setAttribute('aria-label', state.activityCollapsed ? 'Expand Live Activity' : 'Collapse Live Activity');
+        const icon = btn.querySelector('.tm-activity-toggle-icon');
+        if (icon) icon.classList.toggle('expanded', !state.activityCollapsed);
+      }
+      const head = root.querySelector('.tm-activity-head');
+      if (head) head.setAttribute('aria-expanded', state.activityCollapsed ? 'false' : 'true');
+      const act = root.querySelector('.tm-activity');
+      if (act) act.classList.toggle('collapsed', state.activityCollapsed);
+    }
   }
 
   // ------------------------------------------------------------------ actions
@@ -1183,7 +1246,10 @@
   }
   const show = () => window.sailNavigate?.('home');
   const hide = () => window.sailNavigate?.('home');
-  window.sailToolsMap = {show, hide, open: (id) => openStation(id)};
+  window.sailToolsMap = {
+    show, hide, open: (id) => openStation(id),
+    setActivityCollapsed, isActivityCollapsed: () => state.activityCollapsed,
+  };
   window.sailFactory = window.sailToolsMap;
   window.addEventListener('sail:page', (event) => route(event.detail));
   // A fresh briefing marks its view; closing the briefing returns to the map.
