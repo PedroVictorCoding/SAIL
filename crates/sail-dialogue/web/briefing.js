@@ -89,8 +89,9 @@
   // Closing marks the briefing read (the Tools Map returns to the map); it stays
   // available in the "While You Were Away" view.
   async function dismissBriefing() {
-    if (activeBriefing) activeBriefing.dismissed = true;
-    announce({ fresh: false, closed: true });
+    const deck = document.getElementById('returnBriefingDeck');
+    if (deck) deck.hidden = true;
+    document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'false');
     try {
       await fetch('/api/briefing/actions/dismiss', {
         method: 'POST',
@@ -107,10 +108,12 @@
     announce({ fresh: !!briefing && !briefing.dismissed });
     if (!briefing) {
       deck.hidden = true;
+      document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'false');
       return;
     }
 
     deck.hidden = false;
+    document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'true');
 
     // Greeting & headline
     const headlineEl = document.getElementById('briefingHeadline');

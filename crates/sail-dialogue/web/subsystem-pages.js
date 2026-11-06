@@ -229,6 +229,7 @@ function initializeSubsystemPages() {
   let requestedPanel = null;
   for (const id of new Set(subsystemPages.map(item => item.card).filter(Boolean))) {
     const card = document.getElementById(id);
+    if (!card) continue;
     const marker = document.createComment(`${id} Home position`);
     card.before(marker);
     cardHomes.set(card, marker);
@@ -250,26 +251,32 @@ function initializeSubsystemPages() {
     link.append(icon, label); return link;
   }
   for (const item of subsystemPages) {
-    document.getElementById('subsystemNav').append(pageLink(item, 'quiet-button nav-item'));
+    document.getElementById('subsystemNav')?.append(pageLink(item, 'quiet-button nav-item'));
   }
   // Routes: #home (also #factory) is the Tools Map workspace; a subsystem id (or #tracker)
-  // replaces the map in the workspace's centre (toolsmap.js); #classic is the card dashboard.
+  // replaces the map in the workspace's centre (toolsmap.js).
   function renderRoute(focus = true) {
-    const id = location.hash.slice(1) || 'home';
+    let id = location.hash.slice(1) || 'home';
+    if (id === 'classic') {
+      history.replaceState(null, '', '#home');
+      id = 'home';
+    }
     if (id === 'spaces') return; // Spaces overlays the current workspace.
     const found = subsystemPages.find(entry => entry.id === id);
     const item = found?.id === 'factory' ? null : found;
-    const route = item?.id || (id === 'classic' || id === 'tracker' || id === 'entertainment' ? id : 'home');
+    const route = item?.id || (id === 'tracker' || id === 'entertainment' ? id : 'home');
     if (!found && route === 'home' && id !== 'home') history.replaceState(null, '', '#home');
     closeSheet();
     // Move original nodes so socket updates, form state, and listeners stay live.
     for (const [card, marker] of cardHomes) { marker.after(card); showCardTabs(card, null); }
-    content.replaceChildren(); home.hidden = route !== 'classic'; page.hidden = !item;
-    workspace.setAttribute('aria-label', `${item?.name || (route === 'entertainment' ? 'Entertainment' : 'Home')} workspace`);
-    document.title = `SAIL — ${item?.name || {classic: 'Home', tracker: 'Tracker', entertainment: 'Entertainment'}[route] || 'Workspace'}`;
+    content.replaceChildren();
+    if (home) home.hidden = true;
+    page.hidden = !item;
+    if (workspace) workspace.setAttribute('aria-label', `${item?.name || (route === 'entertainment' ? 'Entertainment' : 'Home')} workspace`);
+    document.title = `SAIL — ${item?.name || {tracker: 'Tracker', entertainment: 'Entertainment'}[route] || 'Workspace'}`;
     document.querySelectorAll('[data-page]').forEach(link => {
       const page = link.dataset.page === 'factory' ? 'home' : link.dataset.page;
-      const selected = page === (route === 'classic' ? 'home' : route); link.classList.toggle('selected', selected);
+      const selected = page === route; link.classList.toggle('selected', selected);
       if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     });
     if (item) {
@@ -289,17 +296,18 @@ function initializeSubsystemPages() {
       }
 
     }
-    currentPage = route; requestedPanel = null; workspace.scrollTop = 0;
+    currentPage = route; requestedPanel = null;
+    if (workspace) workspace.scrollTop = 0;
     window.dispatchEvent(new CustomEvent('sail:page', {detail:route}));
     // The map restores focus to whatever opened a closed popup.
-    if (focus && (item || route === 'classic')) (item ? title : document.getElementById('welcomeGreeting')).focus({ preventScroll:true });
+    if (focus && item) title.focus({ preventScroll:true });
   }
   window.sailNavigate = (id, panel = null) => {
     requestedPanel = panel;
     if (location.hash === `#${id}`) renderRoute(); else location.hash = id;
   };
   window.sailCurrentPage = () => currentPage;
-  document.getElementById('homeNav').addEventListener('click', event => {
+  document.getElementById('homeNav')?.addEventListener('click', event => {
     if (currentPage === 'home' && location.hash !== '#spaces') { event.preventDefault(); renderRoute(); }
   });
   window.addEventListener('hashchange', () => renderRoute()); renderRoute(false);

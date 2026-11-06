@@ -122,7 +122,11 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-ask input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--tm-text); }
 .tm-ask input::placeholder { color: var(--tm-dim); }
 .tm-ask kbd { font: 11px ui-monospace, monospace; color: var(--tm-muted); padding: 2px 6px; border: 1px solid var(--tm-line); border-radius: 5px; background: var(--tm-panel-2); }
-.tm-meters { list-style: none; display: flex; gap: 22px; margin: 0 0 0 auto; padding: 0; }
+.tm-indicators { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.tm-top-indicators { display: flex; align-items: center; gap: 8px; }
+.tm-top-indicators .connection-pill, .tm-top-indicators .privacy-indicator { min-height: 32px; font-size: 11px; padding: 0 10px; }
+.tm-top-indicators .loading-indicator { min-height: 32px; }
+.tm-meters { list-style: none; display: flex; gap: 22px; margin: 0; padding: 0; }
 .tm-meter { display: grid; gap: 2px; min-width: 70px; }
 .tm-meter-label { font-size: 11px; color: var(--tm-muted); }
 .tm-meter-value { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; white-space: nowrap; }
@@ -141,6 +145,31 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-stage {
   grid-area: stage; position: relative; overflow: hidden; border-radius: 12px; border: 1px solid var(--tm-line);
   background: radial-gradient(ellipse 70% 60% at 55% 55%, #1c1f23, var(--tm-stage) 70%);
+}
+.tm-stage .return-briefing-deck {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  z-index: 5;
+  margin: 0;
+  max-height: calc(100% - 75px);
+  overflow-y: auto;
+  border-radius: var(--radius-card, 16px);
+  background: rgba(18, 22, 28, 0.88);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  scrollbar-width: thin;
+  scrollbar-color: #3b4148 transparent;
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+.tm-stage .return-briefing-deck[hidden] {
+  display: none !important;
+}
+.tm-stage:has(.return-briefing-deck:not([hidden])) .tm-title {
+  opacity: 0;
+  pointer-events: none;
 }
 .tm-title { position: absolute; z-index: 2; left: 22px; top: 18px; pointer-events: none; }
 .tm-title h2 { margin: 0; font-size: 30px; line-height: 1.08; letter-spacing: 0.03em; font-weight: 700; color: #d9dcdf; }
