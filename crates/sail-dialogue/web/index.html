@@ -774,11 +774,11 @@
                         <div class="lh-stats-bar lh-session-stats-bar">
                           <div class="lh-stats-left">
                             <button type="button" class="lh-stats-trigger" id="learnStatsBtn" title="View session context and token breakdown">
-                              <span id="learnContextText">0 / 24k tokens · 0 turns</span>
+                              <span id="learnContextText">Context 0% used · 0 tokens · 0 turns</span>
                             </button>
                             <div class="lh-popover lh-stats-popover" id="learnStatsPopover" hidden>
                               <div class="lh-popover-title">Session Stats</div>
-                              <div class="lh-context-meter-bar"><div class="lh-context-meter-fill" id="learnContextMeterFill"></div></div>
+                              <div class="lh-context-meter-bar" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="lh-context-meter-fill" id="learnContextMeterFill"></div></div>
                               <div class="lh-stats-summary-grid" id="learnStatsSummaryGrid"></div>
                               <div class="lh-stats-turns-list" id="learnStatsTurnsList"></div>
                             </div>

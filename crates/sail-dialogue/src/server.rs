@@ -144,6 +144,7 @@ pub async fn run_dialogue_server_with_plans(
     let (learn_engine, learn_routes) =
         learn_services(&inference, &arena, authority(), pulse.clone());
     let tracker_routes = tracker_routes(authority());
+    let reader_routes = crate::reader_http::routes(authority(), services.clone());
     let system_routes = crate::system_http::router(authority());
     let spotify_routes = crate::spotify_http::router(authority());
     let briefing_dir = sail_common::storage::resolve().path.join("briefing");
@@ -161,6 +162,7 @@ pub async fn run_dialogue_server_with_plans(
     let pulse_routes = pulse
         .clone()
         .map(|pulse| crate::pulse_http::router(pulse, authority()));
+    let dictation_routes = crate::dictation_http::router(services.clone(), authority());
     let approval_routes = crate::approval_http::router_with_token(
         owner_authority,
         sail_guardian::global_broker().ok(),
@@ -169,6 +171,7 @@ pub async fn run_dialogue_server_with_plans(
     let mut app = Router::new()
         .nest_service("/api/guardian", approval_routes)
         .nest_service("/api/memory", memory_routes)
+        .nest_service("/api/speech", dictation_routes)
         .nest_service(
             "/voice-assets",
             crate::web_assets::router(crate::web_assets::assets_dir()),
@@ -202,6 +205,9 @@ pub async fn run_dialogue_server_with_plans(
     }
     if let Some(routes) = tracker_routes {
         app = app.nest_service("/api/tracker", routes);
+    }
+    if let Some(routes) = reader_routes {
+        app = app.nest_service("/api/reader", routes);
     }
     let app = app.layer(axum::middleware::map_response(cross_origin_isolation));
     match (

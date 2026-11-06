@@ -3807,7 +3807,7 @@ a.nav-item { text-decoration:none; color:var(--muted) }
 
 /* ==========================================================================
    Return Briefing & Session Staging Deck ("While Away" Intelligence Layer)
-   Adheres to DESIGN.md dark tactile neumorphism and WCAG AA contrast.
+   Adheres to DESIGN.md ambient glass, living light, and WCAG AA contrast.
    ========================================================================== */
 .return-briefing-deck {
   margin-bottom: var(--space-6);
@@ -4154,3 +4154,14 @@ a.nav-item { text-decoration:none; color:var(--muted) }
   text-overflow: ellipsis;
 }
 
+
+/* Learn dictation: shared graphite material and explicit recording/status text. */
+.learn-dictation-controls { display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2, 8px); margin-top:8px; }
+.learn-dictate { background:var(--surface); color:var(--text); border:1px solid var(--muted); border-radius:var(--radius-control, 12px); box-shadow:var(--depth-control); padding:8px 12px; min-height:44px; cursor:pointer; font:inherit; }
+.learn-dictate:hover { box-shadow:var(--depth-control-hover); }
+.learn-dictate[aria-pressed="true"] { box-shadow:var(--depth-inset); border-color:var(--accent); }
+.learn-dictate:focus-visible { outline:3px solid var(--focus, #FFC184); outline-offset:3px; }
+.learn-dictate:disabled { cursor:wait; opacity:.65; }
+.learn-dictation-status { color:var(--text); font-size:.875rem; overflow-wrap:anywhere; }
+.learn-dictation-status[data-phase="error"] { font-weight:600; }
+@media (forced-colors: active) { .learn-dictate { border:1px solid ButtonText; } .learn-dictate[aria-pressed="true"] { border:3px double Highlight; } }

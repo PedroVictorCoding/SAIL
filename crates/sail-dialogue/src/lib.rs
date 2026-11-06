@@ -6,6 +6,7 @@ pub mod control;
 pub mod conversation_controller;
 #[cfg(test)]
 mod conversation_controller_tests;
+pub mod dictation_http;
 mod execution;
 pub mod learn_http;
 pub mod live_context;
@@ -17,6 +18,7 @@ pub mod pipeline;
 pub mod plans;
 pub mod prompt;
 pub mod pulse_http;
+pub mod reader_http;
 pub mod server;
 mod speech;
 pub mod spotify_http;

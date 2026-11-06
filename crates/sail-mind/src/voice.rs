@@ -34,6 +34,11 @@ impl WorkerClient {
         }
     }
     async fn request(&self, request: Value) -> Result<Value> {
+        self.request_with(request, true).await
+    }
+    /// `voice_priority` false runs the request without opening a voice turn, so it does not
+    /// cancel background inference or builds (used for book narration, which runs for hours).
+    async fn request_with(&self, request: Value, voice_priority: bool) -> Result<Value> {
         let permit = self.capacity.clone().try_acquire_owned().map_err(|_| {
             warn!(engine = self.mode, "Speech worker queue is full");
             SailError::Inference(format!("{} worker queue full", self.mode))
@@ -51,7 +56,8 @@ impl WorkerClient {
             let _permit = permit;
             // Draining an accepted speech request retains voice priority even if its
             // original turn is aborted; the worker still consumes compute.
-            let _voice = (this.mode != "vad").then(|| this.scheduler.voice_turn());
+            let _voice =
+                (this.mode != "vad" && voice_priority).then(|| this.scheduler.voice_turn());
             let mut slot = this.worker.lock().await;
             let started=Instant::now();
             if this.mode!="vad"{debug!(engine=this.mode,queue_wait_ms=queued.elapsed().as_millis(),"Acquired speech worker; sending request");}
@@ -260,6 +266,32 @@ impl VoiceModelServices {
         speed: f32,
         threads: usize,
     ) -> Result<(Vec<i16>, u32)> {
+        self.synthesize_with(text, voice, language, speed, threads, true)
+            .await
+    }
+    /// Synthesis for reading a book aloud: the same Kokoro worker, but it never opens a voice
+    /// turn, so hours of narration do not keep cancelling background work. The worker serves
+    /// requests in order, so callers keep one reading request in flight at a time; then
+    /// conversation speech waits for at most one sentence.
+    pub async fn synthesize_reading(
+        &self,
+        text: &str,
+        voice: &str,
+        language: &str,
+        speed: f32,
+    ) -> Result<(Vec<i16>, u32)> {
+        self.synthesize_with(text, voice, language, speed, 4, false)
+            .await
+    }
+    async fn synthesize_with(
+        &self,
+        text: &str,
+        voice: &str,
+        language: &str,
+        speed: f32,
+        threads: usize,
+        voice_priority: bool,
+    ) -> Result<(Vec<i16>, u32)> {
         info!(
             voice,
             language,
@@ -268,9 +300,18 @@ impl VoiceModelServices {
             text_chars = text.chars().count(),
             "Requesting local Kokoro synthesis"
         );
-        debug!(text, "Text submitted to speech synthesis");
+        if voice_priority {
+            // Book text never reaches the logs.
+            debug!(text, "Text submitted to speech synthesis");
+        }
         let started = Instant::now();
-        let v = self.tts.request(json!({"text":text,"voice":voice,"language":language,"speed":speed,"threads":threads})).await?;
+        let v = self
+            .tts
+            .request_with(
+                json!({"text":text,"voice":voice,"language":language,"speed":speed,"threads":threads}),
+                voice_priority,
+            )
+            .await?;
         let bytes = STANDARD
             .decode(v["pcm"].as_str().unwrap_or_default())
             .map_err(|e| SailError::Inference(e.to_string()))?;

@@ -16,8 +16,9 @@ const SailClientSpeech = (() => {
       this.worker = new Worker(`/client-speech-worker.js?role=${role}`, { type: 'module' });
       this.nextId = 1; this.pending = new Map();
       this.ready = new Promise((resolve, reject) => {
+        this.rejectReady = reject;
         this.worker.onmessage = ({ data }) => {
-          if (data.ready) { resolve(); return; }
+          if (data.ready) { resolve(data); return; }
           if (data.progress) { onProgress(data.progress); return; }
           const call = this.pending.get(data.id); if (!call) return;
           this.pending.delete(data.id);
@@ -26,6 +27,7 @@ const SailClientSpeech = (() => {
         this.worker.onerror = event => {
           event.preventDefault();
           const error = new Error(event.message || `Speech ${role} worker failed`);
+          this.failed = error;
           reject(error);
           for (const call of this.pending.values()) call.reject(error);
           this.pending.clear();
@@ -34,13 +36,20 @@ const SailClientSpeech = (() => {
     }
     async call(op, fields = {}, transfer = []) {
       await this.ready;
+      if (this.failed) throw this.failed;
       const id = this.nextId++;
       return new Promise((resolve, reject) => {
         this.pending.set(id, { resolve, reject });
         this.worker.postMessage({ id, op, ...fields }, transfer);
       });
     }
-    terminate() { this.worker.terminate(); }
+    terminate() {
+      this.worker.terminate(); const error = new Error('Speech worker stopped.');
+      this.failed = error;
+      this.rejectReady(error);
+      for (const call of this.pending.values()) call.reject(error);
+      this.pending.clear();
+    }
   }
 
   // The host's turn detector (crates/sail-dialogue/src/vad.rs) with the same thresholds,
@@ -101,17 +110,24 @@ const SailClientSpeech = (() => {
   function stop(detail = 'Speech runs on the SAIL host.') {
     engine.vadWorker?.terminate(); engine.speechWorker?.terminate();
     Object.assign(engine, { status: 'off', detail, device: null, voices: [], stt: false, tts: false, measured: null, vadWorker: null, speechWorker: null, settled: true, loading: null });
-    engine.detector.reset();
+    engine.detector.reset(); ttsOnly = null; speechEpoch++;
   }
 
   // Load the chain if this browser and the host support it. Resolves to the engine state;
   // on any failure the engine stays off and the host workers keep handling speech.
-  async function load(onStatus = () => {}) {
+  let fullLoad = null;
+  function load(onStatus = () => {}) {
+    if (fullLoad) return fullLoad;
+    fullLoad = loadFull(onStatus).finally(() => { fullLoad = null; });
+    return fullLoad;
+  }
+  async function loadFull(onStatus = () => {}) {
     if (!preferred()) { stop('Speech runs on the SAIL host (chosen in settings).'); onStatus(engine); return engine; }
     if (engine.status === 'ready' || engine.status === 'loading') return engine;
     if (typeof Worker === 'undefined' || typeof WebAssembly === 'undefined') {
       stop('This browser cannot run on-device speech; the SAIL host handles it.'); onStatus(engine); return engine;
     }
+    if (ttsOnly) { await ttsOnly.catch(() => {}); stop(); ttsOnly = null; }
     try {
       const manifest = await fetch('/voice-assets/manifest.json', { cache: 'no-cache' });
       if (!manifest.ok) { stop('On-device speech is not installed on the SAIL host; the host handles speech.'); onStatus(engine); return engine; }
@@ -162,6 +178,45 @@ const SailClientSpeech = (() => {
     return engine;
   }
 
+  let ttsOnly = null, speechEpoch = 0;
+  // Reuse the Dialogue worker whenever it has Kokoro resident. Otherwise load only
+  // Kokoro from the same SAIL assets; no VAD, Whisper or conversation speed gate.
+  // load() retires this worker before loading the full Dialogue chain.
+  async function loadTts() {
+    if (engine.speechWorker?.failed) {
+      engine.speechWorker.terminate(); engine.speechWorker = null; engine.voices = []; ttsOnly = null;
+    }
+    if (engine.speechWorker && engine.voices.length) return { voices: engine.voices, device: 'wasm' };
+    if (fullLoad) {
+      await fullLoad;
+      if (engine.speechWorker && engine.voices.length) return { voices: engine.voices, device: 'wasm' };
+    }
+    if (ttsOnly) return ttsOnly;
+    const epoch = speechEpoch;
+    const task = (async () => {
+      if (typeof Worker === 'undefined' || typeof WebAssembly === 'undefined') throw new Error('On-device TTS is unavailable.');
+      const response = await fetch('/voice-assets/manifest.json', {cache:'no-store'});
+      if (!response.ok) throw new Error('On-device TTS is not installed.');
+      if (epoch !== speechEpoch) throw new Error('Speech loading canceled.');
+      const worker = new EngineWorker('tts');
+      engine.speechWorker = worker;
+      let timer;
+      try {
+        const ready = await Promise.race([worker.call('load'), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('On-device TTS took too long to load.')), 120000); })]);
+        if (epoch !== speechEpoch) throw new Error('Speech loading canceled.');
+        engine.voices = ready.voices;
+        // Keep Dialogue's status/benchmark flags unchanged in this TTS-only mode.
+        return {voices:ready.voices, device:'wasm'};
+      } catch (error) {
+        worker.terminate();
+        if (engine.speechWorker === worker) { engine.speechWorker = null; engine.voices = []; }
+        throw error;
+      } finally { clearTimeout(timer); }
+    })();
+    ttsOnly = task;
+    try { return await task; } catch (error) { if (ttsOnly === task) ttsOnly = null; throw error; }
+  }
+
   // Speak a short phrase and transcribe it back; also warms both models.
   async function benchmark() {
     const t0 = performance.now();
@@ -181,7 +236,7 @@ const SailClientSpeech = (() => {
 
   const ready = () => engine.status === 'ready';
   return {
-    engine, load, stop, ready, preferred, setPreferred,
+    engine, load, loadTts, stop, ready, preferred, setPreferred,
     sttOnDevice: () => ready() && engine.stt,
     ttsOnDevice: voice => ready() && engine.tts && engine.voices.includes(voice),
     resample,

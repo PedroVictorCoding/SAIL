@@ -7,7 +7,7 @@ const spaces = subsystemPages.map(page => ({
     window.sailNavigate('canvas', 'canvasPanelCamera');
   } },
   { id:'life', name:'Life', subtitle:'Personal space', available:false },
-  { id:'entertainment', name:'Entertainment', subtitle:'Listen and read', available:false },
+  { id:'entertainment', name:'Entertainment', subtitle:'Listen and read', available:true, action:() => window.sailNavigate('entertainment') },
   { id:'sense', name:'Sense', subtitle:'Context', available:false },
   { id:'mesh', name:'Mesh', subtitle:'Local network', available:false },
   { id:'lab', name:'Lab', subtitle:'Experiments', available:false },
