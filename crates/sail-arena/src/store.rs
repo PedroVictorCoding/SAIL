@@ -300,6 +300,18 @@ impl MemoryStore {
         })
     }
 
+    /// Write a consistent, compacted copy of the whole database to `dest`, which must not
+    /// exist. Safe while the store is in use.
+    pub fn copy_to(&self, dest: &Path) -> StoreResult<()> {
+        let dest = dest
+            .to_str()
+            .ok_or_else(|| StoreError(format!("non UTF-8 path {}", dest.display())))?;
+        self.with_writer(|conn| {
+            conn.execute("VACUUM INTO ?1", [dest])?;
+            Ok(())
+        })
+    }
+
     /// Merge FTS segments and checkpoint the WAL. Run when idle (e.g. nightly), not per turn.
     pub fn maintain(&self) -> StoreResult<()> {
         self.with_writer(|conn| {

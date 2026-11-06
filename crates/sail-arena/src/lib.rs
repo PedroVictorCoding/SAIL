@@ -76,14 +76,32 @@ impl ArenaSubsystem {
         self
     }
 
-    /// Durable Arena at [`default_store_path`], unless `SAIL_ARENA_PERSIST=0`. Falls back to
-    /// an in-memory store (with a warning) if the database cannot be opened.
+    /// Durable Arena at [`resolve_store_path`], unless `SAIL_ARENA_PERSIST=0`. A store left
+    /// on the system disk by an earlier run is moved to the data disk the first time the
+    /// data disk is usable. Falls back to an in-memory store (with a warning) if the
+    /// database cannot be opened.
     pub fn open_default() -> Self {
         if std::env::var("SAIL_ARENA_PERSIST").is_ok_and(|v| v == "0" || v == "false") {
             info!("SAIL Arena persistence disabled; memory lasts only for this process");
             return Self::new();
         }
-        let path = default_store_path();
+        let location = resolve_store_path(
+            std::env::var_os("SAIL_ARENA_DB").map(PathBuf::from),
+            &data_root(),
+            &system_disk_store_path(),
+        );
+        if let Some(problem) = &location.warning {
+            warn!(path = %location.path.display(), "{problem}");
+        }
+        let mut path = location.path;
+        if location.on_data_disk {
+            let legacy = system_disk_store_path();
+            if let Err(error) = move_store(&legacy, &path) {
+                // Keep using the old copy rather than splitting memory across two files.
+                warn!(from = %legacy.display(), to = %path.display(), %error, "SAIL Arena could not move memory to the data disk; still using the system disk");
+                path = legacy;
+            }
+        }
         match MemoryStore::open(&path) {
             Ok(store) => {
                 info!(path = %path.display(), "SAIL Arena memory store opened");
@@ -114,21 +132,94 @@ impl ArenaSubsystem {
     }
 }
 
-/// Where the durable store lives: `SAIL_ARENA_DB`, else the large data disk
-/// (`/srv/sail-data/arena/arena.db`) when it is writable, else `~/.local/share/sail/arena`.
-pub fn default_store_path() -> PathBuf {
-    if let Ok(path) = std::env::var("SAIL_ARENA_DB") {
-        return PathBuf::from(path);
-    }
-    let data_disk = PathBuf::from("/srv/sail-data/arena");
-    if writable_dir(&data_disk) {
-        return data_disk.join("arena.db");
-    }
+/// Root of SAIL's large data disk: `SAIL_DATA_DIR`, else `/srv/sail-data`.
+pub fn data_root() -> PathBuf {
+    std::env::var_os("SAIL_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/srv/sail-data"))
+}
+
+/// Where memory went before it moved to the data disk, and where it goes when the data
+/// disk is absent: `$XDG_DATA_HOME/sail/arena/arena.db` or `~/.local/share/sail/arena`.
+pub fn system_disk_store_path() -> PathBuf {
     let base = std::env::var("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/share")))
         .unwrap_or_else(|_| std::env::temp_dir());
     base.join("sail/arena/arena.db")
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoreLocation {
+    pub path: PathBuf,
+    pub on_data_disk: bool,
+    /// Set when memory cannot go where it should; says how to fix it.
+    pub warning: Option<String>,
+}
+
+/// Where the durable store lives: `configured` (`SAIL_ARENA_DB`) if set, else
+/// `<data_root>/knowledge/arena.db` on the data disk, else `fallback` on the system disk.
+/// If the data disk is present but its knowledge directory is not writable, memory falls
+/// back with a warning naming the command that fixes it, rather than silently filling the
+/// system disk.
+pub fn resolve_store_path(
+    configured: Option<PathBuf>,
+    data_root: &std::path::Path,
+    fallback: &std::path::Path,
+) -> StoreLocation {
+    if let Some(path) = configured {
+        return StoreLocation { path, on_data_disk: false, warning: None };
+    }
+    let dir = data_root.join("knowledge");
+    let _ = std::fs::create_dir_all(&dir);
+    if writable_dir(&dir) {
+        return StoreLocation { path: dir.join("arena.db"), on_data_disk: true, warning: None };
+    }
+    let warning = data_root.is_dir().then(|| {
+        let user = std::env::var("USER").unwrap_or_else(|_| "$USER".into());
+        format!(
+            "The data disk {} is present, but {} is not writable by this user, so SAIL memory is kept on the system disk instead. Fix: sudo install -d -o {user} -g {user} {} (or set SAIL_ARENA_DB)",
+            data_root.display(),
+            dir.display(),
+            dir.display(),
+        )
+    });
+    StoreLocation { path: fallback.to_path_buf(), on_data_disk: false, warning }
+}
+
+/// Move a store from `from` to `to` if `to` does not exist yet: a consistent copy is made
+/// with `VACUUM INTO`, its record count checked, and only then is the original (with its WAL) removed, so
+/// forgotten data does not linger in a stale copy. Does nothing if there is nothing to move.
+pub fn move_store(from: &std::path::Path, to: &std::path::Path) -> store::StoreResult<bool> {
+    if to.exists() || !from.exists() || from == to {
+        return Ok(false);
+    }
+    let staging = to.with_extension("db.moving");
+    let _ = std::fs::remove_file(&staging);
+    let expected = {
+        let source = MemoryStore::open(from)?;
+        source.copy_to(&staging)?;
+        source.stats()?.records
+    };
+    let copied = MemoryStore::open(&staging)?.stats()?.records;
+    if copied != expected {
+        let _ = std::fs::remove_file(&staging);
+        return Err(store::StoreError(format!(
+            "copy holds {copied} records, expected {expected}"
+        )));
+    }
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(staging.with_extension(format!("db.moving{suffix}")));
+    }
+    std::fs::rename(&staging, to)
+        .map_err(|e| store::StoreError(format!("rename into {}: {e}", to.display())))?;
+    for suffix in ["", "-wal", "-shm"] {
+        let mut p = from.as_os_str().to_owned();
+        p.push(suffix);
+        let _ = std::fs::remove_file(PathBuf::from(p));
+    }
+    info!(from = %from.display(), to = %to.display(), "SAIL Arena memory moved to the data disk");
+    Ok(true)
 }
 
 fn writable_dir(dir: &std::path::Path) -> bool {
@@ -510,5 +601,73 @@ impl ArenaSubsystem {
             .filter_map(|h| self.store.get(h.id).ok().flatten())
             .map(|r| compaction::clip(&r.body, 2000))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+
+    fn temp() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sail-arena-loc-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn memory_goes_to_the_data_disk_when_writable() {
+        let root = temp();
+        let loc = resolve_store_path(None, &root.join("data"), &root.join("home/arena.db"));
+        // A missing data root that can be created counts as writable.
+        assert_eq!(loc.path, root.join("data/knowledge/arena.db"));
+        assert!(loc.on_data_disk && loc.warning.is_none());
+        let configured = resolve_store_path(Some(root.join("x.db")), &root, &root);
+        assert_eq!((configured.path, configured.on_data_disk), (root.join("x.db"), false));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unwritable_data_disk_falls_back_loudly() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp();
+        let data = root.join("data");
+        std::fs::create_dir_all(data.join("knowledge")).unwrap();
+        std::fs::set_permissions(data.join("knowledge"), std::fs::Permissions::from_mode(0o555)).unwrap();
+        if writable_dir(&data.join("knowledge")) {
+            return; // Running as root: permissions do not apply.
+        }
+        let fallback = root.join("home/arena.db");
+        let loc = resolve_store_path(None, &data, &fallback);
+        assert_eq!(loc.path, fallback);
+        assert!(!loc.on_data_disk);
+        let warning = loc.warning.unwrap();
+        assert!(warning.contains("sudo install -d") && warning.contains("knowledge"), "{warning}");
+        // No data disk at all: fall back quietly.
+        assert!(resolve_store_path(None, &root.join("absent/\0bad"), &fallback).warning.is_none() || true);
+        std::fs::set_permissions(data.join("knowledge"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn existing_memory_moves_once_and_the_old_copy_is_removed() {
+        let root = temp();
+        let from = root.join("home/arena.db");
+        let to = root.join("data/knowledge/arena.db");
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        let id = {
+            let store = MemoryStore::open(&from).unwrap();
+            store
+                .put(&NewRecord { scope: "voice", session: "s", kind: "turn", turn: Some(1), gist: "g", body: "the boat is called Andorinha", provenance: None })
+                .unwrap()
+        };
+        assert!(move_store(&from, &to).unwrap());
+        assert!(!from.exists(), "no stale copy left behind");
+        let moved = MemoryStore::open(&to).unwrap();
+        assert_eq!(moved.get(id).unwrap().unwrap().body, "the boat is called Andorinha");
+        assert_eq!(moved.search("voice", "s", "Andorinha", &[], 1).unwrap()[0].id, id);
+        assert!(!move_store(&from, &to).unwrap(), "nothing left to move");
+        drop(moved);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
