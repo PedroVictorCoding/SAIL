@@ -363,3 +363,112 @@ test('canceled synthesis cannot show a stale slow-device note', async () => {
   f.pending.forEach(d => d.resolve(pcm())); await p;
   assert.equal(notes, 0);
 });
+
+const { HostEngine, VoiceRouter } = require('../web/reader-audio.js');
+const hostPcm = () => ({ ok: true, status: 200,
+  headers: { get: name => name === 'X-Sample-Rate' ? '16000' : '12' },
+  arrayBuffer: async () => new Uint8Array([0, 128, 0, 0, 255, 127]).buffer });
+function hostFixture(fetcher, extra = {}) {
+  return new HostEngine({ fetcher, getToken: async () => 'owner-token', ...extra });
+}
+test('host decodes signed little-endian PCM and real sample rate with authenticated POST', async () => {
+  const host = hostFixture(async (url, request) => {
+    assert.equal(url, '/api/reader/speech');
+    assert.equal(request.headers.Authorization, 'Bearer owner-token');
+    assert.deepEqual(JSON.parse(request.body), { text: 'Literal text.', voice: 'af_heart', speed: 1.25 });
+    return hostPcm();
+  }, { speed: 1.25 });
+  const result = await host.speak('Literal text.', 'af_heart');
+  assert.deepEqual([...result.audio], [-1, 0, 32767 / 32768]);
+  assert.equal(result.sampling_rate, 16000);
+  assert.equal(result.synthesisMs, 12);
+  assert.equal(result.backend, 'host');
+});
+test('host serializes requests including 429 retry', async () => {
+  const gate = deferred(); let count = 0, delays = 0;
+  const host = hostFixture(async () => {
+    count++;
+    if (count === 1) return { status: 429 };
+    if (count === 2) await gate.promise;
+    return hostPcm();
+  }, { delay: async () => { delays++; } });
+  const a = host.speak('One.', 'af_heart'), b = host.speak('Two.', 'af_heart');
+  await tick(); assert.equal(count, 2); assert.equal(delays, 1);
+  gate.resolve(); await Promise.all([a, b]); assert.equal(count, 3);
+});
+test('generation cancellation aborts active host fetch and discards queued requests', async () => {
+  let signal, count = 0;
+  const host = hostFixture(async (_, request) => {
+    count++; signal = request.signal;
+    return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(Error('abort'))));
+  });
+  const a = host.speak('One.', 'af_heart'), b = host.speak('Two.', 'af_heart');
+  const settled = Promise.allSettled([a, b]);
+  await tick(); host.cancel();
+  assert.equal(signal.aborted, true);
+  assert.ok((await settled).every(r => r.status === 'rejected'));
+  assert.equal(count, 1);
+});
+function routerFixture(extra = {}) {
+  return new VoiceRouter({ host: { cancel() {}, speak: async () => pcm() },
+    device: { load: async () => {}, speak: async () => pcm() },
+    capabilities: { available: true }, ...extra });
+}
+test('host is default; explicit device preference and unavailable host are respected', () => {
+  assert.equal(routerFixture().backend, 'host');
+  assert.equal(routerFixture({ preference: 'device' }).backend, 'device');
+  assert.equal(routerFixture({ capabilities: { available: false } }).backend, 'device');
+});
+test('two consecutive slow device segments request switch at next unspoken sentence', async () => {
+  let time = 0;
+  const router = routerFixture({ preference: 'device', now: () => time,
+    device: { load: async () => {}, speak: async () => { time += 2000; return pcm(); } } });
+  await router.speak('One.'); assert.ok(!router.switchPending);
+  await router.speak('Two.'); assert.equal(router.switchPending, true);
+  const f = fixture({ tts: router });
+  f.n.index = 2;
+  await f.n.play();
+  assert.equal(router.backend, 'host');
+  assert.equal(f.n.index, 2);
+  assert.equal(f.events.length, 0);
+});
+test('503 and network failures fall back to loadable device; device load failures surface', async () => {
+  for (const status of [503, undefined]) {
+    let loads = 0;
+    const router = routerFixture({ host: { cancel() {}, speak: async () => { throw Object.assign(Error(), { status }); } },
+      device: { load: async () => { loads++; }, speak: async () => pcm() } });
+    await router.speak('One.'); assert.equal(router.backend, 'device'); assert.equal(loads, 1);
+  }
+  const router = routerFixture({ host: { cancel() {}, speak: async () => { throw Error(); } },
+    device: { load: async () => { throw Error('unavailable'); } } });
+  await assert.rejects(router.speak('One.'), /unavailable/);
+});
+test('speed restart changes generation at the current sentence and preserves pause', () => {
+  const router = routerFixture(); const f = fixture({ tts: router });
+  f.n.index = 2; f.n.setState('paused');
+  const generation = f.n.generation;
+  f.n.setSpeed(1.5);
+  assert.equal(f.n.generation, generation + 1);
+  assert.equal(router.host.speed, 1.5);
+  assert.equal(f.n.index, 2); assert.equal(f.n.state, 'paused');
+  const source = fs.readFileSync(path.join(__dirname, '../web/reader.js'), 'utf8');
+  assert.match(source, /persist\('speed', String\(speed\)\)/);
+  assert.match(source, /\$\('speed-control'\)\.hidden = !host/);
+});
+
+test('host failure prevents repeated automatic host/device cycling in the same session', async () => {
+  const router = routerFixture({ host: { cancel() {}, speak: async () => { throw Error('offline'); } } });
+  await router.speak('One.');
+  assert.equal(router.capabilities.available, false);
+  assert.equal(router.backend, 'device');
+  await assert.rejects(router.select('host'), /unavailable/);
+});
+
+test('host selection supplies endpoint default when the old device voice is unsupported', async () => {
+  let selected;
+  const router = routerFixture({ capabilities: {
+    available: true, voices: ['bf_emma'], default_voice: 'bf_emma'
+  }, host: { cancel() {}, speak: async (_, voice) => { selected = voice; return pcm(); } } });
+  await router.speak('One.', 'unknown-device-voice');
+  assert.equal(selected, 'bf_emma');
+});
