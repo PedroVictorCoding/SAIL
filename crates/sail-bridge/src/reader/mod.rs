@@ -488,9 +488,9 @@ fn parse_txt(bytes: &[u8]) -> Result<Parsed, ReaderError> {
         if lines.is_empty() {
             continue;
         }
-        // Hard-wrapped prose becomes one line; three or more deliberately short lines (verse,
-        // addresses) keep their breaks.
-        let verse = lines.len() > 2 && lines.iter().all(|l| l.trim().chars().count() < 40);
+        // Hard-wrapped prose (Gutenberg wraps near 70 columns) becomes one line; three or more
+        // lines all under 60 characters (verse, addresses, contents lists) keep their breaks.
+        let verse = lines.len() > 2 && lines.iter().all(|l| l.trim().chars().count() < 60);
         let joined = if verse {
             lines
                 .iter()

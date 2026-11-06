@@ -180,6 +180,24 @@
           Next sentence
         </button>
         <label>
+          Voice runs on
+          <select id="backend" aria-label="Voice runs on">
+            <option value="host">SAIL host</option>
+            <option value="device">This device</option>
+          </select>
+        </label>
+        <label id="speed-control" hidden>
+          Speed
+          <select id="speed" aria-label="Narration speed">
+            <option value="0.8">0.8×</option>
+            <option value="0.9">0.9×</option>
+            <option value="1">1.0×</option>
+            <option value="1.1">1.1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+          </select>
+        </label>
+        <label>
           Voice
           <select id="voice" aria-label="Narration voice">
           </select>
@@ -191,7 +209,7 @@
           Follow narration
         </button>
         <p class="muted">
-          Sentence highlighting · on this device · WebAssembly (CPU). Playback may pause when this browser is in the background.
+          Sentence highlighting. Playback may pause when this browser is in the background.
         </p>
         <p id="narration-note" class="muted" role="status"></p>
         <p id="voice-note" class="muted">
