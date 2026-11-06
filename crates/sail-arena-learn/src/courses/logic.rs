@@ -279,13 +279,13 @@ impl<'a> Parser<'a> {
 
     fn parse_implies(&mut self) -> Result<Formula, LogicError> {
         let left = self.parse_or()?;
-        if let Some(tok) = self.peek() {
-            if tok.kind == TokenKind::Implies {
-                self.next();
-                // Right-associative: A -> B -> C parses as A -> (B -> C)
-                let right = self.parse_implies()?;
-                return Ok(Formula::Implies(Box::new(left), Box::new(right)));
-            }
+        if let Some(tok) = self.peek()
+            && tok.kind == TokenKind::Implies
+        {
+            self.next();
+            // Right-associative: A -> B -> C parses as A -> (B -> C)
+            let right = self.parse_implies()?;
+            return Ok(Formula::Implies(Box::new(left), Box::new(right)));
         }
         Ok(left)
     }
@@ -319,12 +319,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_not(&mut self) -> Result<Formula, LogicError> {
-        if let Some(tok) = self.peek() {
-            if tok.kind == TokenKind::Not {
-                self.next();
-                let inner = self.parse_not()?;
-                return Ok(Formula::Not(Box::new(inner)));
-            }
+        if let Some(tok) = self.peek()
+            && tok.kind == TokenKind::Not
+        {
+            self.next();
+            let inner = self.parse_not()?;
+            return Ok(Formula::Not(Box::new(inner)));
         }
         self.parse_primary()
     }

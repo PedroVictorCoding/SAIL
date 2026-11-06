@@ -5,10 +5,7 @@
 //!
 //! Spec: Issue #386 / `LLM_Handoff.md`.
 
-#[path = "../src/courses/logic.rs"]
-pub mod logic;
-
-use logic::*;
+use sail_arena_learn::courses::logic::*;
 use std::collections::BTreeMap;
 
 #[test]

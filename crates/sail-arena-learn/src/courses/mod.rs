@@ -9,6 +9,7 @@ pub mod content;
 pub mod engine;
 pub mod evidence;
 pub mod grade;
+pub mod logic;
 pub mod store;
 
 pub use engine::{AttemptRequest, CourseEngine, CourseError, NoSandbox, RustEvaluator};
