@@ -88,7 +88,7 @@ fun HomeScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(SailColors.BgVoid),
+            .background(SailColors.Base),
     ) {
         SailBrandBar(
             connection = connection,
@@ -114,14 +114,9 @@ fun HomeScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     EmptyState(
-                        title = "Return briefing empty",
-                        detail = current.reason,
-                        action = {
-                            SecondaryButton(
-                                text = "Refresh",
-                                onClick = { viewModel.refresh(forceRegenerateBriefing = true) },
-                            )
-                        },
+                        title = current.title,
+                        detail = current.detail,
+                        onRetry = { viewModel.refresh(forceRegenerateBriefing = true) },
                     )
                 }
             }
@@ -133,28 +128,26 @@ fun HomeScreen(
                         .padding(horizontal = ScreenGutter),
                     contentAlignment = Alignment.Center,
                 ) {
-                    EmptyState(
-                        title = "SAIL host unavailable",
-                        detail = current.message,
-                        action = {
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                SecondaryButton(
-                                    text = "Retry",
-                                    onClick = { viewModel.refresh() },
-                                )
-                                SecondaryButton(
-                                    text = "Server settings",
-                                    onClick = onOpenSettings,
-                                )
-                            }
-                        },
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        EmptyState(
+                            title = "SAIL host unavailable",
+                            detail = current.message,
+                            onRetry = { viewModel.refresh() },
+                        )
+                        SecondaryButton(
+                            text = "Server settings",
+                            onClick = onOpenSettings,
+                        )
+                    }
                 }
             }
 
             is UiState.Ready -> {
                 HomeReadyContent(
-                    dashboard = current.value,
+                    dashboard = current.data,
                     isRefreshing = isRefreshing,
                     onRefresh = { viewModel.refresh(forceRegenerateBriefing = true) },
                     onDismissBriefing = { viewModel.dismissBriefing() },
@@ -207,11 +200,11 @@ private fun HomeReadyContent(
 
         if (!dashboard.actionBanner.isNullOrBlank()) {
             item(key = "banner") {
-                FlatCard(padding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) {
+                FlatCard {
                     Text(
                         text = dashboard.actionBanner,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = SailColors.InkSecondary,
+                        color = SailColors.TextMuted,
                     )
                 }
             }
@@ -289,8 +282,8 @@ private fun HomeReadyContent(
                     Spacer(modifier = Modifier.weight(1f))
                     Text(
                         text = "Dismiss",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = SailColors.InkMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SailColors.TextSubtle,
                         modifier = Modifier
                             .clickable(role = Role.Button, onClick = onDismissBriefing)
                             .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -327,12 +320,12 @@ private fun HomeHeroHeader(
         Spacer(modifier = Modifier.height(14.dp))
         Text(
             text = greeting,
-            style = MaterialTheme.typography.displayLarge.copy(
+            style = MaterialTheme.typography.headlineMedium.copy(
                 fontSize = 32.sp,
                 lineHeight = 38.sp,
                 fontWeight = FontWeight.Bold,
             ),
-            color = SailColors.InkPrimary,
+            color = SailColors.Text,
             textAlign = TextAlign.Center,
             modifier = Modifier.semantics { heading() },
         )
@@ -343,7 +336,7 @@ private fun HomeHeroHeader(
                 fontSize = 16.sp,
                 lineHeight = 22.sp,
             ),
-            color = SailColors.InkSecondary,
+            color = SailColors.TextMuted,
             textAlign = TextAlign.Center,
         )
         if (localTimeStr.isNotBlank() || (awayMinutes != null && awayMinutes > 0L)) {
@@ -357,7 +350,7 @@ private fun HomeHeroHeader(
             }
             SailPill(
                 text = meta,
-                hue = SailColors.Dialogue,
+                dot = Hue.Dialogue.color,
             )
         }
     }
@@ -395,8 +388,8 @@ private fun AmbientReturnOrb(modifier: Modifier = Modifier) {
         drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    SailColors.Dialogue.copy(alpha = 0.42f),
-                    SailColors.Learn.copy(alpha = 0.22f),
+                    Hue.Dialogue.color.copy(alpha = 0.42f),
+                    Hue.Learn.color.copy(alpha = 0.22f),
                     Color.Transparent,
                 ),
                 center = center,
@@ -410,7 +403,7 @@ private fun AmbientReturnOrb(modifier: Modifier = Modifier) {
             brush = Brush.radialGradient(
                 colors = listOf(
                     Color(0xFFE0F7FA),
-                    SailColors.Dialogue,
+                    Hue.Dialogue.color,
                     Color(0xFF1D4ED8),
                     Color(0xFF0A192F),
                 ),
@@ -439,9 +432,8 @@ private fun HomeMusicCard(
     val playableUri = model.playableUri
     GlowCard(
         hue = Hue.Music,
-        strength = GlowStrength.Soft,
+        strength = GlowStrength.Weak,
         modifier = modifier,
-        padding = PaddingValues(16.dp),
         onClick = if (playableUri != null) {
             { onPlayMusic(playableUri) }
         } else {
@@ -455,12 +447,12 @@ private fun HomeMusicCard(
         ) {
             Eyebrow(
                 text = "MUSIC",
-                color = SailColors.Music,
+                dot = Hue.Music.color,
             )
             if (!model.badge.isNullOrBlank()) {
                 SailPill(
                     text = if (model.confirmed) "PLAYING" else model.badge,
-                    hue = SailColors.Music,
+                    dot = Hue.Music.color,
                 )
             }
         }
@@ -472,7 +464,7 @@ private fun HomeMusicCard(
                 lineHeight = 23.sp,
                 fontWeight = FontWeight.Bold,
             ),
-            color = SailColors.InkPrimary,
+            color = SailColors.Text,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -483,7 +475,7 @@ private fun HomeMusicCard(
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
             ),
-            color = SailColors.InkSecondary,
+            color = SailColors.TextMuted,
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
         )
@@ -510,9 +502,8 @@ private fun HomeArenaCard(
 
     GlowCard(
         hue = Hue.Learn,
-        strength = GlowStrength.Soft,
+        strength = GlowStrength.Weak,
         modifier = modifier,
-        padding = PaddingValues(16.dp),
         onClick = handleClick,
     ) {
         Row(
@@ -522,12 +513,12 @@ private fun HomeArenaCard(
         ) {
             Eyebrow(
                 text = "ARENA",
-                color = SailColors.Learn,
+                dot = Hue.Learn.color,
             )
             if (model.dueCount > 0) {
                 SailPill(
                     text = "${model.dueCount} DUE",
-                    hue = SailColors.Learn,
+                    dot = Hue.Learn.color,
                 )
             }
         }
@@ -544,12 +535,12 @@ private fun HomeArenaCard(
                     lineHeight = 23.sp,
                     fontWeight = FontWeight.Bold,
                 ),
-                color = SailColors.InkPrimary,
+                color = SailColors.Text,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            Chevron(tint = SailColors.InkSecondary)
+            Chevron()
         }
         Spacer(modifier = Modifier.height(6.dp))
         Text(
@@ -558,7 +549,7 @@ private fun HomeArenaCard(
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
             ),
-            color = SailColors.InkSecondary,
+            color = SailColors.TextMuted,
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
         )
@@ -569,8 +560,7 @@ private fun HomeArenaCard(
 private fun HomeSystemSummaryCard(model: HomeSystemCardModel) {
     GlowCard(
         hue = Hue.System,
-        strength = GlowStrength.Medium,
-        padding = PaddingValues(18.dp),
+        strength = GlowStrength.Tile,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -579,13 +569,12 @@ private fun HomeSystemSummaryCard(model: HomeSystemCardModel) {
         ) {
             Eyebrow(
                 text = "SYSTEM SUMMARY",
-                color = SailColors.System,
+                dot = Hue.System.color,
             )
             if (model.cpuLabel != null) {
                 SailPill(
                     text = "CPU ${model.cpuLabel}",
-                    hue = SailColors.System,
-                    dot = if (model.isHealthy) SailColors.Success else SailColors.Warning,
+                    dot = if (model.isHealthy) SailColors.Good else SailColors.Warning,
                 )
             }
         }
@@ -597,7 +586,7 @@ private fun HomeSystemSummaryCard(model: HomeSystemCardModel) {
                 lineHeight = 28.sp,
                 fontWeight = FontWeight.Bold,
             ),
-            color = SailColors.InkPrimary,
+            color = SailColors.Text,
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
@@ -606,12 +595,12 @@ private fun HomeSystemSummaryCard(model: HomeSystemCardModel) {
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
             ),
-            color = SailColors.InkSecondary,
+            color = SailColors.TextMuted,
         )
         Spacer(modifier = Modifier.height(14.dp))
         HorizontalDivider(
             thickness = 1.dp,
-            color = SailColors.BorderSubtle,
+            color = SailColors.Line,
         )
         Spacer(modifier = Modifier.height(12.dp))
         Row(
@@ -621,8 +610,8 @@ private fun HomeSystemSummaryCard(model: HomeSystemCardModel) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Storage",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = SailColors.InkMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SailColors.TextSubtle,
                 )
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
@@ -632,14 +621,14 @@ private fun HomeSystemSummaryCard(model: HomeSystemCardModel) {
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 15.sp,
                     ),
-                    color = SailColors.InkPrimary,
+                    color = SailColors.Text,
                 )
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Memory",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = SailColors.InkMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SailColors.TextSubtle,
                 )
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
@@ -649,7 +638,7 @@ private fun HomeSystemSummaryCard(model: HomeSystemCardModel) {
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 15.sp,
                     ),
-                    color = SailColors.InkPrimary,
+                    color = SailColors.Text,
                 )
             }
         }
@@ -658,15 +647,15 @@ private fun HomeSystemSummaryCard(model: HomeSystemCardModel) {
             Spacer(modifier = Modifier.height(12.dp))
             HorizontalDivider(
                 thickness = 1.dp,
-                color = SailColors.BorderSubtle,
+                color = SailColors.Line,
             )
             Spacer(modifier = Modifier.height(10.dp))
             val footer = listOfNotNull(model.forgeSummary, model.lastEditedFile)
                 .joinToString(separator = " · ")
             Text(
                 text = footer,
-                style = MaterialTheme.typography.labelMedium,
-                color = SailColors.InkSecondary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = SailColors.TextMuted,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -678,8 +667,7 @@ private fun HomeSystemSummaryCard(model: HomeSystemCardModel) {
 private fun HomeTrackerEntryCard(onOpenTracker: () -> Unit) {
     GlowCard(
         hue = Hue.Tracker,
-        strength = GlowStrength.Soft,
-        padding = PaddingValues(16.dp),
+        strength = GlowStrength.Weak,
         onClick = onOpenTracker,
     ) {
         Row(
@@ -693,18 +681,17 @@ private fun HomeTrackerEntryCard(onOpenTracker: () -> Unit) {
             ) {
                 SailIconImage(
                     icon = SailIcon.Pulse,
-                    tint = SailColors.Tracker,
+                    contentDescription = null,
+                    tint = Hue.Tracker.color,
                     size = 18.dp,
                 )
                 Eyebrow(
                     text = "SITUATION ROOM",
-                    color = SailColors.Tracker,
                 )
             }
             SailPill(
                 text = "LIVE",
-                hue = SailColors.Tracker,
-                dot = SailColors.Success,
+                dot = SailColors.Good,
             )
         }
         Spacer(modifier = Modifier.height(8.dp))
@@ -720,16 +707,16 @@ private fun HomeTrackerEntryCard(onOpenTracker: () -> Unit) {
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                     ),
-                    color = SailColors.InkPrimary,
+                    color = SailColors.Text,
                 )
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
                     text = "Anomalies, live markets, world map pins, and clustered news signals.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = SailColors.InkSecondary,
+                    color = SailColors.TextMuted,
                 )
             }
-            Chevron(tint = SailColors.InkSecondary)
+            Chevron()
         }
     }
 }
@@ -738,12 +725,11 @@ private fun HomeTrackerEntryCard(onOpenTracker: () -> Unit) {
 private fun HomeEventsCard(events: List<BriefingEvent>) {
     GlowCard(
         hue = Hue.Warning,
-        strength = GlowStrength.Soft,
-        padding = PaddingValues(16.dp),
+        strength = GlowStrength.Weak,
     ) {
         Eyebrow(
             text = "EVENTS TO WATCH",
-            color = SailColors.Warning,
+            dot = SailColors.Warning,
         )
         Spacer(modifier = Modifier.height(10.dp))
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -757,7 +743,7 @@ private fun HomeEventsCard(events: List<BriefingEvent>) {
                         Text(
                             text = event.title,
                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                            color = SailColors.InkPrimary,
+                            color = SailColors.Text,
                         )
                         val meta = listOfNotNull(
                             event.dueRelative.takeIf { it.isNotBlank() },
@@ -766,15 +752,15 @@ private fun HomeEventsCard(events: List<BriefingEvent>) {
                         if (meta.isNotEmpty()) {
                             Text(
                                 text = meta,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = SailColors.InkSecondary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = SailColors.TextMuted,
                             )
                         }
                     }
                     SailPill(
                         text = event.urgency.uppercase(),
-                        hue = if (event.urgency.equals("high", ignoreCase = true)) {
-                            SailColors.Danger
+                        dot = if (event.urgency.equals("high", ignoreCase = true)) {
+                            SailColors.Error
                         } else {
                             SailColors.Warning
                         },
@@ -792,8 +778,7 @@ private fun HomeNewsRadarCard(
 ) {
     GlowCard(
         hue = Hue.Dialogue,
-        strength = GlowStrength.Soft,
-        padding = PaddingValues(16.dp),
+        strength = GlowStrength.Weak,
         onClick = onOpenTracker,
     ) {
         Row(
@@ -803,9 +788,9 @@ private fun HomeNewsRadarCard(
         ) {
             Eyebrow(
                 text = "NEWS RADAR",
-                color = SailColors.Dialogue,
+                dot = Hue.Dialogue.color,
             )
-            Chevron(tint = SailColors.InkSecondary)
+            Chevron()
         }
         Spacer(modifier = Modifier.height(10.dp))
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -814,14 +799,14 @@ private fun HomeNewsRadarCard(
                     Text(
                         text = item.title,
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                        color = SailColors.InkPrimary,
+                        color = SailColors.Text,
                     )
                     if (item.summary.isNotBlank()) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = item.summary,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = SailColors.InkSecondary,
+                            color = SailColors.TextMuted,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -834,8 +819,8 @@ private fun HomeNewsRadarCard(
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = meta,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = SailColors.InkMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SailColors.TextSubtle,
                         )
                     }
                 }

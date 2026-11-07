@@ -469,6 +469,11 @@ object TrackerFormatting {
         }
     }
 
+    fun formatFxRate(rate: Double): String {
+        if (!rate.isFinite()) return "—"
+        return String.format(Locale.US, "%.4f", rate)
+    }
+
     fun formatQuoteHeadline(quote: TrackerQuote?): String {
         if (quote == null) return "Markets"
         val shortName = when {

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.sail.app.core.UiState
 import dev.sail.app.core.net.ApiResult
+import dev.sail.app.core.net.getOrNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,7 +87,7 @@ class HomeViewModel(
         viewModelScope.launch {
             when (repository.dismissBriefing()) {
                 is ApiResult.Ok -> {
-                    val current = (_state.value as? UiState.Ready)?.value
+                    val current = (_state.value as? UiState.Ready)?.data
                     if (current != null) {
                         _state.value = UiState.Ready(
                             current.copy(
@@ -112,15 +113,15 @@ class HomeViewModel(
         viewModelScope.launch {
             when (val res = repository.playStagedMusic(uri)) {
                 is ApiResult.Ok -> {
-                    val current = (_state.value as? UiState.Ready)?.value
+                    val current = (_state.value as? UiState.Ready)?.data
                     if (current != null) {
                         _state.value = UiState.Ready(
                             current.copy(
                                 music = current.music.copy(confirmed = true),
-                                actionBanner = if (res.value.ok) {
+                                actionBanner = if (res.data.ok) {
                                     "Playback requested on SAIL host."
                                 } else {
-                                    res.value.error ?: "Playback request sent."
+                                    res.data.error ?: "Playback request sent."
                                 },
                             ),
                         )
@@ -134,7 +135,7 @@ class HomeViewModel(
     }
 
     private fun updateBanner(message: String) {
-        val current = (_state.value as? UiState.Ready)?.value ?: return
+        val current = (_state.value as? UiState.Ready)?.data ?: return
         _state.value = UiState.Ready(current.copy(actionBanner = message))
     }
 

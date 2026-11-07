@@ -4,16 +4,16 @@ import dev.sail.app.core.UiState
 import dev.sail.app.core.net.ApiResult
 import dev.sail.app.core.net.SailApi
 import dev.sail.app.core.net.ServerConfig
+import dev.sail.app.core.net.getOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
-import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,12 +25,13 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class HomeTest {
 
+    private val dispatcher = StandardTestDispatcher()
+    private val json = SailApi.defaultJson
     private lateinit var server: MockWebServer
-    private val testDispatcher = UnconfinedTestDispatcher()
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(testDispatcher)
+        Dispatchers.setMain(dispatcher)
         server = MockWebServer()
         server.start()
     }
@@ -52,10 +53,30 @@ class HomeTest {
         return SailApi(config = { ServerConfig(baseUrl = baseUrl, token = token) })
     }
 
+    private class FakeHomeRepository(
+        api: SailApi,
+        private val briefingResult: ApiResult<ReturnBriefing?>,
+        private val metricsResult: ApiResult<SystemMetrics>,
+        private val coursesResult: ApiResult<List<HomeCourseSummary>>,
+        private val spotifyResult: ApiResult<SpotifyStatusResponse>,
+        private val healthResult: ApiResult<HealthResponse>,
+        private val mindResult: ApiResult<HomeMindStatus>,
+        private val dismissResult: ApiResult<Boolean> = ApiResult.Ok(true),
+        private val playResult: ApiResult<PlayMusicResponse> = ApiResult.Ok(PlayMusicResponse(ok = true)),
+    ) : HomeRepository(api) {
+        override suspend fun fetchBriefing(): ApiResult<ReturnBriefing?> = briefingResult
+        override suspend fun refreshBriefing(): ApiResult<ReturnBriefing?> = briefingResult
+        override suspend fun dismissBriefing(): ApiResult<Boolean> = dismissResult
+        override suspend fun playStagedMusic(uri: String): ApiResult<PlayMusicResponse> = playResult
+        override suspend fun fetchSystemMetrics(): ApiResult<SystemMetrics> = metricsResult
+        override suspend fun fetchHealth(): ApiResult<HealthResponse> = healthResult
+        override suspend fun fetchMindStatus(): ApiResult<HomeMindStatus> = mindResult
+        override suspend fun fetchCourses(): ApiResult<List<HomeCourseSummary>> = coursesResult
+        override suspend fun fetchSpotifyStatus(): ApiResult<SpotifyStatusResponse> = spotifyResult
+    }
+
     @Test
     fun parsesHomeFixturesAndFormatsMetrics() {
-        val json = SailApi.defaultJson
-
         val briefingEnvelope = json.decodeFromString(
             BriefingEnvelope.serializer(),
             readFixture("fixtures/home/briefing_latest.json"),
@@ -93,7 +114,7 @@ class HomeTest {
     }
 
     @Test
-    fun repositorySendsAuthHeaderAndEncodesCourseNextQuery() = runTest {
+    fun repositorySendsAuthHeaderAndEncodesCourseNextQuery() = runTest(dispatcher) {
         server.enqueue(
             MockResponse()
                 .setResponseCode(200)
@@ -127,31 +148,41 @@ class HomeTest {
     }
 
     @Test
-    fun viewModelBuildsReadyDashboardFromFixtures() = runTest {
-        val briefingJson = readFixture("fixtures/home/briefing_latest.json")
-        val metricsJson = readFixture("fixtures/home/system_metrics.json")
-        val coursesJson = readFixture("fixtures/home/learn_courses.json")
-        val spotifyJson = readFixture("fixtures/home/spotify_status.json")
+    fun viewModelBuildsReadyDashboardFromFixtures() = runTest(dispatcher) {
+        val briefing = json.decodeFromString(
+            BriefingEnvelope.serializer(),
+            readFixture("fixtures/home/briefing_latest.json"),
+        ).briefing
+        val metrics = json.decodeFromString(
+            SystemMetrics.serializer(),
+            readFixture("fixtures/home/system_metrics.json"),
+        )
+        val courses = json.decodeFromString(
+            HomeCoursesResponse.serializer(),
+            readFixture("fixtures/home/learn_courses.json"),
+        ).courses
+        val spotify = json.decodeFromString(
+            SpotifyStatusResponse.serializer(),
+            readFixture("fixtures/home/spotify_status.json"),
+        )
 
-        server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse =
-                when (request.path) {
-                    "/api/briefing/latest" -> MockResponse().setResponseCode(200).setBody(briefingJson)
-                    "/api/system/metrics" -> MockResponse().setResponseCode(200).setBody(metricsJson)
-                    "/api/learn/courses" -> MockResponse().setResponseCode(200).setBody(coursesJson)
-                    "/api/spotify/status" -> MockResponse().setResponseCode(200).setBody(spotifyJson)
-                    "/api/health" -> MockResponse().setResponseCode(200).setBody("""{"speech":{},"llm":{}}""")
-                    "/api/mind/status" -> MockResponse().setResponseCode(200).setBody("""{"version":1,"accepting_requests":true,"models":[]}""")
-                    "/api/briefing/actions/dismiss" -> MockResponse().setResponseCode(200).setBody("""{"dismissed":true}""")
-                    else -> MockResponse().setResponseCode(404).setBody("""{"error":"not found"}""")
-                }
-        }
+        val repo = FakeHomeRepository(
+            api = createApi(),
+            briefingResult = ApiResult.Ok(briefing),
+            metricsResult = ApiResult.Ok(metrics),
+            coursesResult = ApiResult.Ok(courses),
+            spotifyResult = ApiResult.Ok(spotify),
+            healthResult = ApiResult.Ok(HealthResponse()),
+            mindResult = ApiResult.Ok(HomeMindStatus(acceptingRequests = true)),
+        )
 
-        val viewModel = HomeViewModel(HomeRepository(createApi()))
+        val viewModel = HomeViewModel(repo)
+        advanceUntilIdle()
+
         val current = viewModel.state.value
         assertTrue(current is UiState.Ready)
 
-        val dashboard = (current as UiState.Ready).value
+        val dashboard = (current as UiState.Ready).data
         assertEquals("Welcome back.", dashboard.greeting)
         assertEquals("Here's your return briefing.", dashboard.headline)
         assertEquals("Avril 14th", dashboard.music.title)
@@ -168,14 +199,16 @@ class HomeTest {
         assertEquals(1, dashboard.newsRadar.size)
 
         viewModel.dismissBriefing()
-        val afterDismiss = (viewModel.state.value as UiState.Ready).value
+        advanceUntilIdle()
+
+        val afterDismiss = (viewModel.state.value as UiState.Ready).data
         assertTrue(afterDismiss.briefingDismissed)
         assertTrue(afterDismiss.eventsToWatch.isEmpty())
         assertTrue(afterDismiss.newsRadar.isEmpty())
     }
 
     @Test
-    fun viewModelShowsHonestEmptyFallbacksAndUnavailableWhenAllFail() = runTest {
+    fun viewModelShowsHonestEmptyFallbacksAndUnavailableWhenAllFail() = runTest(dispatcher) {
         val musicFallback = HomeViewModel.buildMusicCard(briefing = null, spotify = null)
         assertEquals("No music staged", musicFallback.title)
         assertEquals("History is empty or unavailable.", musicFallback.subtitle)
@@ -189,12 +222,20 @@ class HomeTest {
         assertEquals("Resume in Arena", arenaUnavailable.title)
         assertEquals("Courses unavailable right now.", arenaUnavailable.subtitle)
 
-        server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse =
-                MockResponse().setResponseCode(401).setBody("""{"error":"Unauthorized"}""")
-        }
+        val err = ApiResult.Err(401, "The owner token was refused. Check it in Settings.")
+        val failingRepo = FakeHomeRepository(
+            api = createApi(),
+            briefingResult = err,
+            metricsResult = err,
+            coursesResult = err,
+            spotifyResult = err,
+            healthResult = err,
+            mindResult = err,
+        )
 
-        val viewModel = HomeViewModel(HomeRepository(createApi()))
+        val viewModel = HomeViewModel(failingRepo)
+        advanceUntilIdle()
+
         val state = viewModel.state.value
         assertTrue(state is UiState.Unavailable)
         val unavailable = state as UiState.Unavailable

@@ -122,7 +122,7 @@ class TrackerViewModel(
         } else {
             normalized
         }
-        val current = (_state.value as? UiState.Ready)?.value ?: return
+        val current = (_state.value as? UiState.Ready)?.data ?: return
         val filtered = filterStories(current.stories, selectedTopicFilter)
         _state.value = UiState.Ready(
             current.copy(
@@ -136,7 +136,7 @@ class TrackerViewModel(
         when (result) {
             is ApiResult.Err -> UiState.Unavailable(result.message)
             is ApiResult.Ok -> {
-                val envelope = result.value
+                val envelope = result.data
                 val dashboard = buildDashboard(
                     envelope = envelope,
                     selectedTopic = selectedTopicFilter,
@@ -181,7 +181,7 @@ class TrackerViewModel(
             val fxSample = board.fx.firstOrNull()
             val marketSubtitle = when {
                 fxSample != null -> {
-                    val rateStr = TrackerFormatting.formatQuotePrice(fxSample.rate)
+                    val rateStr = TrackerFormatting.formatFxRate(fxSample.rate)
                     "${fxSample.base}/${fxSample.quote} $rateStr · ${board.quotes.size} quotes"
                 }
                 primaryQuote != null && primaryQuote.label.isNotBlank() -> primaryQuote.label

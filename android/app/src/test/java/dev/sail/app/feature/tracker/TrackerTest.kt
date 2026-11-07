@@ -4,9 +4,11 @@ import dev.sail.app.core.UiState
 import dev.sail.app.core.net.ApiResult
 import dev.sail.app.core.net.SailApi
 import dev.sail.app.core.net.ServerConfig
+import dev.sail.app.core.net.getOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -23,12 +25,13 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class TrackerTest {
 
+    private val dispatcher = StandardTestDispatcher()
+    private val json = SailApi.defaultJson
     private lateinit var server: MockWebServer
-    private val testDispatcher = UnconfinedTestDispatcher()
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(testDispatcher)
+        Dispatchers.setMain(dispatcher)
         server = MockWebServer()
         server.start()
     }
@@ -50,9 +53,19 @@ class TrackerTest {
         return SailApi(config = { ServerConfig(baseUrl = baseUrl, token = token) })
     }
 
+    private class FakeTrackerRepository(
+        api: SailApi,
+        private val boardResult: ApiResult<TrackerBoardEnvelope>,
+        private val refreshResult: ApiResult<TrackerBoardEnvelope> = boardResult,
+    ) : TrackerRepository(api) {
+        override suspend fun fetchBoard(): ApiResult<TrackerBoardEnvelope> = boardResult
+        override suspend fun refresh(source: String?): ApiResult<TrackerBoardEnvelope> = refreshResult
+        override fun tileUrl(z: Int, x: Int, y: Int): String =
+            "https://sail.spinethorns.com/api/tracker/tiles/$z/$x/$y.png"
+    }
+
     @Test
     fun parsesTrackerBoardFixtureAndFormatsValues() {
-        val json = SailApi.defaultJson
         val envelope = json.decodeFromString(
             TrackerBoardEnvelope.serializer(),
             readFixture("fixtures/tracker/tracker_board.json"),
@@ -69,7 +82,7 @@ class TrackerTest {
         assertEquals("+1.2%", TrackerFormatting.formatPercentChange(1.21))
         assertEquals("-0.8%", TrackerFormatting.formatPercentChange(-0.82))
         assertEquals("5,842", TrackerFormatting.formatQuotePrice(5842.47))
-        assertEquals("1.0842", TrackerFormatting.formatQuotePrice(1.0842))
+        assertEquals("1.0842", TrackerFormatting.formatFxRate(1.0842))
         assertEquals("S&P 5,842", TrackerFormatting.formatQuoteHeadline(envelope.board.quotes.first()))
         assertEquals("14:18 UTC · 14:18Z", TrackerFormatting.formatUtcClock(1730989080L))
         assertEquals("14:02", TrackerFormatting.formatStoryTime(1730988120L))
@@ -98,7 +111,7 @@ class TrackerTest {
     }
 
     @Test
-    fun repositoryFetchesBoardRefreshesSourceAndResolvesTileUrl() = runTest {
+    fun repositoryFetchesBoardRefreshesSourceAndResolvesTileUrl() = runTest(dispatcher) {
         val fixture = readFixture("fixtures/tracker/tracker_board.json")
         server.enqueue(MockResponse().setResponseCode(200).setBody(fixture))
         server.enqueue(MockResponse().setResponseCode(200).setBody(fixture))
@@ -128,15 +141,23 @@ class TrackerTest {
     }
 
     @Test
-    fun viewModelMapsSituationRoomStateAndFiltersNewsByTopic() = runTest {
-        val fixture = readFixture("fixtures/tracker/tracker_board.json")
-        server.enqueue(MockResponse().setResponseCode(200).setBody(fixture))
+    fun viewModelMapsSituationRoomStateAndFiltersNewsByTopic() = runTest(dispatcher) {
+        val envelope = json.decodeFromString(
+            TrackerBoardEnvelope.serializer(),
+            readFixture("fixtures/tracker/tracker_board.json"),
+        )
+        val repo = FakeTrackerRepository(
+            api = createApi(),
+            boardResult = ApiResult.Ok(envelope),
+        )
 
-        val viewModel = TrackerViewModel(TrackerRepository(createApi()))
+        val viewModel = TrackerViewModel(repo)
+        advanceUntilIdle()
+
         val state = viewModel.state.value
         assertTrue(state is UiState.Ready)
 
-        val dashboard = (state as UiState.Ready).value
+        val dashboard = (state as UiState.Ready).data
         assertTrue(dashboard.isLive)
         assertEquals("14:18 UTC · 14:18Z", dashboard.clockSubtitle)
         assertEquals(6, dashboard.anomaliesCard.activeCount)
@@ -146,28 +167,34 @@ class TrackerTest {
         assertEquals("S&P 5,842", dashboard.marketsCard.headline)
         assertEquals("+1.2%", dashboard.marketsCard.changePctLabel)
         assertTrue(dashboard.marketsCard.isPositive)
+        assertEquals("EUR/USD 1.0842 · 2 quotes", dashboard.marketsCard.subtitle)
         assertEquals(3, dashboard.mapCard.pins.size)
         assertEquals(6, dashboard.mapCard.tileUrls.size)
         assertEquals(38, dashboard.mapCard.airborneTotal)
         assertEquals(2, dashboard.filteredStories.size)
 
         viewModel.selectTopic("technology")
-        val techFiltered = (viewModel.state.value as UiState.Ready).value
+        val techFiltered = (viewModel.state.value as UiState.Ready).data
         assertEquals("technology", techFiltered.selectedTopic)
         assertEquals(1, techFiltered.filteredStories.size)
         assertEquals("Ars Technica", techFiltered.filteredStories.first().source)
 
         viewModel.selectTopic("technology")
-        val cleared = (viewModel.state.value as UiState.Ready).value
+        val cleared = (viewModel.state.value as UiState.Ready).data
         assertNull(cleared.selectedTopic)
         assertEquals(2, cleared.filteredStories.size)
     }
 
     @Test
-    fun viewModelExposesUnavailableOnServerFailure() = runTest {
-        server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"Tracker offline"}"""))
+    fun viewModelExposesUnavailableOnServerFailure() = runTest(dispatcher) {
+        val repo = FakeTrackerRepository(
+            api = createApi(),
+            boardResult = ApiResult.Err(503, "Tracker offline"),
+        )
 
-        val viewModel = TrackerViewModel(TrackerRepository(createApi()))
+        val viewModel = TrackerViewModel(repo)
+        advanceUntilIdle()
+
         val state = viewModel.state.value
         assertTrue(state is UiState.Unavailable)
         assertEquals("Tracker offline", (state as UiState.Unavailable).message)

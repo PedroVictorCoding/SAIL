@@ -80,14 +80,14 @@ fun TrackerScreen(onBack: () -> Unit) {
     val uiState by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
 
-    val readyDashboard = (uiState as? UiState.Ready)?.value
+    val readyDashboard = (uiState as? UiState.Ready)?.data
     val subtitle = readyDashboard?.clockSubtitle ?: "UTC"
     val isLive = readyDashboard?.isLive ?: false
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(SailColors.BgVoid),
+            .background(SailColors.Base),
     ) {
         SailTopBar(
             title = "Tracker",
@@ -96,8 +96,7 @@ fun TrackerScreen(onBack: () -> Unit) {
             actions = {
                 SailPill(
                     text = if (isLive) "LIVE" else "SYNC",
-                    hue = if (isLive) SailColors.Tracker else SailColors.InkSecondary,
-                    dot = if (isLive) SailColors.Success else SailColors.Warning,
+                    dot = if (isLive) SailColors.Good else SailColors.Warning,
                 )
             },
         )
@@ -121,14 +120,9 @@ fun TrackerScreen(onBack: () -> Unit) {
                     contentAlignment = Alignment.Center,
                 ) {
                     EmptyState(
-                        title = "Situation room empty",
-                        detail = current.reason,
-                        action = {
-                            SecondaryButton(
-                                text = "Refresh board",
-                                onClick = { viewModel.refreshNow() },
-                            )
-                        },
+                        title = current.title,
+                        detail = current.detail,
+                        onRetry = { viewModel.refreshNow() },
                     )
                 }
             }
@@ -143,19 +137,14 @@ fun TrackerScreen(onBack: () -> Unit) {
                     EmptyState(
                         title = "Tracker unavailable",
                         detail = current.message,
-                        action = {
-                            SecondaryButton(
-                                text = "Retry",
-                                onClick = { viewModel.load() },
-                            )
-                        },
+                        onRetry = { viewModel.load() },
                     )
                 }
             }
 
             is UiState.Ready -> {
                 TrackerReadyContent(
-                    dashboard = current.value,
+                    dashboard = current.data,
                     isRefreshing = isRefreshing,
                     onSelectTopic = { topic -> viewModel.selectTopic(topic) },
                     onRefresh = { viewModel.refreshNow() },
@@ -258,8 +247,8 @@ private fun TrackerReadyContent(
                 if (dashboard.sourcesTotalCount > 0) {
                     Text(
                         text = "${dashboard.sourcesHealthyCount}/${dashboard.sourcesTotalCount} sources online",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = SailColors.InkMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SailColors.TextSubtle,
                     )
                 }
             }
@@ -274,13 +263,12 @@ private fun TrackerAnomaliesCard(
 ) {
     GlowCard(
         hue = Hue.Error,
-        strength = GlowStrength.Medium,
+        strength = GlowStrength.Tile,
         modifier = modifier,
-        padding = PaddingValues(16.dp),
     ) {
         Eyebrow(
             text = "ANOMALIES",
-            color = SailColors.Danger,
+            dot = SailColors.Error,
         )
         Spacer(modifier = Modifier.height(10.dp))
         Row(
@@ -295,7 +283,7 @@ private fun TrackerAnomaliesCard(
                     lineHeight = 25.sp,
                     fontWeight = FontWeight.Bold,
                 ),
-                color = SailColors.InkPrimary,
+                color = SailColors.Text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
@@ -304,7 +292,7 @@ private fun TrackerAnomaliesCard(
                 Spacer(modifier = Modifier.width(6.dp))
                 SailPill(
                     text = model.topSigmaLabel,
-                    hue = SailColors.Danger,
+                    dot = SailColors.Error,
                 )
             }
         }
@@ -315,7 +303,7 @@ private fun TrackerAnomaliesCard(
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
             ),
-            color = SailColors.InkSecondary,
+            color = SailColors.TextMuted,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -327,16 +315,15 @@ private fun TrackerMarketsCard(
     model: TrackerMarketsCardModel,
     modifier: Modifier = Modifier,
 ) {
-    val pillHue = if (model.isPositive) SailColors.Tracker else SailColors.Danger
+    val pillDot = if (model.isPositive) Hue.Tracker.color else SailColors.Error
     GlowCard(
         hue = Hue.Tracker,
-        strength = GlowStrength.Medium,
+        strength = GlowStrength.Tile,
         modifier = modifier,
-        padding = PaddingValues(16.dp),
     ) {
         Eyebrow(
             text = "MARKETS",
-            color = SailColors.Tracker,
+            dot = Hue.Tracker.color,
         )
         Spacer(modifier = Modifier.height(10.dp))
         Row(
@@ -351,7 +338,7 @@ private fun TrackerMarketsCard(
                     lineHeight = 25.sp,
                     fontWeight = FontWeight.Bold,
                 ),
-                color = SailColors.InkPrimary,
+                color = SailColors.Text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
@@ -360,7 +347,7 @@ private fun TrackerMarketsCard(
                 Spacer(modifier = Modifier.width(6.dp))
                 SailPill(
                     text = model.changePctLabel,
-                    hue = pillHue,
+                    dot = pillDot,
                 )
             }
         }
@@ -371,7 +358,7 @@ private fun TrackerMarketsCard(
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
             ),
-            color = SailColors.InkSecondary,
+            color = SailColors.TextMuted,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -396,8 +383,7 @@ private fun TrackerMapSnapshotCard(model: TrackerMapCardModel) {
 
     GlowCard(
         hue = Hue.Tracker,
-        strength = GlowStrength.Soft,
-        padding = PaddingValues(0.dp),
+        strength = GlowStrength.Weak,
     ) {
         BoxWithConstraints(
             modifier = Modifier
@@ -460,7 +446,7 @@ private fun TrackerMapSnapshotCard(model: TrackerMapCardModel) {
                 for (i in 1..5) {
                     val x = w * (i / 6f)
                     drawLine(
-                        color = SailColors.Tracker.copy(alpha = 0.10f),
+                        color = Hue.Tracker.color.copy(alpha = 0.10f),
                         start = Offset(x, 0f),
                         end = Offset(x, h),
                         strokeWidth = 1.dp.toPx(),
@@ -469,7 +455,7 @@ private fun TrackerMapSnapshotCard(model: TrackerMapCardModel) {
                 for (j in 1..3) {
                     val y = h * (j / 4f)
                     drawLine(
-                        color = SailColors.Tracker.copy(alpha = 0.10f),
+                        color = Hue.Tracker.color.copy(alpha = 0.10f),
                         start = Offset(0f, y),
                         end = Offset(w, y),
                         strokeWidth = 1.dp.toPx(),
@@ -486,7 +472,7 @@ private fun TrackerMapSnapshotCard(model: TrackerMapCardModel) {
                         }
                         drawPath(
                             path = path,
-                            color = SailColors.Dialogue.copy(alpha = 0.65f),
+                            color = Hue.Dialogue.color.copy(alpha = 0.65f),
                             style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
                         )
                     }
@@ -510,7 +496,7 @@ private fun TrackerMapSnapshotCard(model: TrackerMapCardModel) {
 
                 model.aircraftPoints.forEach { ac ->
                     drawCircle(
-                        color = SailColors.Dialogue.copy(alpha = 0.72f),
+                        color = Hue.Dialogue.color.copy(alpha = 0.72f),
                         radius = 2.2.dp.toPx(),
                         center = Offset(ac.x * w, ac.y * h),
                     )
@@ -519,12 +505,12 @@ private fun TrackerMapSnapshotCard(model: TrackerMapCardModel) {
                 model.pins.forEach { pin ->
                     val center = Offset(pin.point.x * w, pin.point.y * h)
                     drawCircle(
-                        color = SailColors.Tracker.copy(alpha = 0.28f),
+                        color = Hue.Tracker.color.copy(alpha = 0.28f),
                         radius = if (pin.primary) 14.dp.toPx() else 11.dp.toPx(),
                         center = center,
                     )
                     drawCircle(
-                        color = SailColors.Tracker,
+                        color = Hue.Tracker.color,
                         radius = if (pin.primary) 5.dp.toPx() else 4.dp.toPx(),
                         center = center,
                     )
@@ -552,7 +538,7 @@ private fun TrackerMapSnapshotCard(model: TrackerMapCardModel) {
                         }
                         .clip(PillShape)
                         .background(Color(0xCC08151B))
-                        .border(1.dp, SailColors.Tracker.copy(alpha = 0.45f), PillShape)
+                        .border(1.dp, Hue.Tracker.color.copy(alpha = 0.45f), PillShape)
                         .padding(horizontal = 8.dp, vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -561,15 +547,15 @@ private fun TrackerMapSnapshotCard(model: TrackerMapCardModel) {
                         modifier = Modifier
                             .size(6.dp)
                             .clip(CircleShape)
-                            .background(SailColors.Tracker),
+                            .background(Hue.Tracker.color),
                     )
                     Text(
                         text = pin.label,
-                        style = MaterialTheme.typography.labelMedium.copy(
+                        style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                         ),
-                        color = SailColors.InkPrimary,
+                        color = SailColors.Text,
                         maxLines = 1,
                     )
                 }
@@ -585,13 +571,13 @@ private fun TrackerMapSnapshotCard(model: TrackerMapCardModel) {
                     if (model.airborneTotal > 0) {
                         SailPill(
                             text = "${model.airborneTotal} airborne",
-                            hue = SailColors.Dialogue,
+                            dot = Hue.Dialogue.color,
                         )
                     }
                     if (model.quakes.isNotEmpty()) {
                         SailPill(
                             text = "${model.quakes.size} seismic",
-                            hue = SailColors.Warning,
+                            dot = SailColors.Warning,
                         )
                     }
                 }
@@ -609,8 +595,7 @@ private fun TrackerNewsCard(
 ) {
     GlowCard(
         hue = Hue.Learn,
-        strength = GlowStrength.Soft,
-        padding = PaddingValues(18.dp),
+        strength = GlowStrength.Weak,
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -618,7 +603,7 @@ private fun TrackerNewsCard(
         ) {
             Eyebrow(
                 text = "NEWS",
-                color = SailColors.Learn,
+                dot = Hue.Learn.color,
             )
             Text(
                 text = "·  Top signals",
@@ -626,7 +611,7 @@ private fun TrackerNewsCard(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                 ),
-                color = SailColors.InkSecondary,
+                color = SailColors.TextMuted,
             )
         }
 
@@ -659,7 +644,7 @@ private fun TrackerNewsCard(
             Text(
                 text = "No news stories available for this filter.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = SailColors.InkSecondary,
+                color = SailColors.TextMuted,
             )
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -667,7 +652,7 @@ private fun TrackerNewsCard(
                     if (index > 0) {
                         HorizontalDivider(
                             thickness = 1.dp,
-                            color = SailColors.BorderSubtle,
+                            color = SailColors.Line,
                         )
                     }
                     TrackerStoryRow(story = story)
@@ -683,9 +668,9 @@ private fun TopicFilterChip(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val bg = if (selected) SailColors.Learn.copy(alpha = 0.22f) else SailColors.BgElevated
-    val border = if (selected) SailColors.Learn.copy(alpha = 0.55f) else SailColors.BorderSubtle
-    val textColor = if (selected) SailColors.InkPrimary else SailColors.InkSecondary
+    val bg = if (selected) Hue.Learn.color.copy(alpha = 0.22f) else SailColors.SurfaceRaised
+    val border = if (selected) Hue.Learn.color.copy(alpha = 0.55f) else SailColors.Line
+    val textColor = if (selected) SailColors.Text else SailColors.TextMuted
 
     Box(
         modifier = Modifier
@@ -699,7 +684,7 @@ private fun TopicFilterChip(
             text = label.replaceFirstChar {
                 if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString()
             },
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = textColor,
         )
     }
@@ -716,12 +701,12 @@ private fun TrackerStoryRow(story: TrackerStory) {
     ) {
         Text(
             text = TrackerFormatting.formatStoryTime(story.published),
-            style = MaterialTheme.typography.labelMedium.copy(
+            style = MaterialTheme.typography.labelSmall.copy(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
             ),
-            color = SailColors.InkMuted,
+            color = SailColors.TextSubtle,
             modifier = Modifier.padding(top = 2.dp),
         )
         Column(modifier = Modifier.weight(1f)) {
@@ -732,7 +717,7 @@ private fun TrackerStoryRow(story: TrackerStory) {
                     lineHeight = 21.sp,
                     fontWeight = FontWeight.SemiBold,
                 ),
-                color = SailColors.InkPrimary,
+                color = SailColors.Text,
             )
             Spacer(modifier = Modifier.height(3.dp))
             val meta = buildString {
@@ -749,8 +734,8 @@ private fun TrackerStoryRow(story: TrackerStory) {
             if (meta.isNotEmpty()) {
                 Text(
                     text = meta,
-                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
-                    color = SailColors.InkSecondary,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
+                    color = SailColors.TextMuted,
                 )
             }
         }
@@ -761,12 +746,11 @@ private fun TrackerStoryRow(story: TrackerStory) {
 private fun TrackerAnomalyFeedCard(anomalies: List<TrackerAnomaly>) {
     GlowCard(
         hue = Hue.Error,
-        strength = GlowStrength.Soft,
-        padding = PaddingValues(16.dp),
+        strength = GlowStrength.Weak,
     ) {
         Eyebrow(
             text = "ANOMALY LOG",
-            color = SailColors.Danger,
+            dot = SailColors.Error,
         )
         Spacer(modifier = Modifier.height(10.dp))
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -780,23 +764,23 @@ private fun TrackerAnomalyFeedCard(anomalies: List<TrackerAnomaly>) {
                         Text(
                             text = anomaly.headline,
                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                            color = SailColors.InkPrimary,
+                            color = SailColors.Text,
                         )
                         if (anomaly.detail.isNotBlank()) {
                             Text(
                                 text = anomaly.detail,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = SailColors.InkSecondary,
+                                color = SailColors.TextMuted,
                             )
                         }
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     SailPill(
                         text = TrackerFormatting.formatSigma(anomaly.zScore),
-                        hue = if (anomaly.severity.equals("critical", ignoreCase = true) ||
+                        dot = if (anomaly.severity.equals("critical", ignoreCase = true) ||
                             anomaly.severity.equals("elevated", ignoreCase = true)
                         ) {
-                            SailColors.Danger
+                            SailColors.Error
                         } else {
                             SailColors.Warning
                         },
@@ -815,12 +799,11 @@ private fun TrackerMarketsTapeCard(
 ) {
     GlowCard(
         hue = Hue.Tracker,
-        strength = GlowStrength.Soft,
-        padding = PaddingValues(16.dp),
+        strength = GlowStrength.Weak,
     ) {
         Eyebrow(
             text = "MARKETS & FX",
-            color = SailColors.Tracker,
+            dot = Hue.Tracker.color,
         )
         Spacer(modifier = Modifier.height(10.dp))
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -833,7 +816,7 @@ private fun TrackerMarketsTapeCard(
                     Text(
                         text = quote.label.ifBlank { quote.symbol },
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                        color = SailColors.InkPrimary,
+                        color = SailColors.Text,
                     )
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -845,17 +828,17 @@ private fun TrackerMarketsTapeCard(
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.SemiBold,
                             ),
-                            color = SailColors.InkPrimary,
+                            color = SailColors.Text,
                         )
                         SailPill(
                             text = TrackerFormatting.formatPercentChange(quote.changePct),
-                            hue = if (quote.changePct >= 0.0) SailColors.Tracker else SailColors.Danger,
+                            dot = if (quote.changePct >= 0.0) Hue.Tracker.color else SailColors.Error,
                         )
                     }
                 }
             }
             if (fx.isNotEmpty()) {
-                HorizontalDivider(thickness = 1.dp, color = SailColors.BorderSubtle)
+                HorizontalDivider(thickness = 1.dp, color = SailColors.Line)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -864,23 +847,23 @@ private fun TrackerMarketsTapeCard(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "${rate.base}/${rate.quote}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = SailColors.InkMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SailColors.TextSubtle,
                             )
                             Text(
-                                text = TrackerFormatting.formatQuotePrice(rate.rate),
+                                text = TrackerFormatting.formatFxRate(rate.rate),
                                 style = MaterialTheme.typography.bodyMedium.copy(
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.SemiBold,
                                 ),
-                                color = SailColors.InkPrimary,
+                                color = SailColors.Text,
                             )
                         }
                     }
                 }
             }
             if (odds.isNotEmpty()) {
-                HorizontalDivider(thickness = 1.dp, color = SailColors.BorderSubtle)
+                HorizontalDivider(thickness = 1.dp, color = SailColors.Line)
                 odds.take(2).forEach { market ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -890,7 +873,7 @@ private fun TrackerMarketsTapeCard(
                         Text(
                             text = market.question,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = SailColors.InkSecondary,
+                            color = SailColors.TextMuted,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
@@ -898,7 +881,7 @@ private fun TrackerMarketsTapeCard(
                         Spacer(modifier = Modifier.width(8.dp))
                         SailPill(
                             text = "${(market.probability * 100.0).roundToInt()}%",
-                            hue = SailColors.Dialogue,
+                            dot = Hue.Dialogue.color,
                         )
                     }
                 }
@@ -914,12 +897,11 @@ private fun TrackerWorldConditionsCard(
 ) {
     GlowCard(
         hue = Hue.Dialogue,
-        strength = GlowStrength.Soft,
-        padding = PaddingValues(16.dp),
+        strength = GlowStrength.Weak,
     ) {
         Eyebrow(
             text = "WORLD CONDITIONS",
-            color = SailColors.Dialogue,
+            dot = Hue.Dialogue.color,
         )
         Spacer(modifier = Modifier.height(10.dp))
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -933,13 +915,13 @@ private fun TrackerWorldConditionsCard(
                         Text(
                             text = cond.place,
                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                            color = SailColors.InkPrimary,
+                            color = SailColors.Text,
                         )
                         if (cond.condition.isNotBlank()) {
                             Text(
                                 text = cond.condition,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = SailColors.InkSecondary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = SailColors.TextMuted,
                             )
                         }
                     }
@@ -949,13 +931,13 @@ private fun TrackerWorldConditionsCard(
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.SemiBold,
                         ),
-                        color = SailColors.InkPrimary,
+                        color = SailColors.Text,
                     )
                 }
             }
             if (quakes.isNotEmpty()) {
                 if (conditions.isNotEmpty()) {
-                    HorizontalDivider(thickness = 1.dp, color = SailColors.BorderSubtle)
+                    HorizontalDivider(thickness = 1.dp, color = SailColors.Line)
                 }
                 quakes.take(3).forEach { quake ->
                     Row(
@@ -966,7 +948,7 @@ private fun TrackerWorldConditionsCard(
                         Text(
                             text = quake.place,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = SailColors.InkSecondary,
+                            color = SailColors.TextMuted,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
@@ -974,7 +956,7 @@ private fun TrackerWorldConditionsCard(
                         Spacer(modifier = Modifier.width(8.dp))
                         SailPill(
                             text = String.format(Locale.US, "M%.1f", quake.magnitude),
-                            hue = SailColors.Warning,
+                            dot = SailColors.Warning,
                         )
                     }
                 }
