@@ -16,3 +16,4 @@
 //! `CoursePackage`s, graded by `courses` without any model call.
 pub mod contracts;
 pub mod registry;
+pub mod validate;
