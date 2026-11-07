@@ -7,6 +7,29 @@ use std::time::{Duration, Instant};
 
 const MAX_JSON: usize = 512 * 1024;
 pub const MAX_COVER: usize = 2 * 1024 * 1024;
+const SEARCH_FIELDS: &str = "key,title,subtitle,author_name,first_publish_year,edition_count,cover_i,cover_edition_key,subject,language,publisher,isbn";
+const SEARCH_FETCH: &str = "12";
+const SEARCH_RETURN: usize = 5;
+const DERIVATIVE_WORDS: [&str; 10] = [
+    "summary",
+    "study guide",
+    "analysis",
+    "collection",
+    "box set",
+    "books set",
+    "trilogy",
+    "omnibus",
+    "adaptation",
+    "companion",
+];
+
+/// The owner-visible title, author and optional ISBN. Only these leave the host.
+#[derive(Debug, Clone, Copy)]
+pub struct SearchTerms<'a> {
+    pub title: &'a str,
+    pub author: &'a str,
+    pub isbn: &'a str,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
@@ -18,6 +41,17 @@ pub struct Metadata {
     pub subjects: Vec<String>,
     pub description: Option<String>,
     pub cover_id: Option<u64>,
+    /// Edition OLID used when the work has no `cover_i`; validated before a cover request.
+    #[serde(default)]
+    pub cover_olid: Option<String>,
+    #[serde(default)]
+    pub subtitle: Option<String>,
+    #[serde(default)]
+    pub publishers: Vec<String>,
+    #[serde(default)]
+    pub languages: Vec<String>,
+    #[serde(default)]
+    pub isbn: Vec<String>,
     pub cover_cached: bool,
     pub retrieved_at: DateTime<Utc>,
     #[serde(default)]
@@ -142,30 +176,82 @@ impl Catalog {
         Ok(bytes)
     }
 
-    pub async fn search(&self, title: &str, author: &str) -> Result<Vec<Metadata>, String> {
-        if title.trim().is_empty() || title.chars().count() > 200 || author.chars().count() > 160 {
-            return Err(
-                "Enter a title (up to 200 characters) and optional author (up to 160 characters)."
-                    .into(),
-            );
-        }
+    async fn search_docs(&self, params: &[(&str, &str)]) -> Result<Vec<Metadata>, String> {
         let mut url = reqwest::Url::parse(&format!("{}/search.json", self.api)).unwrap();
-        url.query_pairs_mut()
-            .append_pair("title", title.trim())
-            .append_pair(
-                "fields",
-                "key,title,author_name,first_publish_year,edition_count,cover_i,subject",
-            )
-            .append_pair("limit", "5");
-        if !author.trim().is_empty() {
-            url.query_pairs_mut().append_pair("author", author.trim());
+        {
+            let mut query = url.query_pairs_mut();
+            for (key, value) in params {
+                query.append_pair(key, value);
+            }
+            query
+                .append_pair("fields", SEARCH_FIELDS)
+                .append_pair("limit", SEARCH_FETCH);
         }
         let data: Value = serde_json::from_slice(&self.bytes(url, MAX_JSON).await?)
             .map_err(|_| "Open Library returned unreadable book details.".to_string())?;
         let docs = data["docs"]
             .as_array()
             .ok_or("Open Library returned unreadable book details.")?;
-        Ok(docs.iter().take(5).filter_map(candidate).collect())
+        Ok(docs.iter().filter_map(candidate).collect())
+    }
+
+    /// Search the documented Open Library API. Exact title/author fields are tried first;
+    /// when they only return box sets or no close match, a ranked general query is merged in.
+    /// An ISBN is an exact lookup and never falls back to a fuzzy title search.
+    pub async fn search(&self, terms: SearchTerms<'_>) -> Result<Vec<Metadata>, String> {
+        let title = terms.title.trim();
+        let author = terms.author.trim();
+        let isbn_input = terms.isbn.trim();
+        if title.chars().count() > 200
+            || author.chars().count() > 160
+            || isbn_input.chars().count() > 32
+        {
+            return Err(
+                "Enter a title (up to 200 characters), optional author (up to 160) and optional ISBN."
+                    .into(),
+            );
+        }
+        let isbn = if isbn_input.is_empty() {
+            None
+        } else {
+            Some(normalize_isbn(isbn_input)?)
+        };
+        if title.is_empty() && author.is_empty() && isbn.is_none() {
+            return Err("Enter a title, author or ISBN to search Open Library.".into());
+        }
+        if let Some(isbn) = isbn {
+            let q = format!("isbn:{isbn}");
+            let docs = self.search_docs(&[("q", q.as_str())]).await?;
+            return Ok(rank_and_limit(docs, title, author));
+        }
+        if title.is_empty() {
+            let q = format!("author:(\"{}\")", author.replace('"', " "));
+            let docs = self.search_docs(&[("q", q.as_str())]).await?;
+            return Ok(rank_and_limit(docs, "", author));
+        }
+        let mut params = vec![("title", title)];
+        if !author.is_empty() {
+            params.push(("author", author));
+        }
+        let primary = self.search_docs(&params).await?;
+        let ranked = rank_and_limit(primary.clone(), title, author);
+        if strong_match(&ranked, title, author) {
+            return Ok(ranked);
+        }
+        let q = if author.is_empty() {
+            title.to_owned()
+        } else {
+            format!("{title} {author}")
+        };
+        match self.search_docs(&[("q", q.as_str())]).await {
+            Ok(fallback) => {
+                let mut all = primary;
+                all.extend(fallback);
+                Ok(rank_and_limit(all, title, author))
+            }
+            // A fallback failure must not hide the usable field-search results.
+            Err(_) => Ok(ranked),
+        }
     }
 
     pub async fn enrich(&self, mut book: Metadata) -> Result<(Metadata, Option<Vec<u8>>), String> {
@@ -185,10 +271,16 @@ impl Catalog {
             );
         }
         let mut image = None;
-        if let Some(id) = book.cover_id {
-            let url =
-                reqwest::Url::parse(&format!("{}/b/id/{id}-L.jpg?default=false", self.covers))
-                    .unwrap();
+        let cover = if let Some(id) = book.cover_id {
+            Some(format!("{}/b/id/{id}-L.jpg?default=false", self.covers))
+        } else {
+            book.cover_olid
+                .as_deref()
+                .filter(|olid| valid_cover_olid(olid))
+                .map(|olid| format!("{}/b/olid/{olid}-L.jpg?default=false", self.covers))
+        };
+        if let Some(cover) = cover {
+            let url = reqwest::Url::parse(&cover).unwrap();
             if let Ok(bytes) = self.bytes(url, MAX_COVER).await {
                 image = tokio::task::spawn_blocking(move || sanitize_cover(&bytes))
                     .await
@@ -214,7 +306,7 @@ fn allowed_cover_redirect(url: &reqwest::Url) -> bool {
     }
     let host = url.host_str().unwrap_or_default();
     if host == "covers.openlibrary.org" {
-        return url.path().starts_with("/b/id/");
+        return url.path().starts_with("/b/id/") || url.path().starts_with("/b/olid/");
     }
     if host == "archive.org" {
         return url.path().starts_with("/download/l_covers_");
@@ -261,9 +353,234 @@ fn candidate(doc: &Value) -> Option<Metadata> {
         subjects: strings(&doc["subject"], 4, 80),
         description: None,
         cover_id: doc["cover_i"].as_u64().filter(|id| *id > 0),
+        cover_olid: doc["cover_edition_key"]
+            .as_str()
+            .filter(|value| valid_cover_olid(value))
+            .map(str::to_owned),
+        subtitle: text(doc["subtitle"].as_str(), 300),
+        publishers: strings(&doc["publisher"], 2, 160),
+        languages: strings(&doc["language"], 2, 16)
+            .into_iter()
+            .map(|code| language_label(&code))
+            .collect(),
+        isbn: strings(&doc["isbn"], 3, 20),
         cover_cached: false,
         retrieved_at: Utc::now(),
         user_edited: false,
+    })
+}
+
+/// Validate and compact an ISBN-10/13 (hyphens and spaces ignored). Checksums catch typos
+/// before a request leaves the host.
+pub fn normalize_isbn(value: &str) -> Result<String, String> {
+    let compact: String = value
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '-')
+        .collect();
+    let valid = match compact.len() {
+        10 => {
+            let bytes = compact.as_bytes();
+            bytes[..9].iter().all(u8::is_ascii_digit)
+                && (bytes[9].is_ascii_digit() || bytes[9].eq_ignore_ascii_case(&b'X'))
+                && isbn10_checksum(&compact)
+        }
+        13 => compact.bytes().all(|byte| byte.is_ascii_digit()) && isbn13_checksum(&compact),
+        _ => false,
+    };
+    if valid {
+        Ok(compact.to_ascii_uppercase())
+    } else {
+        Err("Enter a valid ISBN-10 or ISBN-13.".into())
+    }
+}
+
+fn isbn10_checksum(value: &str) -> bool {
+    value
+        .bytes()
+        .enumerate()
+        .try_fold(0u32, |sum, (index, byte)| {
+            let digit = match byte {
+                b'0'..=b'9' => u32::from(byte - b'0'),
+                b'X' | b'x' if index == 9 => 10,
+                _ => return None,
+            };
+            Some(sum + digit * (10 - index as u32))
+        })
+        .is_some_and(|sum| sum % 11 == 0)
+}
+
+fn isbn13_checksum(value: &str) -> bool {
+    value
+        .bytes()
+        .enumerate()
+        .try_fold(0u32, |sum, (index, byte)| {
+            let digit = u32::from(byte.checked_sub(b'0')?);
+            (digit <= 9).then_some(sum + digit * if index % 2 == 0 { 1 } else { 3 })
+        })
+        .is_some_and(|sum| sum % 10 == 0)
+}
+
+fn valid_cover_olid(value: &str) -> bool {
+    value
+        .strip_prefix("OL")
+        .and_then(|value| value.strip_suffix('M'))
+        .is_some_and(|digits| {
+            !digits.is_empty() && digits.len() <= 16 && digits.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
+fn language_label(code: &str) -> String {
+    match code {
+        "eng" => "English",
+        "fre" | "fra" => "French",
+        "ger" | "deu" => "German",
+        "spa" => "Spanish",
+        "ita" => "Italian",
+        "por" => "Portuguese",
+        "dut" | "nld" => "Dutch",
+        "rus" => "Russian",
+        "jpn" => "Japanese",
+        "chi" | "zho" => "Chinese",
+        "kor" => "Korean",
+        "ara" => "Arabic",
+        "lat" => "Latin",
+        "gre" | "ell" => "Greek",
+        "swe" => "Swedish",
+        "pol" => "Polish",
+        "tur" => "Turkish",
+        "hin" => "Hindi",
+        "ben" => "Bengali",
+        "heb" => "Hebrew",
+        _ => code,
+    }
+    .to_string()
+}
+
+fn normalize(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn title_key(value: &str) -> String {
+    let normalized = normalize(value);
+    for article in ["the ", "a ", "an "] {
+        if let Some(rest) = normalized.strip_prefix(article) {
+            return rest.to_string();
+        }
+    }
+    normalized
+}
+
+fn token_overlap(query: &str, candidate: &str) -> usize {
+    let candidate: std::collections::HashSet<&str> = candidate.split_whitespace().collect();
+    query
+        .split_whitespace()
+        .filter(|token| token.len() > 1 && candidate.contains(token))
+        .count()
+}
+
+fn derivative(book: &Metadata) -> bool {
+    let text = format!(
+        " {} {} ",
+        normalize(&book.title),
+        book.subtitle.as_deref().map(normalize).unwrap_or_default()
+    );
+    DERIVATIVE_WORDS
+        .iter()
+        .any(|word| text.contains(&format!(" {word} ")))
+}
+
+fn author_match(book: &Metadata, author: &str) -> bool {
+    let query = normalize(author);
+    if query.is_empty() {
+        return true;
+    }
+    let last = query.split_whitespace().last().unwrap_or_default();
+    book.authors.iter().any(|candidate| {
+        let candidate = normalize(candidate);
+        !candidate.is_empty()
+            && (candidate.contains(&query)
+                || query.contains(&candidate)
+                || (!last.is_empty() && candidate.split_whitespace().last() == Some(last)))
+    })
+}
+
+fn score(book: &Metadata, title: &str, author: &str) -> i32 {
+    let mut score = 0;
+    if !title.trim().is_empty() {
+        let query = title_key(title);
+        let candidate = title_key(&book.title);
+        if !query.is_empty() && candidate == query {
+            score += 100;
+        } else if !query.is_empty() && candidate.contains(&query) {
+            score += 60;
+        } else {
+            // A short generic title ("Mistborn") must not outrank the fuller title the
+            // owner typed ("Mistborn: The Final Empire"); shared-token count breaks that tie.
+            score += (token_overlap(&query, &candidate) as i32) * 12;
+        }
+        if derivative(book) {
+            score -= 45;
+        }
+    }
+    if !author.trim().is_empty() && author_match(book, author) {
+        score += 30;
+    }
+    if book.cover_id.is_some() || book.cover_olid.is_some() {
+        score += 2;
+    }
+    if book.edition_count.unwrap_or(0) > 0 {
+        score += 1;
+    }
+    score
+}
+
+fn rank_and_limit(docs: Vec<Metadata>, title: &str, author: &str) -> Vec<Metadata> {
+    let mut seen = std::collections::HashSet::new();
+    let mut unique = Vec::new();
+    for book in docs {
+        if seen.insert(book.work_key.clone()) {
+            unique.push(book);
+        }
+    }
+    let mut scored: Vec<(i32, usize, Metadata)> = unique
+        .into_iter()
+        .enumerate()
+        .map(|(index, book)| (score(&book, title, author), index, book))
+        .collect();
+    scored.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+    scored
+        .into_iter()
+        .take(SEARCH_RETURN)
+        .map(|(_, _, book)| book)
+        .collect()
+}
+
+fn strong_match(docs: &[Metadata], title: &str, author: &str) -> bool {
+    if title.trim().is_empty() {
+        return docs.iter().any(|book| author_match(book, author));
+    }
+    let query = title_key(title);
+    docs.iter().any(|book| {
+        let candidate = title_key(&book.title);
+        let exact = !query.is_empty() && candidate == query;
+        let close = !query.is_empty()
+            && candidate.starts_with(&query)
+            && !derivative(book)
+            && candidate.len() <= query.len() + 24;
+        (exact || close) && (author.trim().is_empty() || author_match(book, author))
     })
 }
 
@@ -412,27 +729,47 @@ mod tests {
         assert_eq!(image::load_from_memory(&cover).unwrap().width(), 20);
     }
     #[tokio::test]
-    async fn lookup_uses_fixed_paths_and_query_encoding() {
-        use axum::{Json, Router, extract::Query, routing::get};
-        let app = Router::new()
+    async fn search_merges_field_and_general_results_and_uses_olid_covers() {
+        use axum::{Json, Router, extract::Query, http::StatusCode, routing::get};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().route(
+            "/search.json",
+            get({
+                let calls = calls.clone();
+                move |Query(q): Query<std::collections::HashMap<String, String>>| {
+                    let calls = calls.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        assert_eq!(q["limit"], "12");
+                        assert!(q["fields"].contains("cover_edition_key"));
+                        assert!(q["fields"].contains("isbn"));
+                        if let Some(title) = q.get("title") {
+                            assert_eq!(title, "Mistborn: The Final Empire");
+                            assert_eq!(q["author"], "Brandon Sanderson");
+                            Json(json!({"docs":[
+                                {"key":"/works/OL1W","title":"Mistborn 7 Books Collection Set","author_name":["Brandon Sanderson"],"cover_i":5},
+                                {"key":"/works/OL2W","title":"Mistborn","author_name":["Brandon Sanderson"]}
+                            ]}))
+                        } else {
+                            assert_eq!(q["q"], "Mistborn: The Final Empire Brandon Sanderson");
+                            Json(json!({"docs":[
+                                {"key":"/works/OL3W","title":"The Final Empire","author_name":["Brandon Sanderson"],"cover_edition_key":"OL123M","language":["eng"],"publisher":["Tor"],"isbn":["9780765311788"]}
+                            ]}))
+                        }
+                    }
+                }
+            }))
             .route(
-                "/search.json",
-                get(
-                    |Query(q): Query<std::collections::HashMap<String, String>>| async move {
-                        assert_eq!(q["title"], "A & B");
-                        assert_eq!(q["author"], "One? Two");
-                        assert_eq!(q["limit"], "5");
-                        Json(json!({"docs":[{"key":"/works/OL1W","title":"A & B","cover_i":5}]}))
-                    },
-                ),
-            )
-            .route(
-                "/works/OL1W.json",
+                "/works/OL3W.json",
                 get(|| async { Json(json!({"description":{"value":"A description"}})) }),
             )
             .route(
-                "/b/id/5-L.jpg",
-                get(|| async { (axum::http::StatusCode::NOT_FOUND, "missing") }),
+                "/b/olid/OL123M-L.jpg",
+                get(|| async { (StatusCode::NOT_FOUND, "missing") }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -442,11 +779,131 @@ mod tests {
         let mut catalog = Catalog::new().unwrap();
         catalog.api = base.clone();
         catalog.covers = base;
-        let results = catalog.search("A & B", "One? Two").await.unwrap();
+        let results = catalog
+            .search(SearchTerms {
+                title: "Mistborn: The Final Empire",
+                author: "Brandon Sanderson",
+                isbn: "",
+            })
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "primary plus fallback");
+        assert_eq!(results[0].title, "The Final Empire", "{results:#?}");
+        assert_eq!(results[0].cover_olid.as_deref(), Some("OL123M"));
+        assert_eq!(results[0].languages, vec!["English"]);
+        assert_eq!(results[0].publishers, vec!["Tor"]);
+        assert_eq!(results[0].isbn, vec!["9780765311788"]);
         let (metadata, cover) = catalog.enrich(results[0].clone()).await.unwrap();
         assert_eq!(metadata.description.as_deref(), Some("A description"));
         assert!(cover.is_none());
-        assert!(catalog.search("", "").await.is_err());
+        assert!(
+            catalog
+                .search(SearchTerms {
+                    title: "",
+                    author: "",
+                    isbn: "",
+                })
+                .await
+                .is_err()
+        );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn isbn_search_is_exact_and_checksum_checked() {
+        use axum::{Json, Router, extract::Query, routing::get};
+        let app = Router::new().route(
+            "/search.json",
+            get(
+                |Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                    assert_eq!(q["q"], "isbn:9780765311788");
+                    Json(json!({"docs":[
+                        {"key":"/works/OL9W","title":"Mistborn","author_name":["Brandon Sanderson"]}
+                    ]}))
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let mut catalog = Catalog::new().unwrap();
+        catalog.api = base.clone();
+        catalog.covers = base;
+        let results = catalog
+            .search(SearchTerms {
+                title: "ignored",
+                author: "ignored",
+                isbn: "978-0-7653-1178-8",
+            })
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Mistborn");
+        assert!(
+            catalog
+                .search(SearchTerms {
+                    title: "",
+                    author: "",
+                    isbn: "123",
+                })
+                .await
+                .is_err()
+        );
+        server.abort();
+    }
+
+    #[test]
+    fn isbn_normalization_and_cover_olid_are_bounded() {
+        assert_eq!(
+            normalize_isbn("978-0-7653-1178-8").unwrap(),
+            "9780765311788"
+        );
+        assert_eq!(normalize_isbn("0-7653-1178-X").unwrap(), "076531178X");
+        for value in ["", "123", "9780765311789", "0-7653-1178-1", "978076531178X"] {
+            assert!(normalize_isbn(value).is_err(), "{value}");
+        }
+        assert!(valid_cover_olid("OL123M"));
+        for value in ["OL123W", "OLM", "OL123", "OL123M/extra"] {
+            assert!(!valid_cover_olid(value), "{value}");
+        }
+    }
+
+    #[test]
+    fn ranking_prefers_the_owned_work_over_collections() {
+        let query = "Mistborn: The Final Empire";
+        let author = "Brandon Sanderson";
+        let collection = candidate(&json!({
+            "key":"/works/OL1W",
+            "title":"Mistborn 7 Books Collection Set",
+            "author_name":["Brandon Sanderson"],
+            "cover_i":5
+        }))
+        .unwrap();
+        let generic = candidate(&json!({
+            "key":"/works/OL2W",
+            "title":"Mistborn",
+            "author_name":["Brandon Sanderson"]
+        }))
+        .unwrap();
+        let intended = candidate(&json!({
+            "key":"/works/OL3W",
+            "title":"The Final Empire",
+            "author_name":["Brandon Sanderson"]
+        }))
+        .unwrap();
+        let ranked = rank_and_limit(vec![collection, generic, intended.clone()], query, author);
+        assert_eq!(ranked[0].work_key, intended.work_key);
+        assert!(strong_match(
+            std::slice::from_ref(&intended),
+            "The Final Empire",
+            author
+        ));
+        assert!(!strong_match(
+            &[candidate(&json!({"key":"/works/OL4W","title":"Mistborn 7 Books Collection Set","author_name":["Brandon Sanderson"]})).unwrap()],
+            query,
+            author
+        ));
     }
 }

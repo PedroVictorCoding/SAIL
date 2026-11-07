@@ -410,6 +410,7 @@ const SailReader = (() => {
       resetEditor();
       $('metadata-title').value = book.title.slice(0, 200);
       $('metadata-author').value = book.authors.join(', ').slice(0, 160);
+      $('metadata-isbn').value = '';
       $('metadata-results').replaceChildren(); $('metadata-results').hidden = false;
       $('metadata-status').textContent = '';
       $('metadata-search').disabled = false;
@@ -462,14 +463,18 @@ const SailReader = (() => {
       $('metadata-results').replaceChildren();
       $('metadata-status').textContent = 'Searching Open Library…';
       try {
-        const data = await api.request(`/books/${key(book)}/metadata/search`, {method: 'POST', body: {
-          title: $('metadata-title').value, author: $('metadata-author').value
-        }});
+        const body = {title: $('metadata-title').value, author: $('metadata-author').value};
+        const isbn = $('metadata-isbn').value.trim();
+        if (isbn) body.isbn = isbn;
+        const data = await api.request(`/books/${key(book)}/metadata/search`, {method: 'POST', body});
         if (serial !== lookupSerial) return;
-        $('metadata-status').textContent = data.matches.length ? 'Preview a match to inspect its cover and edit its details.' : 'No matches found. Try another title or author.';
+        $('metadata-status').textContent = data.matches.length ? 'Preview a match to inspect its cover and edit its details.' : 'No matches found. Try another title, author or ISBN.';
         for (const match of data.matches) {
           const result = el('article', undefined, 'metadata-result');
-          result.append(el('h3', match.title), el('p', [match.authors.join(', '), match.first_publish_year].filter(Boolean).join(' · '), 'muted'));
+          const language = (match.languages || [])[0];
+          const details = [match.subtitle, match.authors.join(', '),
+            match.first_publish_year, (match.publishers || [])[0], language].filter(Boolean).join(' · ');
+          result.append(el('h3', match.title), el('p', details, 'muted'));
           result.append(button('Preview & edit', async () => {
             const previewSerial = ++lookupSerial;
             $('metadata-results').querySelectorAll('button').forEach(b => { b.disabled = true; });
