@@ -18,3 +18,4 @@ pub mod contracts;
 pub mod ingest;
 pub mod registry;
 pub mod sources;
+pub mod validate;
