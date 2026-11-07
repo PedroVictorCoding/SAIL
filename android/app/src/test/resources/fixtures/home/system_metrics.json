@@ -1,0 +1,27 @@
+{
+  "cpu_percent": 14.6,
+  "cpu_cores": 16,
+  "load1": 1.42,
+  "ram_total_bytes": 32212254720,
+  "ram_used_bytes": 2147483648,
+  "swap_total_bytes": 8589934592,
+  "swap_used_bytes": 0,
+  "io_bytes_per_sec": 131072.0,
+  "disks": [
+    {
+      "path": "/",
+      "used_bytes": 37044092928,
+      "total_bytes": 119616077824
+    }
+  ],
+  "gpus": [
+    {
+      "card": "card0",
+      "busy_percent": 6.0,
+      "vram_used_bytes": 1073741824,
+      "vram_total_bytes": 17179869184
+    }
+  ],
+  "uptime_secs": 86400.0,
+  "version": "0.1.0"
+}

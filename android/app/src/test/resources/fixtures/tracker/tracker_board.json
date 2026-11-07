@@ -1,0 +1,347 @@
+{
+  "config": {
+    "places": [
+      {
+        "label": "Dublin",
+        "lat": 53.3498,
+        "lon": -6.2603,
+        "tz": "Europe/Dublin",
+        "primary": true
+      },
+      {
+        "label": "London",
+        "lat": 51.5072,
+        "lon": -0.1276,
+        "tz": "Europe/London",
+        "primary": false
+      },
+      {
+        "label": "New York",
+        "lat": 40.7128,
+        "lon": -74.006,
+        "tz": "America/New_York",
+        "primary": false
+      }
+    ],
+    "tickers": [
+      {
+        "symbol": "^GSPC",
+        "label": "S&P 500",
+        "kind": "index"
+      },
+      {
+        "symbol": "BTC-USD",
+        "label": "Bitcoin",
+        "kind": "crypto"
+      }
+    ],
+    "topics": [
+      "geopolitics",
+      "technology",
+      "science"
+    ],
+    "feeds": [
+      {
+        "name": "Reuters",
+        "url": "https://example.com/reuters.rss",
+        "topic": "geopolitics",
+        "lang": "en"
+      }
+    ],
+    "routes": [
+      {
+        "label": "Dublin → London",
+        "from": "Dublin",
+        "to": "London",
+        "from_lat": 53.3498,
+        "from_lon": -6.2603,
+        "to_lat": 51.5072,
+        "to_lon": -0.1276,
+        "mode": "driving"
+      }
+    ],
+    "markets": [],
+    "base_currency": "EUR",
+    "currencies": [
+      "USD",
+      "GBP"
+    ],
+    "pinned": []
+  },
+  "board": {
+    "news": [
+      {
+        "id": "story-1",
+        "title": "Global shipping lanes report elevated AIS transponder anomalies",
+        "url": "https://example.com/shipping-ais",
+        "source": "Reuters",
+        "topic": "geopolitics",
+        "published": 1730988120,
+        "summary": "Maritime monitoring stations flagged unusual spoofing clusters.",
+        "also": [
+          {
+            "source": "AP",
+            "url": "https://example.com/ap-ais",
+            "title": "AIS anomalies reported in shipping corridors"
+          },
+          {
+            "source": "BBC",
+            "url": "https://example.com/bbc-ais",
+            "title": "Shipping lane navigation alerts"
+          },
+          {
+            "source": "FT",
+            "url": "https://example.com/ft-ais",
+            "title": "Maritime telemetry spike"
+          }
+        ]
+      },
+      {
+        "id": "story-2",
+        "title": "Open-weights speech synthesis reaches sub-40ms first-chunk latency",
+        "url": "https://example.com/speech-latency",
+        "source": "Ars Technica",
+        "topic": "technology",
+        "published": 1730987400,
+        "summary": "Streaming neural codec optimizations cut edge inference overhead.",
+        "also": []
+      }
+    ],
+    "topics": [
+      {
+        "topic": "geopolitics",
+        "count_1h": 14,
+        "count_24h": 92,
+        "sparkline": [3, 5, 8, 14]
+      },
+      {
+        "topic": "technology",
+        "count_1h": 9,
+        "count_24h": 64,
+        "sparkline": [4, 6, 7, 9]
+      }
+    ],
+    "quotes": [
+      {
+        "symbol": "^GSPC",
+        "label": "S&P 500",
+        "kind": "index",
+        "price": 5842.47,
+        "change": 70.11,
+        "change_pct": 1.21,
+        "currency": "USD",
+        "market_state": "REGULAR",
+        "sparkline": [5780.0, 5810.5, 5842.47],
+        "high_24h": 5855.0,
+        "low_24h": 5772.0,
+        "volume": 2410000000.0,
+        "updated_at": 1730989080
+      },
+      {
+        "symbol": "BTC-USD",
+        "label": "Bitcoin",
+        "kind": "crypto",
+        "price": 76420.0,
+        "change": 1420.0,
+        "change_pct": 1.89,
+        "currency": "USD",
+        "market_state": "REGULAR",
+        "sparkline": [75000.0, 75800.0, 76420.0],
+        "updated_at": 1730989080
+      }
+    ],
+    "fx": [
+      {
+        "base": "EUR",
+        "quote": "USD",
+        "rate": 1.0842,
+        "change_pct": 0.18,
+        "sparkline": [1.081, 1.083, 1.0842],
+        "date": "2026-11-07"
+      }
+    ],
+    "odds": [
+      {
+        "id": "odds-1",
+        "question": "ECB rate cut before Q1 close?",
+        "category": "macro",
+        "probability": 0.68,
+        "delta_24h": 0.04,
+        "volume_usd": 1420000.0,
+        "closes_at": "2026-12-31",
+        "url": "https://polymarket.com/example",
+        "outcomes": [
+          {
+            "label": "Yes",
+            "probability": 0.68
+          },
+          {
+            "label": "No",
+            "probability": 0.32
+          }
+        ]
+      }
+    ],
+    "conditions": [
+      {
+        "place": "Dublin",
+        "lat": 53.3498,
+        "lon": -6.2603,
+        "tz": "Europe/Dublin",
+        "temp_c": 11.4,
+        "feels_c": 9.8,
+        "wind_kph": 18.5,
+        "wind_dir": 240,
+        "humidity": 78.0,
+        "precip_mm": 0.0,
+        "condition": "Partly cloudy",
+        "wmo_code": 2,
+        "is_day": true,
+        "aqi_eu": 22,
+        "pm25": 6.1,
+        "pm10": 11.4,
+        "uv_index": 2.1,
+        "hourly_temp": [10.2, 11.0, 11.4],
+        "updated_at": 1730989080
+      }
+    ],
+    "air": [
+      {
+        "place": "Dublin",
+        "lat": 53.3498,
+        "lon": -6.2603,
+        "radius_km": 250.0,
+        "total": 42,
+        "airborne": 38,
+        "sample": [
+          {
+            "icao24": "4ca123",
+            "callsign": "EIN105",
+            "country": "Ireland",
+            "lat": 53.42,
+            "lon": -6.27,
+            "alt_m": 8400.0,
+            "vel_ms": 220.0,
+            "heading": 285.0
+          }
+        ],
+        "updated_at": 1730989080
+      }
+    ],
+    "routes": [
+      {
+        "label": "Dublin → London",
+        "mode": "driving",
+        "distance_km": 463.0,
+        "duration_min": 340.0,
+        "from_lat": 53.3498,
+        "from_lon": -6.2603,
+        "to_lat": 51.5072,
+        "to_lon": -0.1276,
+        "geometry": [
+          [-6.2603, 53.3498],
+          [-0.1276, 51.5072]
+        ]
+      }
+    ],
+    "quakes": [
+      {
+        "id": "us7000abcd",
+        "magnitude": 5.1,
+        "place": "120 km S of Reykjavik",
+        "time": 1730973600000,
+        "lat": 63.05,
+        "lon": -21.9,
+        "depth_km": 10.0,
+        "url": "https://earthquake.usgs.gov/example",
+        "tsunami": false
+      }
+    ],
+    "anomalies": [
+      {
+        "id": "anom-1",
+        "kind": "market_move",
+        "subject": "S&P 500",
+        "headline": "S&P 500 +2.4σ move",
+        "detail": "Intraday move exceeds 30-day rolling baseline",
+        "z_score": 2.4,
+        "severity": "elevated",
+        "detected_at": 1730989000
+      },
+      {
+        "id": "anom-2",
+        "kind": "topic_spike",
+        "subject": "geopolitics",
+        "headline": "geopolitics volume +2.1σ",
+        "detail": "14 articles in last hour vs 4.2 baseline",
+        "z_score": 2.1,
+        "severity": "elevated",
+        "detected_at": 1730988900
+      },
+      {
+        "id": "anom-3",
+        "kind": "seismic",
+        "subject": "Reykjavik",
+        "headline": "M5.1 earthquake near Reykjavik",
+        "detail": "10 km depth",
+        "z_score": 1.9,
+        "severity": "warning",
+        "detected_at": 1730988800
+      },
+      {
+        "id": "anom-4",
+        "kind": "market_move",
+        "subject": "BTC-USD",
+        "headline": "Bitcoin +1.8σ move",
+        "detail": "Spot volume elevated across major venues",
+        "z_score": 1.8,
+        "severity": "info",
+        "detected_at": 1730988700
+      },
+      {
+        "id": "anom-5",
+        "kind": "air_density",
+        "subject": "Dublin FIR",
+        "headline": "North Atlantic track density +1.6σ",
+        "detail": "38 airborne within 250 km radius",
+        "z_score": 1.6,
+        "severity": "info",
+        "detected_at": 1730988600
+      },
+      {
+        "id": "anom-6",
+        "kind": "fx_move",
+        "subject": "EUR/USD",
+        "headline": "EUR/USD +1.5σ intraday drift",
+        "detail": "Spot at 1.0842",
+        "z_score": 1.5,
+        "severity": "info",
+        "detected_at": 1730988500
+      }
+    ],
+    "sources": {
+      "markets": {
+        "source": "markets",
+        "ok": true,
+        "updated_at": 1730989080,
+        "item_count": 2,
+        "latency_ms": 142
+      },
+      "news": {
+        "source": "news",
+        "ok": true,
+        "updated_at": 1730989080,
+        "item_count": 2,
+        "latency_ms": 210
+      },
+      "world": {
+        "source": "world",
+        "ok": true,
+        "updated_at": 1730989080,
+        "item_count": 4,
+        "latency_ms": 188
+      }
+    }
+  },
+  "server_time": 1730989080
+}

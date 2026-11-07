@@ -1,0 +1,28 @@
+{
+  "courses": [
+    {
+      "id": "rust-systems",
+      "title": "Rust Systems Programming",
+      "domain": "programming",
+      "status": "ready",
+      "summary": "Ownership, borrowing, Pin, and zero-copy networking.",
+      "version": "1",
+      "lesson_count": 6,
+      "minutes": 75,
+      "progress": {
+        "lessons_completed": 2,
+        "objectives": 18,
+        "provisional": 4,
+        "retained": 8,
+        "due": 3
+      },
+      "next": {
+        "kind": "review",
+        "lesson_id": "rust-systems-02",
+        "reasons": [
+          "3 due review items in Ownership & Lifetimes"
+        ]
+      }
+    }
+  ]
+}
