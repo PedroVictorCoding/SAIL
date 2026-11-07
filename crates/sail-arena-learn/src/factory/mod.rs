@@ -20,6 +20,7 @@ pub mod ingest;
 pub mod jobs;
 pub mod mind_author;
 pub mod registry;
+pub mod service;
 pub mod settings;
 pub mod sources;
 pub mod validate;
