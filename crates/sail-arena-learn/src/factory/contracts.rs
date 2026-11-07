@@ -398,13 +398,19 @@ pub struct Claim {
     pub derivation: Option<String>,
 }
 
+/// Printed by the generated test `main` after every hidden test returned.
+pub const HIDDEN_TESTS_PASSED: &str = "SAIL_HIDDEN_TESTS_PASSED";
+
 /// Compiler-backed exercise material that never reaches the learner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RustFixture {
     pub step_id: String,
     pub reference_solution: String,
-    /// Test module source appended to the learner's code (`#[cfg(test)] mod hidden { … }`).
+    /// Hidden test functions appended to the program under test: plain `fn hidden_*()` items
+    /// that panic on failure. The validator adds a `main` that calls each one and prints
+    /// [`HIDDEN_TESTS_PASSED`], because the sandbox checker runs `main`, not `cargo test`.
+    /// The program under test must therefore not define `main` itself.
     pub hidden_tests: String,
     #[serde(default)]
     pub public_examples: Vec<String>,
