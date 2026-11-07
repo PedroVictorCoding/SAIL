@@ -151,7 +151,9 @@ echo "using $device (${vram_mib} MiB reported)"
 
 # ------------------------------------------------------------------ 4. bench
 say "4. Benchmarks (stop SAIL first; this takes several minutes per model)"
-if pgrep -f 'llama-server|sail-core' >/dev/null; then
+# Match process names (-x), not command lines: -f also matched compilers and shells whose
+# arguments merely mention llama-server, such as a llama.cpp build in progress.
+if pgrep -x 'llama-server|sail-core|sail-dialogue|saild' >/dev/null; then
   die "SAIL or llama-server is running; stop it (./run.sh --stop) so the measurement is fair"
 fi
 mkdir -p "$OUT_DIR"
