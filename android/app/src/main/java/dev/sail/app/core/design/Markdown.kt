@@ -95,7 +95,7 @@ object Markdown {
         return blocks
     }
 
-    /** Inline **bold**, *italic*/_italic_ and `code`; everything else is literal text. */
+    // Inline **bold**, *italic* or _italic_, and `code`; everything else is literal text.
     fun inline(text: String): AnnotatedString = buildAnnotatedString {
         var i = 0
         while (i < text.length) {
