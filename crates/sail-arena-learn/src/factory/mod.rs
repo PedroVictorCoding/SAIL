@@ -15,3 +15,4 @@
 //! Nothing here runs during a learner's lesson: published packages are plain
 //! `CoursePackage`s, graded by `courses` without any model call.
 pub mod contracts;
+pub mod registry;

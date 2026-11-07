@@ -31,6 +31,15 @@ pub type ReceiptId = String;
 /// Hex SHA-256 of the exact bytes or text it describes.
 pub type ContentHash = String;
 
+/// The one hash function every factory record uses: lowercase hex SHA-256 of `bytes`.
+pub fn sha256_hex(bytes: &[u8]) -> ContentHash {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 // ------------------------------------------------------------------------------- sources
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -877,6 +886,14 @@ mod tests {
         let mut sorted = tiers.clone();
         sorted.sort_unstable();
         assert_eq!(tiers, sorted);
+    }
+
+    #[test]
+    fn sha256_hex_matches_a_known_vector() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]

@@ -526,3 +526,87 @@ fn rustc_json_diagnostics_map_to_lines() {
     assert_eq!((d[0].line, d[0].column), (7, 21));
     assert_eq!(d[0].message, "[E0308] mismatched types");
 }
+
+/// A tiny generated course, as the Course Factory would publish it.
+fn generated_track(revision: u64, title: &str) -> sail_arena_learn::courses::content::Track {
+    use sail_arena_learn::courses::content::{CoursePackage, Domain, Track};
+    let package: CoursePackage = serde_json::from_value(json!({
+        "id": "gen-rust", "version": format!("r{revision}"), "title": title,
+        "domain": "rust", "summary": "Generated from the owner's books.",
+        "objectives": [{ "id": "gen.move", "title": "Moves" }],
+        "chapters": [{ "id": "gen-ch1", "title": "Ownership", "lessons": ["gen-l1"] }],
+        "lessons": [{
+            "id": "gen-l1", "title": "Moves", "minutes": 4, "objective_ids": ["gen.move"],
+            "steps": [{
+                "id": "s1", "kind": "choice", "family": "gen-move", "title": "Pick one",
+                "objective_ids": ["gen.move"],
+                "options": [{ "id": "a", "text": "One" }, { "id": "b", "text": "Two" }],
+                "key": { "choice": ["a"] }
+            }]
+        }],
+        "diagnostic": null,
+        "reviews": [{
+            "id": "gen-r1", "kind": "choice", "family": "gen-move-review", "title": "Again",
+            "objective_ids": ["gen.move"],
+            "options": [{ "id": "x", "text": "Three" }, { "id": "y", "text": "Four" }],
+            "key": { "choice": ["y"] }
+        }]
+    }))
+    .unwrap();
+    Track {
+        id: "gen-rust".into(),
+        title: title.into(),
+        domain: Domain::Rust,
+        summary: "Generated from the owner's books.".into(),
+        package: Some(Arc::new(package)),
+        generated: Some(revision),
+    }
+}
+
+#[tokio::test]
+async fn published_generated_course_is_served_and_only_newer_revisions_replace_it() {
+    let f = Fixture::new();
+    f.engine
+        .publish_generated(generated_track(2, "Second"))
+        .unwrap();
+    let course = f.engine.course("gen-rust").unwrap();
+    assert_eq!(course["course"]["title"], "Second");
+    let lesson = f.engine.lesson_view("gen-l1").unwrap();
+    assert!(
+        !lesson.to_string().contains("\"key\""),
+        "answer key leaked: {lesson}"
+    );
+
+    // An older (or equal) revision never replaces a newer one.
+    f.engine
+        .publish_generated(generated_track(1, "First"))
+        .unwrap();
+    assert_eq!(
+        f.engine.course("gen-rust").unwrap()["course"]["title"],
+        "Second"
+    );
+    f.engine
+        .publish_generated(generated_track(3, "Third"))
+        .unwrap();
+    assert_eq!(
+        f.engine.course("gen-rust").unwrap()["course"]["title"],
+        "Third"
+    );
+}
+
+#[tokio::test]
+async fn generated_course_cannot_replace_a_builtin_or_reuse_its_lesson_ids() {
+    let f = Fixture::new();
+    let mut builtin = generated_track(1, "Hijack");
+    builtin.id = "rust-systems".into();
+    Arc::get_mut(builtin.package.as_mut().unwrap()).unwrap().id = "rust-systems".into();
+    let err = f.engine.publish_generated(builtin).unwrap_err().to_string();
+    assert!(err.contains("built-in") || err.contains("clash"), "{err}");
+
+    let mut clash = generated_track(1, "Clash");
+    let pkg = Arc::get_mut(clash.package.as_mut().unwrap()).unwrap();
+    pkg.lessons[0].id = "rust-own-move".into();
+    pkg.chapters[0].lessons = vec!["rust-own-move".into()];
+    let err = f.engine.publish_generated(clash).unwrap_err().to_string();
+    assert!(err.contains("clash"), "{err}");
+}
