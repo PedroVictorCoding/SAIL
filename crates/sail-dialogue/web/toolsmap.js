@@ -1148,10 +1148,10 @@
   function showEntertainment() {
     if (!entertainmentHost.firstChild) {
       const tabs = el('nav', {class: 'tm-media-tabs', role: 'tablist', 'aria-label': 'Entertainment'});
-      const labels = {reader: 'Reader', music: 'Music player', movies: 'Movies'};
+      const labels = {reader: 'Books', music: 'Music', movies: 'Movies'};
       entertainmentHost.append(el('span', {class: 'tm-sr', id: 'tmEntertainmentLabel', text: 'Entertainment'}), tabs);
       for (const id of MEDIA_TABS) {
-        tabs.append(el('button', {type: 'button', class: 'tm-btn', role: 'tab', id: `tmMediaTab-${id}`,
+        tabs.append(el('button', {type: 'button', class: 'tm-media-tab', role: 'tab', id: `tmMediaTab-${id}`,
           'aria-controls': `tmMediaPanel-${id}`, onclick: () => switchMedia(id), onkeydown: event => {
             let index = MEDIA_TABS.indexOf(mediaTab);
             if (event.key === 'ArrowRight') index++;
