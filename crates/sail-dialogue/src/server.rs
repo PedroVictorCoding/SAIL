@@ -196,6 +196,7 @@ pub async fn run_dialogue_server_with_plans(
         sail_guardian::global_broker().ok(),
         active_token.clone(),
     );
+    let proxy_guard = crate::proxy_guard::ProxyGuard::new(active_token.as_deref());
     let owner_token = active_token;
     let mut app = Router::new()
         .nest_service("/api/guardian", approval_routes)
@@ -243,7 +244,12 @@ pub async fn run_dialogue_server_with_plans(
     if let Some(routes) = music_routes {
         app = app.nest_service("/api/music", routes);
     }
-    let app = app.layer(axum::middleware::from_fn(cross_origin_isolation));
+    let app = app
+        .layer(axum::middleware::from_fn_with_state(
+            proxy_guard,
+            crate::proxy_guard::guard,
+        ))
+        .layer(axum::middleware::from_fn(cross_origin_isolation));
     match (
         std::env::var("SAIL_TLS_CERT"),
         std::env::var("SAIL_TLS_KEY"),
