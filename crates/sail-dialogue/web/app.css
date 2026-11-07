@@ -4696,3 +4696,22 @@ a.nav-item { text-decoration:none; color:var(--muted) }
 /* Ambient backdrop (ambient-backdrop.js): the shell lets the shader light through. */
 html.sail-backdrop-on body, html.sail-backdrop-on .app-shell { background:transparent }
 html.sail-backdrop-on .app-shell::before { display:none }
+
+/* Runtime diagnostics live with their related preferences, without nested tab bars. */
+#contextSheet .settings-runtime-card { display: block; }
+#contextSheet .settings-runtime-card > .workspace-card {
+  width: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  background: var(--sail-surface);
+  box-shadow: none;
+  backdrop-filter: none;
+  transform: none;
+}
+#contextSheet .settings-runtime-card > .workspace-card::after { display: none; }
+.settings-runtime-section + .settings-runtime-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--sail-glass-border);
+}
+.settings-runtime-section h4 { margin: 0 0 12px; color: var(--sail-text); }

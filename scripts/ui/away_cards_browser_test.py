@@ -60,16 +60,60 @@ def route(r):
     r.fulfill(body=f.read_bytes(), content_type={".css": "text/css", ".js": "text/javascript"}.get(f.suffix, "text/html"))
 
 
+def check_settings_navigation(pg):
+    # Relocated diagnostics keep their live DOM nodes and lose their nested selectors.
+    assert pg.locator('.tm-nav-item[data-nav="dialogue"], .tm-nav-item[data-nav="mind"], '
+                      '.tm-nav-item[data-nav="system"], .tm-nav-item[data-nav="guardian"], '
+                      '.tm-nav-item[data-nav="discover"]').count() == 0
+    assert pg.locator('.tm-seg[data-mode="away"], #tmBriefingBtn').count() == 0
+    pg.evaluate("window.__modelCard = document.getElementById('modelsCard')")
+    for category, ids in (
+        ('voice', ('sessionCard', 'sessionPanelAudio')),
+        ('models', ('modelsCard', 'modelsPanelGovernor')),
+        ('developer', ('systemCard',)),
+        ('guardian', ('systemPanelGuardian', 'toolsPanelSafetyReview')),
+    ):
+        pg.evaluate("window.sailOpenSettings()")
+        pg.locator(f'[data-settings-tab="{category}"]').click()
+        for card_id in ids:
+            assert pg.locator(f'#contextSheet #{card_id}').is_visible(), card_id
+        assert pg.locator('#contextSheet .card-tabs').count() == 0
+        pg.keyboard.press('Escape')
+    pg.evaluate("window.sailNavigate('forge')")
+    pg.wait_for_function("window.sailCurrentPage() === 'forge'")
+    assert pg.evaluate("document.querySelector('#settingsPanel-models #modelsCard') === __modelCard")
+    for old, category in (('dialogue', 'voice'), ('core', 'developer'), ('mind', 'models'), ('guardian', 'guardian')):
+        pg.evaluate('(id) => location.hash = id', old)
+        pg.wait_for_function("!document.getElementById('contextSheet').hidden")
+        assert pg.locator(f'#settingsPanel-{category}').is_visible()
+        assert pg.evaluate('location.hash') == '#home'
+        pg.keyboard.press('Escape')
+
+
+def open_away(pg, width):
+    if width > 860:
+        pg.locator('.tm-nav-item[data-nav="away"]').click()
+    else:
+        pg.get_by_role('button', name='While You Were Away', exact=True).click()
+    pg.wait_for_function("window.sailCurrentPage() === 'away'")
+    assert not pg.locator('.tm-ctl-mid').is_visible()
+
+
 errors = []
 with sync_playwright() as p:
     b = p.chromium.launch(args=["--no-sandbox", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"])
     for width, height in ((1440, 900), (390, 844)):
-        ctx = b.new_context(viewport={"width": width, "height": height})
+        ctx = b.new_context(viewport={"width": width, "height": height}, reduced_motion="reduce")
         pg = ctx.new_page(); pg.on("pageerror", lambda e: errors.append(str(e)))
         pg.add_init_script(WS_STUB); pg.route("**/*", route)
         pg.goto("https://sail.test/")
         pg.wait_for_function("!document.getElementById('returnBriefingDeck').hidden")
-        pg.locator(".tm-seg button, button").filter(has_text="While You Were Away").first.click()
+        check_settings_navigation(pg)
+        open_away(pg, width)
+        pg.locator("#briefingDismissBtn").click()
+        pg.wait_for_function("window.sailCurrentPage() === 'home'")
+        open_away(pg, width)
+        assert not pg.locator("#returnBriefingDeck").is_hidden()
         row = pg.locator("#returnBriefingDeck .briefing-cards-grid")
         row.wait_for()
         pg.wait_for_timeout(400)
@@ -100,11 +144,11 @@ with sync_playwright() as p:
                 over = pg.evaluate("(s => s.scrollHeight - s.clientHeight)(document.querySelector('.tm-side'))")
                 assert over <= 0, f"rail scrolls by {over}px at {width}x{h}"
             pg.set_viewport_size({"width": width, "height": height}); pg.wait_for_timeout(200)
-        # A whole card (light and action included) fits above the mode bar.
+        # The first mobile card, or every desktop card, fits inside the stage.
         fit = pg.evaluate("""() => { const cards = [...document.querySelectorAll('#returnBriefingDeck .briefing-card')];
           const c = (innerWidth > 400 ? cards[cards.length - 1] : cards[0]).getBoundingClientRect();
-          const bar = document.querySelector('.tm-ctl-mid')?.getBoundingClientRect(); return [c.bottom, bar ? bar.top : innerHeight]; }""")
-        assert fit[0] <= fit[1] + 1, f"card bottom {fit[0]} below mode bar {fit[1]} at {width}"
+          const stage = document.querySelector('.tm-stage').getBoundingClientRect(); return [c.bottom, stage.bottom]; }""")
+        assert fit[0] <= fit[1] + 1, f"card bottom {fit[0]} below stage {fit[1]} at {width}"
         # An overflowing body is scrollable by keyboard; short ones add no tab stop.
         focus = pg.evaluate("""() => [...document.querySelectorAll('#returnBriefingDeck .briefing-card-body')].map(b =>
           [b.closest('.briefing-card').id, b.scrollHeight > b.clientHeight + 1, b.getAttribute('tabindex') === '0'])""")
@@ -138,10 +182,10 @@ with sync_playwright() as p:
     ctx = b.new_context(viewport={"width": 1440, "height": 900}, forced_colors="active")
     pg = ctx.new_page(); pg.add_init_script(WS_STUB); pg.route("**/*", route); pg.goto("https://sail.test/")
     pg.wait_for_function("!document.getElementById('returnBriefingDeck').hidden")
-    pg.locator("button").filter(has_text="While You Were Away").first.click(); pg.wait_for_timeout(300)
+    open_away(pg, 1440); pg.wait_for_timeout(300)
     assert pg.evaluate("getComputedStyle(document.querySelector('#briefingMusicCard'), '::before').display") == "none"
     ctx.close(); b.close()
 
 assert not errors, errors
 print("Away cards: a grid of five lit cards with no sideways scroll, rail without scroll, keyboard-scrollable "
-      "overflowing body, working actions, unavailable/recovered music, forced colours at 1440 and 390px passed (fixture briefing)")
+      "overflowing body, Settings migration and legacy links, working actions, unavailable/recovered music, forced colours at 1440 and 390px passed (fixture briefing)")

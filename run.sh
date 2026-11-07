@@ -328,8 +328,13 @@ fi
 export SAIL_VOICE_BIND="${HOST}:${PORT}"
 
 # 8. The one resident model (see sail_common::models). No fallback to another model:
-# SAIL keeps a single large model that voice, agents and Forge share.
-if [[ -z "${SAIL_MODEL_PATH:-}" ]]; then
+# SAIL keeps a single large model that voice, agents and Forge share. A default chosen in
+# Settings > Models is saved in $SAIL_DATA/mind/default-model.json and resolved by SAIL
+# itself, so this only pins the primary model when no default has been saved.
+DEFAULT_MODEL_FILE="${SAIL_DATA:-/srv/sail-data}/mind/default-model.json"
+if [[ -z "${SAIL_MODEL_PATH:-}" && -f "$DEFAULT_MODEL_FILE" ]]; then
+  echo "Default model: saved choice in $DEFAULT_MODEL_FILE"
+elif [[ -z "${SAIL_MODEL_PATH:-}" ]]; then
   for cand in \
     "$REPO_ROOT/models/Qwen3.6-35B-A3B-Q4_K_M.gguf" \
     "${SAIL_RUNTIME:-/srv/sail}/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"; do

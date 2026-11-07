@@ -101,11 +101,46 @@ pub struct TocNode {
     pub children: Vec<TocNode>,
 }
 
+/// Metadata authored into the imported file. It is never fetched from a provider and is
+/// shown until the owner explicitly saves online details.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EmbeddedMetadata {
+    #[serde(default)]
+    pub subtitle: Option<String>,
+    #[serde(default)]
+    pub first_publish_year: Option<i64>,
+    #[serde(default)]
+    pub publishers: Vec<String>,
+    #[serde(default)]
+    pub languages: Vec<String>,
+    #[serde(default)]
+    pub isbn: Vec<String>,
+    #[serde(default)]
+    pub subjects: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+impl EmbeddedMetadata {
+    pub fn is_empty(&self) -> bool {
+        self.subtitle.is_none()
+            && self.first_publish_year.is_none()
+            && self.publishers.is_empty()
+            && self.languages.is_empty()
+            && self.isbn.is_empty()
+            && self.subjects.is_empty()
+            && self.description.is_none()
+    }
+}
+
 #[derive(Debug)]
 pub struct Parsed {
     pub title: Option<String>,
     pub authors: Vec<String>,
     pub language: Option<String>,
+    pub embedded: EmbeddedMetadata,
+    /// Raw cover bytes found in the file; the Library re-encodes them before storing.
+    pub cover: Option<Vec<u8>>,
     pub sections: Vec<Section>,
     pub toc: Vec<TocNode>,
 }
@@ -171,8 +206,18 @@ pub struct Book {
     pub section_info: Vec<SectionInfo>,
     #[serde(default)]
     pub metadata: Option<catalog::Metadata>,
+    /// Metadata embedded in the imported file, used when no online details were saved.
+    #[serde(default)]
+    pub embedded: Option<EmbeddedMetadata>,
+    /// Stable cache key for the displayed cover (embedded or online).
+    #[serde(default)]
+    pub cover_version: Option<String>,
     #[serde(default)]
     cover_file: Option<String>,
+    #[serde(default)]
+    embedded_cover_file: Option<String>,
+    #[serde(default)]
+    embedded_cover_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,6 +337,17 @@ impl Library {
             BookFormat::Epub => epub::parse(bytes)?,
             BookFormat::Txt => parse_txt(bytes)?,
         };
+        let embedded = parsed.embedded;
+        let embedded = (!embedded.is_empty()).then_some(embedded);
+        let cover = parsed
+            .cover
+            .and_then(|bytes| catalog::sanitize_cover(&bytes).ok());
+        let cover_file = cover
+            .as_ref()
+            .map(|_| format!("cover-{}.jpg", uuid::Uuid::new_v4()));
+        let cover_version = cover_file
+            .as_ref()
+            .map(|name| name.trim_end_matches(".jpg").to_string());
         let stem = Path::new(file_name)
             .file_stem()
             .and_then(|s| s.to_str())
@@ -332,7 +388,11 @@ impl Library {
             opened_at: None,
             section_info,
             metadata: None,
-            cover_file: None,
+            embedded,
+            cover_version: cover_version.clone(),
+            cover_file: cover_file.clone(),
+            embedded_cover_file: cover_file.clone(),
+            embedded_cover_version: cover_version,
         };
         let content = Content {
             sections: parsed.sections,
@@ -340,6 +400,9 @@ impl Library {
         };
         let dir = self.root.join("books").join(&id);
         std::fs::create_dir_all(&dir)?;
+        if let (Some(bytes), Some(name)) = (&cover, &cover_file) {
+            write_private(&dir.join(name), bytes)?;
+        }
         write_private(&dir.join(format!("source.{}", format.extension())), bytes)?;
         write_private(
             &dir.join("content.json"),
@@ -425,8 +488,14 @@ impl Library {
             .ok_or(ReaderError::NotFound)?;
         let old = index.books[position].metadata.clone();
         let old_file = index.books[position].cover_file.clone();
+        let old_version = index.books[position].cover_version.clone();
+        let embedded_file = index.books[position].embedded_cover_file.clone();
+        let embedded_version = index.books[position].embedded_cover_version.clone();
         let dir = self.root.join("books").join(id);
         let new_file = cover.map(|_| format!("cover-{}.jpg", uuid::Uuid::new_v4()));
+        let new_version = new_file
+            .as_ref()
+            .map(|name| name.trim_end_matches(".jpg").to_string());
         if let Some(ref m) = metadata {
             if !catalog::valid_work_key(&m.work_key)
                 || m.cover_cached != cover.is_some()
@@ -441,17 +510,23 @@ impl Library {
             write_private(&dir.join(name), bytes)?;
         }
         index.books[position].metadata = metadata;
-        index.books[position].cover_file = new_file.clone();
+        // Dropping online details returns to the cover embedded in the uploaded file.
+        index.books[position].cover_file = new_file.clone().or(embedded_file.clone());
+        index.books[position].cover_version = new_version.clone().or(embedded_version);
         if let Err(error) = self.save(&index) {
             index.books[position].metadata = old;
-            index.books[position].cover_file = old_file;
+            index.books[position].cover_file = old_file.clone();
+            index.books[position].cover_version = old_version;
             if let Some(name) = new_file {
                 let _ = std::fs::remove_file(dir.join(name));
             }
             return Err(error);
         }
         if let Some(name) = old_file {
-            let _ = std::fs::remove_file(dir.join(name));
+            // Never delete the embedded fallback when replacing or removing online details.
+            if Some(&name) != embedded_file.as_ref() {
+                let _ = std::fs::remove_file(dir.join(name));
+            }
         }
         Ok(index.books[position].clone())
     }
@@ -463,9 +538,6 @@ impl Library {
             .iter()
             .find(|b| b.id == id)
             .ok_or(ReaderError::NotFound)?;
-        if !book.metadata.as_ref().is_some_and(|m| m.cover_cached) {
-            return Err(ReaderError::NotFound);
-        }
         let name = book.cover_file.as_ref().ok_or(ReaderError::NotFound)?;
         // The filename is created here, never from a query or remote metadata field.
         if !name.starts_with("cover-") || !name.ends_with(".jpg") || name.contains(['/', '\\']) {
@@ -626,6 +698,8 @@ fn parse_txt(bytes: &[u8]) -> Result<Parsed, ReaderError> {
         title: None,
         authors: Vec::new(),
         language: None,
+        embedded: EmbeddedMetadata::default(),
+        cover: None,
         sections,
         toc,
     })
@@ -718,6 +792,121 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    fn tiny_cover() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut bytes)
+            .encode_image(&image::RgbImage::from_pixel(6, 9, image::Rgb([20, 40, 60])))
+            .unwrap();
+        bytes
+    }
+
+    fn embedded_epub(cover: &[u8]) -> Vec<u8> {
+        const CONTAINER: &[u8] = br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+        const OPF: &[u8] = br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Embedded Book</dc:title><dc:creator>Embedded Author</dc:creator><dc:language>en</dc:language><dc:publisher>Test Press</dc:publisher><dc:identifier>urn:isbn:9780765311788</dc:identifier><dc:date>2006-07-25</dc:date><dc:subject>Fantasy</dc:subject><dc:description>A test description.</dc:description></metadata><manifest><item id="cover" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="ch1"/></spine></package>"#;
+        const CHAPTER: &[u8] = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Chapter One</h1><p>Text.</p></body></html>"#;
+        crate::reader::zip::build(&[
+            ("mimetype", b"application/epub+zip", false),
+            ("META-INF/container.xml", CONTAINER, true),
+            ("OEBPS/content.opf", OPF, true),
+            ("OEBPS/ch1.xhtml", CHAPTER, true),
+            ("OEBPS/cover.jpg", cover, true),
+        ])
+    }
+
+    #[test]
+    fn imports_embedded_epub_cover_and_metadata_and_restores_them_after_online_removal() {
+        let bytes = embedded_epub(&tiny_cover());
+        let (library, dir) = temp_library();
+        let book = library.import("embedded.epub", &bytes).unwrap().book;
+        assert_eq!(book.title, "Embedded Book");
+        assert_eq!(book.authors, ["Embedded Author"]);
+        let embedded = book.embedded.as_ref().expect("embedded metadata");
+        assert_eq!(embedded.publishers, ["Test Press"]);
+        assert_eq!(embedded.languages, ["English"]);
+        assert_eq!(embedded.isbn, ["9780765311788"]);
+        assert_eq!(embedded.first_publish_year, Some(2006));
+        assert_eq!(embedded.subjects, ["Fantasy"]);
+        assert_eq!(embedded.description.as_deref(), Some("A test description."));
+        assert!(book.cover_version.is_some());
+        let stored = library.cover(&book.id).unwrap();
+        assert!(image::load_from_memory(&stored).is_ok());
+
+        // Online details without a cover keep the embedded artwork.
+        let online = catalog::Metadata {
+            work_key: "/works/OL1W".into(),
+            title: "Online title".into(),
+            authors: vec!["Online author".into()],
+            first_publish_year: None,
+            edition_count: None,
+            subjects: Vec::new(),
+            description: None,
+            cover_id: None,
+            cover_olid: None,
+            subtitle: None,
+            publishers: Vec::new(),
+            languages: Vec::new(),
+            isbn: Vec::new(),
+            cover_cached: false,
+            retrieved_at: Utc::now(),
+            user_edited: false,
+        };
+        let saved = library.set_metadata(&book.id, Some(online), None).unwrap();
+        assert_eq!(saved.metadata.as_ref().unwrap().title, "Online title");
+        assert_eq!(saved.cover_version, book.cover_version);
+        assert!(library.cover(&book.id).is_ok());
+
+        // Removing online details restores the embedded metadata and cover.
+        let removed = library.set_metadata(&book.id, None, None).unwrap();
+        assert!(removed.metadata.is_none());
+        assert!(removed.embedded.is_some());
+        assert_eq!(removed.cover_version, book.cover_version);
+        assert!(library.cover(&book.id).is_ok());
+
+        drop(library);
+        let reopened = Library::open(&dir).unwrap();
+        let reloaded = reopened.book(&book.id).unwrap();
+        assert!(reloaded.embedded.is_some());
+        assert!(reloaded.cover_version.is_some());
+        assert!(reopened.cover(&book.id).is_ok());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn saved_online_cover_does_not_delete_the_embedded_fallback() {
+        let bytes = embedded_epub(&tiny_cover());
+        let (library, dir) = temp_library();
+        let book = library.import("embedded.epub", &bytes).unwrap().book;
+        let embedded_cover = library.cover(&book.id).unwrap();
+        let online_cover = tiny_cover();
+        let metadata = catalog::Metadata {
+            work_key: "/works/OL1W".into(),
+            title: "Online title".into(),
+            authors: vec!["Online author".into()],
+            first_publish_year: None,
+            edition_count: None,
+            subjects: Vec::new(),
+            description: None,
+            cover_id: Some(1),
+            cover_olid: None,
+            subtitle: None,
+            publishers: Vec::new(),
+            languages: Vec::new(),
+            isbn: Vec::new(),
+            cover_cached: true,
+            retrieved_at: Utc::now(),
+            user_edited: false,
+        };
+        let saved = library
+            .set_metadata(&book.id, Some(metadata), Some(&online_cover))
+            .unwrap();
+        assert_ne!(saved.cover_version, book.cover_version);
+        assert_eq!(library.cover(&book.id).unwrap(), online_cover);
+        let removed = library.set_metadata(&book.id, None, None).unwrap();
+        assert_eq!(removed.cover_version, book.cover_version);
+        assert_eq!(library.cover(&book.id).unwrap(), embedded_cover);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn imports_txt_with_chapters_dedupes_and_persists() {
         let (library, dir) = temp_library();
@@ -727,6 +916,9 @@ mod tests {
         assert_eq!(book.title, "my book");
         assert_eq!(book.format, BookFormat::Txt);
         assert_eq!(book.sections, 2);
+        assert!(book.embedded.is_none());
+        assert!(book.cover_version.is_none());
+        assert!(library.cover(&book.id).is_err());
         let s0 = library.section(&book.id, 0).unwrap();
         assert_eq!(s0.title.as_deref(), Some("Chapter 1\nThe Clocks"));
         assert_eq!(

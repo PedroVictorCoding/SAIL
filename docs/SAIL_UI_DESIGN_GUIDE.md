@@ -72,3 +72,16 @@ Prefer precomputed gradients with opacity cross-fading instead of animating seve
 - Real CPU/GPU frame time and battery profiling; no client model slowdown or dropped speech.
 - Focus rings, accessible labels, noncolor indicators, usable forms and input feedback.
 - No fake numbers, no social/leaderboard UI copied from owner image references.
+
+## Workspace navigation and runtime settings
+
+Dialogue session/audio diagnostics belong in Settings → Voice & Audio; local models
+and the resource governor in Models & Inference; system telemetry in Developer &
+Telemetry; security status and safety findings in Guardian Security. Keep the original
+live elements mounted there and show their sections without nested card tab selectors.
+The corresponding legacy subsystem links open the relevant Settings category.
+
+While You Were Away replaces Discover in the sidebar and Spaces selector. It is a
+separate return-briefing destination, not a Home map-view selector. On phones, where
+the sidebar is hidden, a labeled header shortcut keeps it reachable. Closing the
+briefing returns Home; reopening it still shows the prepared briefing.

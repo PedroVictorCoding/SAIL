@@ -283,6 +283,8 @@ fn public(book: &Book) -> Value {
         "opened_at": book.opened_at,
         "source_name": book.source_name,
         "position": book.position,
+        "embedded": book.embedded.as_ref(),
+        "cover_version": book.cover_version.as_deref(),
         "metadata": book.metadata.as_ref().map(|m| {
             let mut value = serde_json::to_value(m).expect("metadata is serializable");
             value["source_url"] = json!(m.source_url());
@@ -930,6 +932,8 @@ mod tests {
                 .unwrap(),
         )
         .await;
+        assert!(imported["book"].get("embedded").is_some());
+        assert!(imported["book"].get("cover_version").is_some());
         let id = imported["book"]["id"].as_str().unwrap();
         let (status, result) = call(
             &app,
@@ -1364,6 +1368,27 @@ mod tests {
         .await;
         assert!(status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn public_projection_includes_embedded_metadata_and_cover_version() {
+        let book: Book = serde_json::from_value(json!({
+            "id": "x", "title": "Imported", "authors": ["A"], "format": "txt",
+            "language": "en", "sections": 1, "chars": 1,
+            "added_at": "2026-11-06T00:00:00Z", "position": null,
+            "content_hash": "hash", "source_name": "x.txt",
+            "embedded": {
+                "subtitle": "Sub", "first_publish_year": 2000, "publishers": ["Press"],
+                "languages": ["English"], "isbn": ["9780765311788"], "subjects": ["Test"],
+                "description": "Embedded description."
+            },
+            "cover_version": "cover-test"
+        }))
+        .unwrap();
+        let value = public(&book);
+        assert_eq!(value["embedded"]["subtitle"], "Sub");
+        assert_eq!(value["embedded"]["publishers"][0], "Press");
+        assert_eq!(value["cover_version"], "cover-test");
     }
 
     #[test]
