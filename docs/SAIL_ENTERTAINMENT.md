@@ -190,10 +190,14 @@ Reading surfaces remain opaque, and the reader's theme and narration are indepen
 The Library uses static gradients, without blur, continuous animation or new JS dependencies.
 
 **Find cover & details** opens a searchable match picker. Search explicitly sends
-only the entered title and optional author to Open Library. It does not send book
-text, source paths, owner tokens or reading history. Opening the Library, importing,
-reading and searching the local shelf never initiate a catalog search. The owner
-previews a returned match, edits a local draft and explicitly saves it; imported metadata, text and position anchors stay intact.
+only the entered title, optional author and optional ISBN to Open Library. It does not
+send book text, source paths, owner tokens or reading history. ISBN-10/13 values are
+compacted and checksum-validated before leaving the host. Open Library remains the
+only catalog provider; SAIL does not scrape retailer or social-reading pages and adds
+no third-party API key. Opening the Library, importing, reading and searching the
+local shelf never initiate a catalog search. The owner previews a returned match,
+edits a local draft and explicitly saves it; imported metadata, text and position
+anchors stay intact.
 Selected online title/author appear in the Library, while original fields remain
 available for lookup and removal restores them. **About this book** progressively
 discloses the bounded description, source link and **Remove online details** action.
@@ -204,8 +208,13 @@ social rankings are not fabricated.
 Bridge owns the adapter (`reader/catalog.rs`), using the documented
 [Search](https://openlibrary.org/dev/docs/api/search) and
 [Covers](https://openlibrary.org/dev/docs/api/covers) APIs plus the selected work's
-JSON description. Production URLs are fixed HTTPS hosts, with a narrow allowlist
-for Open Library's verified Internet Archive cover-storage redirect chain. Requests
+JSON description. Search first asks the exact title/author fields; when those only
+return box sets, study guides or a generic series title, it merges a ranked general
+query and prefers the closer owned work. The picker shows subtitle (when present),
+authors, first year, a publisher and language, and accepts an ISBN-only lookup. Cover
+selection uses `cover_i` first and a validated edition OLID as a fallback.
+Production URLs are fixed HTTPS hosts, with a narrow allowlist for Open Library's
+verified Internet Archive cover-storage redirect chain. Requests
 have 4s connect/12s total timeouts, are serialized with at least 1.1s between starts,
 and are bounded to 512KiB JSON / 2MiB cover responses. Images are decoded with
 4096px/64MiB limits, resized to at most 600×900 without upscaling, and re-encoded as
@@ -224,7 +233,8 @@ private Library, not a public artwork redistribution feature.
 
 Additional owner-authenticated, `no-store` API routes under `/api/reader`:
 
-- `POST /books/:id/metadata/search` — `{title, author}`, returns at most five matches.
+- `POST /books/:id/metadata/search` — `{title, author, isbn?}`, returns at most five
+  matches. Any one of title/author/ISBN may be supplied; ISBN is exact.
 - `POST /books/:id/metadata/preview` — `{work_key}`, accepts a recent server-held search
   match, downloads its details/validated cover into a volatile preview, and returns
   `{preview_id, metadata}`. It never writes the Library or its persistent cover.

@@ -16,7 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use sail_bridge::reader::catalog::{Catalog, Metadata, MetadataEdits};
+use sail_bridge::reader::catalog::{Catalog, Metadata, MetadataEdits, SearchTerms, normalize_isbn};
 use sail_bridge::reader::{Anchor, Book, Library, ReaderError};
 use sail_guardian::authority::ApprovalAuthority;
 use serde::Deserialize;
@@ -413,9 +413,12 @@ async fn save_position(
 
 #[derive(Deserialize)]
 struct MetadataQuery {
+    #[serde(default)]
     title: String,
     #[serde(default)]
     author: String,
+    #[serde(default)]
+    isbn: String,
 }
 #[derive(Deserialize)]
 struct MatchSelection {
@@ -450,16 +453,24 @@ async fn search_metadata(
     state.library.book(&id).map_err(failure)?;
     let Json(query) = body.map_err(|_| {
         failure(ReaderError::Invalid(
-            "Enter a title and optional author.".into(),
+            "Enter a title, author or ISBN.".into(),
         ))
     })?;
-    if query.title.trim().is_empty()
-        || query.title.chars().count() > 200
-        || query.author.chars().count() > 160
+    let title = query.title.trim();
+    let author = query.author.trim();
+    let isbn = query.isbn.trim();
+    if title.chars().count() > 200
+        || author.chars().count() > 160
+        || isbn.chars().count() > 32
+        || (title.is_empty() && author.is_empty() && isbn.is_empty())
     {
         return Err(failure(ReaderError::Invalid(
-            "Enter a title (up to 200 characters) and optional author (up to 160 characters)."
-                .into(),
+            "Enter a title (up to 200 characters), optional author (up to 160) or an ISBN.".into(),
+        )));
+    }
+    if !isbn.is_empty() && normalize_isbn(isbn).is_err() {
+        return Err(failure(ReaderError::Invalid(
+            "Enter a valid ISBN-10 or ISBN-13.".into(),
         )));
     }
     let _permit = state.lookup_busy.try_acquire().map_err(|_| lookup_busy())?;
@@ -467,7 +478,11 @@ async fn search_metadata(
         .catalog
         .as_ref()
         .map_err(|e| lookup_error(e.clone()))?
-        .search(&query.title, &query.author)
+        .search(SearchTerms {
+            title,
+            author,
+            isbn,
+        })
         .await
         .map_err(lookup_error)?;
     let mut matches = state.matches.lock().unwrap();
@@ -1027,6 +1042,19 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, body) = call(
+            &app,
+            request("POST", &format!("/books/{id}/metadata/search"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"title":"","author":"","isbn":"123"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"].as_str().unwrap_or_default().contains("ISBN"),
+            "{body}"
+        );
         let (status, _) = call(
             &app,
             request("GET", &format!("/books/{id}/cover"))
@@ -1049,6 +1077,11 @@ mod tests {
                     subjects: vec![],
                     description: None,
                     cover_id: Some(1),
+                    cover_olid: None,
+                    subtitle: None,
+                    publishers: Vec::new(),
+                    languages: Vec::new(),
+                    isbn: Vec::new(),
                     cover_cached: true,
                     retrieved_at: chrono::Utc::now(),
                     user_edited: false,
@@ -1331,5 +1364,23 @@ mod tests {
         .await;
         assert!(status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn metadata_dialog_exposes_isbn_and_sends_it() {
+        let html = include_str!("../web/reader.html");
+        assert!(
+            html.contains("id=\"metadata-isbn\""),
+            "ISBN input is missing"
+        );
+        assert!(
+            html.contains("optional ISBN"),
+            "search privacy text is stale"
+        );
+        let js = include_str!("../web/reader.js");
+        assert!(
+            js.contains("body.isbn = isbn"),
+            "the dialog no longer sends the optional ISBN"
+        );
     }
 }

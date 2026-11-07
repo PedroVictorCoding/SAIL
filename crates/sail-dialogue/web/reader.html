@@ -89,10 +89,11 @@
         <div><p class="eyebrow">OPEN LIBRARY</p><h2 id="metadata-heading">Find a cover &amp; book details</h2></div>
         <button id="metadata-close" type="button">Close</button>
       </div>
-      <p class="muted">Search sends the title and author below to Open Library. Book text and reading history stay on your host. Preview a match and edit its details before saving. Searches and previews do not change your library.</p>
+      <p class="muted">Search sends the title, optional author and optional ISBN below to Open Library. No other service or scraping is used. Book text and reading history stay on your host. Preview a match and edit its details before saving. Searches and previews do not change your library.</p>
       <form id="metadata-form">
-        <label>Title<input id="metadata-title" required maxlength="200"></label>
+        <label>Title <span class="muted">(or use ISBN)</span><input id="metadata-title" maxlength="200"></label>
         <label>Author <span class="muted">(optional)</span><input id="metadata-author" maxlength="160"></label>
+        <label>ISBN <span class="muted">(optional; 10 or 13 characters)</span><input id="metadata-isbn" inputmode="numeric" autocomplete="off" maxlength="32" placeholder="978-0-7653-1178-8"></label>
         <button id="metadata-search" type="submit">Search Open Library</button>
       </form>
       <p id="metadata-status" role="status" aria-live="polite"></p>
