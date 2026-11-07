@@ -1608,21 +1608,10 @@ async fn run_turn(
         .learn_from_conversation_turn("voice", &prompt, &reply);
     for artifact in sail_canvas::voice_artifacts(&reply) {
         debug!(artifact_type=%artifact.artifact_type,content_chars=artifact.content.chars().count(),"Publishing Canvas artifact alongside the conversation");
-        let invocation_id = format!("canvas-{session}-{current}-{}", artifact.artifact_type);
-        let tool_message = crate::execution::build_tool_result_message(
-            &session,
-            &invocation_id,
-            "canvas:publish",
-            true,
-            &json!({
-                "artifact_type": artifact.artifact_type,
-                "content": artifact.content,
-            }),
-        );
         emit(
             &tx,
             current,
-            json!({"type":"canvas","artifact":artifact,"turn_id":current,"tool_message":tool_message,"invocation_id":invocation_id}),
+            json!({"type":"canvas","artifact":artifact,"turn_id":current}),
         )
         .await;
         let _ = state.bus.publish(
@@ -1776,7 +1765,6 @@ async fn take_snapshot(
         json!({"type":"snapshot_request","request_id":request.id,"source":source.as_str(),"question":question,"turn_id":current}),
     )
     .await;
-    let request_id = request.id;
     let frame = match request.wait(snapshot::SNAPSHOT_TIMEOUT).await {
         Ok(frame) => frame,
         Err(error) => {
@@ -1795,13 +1783,6 @@ async fn take_snapshot(
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "Visual snapshot observed"
             );
-            let mut output = snapshot::tool_output(source, &observation);
-            if let Some(obj) = output.as_object_mut() {
-                obj.insert("request_id".into(), json!(request_id));
-                obj.insert("width".into(), json!(frame.width));
-                obj.insert("height".into(), json!(frame.height));
-                obj.insert("source".into(), json!(source.as_str()));
-            }
             let image = match &observation {
                 snapshot::Observation::Native => {
                     let label = format!("[Snapshot from the {}]", source.as_str());
@@ -1816,7 +1797,7 @@ async fn take_snapshot(
                 crate::KernelToolResult {
                     tool: snapshot::TOOL.into(),
                     success: true,
-                    output,
+                    output: snapshot::tool_output(source, &observation),
                 },
                 image,
             )
@@ -2245,12 +2226,7 @@ async fn reason_turn(
                         )
                         .await;
                     }
-                    let session_str = memory.as_ref().map(|s| s.session).unwrap_or("dialogue");
-                    let invocation_id = result.output.get("request_id")
-                        .and_then(|id| id.as_u64().map(|n| format!("snapshot-{n}")).or_else(|| id.as_str().map(String::from)))
-                        .unwrap_or_else(|| format!("{}-{current}-{round}", result.tool));
-                    let tool_message = crate::execution::build_tool_result_message(session_str, &invocation_id, &result.tool, result.success, &result.output);
-                    emit(tx, current, json!({"type":"tool_result","result":result,"tool_message":tool_message,"invocation_id":invocation_id,"turn_id":current})).await;
+                    emit(tx, current, json!({"type":"tool_result","result":result})).await;
                 }
                 if (name == "web:speak"
                     || name == "web_speak"
