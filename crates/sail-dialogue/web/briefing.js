@@ -91,7 +91,8 @@
   async function dismissBriefing() {
     const deck = document.getElementById('returnBriefingDeck');
     if (deck) deck.hidden = true;
-    document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'false');
+    if (activeBriefing) activeBriefing.dismissed = true;
+    announce({fresh: false, closed: true});
     try {
       await fetch('/api/briefing/actions/dismiss', {
         method: 'POST',
@@ -108,12 +109,10 @@
     announce({ fresh: !!briefing && !briefing.dismissed });
     if (!briefing) {
       deck.hidden = true;
-      document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'false');
       return;
     }
 
     deck.hidden = false;
-    document.getElementById('tmBriefingBtn')?.setAttribute('aria-pressed', 'true');
 
     // Greeting & headline
     const headlineEl = document.getElementById('briefingHeadline');
@@ -238,7 +237,10 @@
       .replace(/"/g, '&quot;');
   }
 
-  window.sailBriefing = { refresh: () => refreshBriefing(document.getElementById('briefingRefreshBtn')) };
+  window.sailBriefing = {
+    refresh: () => refreshBriefing(document.getElementById('briefingRefreshBtn')),
+    show: () => { if (activeBriefing) renderBriefing(activeBriefing); }
+  };
 
   // The cards sit in a grid. A card whose text overflows becomes focusable so its body can
   // be scrolled by keyboard.

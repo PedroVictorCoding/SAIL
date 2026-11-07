@@ -60,6 +60,15 @@ document.getElementById('spacesTop')?.addEventListener('click', () => { location
 document.getElementById('settingsOpen')?.addEventListener('click', () => openSheet(contextSheet));
 document.getElementById('settingsRail')?.addEventListener('click', () => openSheet(contextSheet));
 
+// One destination for both Settings controls and legacy subsystem links.
+window.sailOpenSettings = (category = 'general') => {
+  const search = document.getElementById('settingsSearchInput');
+  search.value = '';
+  search.dispatchEvent(new Event('input', {bubbles: true}));
+  openSheet(contextSheet);
+  contextSheet.querySelector(`[data-settings-tab="${category}"]`)?.click();
+};
+
 // VS Code Style Settings Tab Navigation & Search
 function initVscodeSettings() {
   const navItems = document.querySelectorAll('.vscode-nav-item');
