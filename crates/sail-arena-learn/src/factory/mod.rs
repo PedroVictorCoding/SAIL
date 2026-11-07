@@ -23,4 +23,5 @@ pub mod registry;
 pub mod service;
 pub mod settings;
 pub mod sources;
+pub mod store;
 pub mod validate;
