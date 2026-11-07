@@ -115,6 +115,12 @@ impl FactoryStore {
         Self::init(Connection::open_in_memory().map_err(backend)?)
     }
 
+    /// Build the store over a connection the caller already owns, for a daemon that shares
+    /// one Arena Learn connection between the factory tables.
+    pub fn new(conn: Connection) -> Result<Self, StoreError> {
+        Self::init(conn)
+    }
+
     fn init(conn: Connection) -> Result<Self, StoreError> {
         conn.execute_batch(
             "PRAGMA busy_timeout=5000;
