@@ -2,7 +2,10 @@
 use async_trait::async_trait;
 use sail_agents::tools::{Tool, ToolContext, ToolFailure, ToolRegistry, ToolScheduler};
 use sail_guardian::{Capability, SystemCapability};
-use sail_protocol::execution::{ToolDescriptor, ToolEffect};
+use sail_protocol::execution::{
+    ArtifactRef, InteractiveControl, ToolDescriptor, ToolEffect, ToolPayload, ToolResultMessage,
+    ToolStatus,
+};
 use serde_json::{Value, json};
 use std::sync::Arc;
 struct Kernel;
@@ -227,6 +230,164 @@ impl Tool for Canvas {
         Ok(Value::String(input.to_string()))
     }
 }
+
+pub fn build_tool_result_message(
+    conversation_id: &str,
+    invocation_id: &str,
+    tool_name: &str,
+    success: bool,
+    output: &Value,
+) -> ToolResultMessage {
+    let now = chrono::Utc::now().timestamp_millis();
+    let status = if success {
+        ToolStatus::Completed
+    } else {
+        ToolStatus::Failed
+    };
+    let mut artifact_refs = Vec::new();
+
+    let payload = if tool_name == "visual_snapshot" {
+        let source = output["source"].as_str().unwrap_or("camera").to_string();
+        let artifact_id = format!("snapshot-{invocation_id}");
+        artifact_refs.push(ArtifactRef {
+            id: artifact_id.clone(),
+            artifact_type: "image".into(),
+            title: Some(format!("Snapshot from {source}")),
+            uri: None,
+        });
+        ToolPayload::CameraCapture {
+            source,
+            status: if success { "captured".into() } else { "failed".into() },
+            thumbnail_url: output["image_url"].as_str().map(String::from),
+            artifact_id: Some(artifact_id),
+            width: output["width"].as_u64().map(|w| w as u32),
+            height: output["height"].as_u64().map(|h| h as u32),
+            timestamp: Some(now),
+            question: output["question"].as_str().map(String::from),
+        }
+    } else if tool_name == "canvas:publish" {
+        let viz_type = output["artifact_type"].as_str().unwrap_or("mermaid").to_string();
+        let content = output["content"].as_str().unwrap_or_default().to_string();
+        let artifact_id = format!("viz-{invocation_id}");
+        artifact_refs.push(ArtifactRef {
+            id: artifact_id,
+            artifact_type: viz_type.clone(),
+            title: Some("Canvas Visual".into()),
+            uri: None,
+        });
+        ToolPayload::Visualization {
+            viz_type,
+            content,
+            title: Some("Canvas Diagram".into()),
+        }
+    } else if tool_name == "proc:list" && output["processes"].is_array() {
+        let procs = output["processes"].as_array().unwrap();
+        let headers = vec!["PID".into(), "Command".into(), "CPU %".into(), "Memory %".into()];
+        let mut rows = Vec::new();
+        for p in procs.iter().take(25) {
+            rows.push(vec![
+                p["pid"].to_string(),
+                p["name"].as_str().unwrap_or("—").to_string(),
+                p["cpu_percent"].as_str().or_else(|| p["cpu"].as_str()).unwrap_or("0").to_string(),
+                p["mem_percent"].as_str().or_else(|| p["memory"].as_str()).unwrap_or("0").to_string(),
+            ]);
+        }
+        let total_count = procs.len();
+        ToolPayload::Table {
+            headers,
+            rows,
+            title: Some("Local Processes".into()),
+            total_count,
+        }
+    } else if tool_name == "fs:query" && output["entries"].is_array() {
+        let entries = output["entries"].as_array().unwrap();
+        let headers = vec!["Name".into(), "Type".into(), "Size".into()];
+        let mut rows = Vec::new();
+        for e in entries.iter().take(25) {
+            rows.push(vec![
+                e["name"].as_str().unwrap_or("—").to_string(),
+                if e["is_dir"].as_bool() == Some(true) { "Directory" } else { "File" }.to_string(),
+                e["size"].to_string(),
+            ]);
+        }
+        let total_count = entries.len();
+        ToolPayload::Table {
+            headers,
+            rows,
+            title: Some(format!("Files in {}", output["path"].as_str().unwrap_or("workspace"))),
+            total_count,
+        }
+    } else if tool_name == "fs:read" || tool_name == "fs:write" {
+        let path = output["path"].as_str().unwrap_or_default().to_string();
+        let content = output["content"].as_str().map(String::from);
+        let bytes = output["bytes"].as_u64().or_else(|| output["bytes_written"].as_u64()).map(|b| b as usize);
+        ToolPayload::Document {
+            path,
+            content,
+            bytes,
+            operation: if tool_name == "fs:write" { "write" } else { "read" }.into(),
+        }
+    } else if tool_name == "github:issues" && output["issues"].is_array() {
+        let issues = output["issues"].as_array().unwrap();
+        let mut controls = Vec::new();
+        for issue in issues.iter().take(10) {
+            if let Some(num) = issue["number"].as_i64() {
+                controls.push(InteractiveControl {
+                    id: format!("forge-solve-{num}"),
+                    label: format!("Solve #{num}"),
+                    action: "forge:enqueue".into(),
+                    params: json!({
+                        "issue_number": num,
+                        "task": issue["title"].as_str().unwrap_or_default(),
+                    }),
+                });
+            }
+        }
+        ToolPayload::InteractiveControls {
+            title: "GitHub Issues".into(),
+            summary: format!("Retrieved {} open issues", issues.len()),
+            controls,
+        }
+    } else if tool_name == "studio:audio_analyze" {
+        let viz = output["mermaid"].as_str().unwrap_or_default().to_string();
+        ToolPayload::Visualization {
+            viz_type: "chart".into(),
+            content: viz,
+            title: Some("Audio Measurements".into()),
+        }
+    } else {
+        let summary = if let Some(text) = output.as_str() {
+            text.to_string()
+        } else if let Some(text) = output["summary"].as_str() {
+            text.to_string()
+        } else if let Some(err) = output["error"].as_str() {
+            err.to_string()
+        } else if success {
+            format!("Tool {tool_name} completed successfully")
+        } else {
+            format!("Tool {tool_name} failed")
+        };
+        ToolPayload::ExecutionResult {
+            summary,
+            success,
+            output: output.clone(),
+            error: if success { None } else { output["error"].as_str().map(String::from) },
+        }
+    };
+
+    ToolResultMessage {
+        message_id: format!("msg-{invocation_id}"),
+        conversation_id: conversation_id.to_string(),
+        invocation_id: invocation_id.to_string(),
+        tool_name: tool_name.to_string(),
+        status,
+        payload,
+        artifact_refs,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
 /// Dialogue's tools as the model sees them, in the order the voice tool list offers them
 /// (ties in tool selection keep this order). `vision_frame` and `memory_recall` are not
 /// here: they act on the current turn's image and archive, not through the scheduler.

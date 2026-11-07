@@ -26,12 +26,10 @@
       about: 'Episodic memory and the associative knowledge graph SAIL learns from conversation.'},
     {id: 'system', name: 'System', sub: 'OS · Resources', u: 10.4, v: 10.4, icon: 'sense', page: 'core', endpoint: '/api/system/metrics',
       about: 'The host: CPU, GPU, memory, storage and throughput that every subsystem shares.'},
-    {id: 'vision', name: 'Vision', sub: 'Camera · OCR · VLM', u: -9.4, v: 13.4, icon: 'vision', page: 'canvas',
+    {id: 'vision', name: 'Vision', sub: 'Camera · OCR · VLM', u: -9.4, v: 13.4, icon: 'vision', page: 'dialogue',
       about: 'Camera and screen previews you choose to share, read by the vision model.'},
     {id: 'flow', name: 'Flow', sub: 'Automation · Workflows', u: -7.8, v: 17.8, icon: 'flow', page: 'pulse', endpoint: '/api/pulse/reminders',
       about: 'Triggers, schedules and durable reminders that run without a conversation.'},
-    {id: 'canvas', name: 'Canvas', sub: 'Projects · Notes', u: -5, v: 21.2, icon: 'canvas', page: 'canvas',
-      about: 'Visual answers, diagrams and structured results from conversations.'},
     {id: 'arena', name: 'Arena', sub: 'Learn · Eval', u: -0.4, v: 21.6, icon: 'arena', page: 'arena',
       about: 'Arena Learn teaches step by step, from an assessment to a lesson map.'},
     {id: 'forge', name: 'Forge', sub: 'Build · Agents · Tools', u: 4.2, v: 18.6, kind: 'forge', page: 'forge', endpoint: '/api/plans/',
@@ -45,9 +43,9 @@
   ];
   const LINKS = [
     ['dialogue', 'core'], ['mind', 'core'], ['memory', 'core'], ['system', 'core'], ['vision', 'core'],
-    ['flow', 'core'], ['canvas', 'core'], ['arena', 'core'], ['forge', 'core'], ['guardian', 'core'],
+    ['flow', 'core'], ['arena', 'core'], ['forge', 'core'], ['guardian', 'core'],
     ['discover', 'forge'], ['entertainment', 'forge'], ['dialogue', 'mind'], ['mind', 'memory'],
-    ['memory', 'system'], ['vision', 'dialogue'], ['flow', 'canvas'], ['guardian', 'system'], ['arena', 'memory'],
+    ['memory', 'system'], ['vision', 'dialogue'], ['guardian', 'system'], ['arena', 'memory'],
   ];
   const SLABS = [
     {label: 'Models', u: 9.4, v: 3.4, w: 7, d: 2.2, h: 1.6},
@@ -198,7 +196,7 @@
       el('div', {class: 'tm-brand'}, logo(), el('div', {}, el('strong', {text: 'SAIL'}), el('span', {class: 'tm-version', id: 'tmVersion', text: 'local'}))),
       el('ul', {class: 'tm-nav'},
         navItem('home', 'Home', 'home'), navItem('dialogue', 'Dialogue', 'dialogue'), navItem('arena', 'Arena', 'arena'),
-        navItem('canvas', 'Canvas', 'canvas'), navItem('forge', 'Forge', 'forge'), navItem('flow', 'Flow', 'flow'),
+        navItem('forge', 'Forge', 'forge'), navItem('flow', 'Flow', 'flow'),
         navItem('system', 'System', 'sense'), navItem('mind', 'Mind', 'mind'), navItem('memory', 'Memory', 'mesh'),
         navItem('discover', 'Discover', 'discovery'),
         navItem('entertainment', 'Entertainment', 'entertainment'), navItem('guardian', 'Guardian', 'guardian')),
@@ -510,7 +508,7 @@
   }
   function push(arr, v) { arr.push(v); if (arr.length > 40) arr.shift(); }
 
-  const AUDIT_STATION = {core: 'core', dialogue: 'dialogue', arena: 'arena', canvas: 'canvas', flow: 'flow', discovery: 'discover', agents: 'forge', mind: 'mind', bridge: 'system', guardian: 'guardian', forge: 'forge', ui: 'core'};
+  const AUDIT_STATION = {core: 'core', dialogue: 'dialogue', arena: 'arena', canvas: 'dialogue', flow: 'flow', discovery: 'discover', agents: 'forge', mind: 'mind', bridge: 'system', guardian: 'guardian', forge: 'forge', ui: 'core'};
   function capabilityText(c) {
     if (c == null) return 'action';
     if (typeof c === 'string') return c;
