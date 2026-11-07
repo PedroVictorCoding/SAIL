@@ -653,6 +653,14 @@ pub enum AuthoringJob {
         source_id: SourceId,
         revision: u64,
     },
+    /// A modern (compressed) PDF, extracted [`PDF_TEXT_PAGES_PER_CALL`] pages at a time
+    /// through [`PdfTextExtractor`], so a 1,000-page book is many small resumable jobs.
+    ExtractPdfPages {
+        source_id: SourceId,
+        revision: u64,
+        /// 1-based physical page this chunk starts at.
+        first_page: u32,
+    },
     ExtractConcepts {
         course_id: CourseId,
         fragment_ids: Vec<FragmentId>,
@@ -694,6 +702,11 @@ impl AuthoringJob {
                 source_id,
                 revision,
             } => format!("extract:{source_id}@{revision}"),
+            Self::ExtractPdfPages {
+                source_id,
+                revision,
+                first_page,
+            } => format!("pdf-pages:{source_id}@{revision}:{first_page}"),
             Self::ExtractConcepts {
                 course_id,
                 fragment_ids,
@@ -830,6 +843,91 @@ pub trait AuthorModel: Send + Sync {
         prompt: &AuthorPrompt,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<String, AuthorModelError>;
+}
+
+// ------------------------------------------------------------------------- course projects
+
+/// What the owner asked the factory to build: a course over some sources. The
+/// [`ConceptGraph`], [`CurriculumPlan`] and drafts all hang off `course_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CourseProject {
+    pub course_id: CourseId,
+    pub title: String,
+    pub domain: Domain,
+    /// Sources the course is grounded in. Order is the owner's reading order.
+    pub source_ids: Vec<SourceId>,
+    /// e.g. "Second-year undergraduate"; a hint to the curriculum planner, not a promise.
+    pub level: String,
+    pub status: ProjectStatus,
+    pub created_ms: i64,
+}
+
+/// Where a course project is. The owner can pause it at any time; nothing is lost.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum ProjectStatus {
+    /// Sources are still being extracted.
+    Extracting,
+    /// Concept batches are being proposed and merged.
+    Mapping,
+    /// A plan is proposed and waits for the owner to approve it.
+    AwaitingPlanApproval,
+    /// Lessons are being generated and validated ahead of the learner.
+    Generating,
+    Paused,
+    /// Every planned lesson is published or needs the owner.
+    Complete,
+    Failed {
+        reason: String,
+    },
+}
+
+// ---------------------------------------------------------------------- sandboxed PDF text
+
+/// Pages per [`PdfTextExtractor::pages`] call. Keeps each sandbox reply well under the
+/// runner's 2 MiB result frame even for dense pages.
+pub const PDF_TEXT_PAGES_PER_CALL: u32 = 20;
+
+/// Why sandboxed PDF text couldn't be produced. Mapped to job states like
+/// [`AuthorModelError`]: `Unavailable` waits, `Refused` marks the source, `Failed` retries.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PdfTextError {
+    /// The sandbox runner isn't configured or is down. Never fall back to in-daemon parsing.
+    #[error("PDF text sandbox unavailable: {0}")]
+    Unavailable(String),
+    /// Encrypted, or the tool refused the file. The source becomes `Failed`/`NeedsReview`.
+    #[error("PDF refused: {0}")]
+    Refused(String),
+    #[error("PDF text extraction failed: {0}")]
+    Failed(String),
+}
+
+/// One page of sandbox output. `text` is untrusted data like any other source text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PdfPageText {
+    /// 1-based physical page.
+    pub page: u32,
+    /// Printed page label when the PDF has one (`xii`, `37`).
+    pub label: Option<String>,
+    pub text: String,
+}
+
+/// Text extraction for PDFs the pure parser refuses (compressed object/xref streams,
+/// incremental updates). Implemented outside this crate by a `pdftotext` run inside the
+/// `sail-runner` sandbox; the daemon never parses those files itself.
+#[async_trait::async_trait]
+pub trait PdfTextExtractor: Send + Sync {
+    /// Physical page count of the blob stored under `content_hash`.
+    async fn page_count(&self, content_hash: &str) -> Result<u32, PdfTextError>;
+
+    /// Text of pages `first..=last` (at most [`PDF_TEXT_PAGES_PER_CALL`]), in order.
+    async fn pages(
+        &self,
+        content_hash: &str,
+        first: u32,
+        last: u32,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<Vec<PdfPageText>, PdfTextError>;
 }
 
 #[cfg(test)]
