@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.sail.app.core.LockNavigation
 import dev.sail.app.core.UiState
 import dev.sail.app.core.sailViewModel
 import dev.sail.app.core.design.EmptyState
@@ -115,6 +116,7 @@ fun CourseScreen(courseId: String, onOpenLesson: (String) -> Unit, onBack: () ->
     val next by vm.next.collectAsStateWithLifecycle()
     val evidence by vm.evidence.collectAsStateWithLifecycle()
     var section by rememberSaveable(courseId) { mutableStateOf("path") }
+    LockNavigation(locked = section == "diagnostic" || section == "reviews")
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.loadCourse(courseId) }
     if (section == "diagnostic") {
         PlayerPane(player, { section = "path"; vm.loadCourse(courseId) }, onOpenLesson)

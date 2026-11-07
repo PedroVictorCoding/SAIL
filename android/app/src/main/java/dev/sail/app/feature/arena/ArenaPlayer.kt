@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.sail.app.core.LockNavigation
 import dev.sail.app.core.UiState
 import dev.sail.app.core.design.EmptyState
 import dev.sail.app.core.design.FlatCard
@@ -53,6 +54,7 @@ internal fun PlayerPane(vm: ArenaPlayerViewModel, onBack: () -> Unit, onOpenLess
     var confirmReveal by remember { mutableStateOf(false) }
     val current = (state as? UiState.Ready)?.data
     val locked = busy || pending != null
+    LockNavigation(locked = locked || current?.finished != true)
     BackHandler(locked) { }
     ArenaFrame(current?.title ?: "Activity", onBack = if (locked) null else onBack) {
         if (locked) Text("Keep this activity open until SAIL confirms the submission.", color = SailColors.Warning)
