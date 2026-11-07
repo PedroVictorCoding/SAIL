@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "accepting_requests": true,
+  "models": [
+    {
+      "version": 1,
+      "state": "ready",
+      "model": "/models/qwen2.5-7b-instruct.gguf",
+      "requested_backend": "vulkan",
+      "observed_backend": "vulkan",
+      "owned_process": true,
+      "last_error": null
+    }
+  ],
+  "metrics": {
+    "submitted": 12,
+    "completed": 11,
+    "failed": 1,
+    "cancelled": 0,
+    "rejected": 0,
+    "active": 1,
+    "queued": 2,
+    "total_inference_ms": 5400,
+    "last_first_token_ms": 420
+  },
+  "limits": {
+    "max_parallel": 1,
+    "max_queued": 8,
+    "max_input_bytes": 131072,
+    "max_response_bytes": 131072,
+    "max_images": 2,
+    "max_image_bytes": 4000000,
+    "max_output_tokens": 1024,
+    "queue_timeout_ms": 30000,
+    "inference_timeout_ms": 180000
+  },
+  "resources": {
+    "voice_turns": 2,
+    "admitted_inference": 1,
+    "speech_workers": 1,
+    "ram_headroom_bytes": 4294967296,
+    "resident_heavy_models": 1,
+    "active_browsers": 0,
+    "active_builds": 0,
+    "pending_ram_bytes": 0,
+    "reserved_cpu_slots": 2,
+    "rejected": 3,
+    "preemptions": 0
+  }
+}
