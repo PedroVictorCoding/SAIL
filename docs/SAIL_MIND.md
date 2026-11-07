@@ -56,12 +56,21 @@ live voice goes first. A second large model does not fit beside it in the host's
 and swapping to a separate coding model would take the main model away from voice
 while Forge runs. Forge therefore never selects a model of its own.
 
-`sail_common::models::primary_model_path()` is the single resolver used by Core, Mind,
-Forge and `run.sh`: `SAIL_MODEL_PATH` if set, else the primary model in `models/` or
-`$SAIL_RUNTIME/models`. It never falls back to another model; missing weights produce an
-error that names the file to install. A different model is a deliberate change of
-`SAIL_MODEL_PATH`, measured before adoption with the [model eval](MODEL_EVAL.md) (voice tools,
-Learn judge, grounded answers) and Forge's eval.
+`sail_common::models::primary_model_path()` is the single resolver used by Core, Mind and
+Forge: `SAIL_MODEL_PATH` if set, else the owner's **saved default**, else the primary model.
+Weights are looked up in `models/`, `$SAIL_RUNTIME/models` and `<data root>/models`. It never
+falls back to another model; missing weights produce an error that names the file to install.
+
+**Default reasoning model.** Settings → Models lists a small catalog
+(`sail_common::models::CATALOG`): Qwen3.6-35B-A3B (primary), LFM2.5-24B-A2B Uncensored
+(Q4_K_M, text) and LFM3-Omni-2B (Q4_K_M plus its image projector). The choice is saved in
+`<data root>/mind/default-model.json` through `PUT /api/mind/models/default` (owner token).
+Only installed models can be chosen. It applies the next time SAIL starts: there is still one
+resident model, and nothing reloads at runtime. `run.sh` pins the primary model only when
+no default is saved. Measure a model with the [model eval](MODEL_EVAL.md) (voice tools, Learn
+judge, grounded answers) and Forge's eval before relying on it. On the CPU-only host
+(2026-11-07), LFM3-Omni-2B read prompts at ~119 tokens/s and wrote at ~24 tokens/s, against
+~48 and ~9.5 for Qwen3.6, and returned well-formed tool calls.
 
 ## Host admission and voice priority
 

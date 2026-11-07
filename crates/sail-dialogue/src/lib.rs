@@ -12,6 +12,7 @@ pub mod learn_courses_http;
 pub mod learn_http;
 pub mod live_context;
 pub mod memory_http;
+pub mod mind_models_http;
 pub mod model_eval;
 pub mod music_fastpath;
 pub mod music_http;

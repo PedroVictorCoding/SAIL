@@ -1150,29 +1150,32 @@
       <section class="vscode-category-panel" id="settingsPanel-models" data-category="models" hidden>
         <div class="vscode-category-header">
           <h3>Models & Inference Configuration</h3>
-          <p class="vscode-category-desc">Manage local LLM weights, llama-server endpoints, context windows, and fallback models.</p>
+          <p class="vscode-category-desc">Choose the default reasoning model, check model status and see the context budget.</p>
         </div>
 
-        <div class="vscode-setting-item" data-search-terms="qwen gemma model llm inference llama local server weights hybrid gpu cpu">
+        <div class="vscode-setting-item" data-search-terms="default reasoning model switch qwen lfm liquid llm inference llama local weights">
           <div class="vscode-setting-info">
-            <label class="vscode-setting-name">Primary Local Language Model</label>
-            <p class="vscode-setting-desc">Primary: Qwen3.6-35B-A3B (16,384 token context window via GPU+CPU Hybrid / Vulkan / CPU).</p>
+            <label class="vscode-setting-name" for="defaultModelSelect">Default Reasoning Model</label>
+            <p class="vscode-setting-desc">The one model SAIL keeps loaded for Dialogue, agents and Forge. A new default applies the next time SAIL starts.</p>
+            <p class="vscode-setting-desc" id="defaultModelSummary"></p>
+          </div>
+          <div class="vscode-setting-control">
+            <select id="defaultModelSelect" aria-describedby="defaultModelStatus"><option>Loading…</option></select>
+            <button class="quiet-button" type="button" id="defaultModelSave">Save default</button>
+          </div>
+        </div>
+        <p class="sheet-note" id="defaultModelStatus" role="status" aria-live="polite">Checking which model is running…</p>
+
+        <div class="vscode-setting-item" data-search-terms="model status llm inference llama local server hybrid gpu cpu">
+          <div class="vscode-setting-info">
+            <label class="vscode-setting-name">Model Status</label>
+            <p class="vscode-setting-desc">Ask the local server whether the language model and voice workers are ready.</p>
           </div>
           <div class="vscode-setting-control">
             <button class="quiet-button" id="checkModelsBtn">Check model status</button>
           </div>
         </div>
         <p class="sheet-note" id="modelStatusSettings">Model status is checked with the local SAIL server.</p>
-
-        <div class="vscode-setting-item" data-search-terms="model fallback coder secondary gemma qwen3">
-          <div class="vscode-setting-info">
-            <label class="vscode-setting-name">Secondary / Fallback Model</label>
-            <p class="vscode-setting-desc">Fallback order: Qwen3-Coder-30B-A3B &rarr; Gemma-4-E4B &rarr; Gemma-2-27B.</p>
-          </div>
-          <div class="vscode-setting-control">
-            <span class="vscode-badge-tag">Auto-Failover Active</span>
-          </div>
-        </div>
 
         <div class="vscode-setting-item" data-search-terms="context size budget tokens window 16384 memory">
           <div class="vscode-setting-info">
@@ -1305,6 +1308,7 @@
 <script src="/subsystem-pages.js" defer></script>
 <script src="/memory.js" defer></script>
 <script src="/learn.js" defer></script>
+<script src="/model-picker.js" defer></script>
 <script src="/courses.js" defer></script>
 <link rel="stylesheet" href="/toolsmap.css">
 <script src="/toolsmap.js" defer></script>

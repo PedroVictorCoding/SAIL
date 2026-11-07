@@ -93,18 +93,37 @@ impl Default for LocalModelConfig {
         let cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1);
+        // The resident model: SAIL_MODEL_PATH, else the owner's saved default, else Qwen.
+        // Its catalog entry names it and supplies its image projector, if it has one.
+        let model_path = sail_common::models::primary_model_path();
+        let entry = sail_common::models::running_entry(&model_path);
+        let projector = std::env::var("SAIL_MMPROJ")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| {
+                entry
+                    .and_then(|m| m.projector)
+                    .map(sail_common::models::locate)
+                    .filter(|p| p.is_file())
+            });
+        let mut aliases: Vec<String> = entry.map(|m| vec![m.id.into()]).unwrap_or_default();
         Self {
-            name: "Qwen3.6-35B-A3B".into(),
-            aliases: vec![
-                "local".into(),
-                "qwen".into(),
-                "qwen3.6".into(),
-                "qwen3".into(),
-                "qwen3.6-35b".into(),
-                "gemma4".into(),
-                "gemma-4".into(),
-            ],
-            model_path: sail_common::models::primary_model_path(),
+            name: entry
+                .map(|m| m.name.replace(' ', "-"))
+                .unwrap_or_else(|| "Qwen3.6-35B-A3B".into()),
+            aliases: {
+                aliases.extend([
+                    "local".into(),
+                    "qwen".into(),
+                    "qwen3.6".into(),
+                    "qwen3".into(),
+                    "qwen3.6-35b".into(),
+                    "gemma4".into(),
+                    "gemma-4".into(),
+                ]);
+                aliases
+            },
+            model_path,
             server_binary: std::env::var("SAIL_LLAMA_SERVER")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
@@ -121,7 +140,7 @@ impl Default for LocalModelConfig {
                     PathBuf::from("/home/main/llama.cpp/build/bin/llama-server")
                 }),
             endpoint,
-            projector: std::env::var("SAIL_MMPROJ").map(PathBuf::from).ok(),
+            projector,
             managed,
             persist: std::env::var("SAIL_LLAMA_PERSIST")
                 .map(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
