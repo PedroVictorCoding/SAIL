@@ -158,7 +158,7 @@ function handleVoiceMessage(data) {
         turnGenStart = performance.now();
         turnFirstTokenTime = 0;
         turnTokenCount = 0;
-        appendConversation('You', data.transcript);
+        appendConversation('You', window.sailLiveTranscript?.consumePendingQuestion?.(data.transcript) || data.transcript);
         responseNode = appendConversation('SAIL', '');
         updateState('thinking');
         document.getElementById('sessionTokensPerSec').textContent = 'Calculating…';
@@ -169,6 +169,7 @@ function handleVoiceMessage(data) {
         responseText += data.text;
         if (!responseNode) responseNode = appendConversation('SAIL', '');
         setMessageText(responseNode, responseText);
+        window.sailLiveTranscript?.onAnswerDelta?.(responseText);
         if (!turnTokenCount) updateState('generating');
         if (data.token_count !== undefined) {
           turnTokenCount = data.token_count;
@@ -189,6 +190,7 @@ function handleVoiceMessage(data) {
         setCaptureHeld(false);
         turnInProgress = false;
         document.getElementById('assistantAnnounce').textContent = responseNode?.lastChild?.innerText || responseText;
+        window.sailLiveTranscript?.onAnswerComplete?.(responseText || responseNode?.lastChild?.innerText);
         turnFinished = true;
         if (!pendingAudio && !playingSources.size) finishPlayback();
         if (data.latency_ms) setConnection(`Connected · local turn ${(data.latency_ms / 1000).toFixed(1)}s`, true);
@@ -912,7 +914,7 @@ function runKernelTool(tool, params = {}, approval_token) {
     lastToolCalls.set(normalizeToolName(tool), {tool,params}); updateToolActivity(tool, true);
   }
 }
-function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('assistantAnnounce').textContent = ''; document.getElementById('canvasClearBtn').click(); window.sailLiveTranscript?.onReset?.(); }
+function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('assistantAnnounce').textContent = ''; document.getElementById('canvasClearBtn').click(); window.sailLiveTranscript?.onSessionReset?.(); }
 async function checkModels() {
   const summary = document.getElementById('modelStatus'); summary.textContent = 'Checking local model status…'; summary.className = 'model-summary';
   const modelsCard = document.getElementById('modelsCard'); modelsCard.setAttribute('data-state', 'active');

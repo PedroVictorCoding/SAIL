@@ -669,6 +669,14 @@
               <p class="lt-empty" id="ltEmpty">With everyone’s consent, press Record (or enable Listen without reply and start the microphone). SAIL transcribes speech continuously without interrupting or replying.</p>
             </section>
 
+            <section class="lt-answer" id="ltAnswer" aria-live="polite" hidden>
+              <div class="lt-answer-head">
+                <strong id="ltAnswerQuestion"></strong>
+                <button type="button" class="quiet-button lt-answer-close" id="ltAnswerClose" aria-label="Dismiss answer">×</button>
+              </div>
+              <p class="lt-answer-body" id="ltAnswerBody"></p>
+            </section>
+
             <form class="lt-ask-form" id="ltAskForm">
               <label for="ltAskInput" class="sr-only">Ask SAIL about this transcript</label>
               <input id="ltAskInput" type="text" maxlength="4000" placeholder="Ask SAIL a question about this lesson or conversation…" autocomplete="off">

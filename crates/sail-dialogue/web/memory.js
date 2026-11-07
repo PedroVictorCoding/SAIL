@@ -78,6 +78,7 @@
   window.addEventListener('sail:page',event=>{if(event.detail==='memory')load().catch(fail);});
 
   // Live Transcript Mode (Listen without reply)
+  const STORAGE_KEY = 'sail.liveTranscript.v1';
   const ltCard = document.getElementById('ltCard');
   const ltTitleInput = document.getElementById('ltTitleInput');
   const ltStatusPill = document.getElementById('ltStatusPill');
@@ -98,13 +99,21 @@
   const ltSegments = document.getElementById('ltSegments');
   const ltPartial = document.getElementById('ltPartial');
   const ltEmpty = document.getElementById('ltEmpty');
+  const ltAnswer = document.getElementById('ltAnswer');
+  const ltAnswerQuestion = document.getElementById('ltAnswerQuestion');
+  const ltAnswerBody = document.getElementById('ltAnswerBody');
+  const ltAnswerClose = document.getElementById('ltAnswerClose');
   const ltAskForm = document.getElementById('ltAskForm');
   const ltAskInput = document.getElementById('ltAskInput');
 
   let ltEntries = [];
-  let ltElapsedSec = 0;
+  let ltBaseElapsedMs = 0;
+  let ltRunStartedAt = null;
+  let ltHasRecorded = false;
   let ltTimerId = null;
   let ltPendingStartMic = false;
+  let ltPendingQuestion = null;
+  let ltWaitingForAnswer = false;
 
   function formatDuration(totalSeconds) {
     const sec = Math.max(0, Math.floor(totalSeconds));
@@ -116,16 +125,92 @@
     return hrs > 0 ? `${String(hrs).padStart(2, '0')}:${mm}:${ss}` : `${mm}:${ss}`;
   }
 
+  function currentElapsedMs() {
+    return ltBaseElapsedMs + (ltRunStartedAt !== null ? Math.max(0, Date.now() - ltRunStartedAt) : 0);
+  }
+
+  function currentElapsedSeconds() {
+    return Math.floor(currentElapsedMs() / 1000);
+  }
+
+  function saveTranscriptState() {
+    try {
+      if (!ltEntries.length && currentElapsedMs() === 0 && !ltHasRecorded) {
+        localStorage.removeItem(STORAGE_KEY);
+        return;
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        version: 1,
+        title: (ltTitleInput?.value || 'Live lesson transcript').trim(),
+        entries: ltEntries,
+        baseElapsedMs: currentElapsedMs(),
+        hasRecorded: ltHasRecorded,
+      }));
+    } catch (_) {}
+  }
+
+  function renderSegmentDom(entry) {
+    if (!ltSegments) return;
+    const article = node('article', undefined, 'lt-segment');
+    const timeEl = node('time', entry.elapsed, 'lt-seg-time');
+    if (entry.clock) timeEl.title = `Captured at ${entry.clock}`;
+    const bodyEl = node('div', undefined, 'lt-seg-body');
+    const textEl = node('p', entry.text, 'lt-seg-text');
+    bodyEl.append(textEl);
+    article.append(timeEl, bodyEl);
+    ltSegments.append(article);
+  }
+
+  function restoreTranscriptState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return;
+      if (typeof parsed.title === 'string' && parsed.title.trim() && ltTitleInput) {
+        ltTitleInput.value = parsed.title;
+      }
+      if (Number.isFinite(parsed.baseElapsedMs) && parsed.baseElapsedMs >= 0) {
+        ltBaseElapsedMs = parsed.baseElapsedMs;
+      }
+      ltHasRecorded = Boolean(parsed.hasRecorded);
+      if (Array.isArray(parsed.entries) && parsed.entries.length > 0) {
+        ltEntries = parsed.entries
+          .filter(e => e && typeof e.text === 'string' && e.text.trim())
+          .map(e => ({
+            elapsed: String(e.elapsed || '00:00'),
+            clock: String(e.clock || ''),
+            text: e.text.trim(),
+          }));
+        if (ltSegments) ltSegments.replaceChildren();
+        for (const entry of ltEntries) renderSegmentDom(entry);
+        if (ltEmpty && ltEntries.length > 0) ltEmpty.hidden = true;
+      }
+      if (ltTimer) ltTimer.textContent = formatDuration(currentElapsedSeconds());
+    } catch (_) {}
+  }
+
   function updateTimerLoop(active) {
-    if (active && !ltTimerId) {
-      ltTimerId = setInterval(() => {
-        ltElapsedSec += 1;
-        if (ltTimer) ltTimer.textContent = formatDuration(ltElapsedSec);
-      }, 1000);
-    } else if (!active && ltTimerId) {
-      clearInterval(ltTimerId);
-      ltTimerId = null;
+    if (active) {
+      if (ltRunStartedAt === null) ltRunStartedAt = Date.now();
+      ltHasRecorded = true;
+      if (!ltTimerId) {
+        ltTimerId = setInterval(() => {
+          if (ltTimer) ltTimer.textContent = formatDuration(currentElapsedSeconds());
+        }, 250);
+      }
+    } else {
+      if (ltRunStartedAt !== null) {
+        ltBaseElapsedMs = currentElapsedMs();
+        ltRunStartedAt = null;
+        saveTranscriptState();
+      }
+      if (ltTimerId) {
+        clearInterval(ltTimerId);
+        ltTimerId = null;
+      }
     }
+    if (ltTimer) ltTimer.textContent = formatDuration(currentElapsedSeconds());
   }
 
   function syncLiveTranscript() {
@@ -134,19 +219,29 @@
     const recording = typeof isRecording !== 'undefined' && Boolean(isRecording);
     const muted = typeof isMuted !== 'undefined' && Boolean(isMuted);
     const connected = typeof ws !== 'undefined' && Boolean(ws && ws.readyState === WebSocket.OPEN);
-    const activelyCapturing = enabled && recording && !muted;
+    const activelyCapturing = connected && enabled && recording && !muted;
 
-    const state = activelyCapturing ? 'recording' : enabled ? 'ready' : 'off';
+    updateTimerLoop(activelyCapturing);
+
+    const state = !connected ? 'off' : activelyCapturing ? 'recording' : enabled ? 'ready' : 'off';
     ltCard.dataset.state = state;
     if (ltStatusPill) ltStatusPill.dataset.state = state;
     if (ltTabDot) ltTabDot.hidden = !enabled;
 
     if (ltStatusText) {
-      ltStatusText.textContent = activelyCapturing
-        ? 'Recording'
-        : enabled
-          ? (recording && muted ? 'Muted' : ltEntries.length > 0 ? 'Paused' : 'Ready')
-          : 'Off';
+      if (!connected) {
+        ltStatusText.textContent = 'Disconnected';
+      } else if (activelyCapturing) {
+        ltStatusText.textContent = 'Recording';
+      } else if (enabled) {
+        ltStatusText.textContent = (recording && muted)
+          ? 'Muted'
+          : ltHasRecorded
+            ? 'Paused'
+            : 'Ready';
+      } else {
+        ltStatusText.textContent = (ltHasRecorded && ltEntries.length > 0) ? 'Stopped' : 'Off';
+      }
     }
 
     if (ltMicOrb) {
@@ -162,7 +257,7 @@
       } else if (enabled && recording && muted) {
         ltSubStatus.textContent = 'Microphone muted · unmute or press Resume to continue transcribing.';
       } else if (enabled) {
-        ltSubStatus.textContent = ltEntries.length > 0
+        ltSubStatus.textContent = ltHasRecorded
           ? 'Transcription paused · press Resume or start microphone to continue.'
           : 'Listen without reply enabled · press Record or start microphone to capture.';
       } else {
@@ -174,7 +269,7 @@
     if (ltPauseLabel) {
       ltPauseLabel.textContent = activelyCapturing
         ? 'Pause'
-        : (enabled && ltEntries.length > 0 ? 'Resume' : 'Record');
+        : (enabled && ltHasRecorded ? 'Resume' : 'Record');
     }
     if (ltPauseBtn) {
       ltPauseBtn.disabled = !connected;
@@ -194,9 +289,7 @@
     const hasEntries = ltEntries.length > 0;
     if (ltCopyBtn) ltCopyBtn.hidden = !hasEntries;
     if (ltExportBtn) ltExportBtn.hidden = !hasEntries;
-    if (ltClearBtn) ltClearBtn.hidden = !hasEntries && ltElapsedSec === 0;
-
-    updateTimerLoop(activelyCapturing);
+    if (ltClearBtn) ltClearBtn.hidden = !hasEntries && currentElapsedSeconds() === 0;
   }
 
   function appendObservedSegment(rawText) {
@@ -208,18 +301,16 @@
     }
     if (ltEmpty) ltEmpty.hidden = true;
 
-    const elapsed = formatDuration(ltElapsedSec);
-    const clock = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    ltEntries.push({ elapsed, clock, text });
-
-    const article = node('article', undefined, 'lt-segment');
-    const timeEl = node('time', elapsed, 'lt-seg-time');
-    timeEl.title = `Captured at ${clock}`;
-    const bodyEl = node('div', undefined, 'lt-seg-body');
-    const textEl = node('p', text, 'lt-seg-text');
-    bodyEl.append(textEl);
-    article.append(timeEl, bodyEl);
-    ltSegments.append(article);
+    const now = new Date();
+    const clock = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const elapsedSec = currentElapsedSeconds();
+    const elapsed = (ltRunStartedAt !== null || elapsedSec > 0)
+      ? formatDuration(elapsedSec)
+      : clock;
+    const entry = { elapsed, clock, text };
+    ltEntries.push(entry);
+    renderSegmentDom(entry);
+    saveTranscriptState();
 
     syncLiveTranscript();
     if (ltStream) ltStream.scrollTop = ltStream.scrollHeight;
@@ -241,14 +332,31 @@
 
   function clearTranscriptEntries() {
     ltEntries = [];
-    ltElapsedSec = 0;
+    ltBaseElapsedMs = 0;
+    ltRunStartedAt = null;
+    ltHasRecorded = false;
+    ltPendingQuestion = null;
+    ltWaitingForAnswer = false;
     if (ltTimer) ltTimer.textContent = '00:00';
     if (ltSegments) ltSegments.replaceChildren();
     if (ltPartial) {
       ltPartial.textContent = '';
       ltPartial.hidden = true;
     }
+    if (ltAnswer) ltAnswer.hidden = true;
     if (ltEmpty) ltEmpty.hidden = false;
+    try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+    syncLiveTranscript();
+  }
+
+  function resetLiveStateOnly() {
+    ltPendingStartMic = false;
+    ltPendingQuestion = null;
+    ltWaitingForAnswer = false;
+    if (ltPartial) {
+      ltPartial.textContent = '';
+      ltPartial.hidden = true;
+    }
     syncLiveTranscript();
   }
 
@@ -272,6 +380,7 @@
     syncLiveTranscript();
   }
 
+  ltTitleInput?.addEventListener('change', saveTranscriptState);
   ltMicOrb?.addEventListener('click', toggleRecordOrPause);
   ltPauseBtn?.addEventListener('click', toggleRecordOrPause);
 
@@ -323,17 +432,51 @@
 
   ltClearBtn?.addEventListener('click', clearTranscriptEntries);
 
+  ltAnswerClose?.addEventListener('click', () => {
+    ltWaitingForAnswer = false;
+    if (ltAnswer) ltAnswer.hidden = true;
+  });
+
+  function buildTranscriptQuestionPayload(question) {
+    if (!ltEntries.length) return question;
+    const title = (ltTitleInput?.value || 'Live lesson transcript').trim();
+    const header = `Lesson transcript (${title}):\n`;
+    const footer = `\n\nQuestion: ${question}`;
+    const maxTranscriptChars = Math.max(1000, 15500 - header.length - footer.length);
+    const selected = [];
+    let used = 0;
+    for (let i = ltEntries.length - 1; i >= 0; i--) {
+      const line = `[${ltEntries[i].elapsed}] ${ltEntries[i].text}`;
+      if (used + line.length + 1 > maxTranscriptChars) break;
+      selected.push(line);
+      used += line.length + 1;
+    }
+    selected.reverse();
+    return `${header}${selected.join('\n')}${footer}`;
+  }
+
   ltAskForm?.addEventListener('submit', async event => {
     event.preventDefault();
-    const text = (ltAskInput?.value || '').trim();
-    if (!text) return;
+    const question = (ltAskInput?.value || '').trim();
+    if (!question) return;
+    const payload = buildTranscriptQuestionPayload(question);
     try {
       if (typeof ensureAudio === 'function') await ensureAudio();
       if (typeof stopPlayback === 'function') stopPlayback();
-      if (typeof sendAction === 'function' && sendAction('text', { text })) {
+      ltPendingQuestion = question;
+      ltWaitingForAnswer = true;
+      if (ltAnswerQuestion) ltAnswerQuestion.textContent = question;
+      if (ltAnswerBody) ltAnswerBody.textContent = 'Thinking…';
+      if (ltAnswer) ltAnswer.hidden = false;
+      if (typeof sendAction === 'function' && sendAction('text', { text: payload })) {
         ltAskInput.value = '';
+      } else {
+        ltPendingQuestion = null;
+        ltWaitingForAnswer = false;
       }
     } catch (err) {
+      ltPendingQuestion = null;
+      ltWaitingForAnswer = false;
       if (typeof showError === 'function') showError(err.message || String(err));
     }
   });
@@ -342,8 +485,10 @@
     sync: syncLiveTranscript,
     onStateChange(enabled) {
       if (enabled) {
-        const hash = (location.hash || '').replace(/^#\/?/, '').toLowerCase();
-        if (hash !== 'learn' && hash !== 'courses' && typeof switchCardTab === 'function') {
+        const currentPage = typeof window.sailCurrentPage === 'function'
+          ? window.sailCurrentPage()
+          : (location.hash || '').slice(1).split('?')[0].toLowerCase();
+        if (currentPage === 'memory' && typeof switchCardTab === 'function') {
           switchCardTab('memoryCard', 'memoryPanelTranscript');
         }
         if (ltPendingStartMic) {
@@ -364,7 +509,25 @@
     onObserved: appendObservedSegment,
     onPartial: updatePartialSegment,
     onReset: clearTranscriptEntries,
+    onSessionReset: resetLiveStateOnly,
+    consumePendingQuestion() {
+      const q = ltPendingQuestion;
+      ltPendingQuestion = null;
+      return q;
+    },
+    onAnswerDelta(text) {
+      if (!ltWaitingForAnswer || !ltAnswerBody) return;
+      ltAnswerBody.textContent = text;
+      if (ltAnswer) ltAnswer.hidden = false;
+    },
+    onAnswerComplete(text) {
+      if (!ltWaitingForAnswer) return;
+      ltWaitingForAnswer = false;
+      if (ltAnswerBody && text) ltAnswerBody.textContent = text;
+      if (ltAnswer) ltAnswer.hidden = false;
+    },
   });
 
+  restoreTranscriptState();
   syncLiveTranscript();
 })();
