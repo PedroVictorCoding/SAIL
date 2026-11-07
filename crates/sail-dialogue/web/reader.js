@@ -161,6 +161,10 @@ const SailReader = (() => {
     }
     const titleOf = book => book.metadata?.title || book.title;
     const authorsOf = book => book.metadata?.authors?.length ? book.metadata.authors : book.authors;
+    // Covers can come from the uploaded file or a saved online match. The version keeps the
+    // object URL cache correct when either source changes.
+    const coverVersion = book => book.cover_version
+      || (book.metadata?.cover_cached ? `meta:${book.metadata.retrieved_at}` : null);
     let featuredId = null, dialogBook = null, lookupSerial = 0;
     const coverCache = new Map();
     const imageObserver = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
@@ -170,10 +174,11 @@ const SailReader = (() => {
       }
     }, {rootMargin: '200px'}) : null;
     function coverImage(book) {
-      if (!book.metadata?.cover_cached) return null;
+      const version = coverVersion(book);
+      if (!version) return null;
       const image = el('img', undefined, 'cover-image');
       image.alt = ''; image.decoding = 'async'; image.style.opacity = '0';
-      const cacheKey = `${book.id}:${book.metadata.retrieved_at}`;
+      const cacheKey = `${book.id}:${version}`;
       image.loadCover = async () => {
         try {
           if (!coverCache.has(cacheKey)) {
@@ -222,7 +227,7 @@ const SailReader = (() => {
     }
     function renderLibrary() {
       imageObserver?.disconnect();
-      const activeCoverKeys = new Set(state.books.filter(b => b.metadata?.cover_cached).map(b => `${b.id}:${b.metadata.retrieved_at}`));
+      const activeCoverKeys = new Set(state.books.filter(coverVersion).map(b => `${b.id}:${coverVersion(b)}`));
       for (const [key, pending] of coverCache) if (!activeCoverKeys.has(key)) {
         pending.then(url => URL.revokeObjectURL(url)).catch(() => {}); coverCache.delete(key);
       }
@@ -261,26 +266,39 @@ const SailReader = (() => {
           button(progress === undefined ? 'Start reading →' : 'Continue reading →', () => openBook(recent))
         );
         const details = recent.metadata;
+        const embedded = recent.embedded;
         const about = el('details', undefined, 'book-about');
         about.append(el('summary', 'About this book'));
+        const factsFor = source => [
+          source.subtitle,
+          source.first_publish_year ? `First published ${source.first_publish_year}` : '',
+          (source.publishers || [])[0],
+          (source.languages || [])[0],
+          (source.isbn || [])[0] ? `ISBN ${(source.isbn || [])[0]}` : '',
+          ...(source.subjects || []).slice(0, 2),
+        ].filter(Boolean);
         if (details) {
-          const edition = [details.first_publish_year ? `First published ${details.first_publish_year}` : '',
-            details.subjects?.slice(0, 2).join(' · ')].filter(Boolean).join(' · ');
+          const edition = factsFor(details).join(' · ');
           if (edition) info.append(el('p', edition, 'book-edition muted'));
-          if (details.description) about.append(el('p', details.description, 'book-description muted'));
+          const description = details.description || embedded?.description;
+          if (description) about.append(el('p', description, 'book-description muted'));
           const source = el('a', details.user_edited ? 'Open Library · edited locally' : 'Details from Open Library', 'metadata-source');
           source.href = `https://openlibrary.org${details.work_key}`;
           source.target = '_blank'; source.rel = 'noopener noreferrer'; about.append(source);
+        } else if (embedded) {
+          const edition = factsFor(embedded).join(' · ');
+          if (edition) info.append(el('p', edition, 'book-edition muted'));
+          if (embedded.description) about.append(el('p', embedded.description, 'book-description muted'));
+          about.append(el('p', 'From the imported book', 'metadata-source'));
         }
         const actions = el('div', undefined, 'book-detail-actions');
         const lookup = button(details ? 'Change book details' : 'Find cover & details', () => openMetadata(recent));
-        if (details) about.append(lookup); else actions.append(lookup);
+        if (details || embedded) about.append(lookup); else actions.append(lookup);
         if (details) about.append(button('Remove online details', async () => {
           const data = await api.request(`/books/${key(recent)}/metadata`, {method: 'DELETE'});
           state.books = state.books.map(b => b.id === recent.id ? data.book : b); renderLibrary();
         }));
-        if (!details) info.append(actions);
-        if (details) info.append(about);
+        if (details || embedded) info.append(about); else info.append(actions);
         card.append(cover(recent), info);
         $('continue').append(card);
         lightFromCover(card.querySelector('.cover-image'));
@@ -379,7 +397,9 @@ const SailReader = (() => {
       $('metadata-use-cover').checked = false;
       $('metadata-use-cover').disabled = true;
       $('metadata-cover-empty').hidden = false;
-      $('metadata-cover-empty').textContent = metadata.cover_cached ? 'Loading cover preview…' : 'No cover available. You can save the details without a cover.';
+      $('metadata-cover-empty').textContent = metadata.cover_cached
+        ? 'Loading cover preview…'
+        : (book.cover_version ? 'No online cover. The cover embedded in the file stays unless you choose another.' : 'No cover available. You can save the details without a cover.');
       $('metadata-save').disabled = true;
       $('edit-title').focus();
       if (metadata.cover_cached) {

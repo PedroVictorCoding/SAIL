@@ -429,28 +429,28 @@ fn valid_cover_olid(value: &str) -> bool {
         })
 }
 
-fn language_label(code: &str) -> String {
+pub(crate) fn language_label(code: &str) -> String {
     match code {
-        "eng" => "English",
-        "fre" | "fra" => "French",
-        "ger" | "deu" => "German",
-        "spa" => "Spanish",
-        "ita" => "Italian",
-        "por" => "Portuguese",
-        "dut" | "nld" => "Dutch",
-        "rus" => "Russian",
-        "jpn" => "Japanese",
-        "chi" | "zho" => "Chinese",
-        "kor" => "Korean",
-        "ara" => "Arabic",
-        "lat" => "Latin",
-        "gre" | "ell" => "Greek",
-        "swe" => "Swedish",
-        "pol" => "Polish",
-        "tur" => "Turkish",
-        "hin" => "Hindi",
-        "ben" => "Bengali",
-        "heb" => "Hebrew",
+        "en" | "eng" => "English",
+        "fr" | "fre" | "fra" => "French",
+        "de" | "ger" | "deu" => "German",
+        "es" | "spa" => "Spanish",
+        "it" | "ita" => "Italian",
+        "pt" | "por" => "Portuguese",
+        "nl" | "dut" | "nld" => "Dutch",
+        "ru" | "rus" => "Russian",
+        "ja" | "jpn" => "Japanese",
+        "zh" | "chi" | "zho" => "Chinese",
+        "ko" | "kor" => "Korean",
+        "ar" | "ara" => "Arabic",
+        "la" | "lat" => "Latin",
+        "el" | "gre" | "ell" => "Greek",
+        "sv" | "swe" => "Swedish",
+        "pl" | "pol" => "Polish",
+        "tr" | "tur" => "Turkish",
+        "hi" | "hin" => "Hindi",
+        "bn" | "ben" => "Bengali",
+        "he" | "heb" => "Hebrew",
         _ => code,
     }
     .to_string()
@@ -585,7 +585,7 @@ fn strong_match(docs: &[Metadata], title: &str, author: &str) -> bool {
 }
 
 /// Re-encode a bounded raster as JPEG; never store SVG, metadata or arbitrary provider bytes.
-fn sanitize_cover(bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn sanitize_cover(bytes: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Cursor;
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
