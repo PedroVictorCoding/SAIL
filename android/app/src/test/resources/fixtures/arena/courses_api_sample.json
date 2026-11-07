@@ -1,0 +1,659 @@
+{
+  "GET /courses": {
+    "courses": [
+      {
+        "id": "rust-systems",
+        "title": "Rust & Systems Programming",
+        "domain": "rust",
+        "status": "ready",
+        "summary": "Ownership, borrowing and the type system, checked by the real compiler.",
+        "version": "2026.11.1",
+        "lesson_count": 2,
+        "minutes": 11,
+        "progress": {
+          "lessons_completed": 0,
+          "objectives": 4,
+          "provisional": 0,
+          "retained": 0,
+          "due": 0
+        },
+        "next": {
+          "kind": "diagnostic",
+          "reasons": [
+            "A short cold check finds where to start. Nothing counts as known without a real answer."
+          ]
+        }
+      },
+      {
+        "id": "philosophy-logic",
+        "title": "Philosophy & Logic",
+        "domain": "philosophy",
+        "status": "ready",
+        "summary": "Deductive validity, formal fallacies, and sound reasoning evaluated by pure logical form.",
+        "version": "2026.11.1",
+        "lesson_count": 2,
+        "minutes": 11,
+        "progress": {
+          "lessons_completed": 0,
+          "objectives": 4,
+          "provisional": 0,
+          "retained": 0,
+          "due": 0
+        },
+        "next": {
+          "kind": "diagnostic",
+          "reasons": [
+            "A short cold check finds where to start. Nothing counts as known without a real answer."
+          ]
+        }
+      },
+      {
+        "id": "physics-engineering",
+        "title": "Physics, Math & Engineering",
+        "domain": "physics",
+        "status": "planned",
+        "summary": "Units, motion, circuits and control, with validated simulations. Lessons are being written.",
+        "version": null,
+        "lesson_count": 0,
+        "minutes": 0,
+        "progress": null,
+        "next": null
+      }
+    ]
+  },
+  "GET /courses/rust-systems": {
+    "course": {
+      "id": "rust-systems",
+      "title": "Rust & Systems Programming",
+      "domain": "rust",
+      "status": "ready",
+      "summary": "Ownership, borrowing and the type system, checked by the real compiler.",
+      "version": "2026.11.1",
+      "lesson_count": 2,
+      "minutes": 11,
+      "progress": {
+        "lessons_completed": 0,
+        "objectives": 4,
+        "provisional": 0,
+        "retained": 0,
+        "due": 0
+      },
+      "next": {
+        "kind": "diagnostic",
+        "reasons": [
+          "A short cold check finds where to start. Nothing counts as known without a real answer."
+        ]
+      }
+    },
+    "objectives": [
+      {
+        "id": "rust.move",
+        "title": "A non-Copy value moves on assignment",
+        "prerequisites": []
+      },
+      {
+        "id": "rust.copy",
+        "title": "Copy types are duplicated, not moved",
+        "prerequisites": []
+      },
+      {
+        "id": "rust.borrow-shared",
+        "title": "Shared references read without taking ownership",
+        "prerequisites": [
+          "rust.move"
+        ]
+      },
+      {
+        "id": "rust.borrow-mut",
+        "title": "Only one mutable reference at a time",
+        "prerequisites": [
+          "rust.borrow-shared"
+        ]
+      }
+    ],
+    "chapters": [
+      {
+        "id": "ownership",
+        "title": "Ownership and borrowing",
+        "lessons": [
+          {
+            "id": "rust-own-move",
+            "title": "Who owns this String?",
+            "minutes": 5,
+            "objective_ids": [
+              "rust.move",
+              "rust.copy"
+            ],
+            "prerequisites": [],
+            "state": "not_started",
+            "certified": false
+          },
+          {
+            "id": "rust-own-borrow",
+            "title": "Borrow instead of taking",
+            "minutes": 6,
+            "objective_ids": [
+              "rust.borrow-shared",
+              "rust.borrow-mut"
+            ],
+            "prerequisites": [
+              "rust-own-move"
+            ],
+            "state": "not_started",
+            "certified": false
+          }
+        ]
+      }
+    ],
+    "diagnostic": {
+      "id": "rust-ownership-probe",
+      "session_id": null,
+      "state": "not_started"
+    }
+  },
+  "POST /diagnostics": {
+    "id": "diag-c7f60869e4854c33a88121a21943a855",
+    "step": {
+      "id": "d-move",
+      "kind": "predict",
+      "title": "Predict the result",
+      "body": [
+        {
+          "kind": "p",
+          "text": "Pick the result you expect. If you don't know, say so: an honest \"not sure\" places you better than a guess."
+        }
+      ],
+      "objective_ids": [
+        "rust.move"
+      ],
+      "hint_count": 0,
+      "confidence": true,
+      "options": [
+        {
+          "id": "a",
+          "text": "It prints `2`."
+        },
+        {
+          "id": "b",
+          "text": "It doesn't compile: `tools` was moved."
+        },
+        {
+          "id": "c",
+          "text": "It prints `0`."
+        },
+        {
+          "id": "unsure",
+          "text": "I'm not sure."
+        }
+      ],
+      "code": "fn main() {\n    let tools = vec![\"axe\", \"rope\"];\n    let pack = tools;\n    println!(\"{}\", tools.len());\n}"
+    },
+    "done": false
+  },
+  "POST /diagnostics/:id/attempt": {
+    "result": "correct",
+    "evidence_id": "ev-abfc5e3057b6447ca0819cfc59933ba6",
+    "skill_ids": [
+      "rust.move"
+    ],
+    "validator_kind": "choice",
+    "assistance_state": "independent",
+    "provisional_vs_retained": "provisional",
+    "review_due_at": "2026-11-07T22:54:56Z",
+    "gate_decision": "continue",
+    "gate_reasons": [],
+    "revision": 2,
+    "feedback": {
+      "summary": "Correct.",
+      "explanation": [],
+      "diagnostics": []
+    },
+    "next_step_id": "d-copy",
+    "policy_version": "courses-evidence-1",
+    "next": {
+      "id": "d-copy",
+      "kind": "choice",
+      "title": "After a copy",
+      "body": [
+        {
+          "kind": "p",
+          "text": "`a` has type `char`. After `let b = a;`, can `a` still be used?"
+        }
+      ],
+      "objective_ids": [
+        "rust.copy"
+      ],
+      "hint_count": 0,
+      "confidence": true,
+      "options": [
+        {
+          "id": "yes",
+          "text": "Yes, char is Copy."
+        },
+        {
+          "id": "no",
+          "text": "No, `a` has moved into `b`."
+        },
+        {
+          "id": "unsure",
+          "text": "I'm not sure."
+        }
+      ]
+    },
+    "done": false
+  },
+  "GET /diagnostics/:id": {
+    "id": "diag-c7f60869e4854c33a88121a21943a855",
+    "course_id": "rust-systems",
+    "step": {
+      "id": "d-copy",
+      "kind": "choice",
+      "title": "After a copy",
+      "body": [
+        {
+          "kind": "p",
+          "text": "`a` has type `char`. After `let b = a;`, can `a` still be used?"
+        }
+      ],
+      "objective_ids": [
+        "rust.copy"
+      ],
+      "hint_count": 0,
+      "confidence": true,
+      "options": [
+        {
+          "id": "yes",
+          "text": "Yes, char is Copy."
+        },
+        {
+          "id": "no",
+          "text": "No, `a` has moved into `b`."
+        },
+        {
+          "id": "unsure",
+          "text": "I'm not sure."
+        }
+      ]
+    },
+    "done": false
+  },
+  "GET /lessons/:id": {
+    "lesson": {
+      "id": "rust-own-move",
+      "course_id": "rust-systems",
+      "version": "2026.11.1",
+      "title": "Who owns this String?",
+      "minutes": 5,
+      "objective_ids": [
+        "rust.move",
+        "rust.copy"
+      ],
+      "steps": [
+        {
+          "id": "intro",
+          "kind": "explain",
+          "title": "One owner at a time",
+          "body": [
+            {
+              "kind": "p",
+              "text": "Every value in Rust has exactly one owner. When the owner goes out of scope, the value is dropped."
+            },
+            {
+              "kind": "p",
+              "text": "A String keeps its text on the heap. Writing `let b = a;` doesn't copy that text. It hands ownership from `a` to `b`, and `a` can't be used afterwards."
+            },
+            {
+              "kind": "note",
+              "text": "Make a prediction before you check each answer. A wrong guess teaches you more than a lucky one."
+            }
+          ],
+          "objective_ids": [
+            "rust.move"
+          ],
+          "hint_count": 0,
+          "confidence": false
+        },
+        {
+          "id": "predict-move",
+          "kind": "predict",
+          "title": "What happens when this runs?",
+          "body": [
+            {
+              "kind": "p",
+              "text": "Read the program and predict what the compiler and the program do."
+            }
+          ],
+          "objective_ids": [
+            "rust.move"
+          ],
+          "hint_count": 3,
+          "confidence": true,
+          "options": [
+            {
+              "id": "a",
+              "text": "It prints `north ridge`."
+            },
+            {
+              "id": "b",
+              "text": "It prints an empty line."
+            },
+            {
+              "id": "c",
+              "text": "It doesn't compile: `route` was moved into `saved`."
+            },
+            {
+              "id": "d",
+              "text": "It compiles, then panics at run time."
+            }
+          ],
+          "code": "fn main() {\n    let route = String::from(\"north ridge\");\n    let saved = route;\n    println!(\"{route}\");\n}"
+        },
+        {
+          "id": "copy-types",
+          "kind": "choice",
+          "title": "Which of these types are Copy?",
+          "body": [
+            {
+              "kind": "p",
+              "text": "A Copy type is duplicated bit for bit on assignment, so the original stays usable. Select every type that is Copy."
+            }
+          ],
+          "objective_ids": [
+            "rust.copy"
+          ],
+          "hint_count": 3,
+          "confidence": true,
+          "options": [
+            {
+              "id": "i32",
+              "text": "i32",
+              "code": true
+            },
+            {
+              "id": "bool",
+              "text": "bool",
+              "code": true
+            },
+            {
+              "id": "string",
+              "text": "String",
+              "code": true
+            },
+            {
+              "id": "vec",
+              "text": "Vec<u8>",
+              "code": true
+            },
+            {
+              "id": "tuple",
+              "text": "(u8, char)",
+              "code": true
+            },
+            {
+              "id": "str-ref",
+              "text": "&str",
+              "code": true
+            }
+          ],
+          "multi": true
+        },
+        {
+          "id": "fill-clone",
+          "kind": "fill",
+          "title": "Keep both names usable",
+          "body": [
+            {
+              "kind": "p",
+              "text": "Fill in the method so that `route` and `saved` both own their own String, and `route` can still be printed."
+            }
+          ],
+          "objective_ids": [
+            "rust.move"
+          ],
+          "hint_count": 3,
+          "confidence": false,
+          "template": "let route = String::from(\"north ridge\");\nlet saved = route.____();\nprintln!(\"{route} / {saved}\");",
+          "placeholder": "method name"
+        },
+        {
+          "id": "predict-copy",
+          "kind": "predict",
+          "title": "Transfer: the same shape, a different type",
+          "body": [
+            {
+              "kind": "p",
+              "text": "This has the same shape as the first program, but the type is different. Predict the result."
+            }
+          ],
+          "objective_ids": [
+            "rust.copy"
+          ],
+          "hint_count": 2,
+          "confidence": true,
+          "options": [
+            {
+              "id": "a",
+              "text": "It prints `40 40`."
+            },
+            {
+              "id": "b",
+              "text": "It doesn't compile: `depth` was moved."
+            },
+            {
+              "id": "c",
+              "text": "It prints `40 0`."
+            }
+          ],
+          "code": "fn main() {\n    let depth: u32 = 40;\n    let copy = depth;\n    println!(\"{depth} {copy}\");\n}"
+        },
+        {
+          "id": "predict-fn-move",
+          "kind": "predict",
+          "title": "Transfer: passing a String to a function",
+          "body": [
+            {
+              "kind": "p",
+              "text": "Calling a function with a value works like assigning it to the parameter. Predict the result."
+            }
+          ],
+          "objective_ids": [
+            "rust.move"
+          ],
+          "hint_count": 2,
+          "confidence": true,
+          "options": [
+            {
+              "id": "a",
+              "text": "It prints `Ada has 3 letters`."
+            },
+            {
+              "id": "b",
+              "text": "It doesn't compile: `name` moved into `shout`."
+            },
+            {
+              "id": "c",
+              "text": "It doesn't compile: `shout` returns the wrong type."
+            }
+          ],
+          "code": "fn shout(text: String) -> usize {\n    text.len()\n}\n\nfn main() {\n    let name = String::from(\"Ada\");\n    let n = shout(name);\n    println!(\"{name} has {n} letters\");\n}"
+        }
+      ]
+    },
+    "progress": {
+      "current_step_id": "intro",
+      "completed_step_ids": [],
+      "state": "not_started"
+    }
+  },
+  "POST /lessons/:id/attempt (incorrect)": {
+    "result": "incorrect",
+    "evidence_id": "ev-7d3e09844cdb44fa9070cfac35d36b18",
+    "skill_ids": [
+      "rust.move"
+    ],
+    "validator_kind": "choice",
+    "assistance_state": "independent",
+    "provisional_vs_retained": "provisional",
+    "review_due_at": "2026-11-07T22:54:56Z",
+    "gate_decision": "retry",
+    "gate_reasons": [],
+    "revision": 4,
+    "feedback": {
+      "summary": "Not this time.",
+      "explanation": [
+        {
+          "kind": "p",
+          "text": "Assigning a String doesn't copy its heap text. Ownership moves to `saved`, so the compiler rejects the later use of `route`."
+        }
+      ],
+      "diagnostics": []
+    },
+    "next_step_id": "predict-move",
+    "policy_version": "courses-evidence-1"
+  },
+  "POST /lessons/:id/hint": {
+    "level": 1,
+    "text": "Think about how many owners the text \"north ridge\" can have at once.",
+    "hints_used": 1,
+    "hint_count": 3,
+    "assistance_state": "hinted"
+  },
+  "POST /lessons/:id/attempt (correct, hinted)": {
+    "result": "correct",
+    "evidence_id": "ev-3a6d7b2309bb41a1bab94f7e8365dcf9",
+    "skill_ids": [
+      "rust.move"
+    ],
+    "validator_kind": "choice",
+    "assistance_state": "hinted",
+    "provisional_vs_retained": "provisional",
+    "review_due_at": "2026-11-07T22:54:56Z",
+    "gate_decision": "continue",
+    "gate_reasons": [
+      "You used help, so this counts as assisted. A fresh problem will check it later."
+    ],
+    "revision": 6,
+    "feedback": {
+      "summary": "Correct.",
+      "explanation": [
+        {
+          "kind": "p",
+          "text": "Right. `saved` now owns the String, so `route` is no longer usable. rustc reports E0382: borrow of moved value."
+        }
+      ],
+      "diagnostics": []
+    },
+    "next_step_id": "copy-types",
+    "policy_version": "courses-evidence-1"
+  },
+  "POST /lessons/:id/reveal": {
+    "solution": [
+      {
+        "kind": "p",
+        "text": "Copy: i32, bool, (u8, char), &str. Not Copy: String, Vec<u8>."
+      }
+    ],
+    "assistance_state": "solution_seen"
+  },
+  "POST /lessons/:id/attempt (rust_edit, sandbox unavailable)": {
+    "result": "unavailable",
+    "evidence_id": "ev-f55d049c4d6244b1a4531c6a54433a89",
+    "skill_ids": [
+      "rust.borrow-shared"
+    ],
+    "validator_kind": "rustc",
+    "assistance_state": "independent",
+    "provisional_vs_retained": "none",
+    "review_due_at": null,
+    "gate_decision": "continue",
+    "gate_reasons": [
+      "Evaluation is unavailable, so this step isn't scored. You can continue; it isn't marked wrong."
+    ],
+    "revision": 8,
+    "feedback": {
+      "summary": "Evaluation unavailable. This attempt isn't scored as right or wrong.",
+      "explanation": [],
+      "diagnostics": [],
+      "unavailable_reason": "The isolated Rust runner isn't configured on this host."
+    },
+    "next_step_id": "intro",
+    "policy_version": "courses-evidence-1"
+  },
+  "GET /reviews/due": {
+    "items": [],
+    "catch_up": {
+      "total_due": 0,
+      "cap": 5,
+      "sessions": 0,
+      "reviewed_today": 0
+    },
+    "policy_version": "courses-evidence-1"
+  },
+  "GET /skills/evidence": {
+    "objectives": [
+      {
+        "objective_id": "rust.move",
+        "title": "A non-Copy value moves on assignment",
+        "state": "provisional",
+        "independent_passes": 1,
+        "assisted_passes": 1,
+        "failures": 1,
+        "last_independent_success": "2026-11-06T22:54:56Z",
+        "last_delayed_success": null,
+        "retention_due_at": "2026-11-07T22:54:56Z",
+        "why": "Passed independently, but not yet after a delay. The first retention check is 2026-11-07T22:54:56Z.",
+        "not_assessed": false,
+        "revision": 6
+      },
+      {
+        "objective_id": "rust.copy",
+        "title": "Copy types are duplicated, not moved",
+        "state": "untested",
+        "independent_passes": 0,
+        "assisted_passes": 0,
+        "failures": 0,
+        "last_independent_success": null,
+        "last_delayed_success": null,
+        "retention_due_at": null,
+        "why": "Not assessed yet. SAIL doesn't assume you know it or don't.",
+        "not_assessed": true,
+        "revision": 0
+      },
+      {
+        "objective_id": "rust.borrow-shared",
+        "title": "Shared references read without taking ownership",
+        "state": "exposure",
+        "independent_passes": 0,
+        "assisted_passes": 0,
+        "failures": 0,
+        "last_independent_success": null,
+        "last_delayed_success": null,
+        "retention_due_at": null,
+        "why": "You've seen this material, but no answer has been checked yet.",
+        "not_assessed": true,
+        "revision": 8
+      },
+      {
+        "objective_id": "rust.borrow-mut",
+        "title": "Only one mutable reference at a time",
+        "state": "untested",
+        "independent_passes": 0,
+        "assisted_passes": 0,
+        "failures": 0,
+        "last_independent_success": null,
+        "last_delayed_success": null,
+        "retention_due_at": null,
+        "why": "Not assessed yet. SAIL doesn't assume you know it or don't.",
+        "not_assessed": true,
+        "revision": 0
+      }
+    ],
+    "policy_version": "courses-evidence-1"
+  },
+  "GET /next": {
+    "kind": "diagnostic",
+    "reasons": [
+      "A short cold check finds where to start. Nothing counts as known without a real answer."
+    ]
+  }
+}
