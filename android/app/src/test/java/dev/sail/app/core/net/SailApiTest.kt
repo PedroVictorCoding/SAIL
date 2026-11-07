@@ -102,4 +102,27 @@ class SailApiTest {
         if (other.requestCount > 0) assertNull(other.takeRequest().getHeader("Authorization"))
         other.shutdown()
     }
+
+    @Test
+    fun cloudflareAccessHeadersGoToSailOnly() = runTest {
+        val base = server.url("/").toString().trimEnd('/').toHttpUrl()
+        val withAccess = SailApi(config = { ServerConfig(base, token, AccessToken("id.access", "secret")) })
+        server.enqueue(MockResponse().setBody("""{"id":"a","title":"b"}"""))
+        withAccess.get<Course>("/api/health")
+        val request = server.takeRequest()
+        assertEquals("id.access", request.getHeader("CF-Access-Client-Id"))
+        assertEquals("secret", request.getHeader("CF-Access-Client-Secret"))
+        assertEquals("Bearer $token", request.getHeader("Authorization"))
+    }
+
+    @Test
+    fun cloudflareAccessLoginIsReportedAsAccessNotAsGarbage() = runTest {
+        server.enqueue(
+            MockResponse().setBody("<html>Sign in</html>").setHeader("Content-Type", "text/html")
+                .setHeader("cf-access-domain", "sail.example.com"),
+        )
+        val result = api.get<Course>("/api/health") as ApiResult.Err
+        assertEquals(403, result.status)
+        assertTrue(result.message.startsWith("Cloudflare Access"))
+    }
 }

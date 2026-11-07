@@ -41,6 +41,9 @@ enum class SailIcon(@DrawableRes val res: Int) {
     Factory(R.drawable.ic_sail_factory),
     Forge(R.drawable.ic_sail_forge),
     Mark(R.drawable.ic_sail_mark),
+
+    /** The web composer's microphone glyph (index.html #micBtn). */
+    Mic(R.drawable.ic_mic),
 }
 
 /** [contentDescription] is required when the icon is the only label of a control. */

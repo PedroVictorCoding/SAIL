@@ -1,0 +1,20 @@
+{
+  "plans": [
+    {
+      "plan": {
+        "id": "plan-1",
+        "goal": "Ship the Android shell",
+        "correlation_id": "00000000-0000-0000-0000-000000000000",
+        "revision": 2,
+        "state": "running",
+        "steps": [],
+        "replans": 0,
+        "approved": [],
+        "history": [],
+        "reason": null
+      },
+      "task_state": "running",
+      "task_reason": null
+    }
+  ]
+}

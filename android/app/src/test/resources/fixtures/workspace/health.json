@@ -1,0 +1,13 @@
+{
+  "speech": {
+    "vad": {"ready": true},
+    "stt": {"ready": true},
+    "tts": {"ready": false, "error": "voice not loaded"}
+  },
+  "llm": {
+    "ready": true,
+    "model": "/models/qwen2.5-7b-instruct.gguf",
+    "modalities": {"vision": false, "text": true}
+  },
+  "sample_rate": 16000
+}

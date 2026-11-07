@@ -1,0 +1,26 @@
+{
+  "book": {
+    "id": "abc123",
+    "title": "Embedded Title",
+    "authors": ["File Author"],
+    "format": "epub",
+    "sections": 2,
+    "chars": 500,
+    "added_at": "2026-11-01T10:00:00Z",
+    "position": null
+  },
+  "toc": [
+    {
+      "title": "Chapter One",
+      "section": 0,
+      "block": 0,
+      "children": [
+        {"title": "A Part", "section": 1, "block": 2, "children": []}
+      ]
+    }
+  ],
+  "sections": [
+    {"index": 0, "title": null, "chars": 300, "blocks": 4},
+    {"index": 1, "title": "Named Section", "chars": 200, "blocks": 3}
+  ]
+}

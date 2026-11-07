@@ -22,6 +22,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -42,6 +43,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dev.sail.app.core.LocalAppContainer
+import dev.sail.app.core.LocalNavLock
+import dev.sail.app.core.NavLock
 import dev.sail.app.core.design.SailColors
 import dev.sail.app.core.design.SailIconImage
 import dev.sail.app.feature.arena.ArenaScreen
@@ -65,6 +68,7 @@ fun SailApp() {
     val route = entry?.destination?.route
     // Fixed for the life of the NavHost; finishing Settings navigates to Home itself.
     val start = remember { if (config == null) Routes.SETTINGS else Routes.HOME }
+    val navLock = remember { NavLock() }
 
     Column(
         Modifier
@@ -78,10 +82,16 @@ fun SailApp() {
                 .fillMaxWidth()
                 .imePadding(),
         ) {
-            SailNavHost(nav, start)
+            CompositionLocalProvider(LocalNavLock provides navLock) {
+                SailNavHost(nav, start)
+            }
         }
         val tab = TopLevel.of(route)
-        if (tab != null && config != null) {
+        // Lessons and reviews are focused, one step per screen: no tab bar, so a pending answer
+        // can't be abandoned by switching tabs. Their own Back handles leaving.
+        // Other screens (a diagnostic on the course path) hold a NavLock while work is pending.
+        val focused = route == Routes.LESSON || route == Routes.REVIEW || navLock.locked
+        if (tab != null && config != null && !focused) {
             BottomNav(selected = tab, onSelect = { nav.navigateTopLevel(it.route) })
         }
     }

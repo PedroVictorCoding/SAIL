@@ -1,9 +1,11 @@
 package dev.sail.app.core.design
 
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -82,6 +84,9 @@ fun SailTheme(content: @Composable () -> Unit) {
             error = SailColors.Error,
         ),
         typography = SailTypography,
-        content = content,
-    )
+    ) {
+        // Screens draw straight on the dark base, not inside a Surface, so set the default
+        // text/icon colour here; otherwise unstyled Text falls back to black.
+        CompositionLocalProvider(LocalContentColor provides SailColors.Text, content = content)
+    }
 }
