@@ -13,6 +13,7 @@ sail-protocol.workspace = true
 sail-mind.workspace = true
 sail-arena.workspace = true
 sail-guardian.workspace = true
+sail-continuity.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

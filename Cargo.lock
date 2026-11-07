@@ -2607,6 +2607,7 @@ dependencies = [
  "rusqlite",
  "sail-arena",
  "sail-common",
+ "sail-continuity",
  "sail-guardian",
  "sail-mind",
  "sail-protocol",
