@@ -88,6 +88,7 @@ assets![
     ("/app.css", "web/app.css", CSS),
     ("/tokens.css", "web/tokens.css", CSS),
     ("/learn.js", "web/learn.js", JS),
+    ("/model-picker.js", "web/model-picker.js", JS),
     ("/courses.js", "web/courses.js", JS),
     ("/courses.css", "web/courses.css", CSS),
     ("/memory.js", "web/memory.js", JS),
