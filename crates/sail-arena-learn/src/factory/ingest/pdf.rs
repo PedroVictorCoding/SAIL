@@ -51,6 +51,7 @@ fn preflight(bytes: &[u8]) -> Result<(), IngestError> {
         return Err(invalid());
     }
     let mut index = 0;
+    let mut needs_sandbox = false;
     while index < bytes.len() {
         if bytes[index] != b'/' {
             index += 1;
@@ -83,10 +84,13 @@ fn preflight(bytes: &[u8]) -> Result<(), IngestError> {
         }
         // These are decompressed inside lopdf::load_mem before we can apply an output cap.
         if name == b"ObjStm" || name == b"XRef" || name == b"Prev" {
-            return Err(IngestError::Invalid(
-                "compressed/incremental PDF structures need a bounded runner adapter".into(),
-            ));
+            needs_sandbox = true;
         }
+    }
+    if needs_sandbox {
+        return Err(IngestError::NeedsSandbox(
+            "compressed/incremental PDF structures need a bounded runner adapter".into(),
+        ));
     }
     Ok(())
 }
@@ -114,7 +118,7 @@ fn bounded_streams(doc: &mut Document) -> Result<(), IngestError> {
             Err(_) => Vec::new(),
         };
         if filters.len() > 1 {
-            return Err(IngestError::Invalid(
+            return Err(IngestError::NeedsSandbox(
                 "PDF filter chains need bounded runner extraction".into(),
             ));
         }
@@ -132,7 +136,7 @@ fn bounded_streams(doc: &mut Document) -> Result<(), IngestError> {
                     .get(b"DecodeParms")
                     .is_ok_and(|v| !matches!(v, Object::Null))
                 {
-                    return Err(IngestError::Invalid(
+                    return Err(IngestError::NeedsSandbox(
                         "PDF predictors need bounded runner extraction".into(),
                     ));
                 }
@@ -143,7 +147,11 @@ fn bounded_streams(doc: &mut Document) -> Result<(), IngestError> {
                     .map_err(|_| invalid())?;
                 out
             }
-            _ => return Err(IngestError::Invalid("unsupported PDF stream filter".into())),
+            _ => {
+                return Err(IngestError::NeedsSandbox(
+                    "unsupported PDF stream filter".into(),
+                ));
+            }
         };
         if content.len() > MAX_PDF_STREAM_BYTES {
             return Err(IngestError::Limit("PDF stream bytes"));
@@ -655,7 +663,14 @@ mod tests {
             extract(b"%PDF-1.4 /Encr#79pt 1 0 R", "s", 1),
             Err(IngestError::Drm(_))
         ));
-        assert!(extract(b"%PDF-1.4 /ObjStm", "s", 1).is_err());
+        assert!(matches!(
+            extract(b"%PDF-1.4 /ObjStm", "s", 1),
+            Err(IngestError::NeedsSandbox(_))
+        ));
+        assert!(matches!(
+            extract(b"%PDF-1.7 /XRef /Encr#79pt 1 0 R", "s", 1),
+            Err(IngestError::Drm(_))
+        ));
         assert!(extract(b"%PDF-1.4 truncated", "s", 1).is_err());
     }
 

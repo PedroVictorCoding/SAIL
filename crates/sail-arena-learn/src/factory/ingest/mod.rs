@@ -6,6 +6,7 @@ use super::contracts::{
 
 pub mod epub;
 pub mod pdf;
+pub mod pdf_text;
 pub mod text;
 mod zip;
 
@@ -25,6 +26,9 @@ pub const MAX_PAGES: usize = 5000;
 /// Extraction errors describe rejected inputs without including private source text.
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
+    /// Modern PDF parsing belongs in the isolated text runner, never an unbounded fallback.
+    #[error("PDF needs sandbox extraction: {0}")]
+    NeedsSandbox(String),
     /// Malformed documents never become silently empty indexed sources.
     #[error("invalid source: {0}")]
     Invalid(String),
