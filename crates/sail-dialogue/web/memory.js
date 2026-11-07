@@ -16,7 +16,7 @@
   async function change(action) {
     if(busy) return;
     busy=true;
-    const controls=[...document.querySelectorAll('#memoryCard button')];controls.forEach(b=>b.disabled=true);
+    const controls=[...document.querySelectorAll('#memoryPanelMain button')];controls.forEach(b=>b.disabled=true);
     try {await request('change',{generation,action}); await load(); if(selection) await showEntity(selection);}
     finally {busy=false;controls.forEach(b=>b.disabled=false);}
   }
@@ -76,4 +76,295 @@
   });
   document.getElementById('memoryExport').addEventListener('click',async()=>{try {const data=await request('read',{action:'export'});const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=node('a');a.href=url;a.download='sail-knowledge.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(error){fail(error);}});
   window.addEventListener('sail:page',event=>{if(event.detail==='memory')load().catch(fail);});
+
+  // Live Transcript Mode (Listen without reply)
+  const ltCard = document.getElementById('ltCard');
+  const ltTitleInput = document.getElementById('ltTitleInput');
+  const ltStatusPill = document.getElementById('ltStatusPill');
+  const ltStatusText = document.getElementById('ltStatusText');
+  const ltTabDot = document.getElementById('transcriptTabDot');
+  const ltMicOrb = document.getElementById('ltMicOrb');
+  const ltSubStatus = document.getElementById('ltSubStatus');
+  const ltTimer = document.getElementById('ltTimer');
+  const ltPauseBtn = document.getElementById('ltPauseBtn');
+  const ltPauseIcon = document.getElementById('ltPauseIcon');
+  const ltPauseLabel = document.getElementById('ltPauseLabel');
+  const ltStopBtn = document.getElementById('ltStopBtn');
+  const ltEnableBtn = document.getElementById('ltEnableBtn');
+  const ltCopyBtn = document.getElementById('ltCopyBtn');
+  const ltExportBtn = document.getElementById('ltExportBtn');
+  const ltClearBtn = document.getElementById('ltClearBtn');
+  const ltStream = document.getElementById('ltStream');
+  const ltSegments = document.getElementById('ltSegments');
+  const ltPartial = document.getElementById('ltPartial');
+  const ltEmpty = document.getElementById('ltEmpty');
+  const ltAskForm = document.getElementById('ltAskForm');
+  const ltAskInput = document.getElementById('ltAskInput');
+
+  let ltEntries = [];
+  let ltElapsedSec = 0;
+  let ltTimerId = null;
+  let ltPendingStartMic = false;
+
+  function formatDuration(totalSeconds) {
+    const sec = Math.max(0, Math.floor(totalSeconds));
+    const hrs = Math.floor(sec / 3600);
+    const mins = Math.floor((sec % 3600) / 60);
+    const rem = sec % 60;
+    const mm = String(mins).padStart(2, '0');
+    const ss = String(rem).padStart(2, '0');
+    return hrs > 0 ? `${String(hrs).padStart(2, '0')}:${mm}:${ss}` : `${mm}:${ss}`;
+  }
+
+  function updateTimerLoop(active) {
+    if (active && !ltTimerId) {
+      ltTimerId = setInterval(() => {
+        ltElapsedSec += 1;
+        if (ltTimer) ltTimer.textContent = formatDuration(ltElapsedSec);
+      }, 1000);
+    } else if (!active && ltTimerId) {
+      clearInterval(ltTimerId);
+      ltTimerId = null;
+    }
+  }
+
+  function syncLiveTranscript() {
+    if (!ltCard) return;
+    const enabled = typeof liveContextEnabled !== 'undefined' && Boolean(liveContextEnabled);
+    const recording = typeof isRecording !== 'undefined' && Boolean(isRecording);
+    const muted = typeof isMuted !== 'undefined' && Boolean(isMuted);
+    const connected = typeof ws !== 'undefined' && Boolean(ws && ws.readyState === WebSocket.OPEN);
+    const activelyCapturing = enabled && recording && !muted;
+
+    const state = activelyCapturing ? 'recording' : enabled ? 'ready' : 'off';
+    ltCard.dataset.state = state;
+    if (ltStatusPill) ltStatusPill.dataset.state = state;
+    if (ltTabDot) ltTabDot.hidden = !enabled;
+
+    if (ltStatusText) {
+      ltStatusText.textContent = activelyCapturing
+        ? 'Recording'
+        : enabled
+          ? (recording && muted ? 'Muted' : ltEntries.length > 0 ? 'Paused' : 'Ready')
+          : 'Off';
+    }
+
+    if (ltMicOrb) {
+      ltMicOrb.setAttribute('aria-pressed', String(activelyCapturing));
+      ltMicOrb.disabled = !connected;
+    }
+
+    if (ltSubStatus) {
+      if (!connected) {
+        ltSubStatus.textContent = 'Disconnected · waiting for local voice service…';
+      } else if (activelyCapturing) {
+        ltSubStatus.textContent = 'Listening and transcribing live without replying…';
+      } else if (enabled && recording && muted) {
+        ltSubStatus.textContent = 'Microphone muted · unmute or press Resume to continue transcribing.';
+      } else if (enabled) {
+        ltSubStatus.textContent = ltEntries.length > 0
+          ? 'Transcription paused · press Resume or start microphone to continue.'
+          : 'Listen without reply enabled · press Record or start microphone to capture.';
+      } else {
+        ltSubStatus.textContent = 'Enable Listen without reply or press Record to transcribe a lesson live.';
+      }
+    }
+
+    if (ltPauseIcon) ltPauseIcon.textContent = activelyCapturing ? '⏸' : '▶';
+    if (ltPauseLabel) {
+      ltPauseLabel.textContent = activelyCapturing
+        ? 'Pause'
+        : (enabled && ltEntries.length > 0 ? 'Resume' : 'Record');
+    }
+    if (ltPauseBtn) {
+      ltPauseBtn.disabled = !connected;
+      ltPauseBtn.setAttribute('aria-pressed', String(activelyCapturing));
+    }
+
+    if (ltStopBtn) {
+      ltStopBtn.disabled = !enabled && !recording;
+    }
+
+    if (ltEnableBtn) {
+      ltEnableBtn.disabled = !connected;
+      ltEnableBtn.setAttribute('aria-pressed', String(enabled));
+      ltEnableBtn.textContent = enabled ? 'Disable Listen without reply' : 'Enable Listen without reply';
+    }
+
+    const hasEntries = ltEntries.length > 0;
+    if (ltCopyBtn) ltCopyBtn.hidden = !hasEntries;
+    if (ltExportBtn) ltExportBtn.hidden = !hasEntries;
+    if (ltClearBtn) ltClearBtn.hidden = !hasEntries && ltElapsedSec === 0;
+
+    updateTimerLoop(activelyCapturing);
+  }
+
+  function appendObservedSegment(rawText) {
+    const text = String(rawText || '').trim();
+    if (!text || !ltSegments) return;
+    if (ltPartial) {
+      ltPartial.textContent = '';
+      ltPartial.hidden = true;
+    }
+    if (ltEmpty) ltEmpty.hidden = true;
+
+    const elapsed = formatDuration(ltElapsedSec);
+    const clock = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    ltEntries.push({ elapsed, clock, text });
+
+    const article = node('article', undefined, 'lt-segment');
+    const timeEl = node('time', elapsed, 'lt-seg-time');
+    timeEl.title = `Captured at ${clock}`;
+    const bodyEl = node('div', undefined, 'lt-seg-body');
+    const textEl = node('p', text, 'lt-seg-text');
+    bodyEl.append(textEl);
+    article.append(timeEl, bodyEl);
+    ltSegments.append(article);
+
+    syncLiveTranscript();
+    if (ltStream) ltStream.scrollTop = ltStream.scrollHeight;
+  }
+
+  function updatePartialSegment(rawText) {
+    if (!ltPartial) return;
+    const text = String(rawText || '').trim();
+    if (!text) {
+      ltPartial.textContent = '';
+      ltPartial.hidden = true;
+      return;
+    }
+    if (ltEmpty) ltEmpty.hidden = true;
+    ltPartial.textContent = text;
+    ltPartial.hidden = false;
+    if (ltStream) ltStream.scrollTop = ltStream.scrollHeight;
+  }
+
+  function clearTranscriptEntries() {
+    ltEntries = [];
+    ltElapsedSec = 0;
+    if (ltTimer) ltTimer.textContent = '00:00';
+    if (ltSegments) ltSegments.replaceChildren();
+    if (ltPartial) {
+      ltPartial.textContent = '';
+      ltPartial.hidden = true;
+    }
+    if (ltEmpty) ltEmpty.hidden = false;
+    syncLiveTranscript();
+  }
+
+  function toggleRecordOrPause() {
+    const enabled = typeof liveContextEnabled !== 'undefined' && Boolean(liveContextEnabled);
+    const recording = typeof isRecording !== 'undefined' && Boolean(isRecording);
+    const muted = typeof isMuted !== 'undefined' && Boolean(isMuted);
+
+    if (!enabled) {
+      ltPendingStartMic = true;
+      if (typeof window.setLiveContext === 'function') window.setLiveContext(true);
+      return;
+    }
+    if (!recording) {
+      if (typeof startMic === 'function') startMic();
+    } else if (muted) {
+      if (typeof toggleMute === 'function') toggleMute();
+    } else {
+      if (typeof stopMic === 'function') stopMic();
+    }
+    syncLiveTranscript();
+  }
+
+  ltMicOrb?.addEventListener('click', toggleRecordOrPause);
+  ltPauseBtn?.addEventListener('click', toggleRecordOrPause);
+
+  ltStopBtn?.addEventListener('click', () => {
+    ltPendingStartMic = false;
+    if (typeof isRecording !== 'undefined' && isRecording && typeof stopMic === 'function') {
+      stopMic();
+    }
+    if (typeof liveContextEnabled !== 'undefined' && liveContextEnabled && typeof window.setLiveContext === 'function') {
+      window.setLiveContext(false);
+    }
+    syncLiveTranscript();
+  });
+
+  ltEnableBtn?.addEventListener('click', () => {
+    ltPendingStartMic = false;
+    if (typeof window.setLiveContext === 'function') {
+      const enabled = typeof liveContextEnabled !== 'undefined' && Boolean(liveContextEnabled);
+      window.setLiveContext(!enabled);
+    }
+  });
+
+  ltCopyBtn?.addEventListener('click', async () => {
+    if (!ltEntries.length) return;
+    const title = (ltTitleInput?.value || 'Live lesson transcript').trim();
+    const lines = [title, '', ...ltEntries.map(e => `[${e.elapsed}] ${e.text}`)];
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      const prev = ltCopyBtn.textContent;
+      ltCopyBtn.textContent = 'Copied';
+      setTimeout(() => { ltCopyBtn.textContent = prev; }, 1400);
+    } catch (err) {
+      if (typeof showError === 'function') showError(err.message || 'Clipboard copy failed.');
+    }
+  });
+
+  ltExportBtn?.addEventListener('click', () => {
+    if (!ltEntries.length) return;
+    const title = (ltTitleInput?.value || 'Live lesson transcript').trim();
+    const lines = [title, `Exported: ${new Date().toLocaleString()}`, '', ...ltEntries.map(e => `[${e.elapsed}] ${e.text}`)];
+    const url = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' }));
+    const a = node('a');
+    a.href = url;
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'live-transcript';
+    a.download = `${slug}.txt`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  ltClearBtn?.addEventListener('click', clearTranscriptEntries);
+
+  ltAskForm?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const text = (ltAskInput?.value || '').trim();
+    if (!text) return;
+    try {
+      if (typeof ensureAudio === 'function') await ensureAudio();
+      if (typeof stopPlayback === 'function') stopPlayback();
+      if (typeof sendAction === 'function' && sendAction('text', { text })) {
+        ltAskInput.value = '';
+      }
+    } catch (err) {
+      if (typeof showError === 'function') showError(err.message || String(err));
+    }
+  });
+
+  window.sailLiveTranscript = Object.freeze({
+    sync: syncLiveTranscript,
+    onStateChange(enabled) {
+      if (enabled) {
+        const hash = (location.hash || '').replace(/^#\/?/, '').toLowerCase();
+        if (hash !== 'learn' && hash !== 'courses' && typeof switchCardTab === 'function') {
+          switchCardTab('memoryCard', 'memoryPanelTranscript');
+        }
+        if (ltPendingStartMic) {
+          ltPendingStartMic = false;
+          if (typeof isRecording !== 'undefined' && !isRecording && typeof startMic === 'function') {
+            startMic();
+          }
+        }
+      } else {
+        ltPendingStartMic = false;
+        if (ltPartial) {
+          ltPartial.textContent = '';
+          ltPartial.hidden = true;
+        }
+      }
+      syncLiveTranscript();
+    },
+    onObserved: appendObservedSegment,
+    onPartial: updatePartialSegment,
+    onReset: clearTranscriptEntries,
+  });
+
+  syncLiveTranscript();
 })();

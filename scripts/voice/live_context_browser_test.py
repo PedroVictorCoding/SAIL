@@ -56,7 +56,40 @@ try:
           discardListeningCapture(); finish({text:'late ambient private speech'}); await pending;
           if (sentActions.some(a => a.action === 'voice_text')) throw Error('revoked transcript sent');
         }''')
-        button.click();expect(button).to_have_attribute('aria-pressed','false')
+        # Open the Live Transcript tab inside Memory from the Settings shortcut.
+        page.set_viewport_size({'width':1280,'height':900})
+        page.locator('#openLiveTranscriptBtn').click()
+        expect(page.locator('#subsystemTitle')).to_have_text('Memory')
+        expect(page.locator('#transcriptTab')).to_have_attribute('aria-selected','true')
+        expect(page.locator('#memoryPanelTranscript')).to_be_visible()
+        expect(page.locator('#ltEnableBtn')).to_have_attribute('aria-pressed','true')
+        expect(page.locator('#ltStatusText')).to_have_text('Ready')
+        # Partial and observed live transcript segments render chronologically inside the panel.
+        page.evaluate("handleVoiceMessage({type:'transcript', text:'Aujourd’hui, nous voyons…', is_final:false})")
+        expect(page.locator('#ltPartial')).to_be_visible()
+        expect(page.locator('#ltPartial')).to_have_text('Aujourd’hui, nous voyons…')
+        page.evaluate("handleVoiceMessage({type:'live_context_observed', text:'Aujourd’hui, nous voyons pourquoi la croissance a ralenti en Europe cette année.'})")
+        page.evaluate("handleVoiceMessage({type:'live_context_observed', text:'La première raison, c’est le prix de l’énergie.'})")
+        expect(page.locator('#ltPartial')).to_be_hidden()
+        expect(page.locator('#ltEmpty')).to_be_hidden()
+        expect(page.locator('#ltSegments .lt-segment')).to_have_count(2)
+        expect(page.locator('#ltSegments .lt-segment').first).to_contain_text('Aujourd’hui, nous voyons pourquoi la croissance a ralenti')
+        expect(page.locator('#ltCopyBtn')).to_be_visible()
+        expect(page.locator('#ltExportBtn')).to_be_visible()
+        # Asking SAIL from the Live Transcript footer sends a text turn using the captured context.
+        page.fill('#ltAskInput', 'Summarize the two reasons from this lecture.')
+        page.locator('#ltAskForm button[type="submit"]').click()
+        assert page.evaluate("sentActions.some(a => a.action === 'text' && a.text === 'Summarize the two reasons from this lecture.')")
+        page.screenshot(path='.local/live-transcript-tab-desktop.png')
+        # Mobile layout check on the Live Transcript tab inside Memory.
+        page.set_viewport_size({'width':390,'height':844})
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        page.screenshot(path='.local/live-transcript-tab-mobile.png',full_page=True)
+        # Stopping from the Live Transcript tab disables Listen without reply.
+        page.locator('#ltStopBtn').click()
+        expect(page.locator('#ltEnableBtn')).to_have_attribute('aria-pressed','false')
+        expect(page.locator('#ltStatusText')).to_have_text('Off')
+        expect(button).to_have_attribute('aria-pressed','false')
         assert not errors,errors
         browser.close()
 finally:
