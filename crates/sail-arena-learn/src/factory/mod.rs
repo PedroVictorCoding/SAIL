@@ -18,6 +18,7 @@ pub mod author;
 pub mod contracts;
 pub mod ingest;
 pub mod jobs;
+pub mod mind_author;
 pub mod registry;
 pub mod settings;
 pub mod sources;
