@@ -62,6 +62,7 @@ fn learn_services(
     arena: &Arc<sail_arena::ArenaSubsystem>,
     authority: Option<sail_guardian::authority::ApprovalAuthority>,
     course_authority: Option<sail_guardian::authority::ApprovalAuthority>,
+    factory_authority: Option<sail_guardian::authority::ApprovalAuthority>,
     pulse: Option<Arc<sail_pulse::Pulse>>,
 ) -> (Option<Arc<sail_arena_learn::Engine>>, Option<Router>) {
     use sail_arena_learn::{Engine, SqliteEventStore, agent::ArenaKnowledge, agent::MindModel};
@@ -80,6 +81,12 @@ fn learn_services(
                 Ok(courses) => router = router.merge(course_routes(courses, course_authority)),
                 Err(error) => {
                     warn!(%error, "Interactive Courses store unavailable; courses disabled")
+                }
+            }
+            match factory_routes(&path, factory_authority) {
+                Ok(routes) => router = router.merge(routes),
+                Err(error) => {
+                    warn!(%error, "Course Factory unavailable; course generation disabled")
                 }
             }
             (Some(engine), Some(router))
@@ -104,6 +111,40 @@ fn course_routes(
             None => Arc::new(NoSandbox),
         };
     crate::learn_courses_http::router(Arc::new(CourseEngine::new(store, rust)), authority)
+}
+
+/// Course Factory owner API. Sources and settings live in the Learn database; jobs in
+/// their own Continuity file next to it, recovered here so a job a crash interrupted runs
+/// again. No model is called from these routes.
+fn factory_routes(
+    learn_db: &std::path::Path,
+    authority: Option<sail_guardian::authority::ApprovalAuthority>,
+) -> std::result::Result<Router, String> {
+    use sail_arena_learn::factory::{
+        jobs::JobQueue, service::FactoryService, settings::SettingsStore, sources::SourceRegistry,
+    };
+    let dir = learn_db
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| sail_common::storage::data_path("arena"));
+    let sources =
+        SourceRegistry::open(learn_db, dir.join("factory-sources")).map_err(|e| e.to_string())?;
+    let settings = SettingsStore::open(learn_db).map_err(|e| e.to_string())?;
+    let tasks = sail_continuity::Continuity::open(dir.join("factory-jobs.db"))
+        .map_err(|e| e.to_string())?;
+    if let Err(error) = tasks.recover() {
+        warn!(%error, "Course Factory job recovery failed; interrupted jobs may wait");
+    }
+    let factory = FactoryService::new(
+        Arc::new(sources),
+        Arc::new(JobQueue::new(Arc::new(tasks))),
+        Arc::new(settings),
+        Arc::new(|| chrono::Utc::now().timestamp_millis()),
+    );
+    Ok(crate::learn_factory_http::router(
+        Arc::new(factory),
+        authority,
+    ))
 }
 
 /// SAIL Tracker's owner API. The tracker is unavailable (and logged) if its store cannot be
@@ -165,8 +206,14 @@ pub async fn run_dialogue_server_with_plans(
     };
     let live_context_authority = authority();
     let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
-    let (learn_engine, learn_routes) =
-        learn_services(&inference, &arena, authority(), authority(), pulse.clone());
+    let (learn_engine, learn_routes) = learn_services(
+        &inference,
+        &arena,
+        authority(),
+        authority(),
+        authority(),
+        pulse.clone(),
+    );
     let tracker_routes = tracker_routes(authority());
     let reader_routes = crate::reader_http::routes(authority(), services.clone());
     let music_routes = crate::music_http::routes(authority());
