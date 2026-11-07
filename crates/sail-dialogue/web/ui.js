@@ -4,7 +4,7 @@ const spaces = subsystemPages.map(page => ({
   action:() => window.sailNavigate(page.id),
 })).concat([
   { id:'vision', name:'Vision', subtitle:'Camera & desktop feeds', available:true, action:() => {
-    window.sailNavigate('dialogue');
+    window.sailNavigate('canvas', 'canvasPanelCamera');
   } },
   { id:'life', name:'Life', subtitle:'Personal space', available:false },
   { id:'entertainment', name:'Entertainment', subtitle:'Listen and read', available:true, action:() => window.sailNavigate('entertainment') },
@@ -703,161 +703,19 @@ function liveSnapshot(source) {
   if (source === 'screen' && engine?.desktopActive) return frameFromVideo(document.getElementById('desktopVideo'));
   return null;
 }
-function renderDialogueCameraPrompt(request) {
-  const conv = document.getElementById('conversation');
-  if (!conv || typeof conv.append !== 'function') return;
-  const id = `toolMsg-snapshot-${request.request_id}`;
-  let card = document.getElementById(id);
-  if (!card) {
-    card = document.createElement('article');
-    card.id = id;
-    card.className = 'message message-tool tool-card-camera';
-    card.setAttribute('data-status', 'requested');
-    conv.append(card);
-  }
-  if (typeof card.replaceChildren === 'function') card.replaceChildren();
-
-  const header = document.createElement('div');
-  header.className = 'tool-msg-header';
-  const title = document.createElement('span');
-  title.className = 'tool-msg-title';
-  title.textContent = `${request.source === 'screen' ? '🖥️' : '📷'} ${request.source === 'screen' ? 'Screen · Snapshot' : 'Camera · Snapshot'}`;
-  const pill = document.createElement('span');
-  pill.className = 'tool-status-pill status-requested';
-  pill.textContent = '● Permission required';
-  header.append(title, pill);
-
-  const desc = document.createElement('p');
-  desc.className = 'result-summary';
-  const why = request.question ? ` SAIL asks: “${request.question}”` : '';
-  desc.textContent = (request.source === 'screen'
-    ? 'Share your screen or a window for one local snapshot.'
-    : 'Allow camera to take one local snapshot.') + why;
-
-  const actions = document.createElement('div');
-  actions.className = 'tool-actions-bar';
-  const allowBtn = document.createElement('button');
-  allowBtn.type = 'button';
-  allowBtn.className = 'quiet-button mini-btn';
-  allowBtn.style.color = '#70b4ff';
-  allowBtn.textContent = request.source === 'screen' ? 'Share Screen' : 'Allow Camera';
-  allowBtn.addEventListener('click', () => captureRequestedVisual(request.source));
-
-  const declineBtn = document.createElement('button');
-  declineBtn.type = 'button';
-  declineBtn.className = 'quiet-button mini-btn';
-  declineBtn.textContent = 'Decline';
-  declineBtn.addEventListener('click', declineVisualCapture);
-
-  actions.append(allowBtn, declineBtn);
-  card.append(header, desc, actions);
-  if (typeof chatFollow !== 'undefined' && chatFollow?.resume) chatFollow.resume();
-}
-function renderDialogueCameraCompleted(request, dataUrl) {
-  const card = document.getElementById(`toolMsg-snapshot-${request.request_id}`);
-  if (!card || typeof card.replaceChildren !== 'function') return;
-  card.setAttribute('data-status', 'completed');
-  card.replaceChildren();
-
-  const header = document.createElement('div');
-  header.className = 'tool-msg-header';
-  const title = document.createElement('span');
-  title.className = 'tool-msg-title';
-  title.textContent = `${request.source === 'screen' ? '🖥️' : '📷'} ${request.source === 'screen' ? 'Screen · Snapshot' : 'Camera · Snapshot'}`;
-
-  const right = document.createElement('div');
-  right.style.display = 'flex';
-  right.style.alignItems = 'center';
-  right.style.gap = '8px';
-
-  const pill = document.createElement('span');
-  pill.className = 'tool-status-pill status-completed';
-  pill.textContent = '● Completed';
-
-  const expandBtn = document.createElement('button');
-  expandBtn.type = 'button';
-  expandBtn.className = 'card-expand-btn';
-  expandBtn.title = 'Expand image into pop-up';
-  expandBtn.setAttribute('aria-label', 'Expand image into pop-up');
-  expandBtn.textContent = '⤢';
-
-  right.append(pill, expandBtn);
-  header.append(title, right);
-
-  const img = document.createElement('img');
-  img.className = 'tool-snapshot-thumb';
-  img.src = dataUrl;
-  img.alt = 'Captured visual';
-
-  const meta = document.createElement('div');
-  meta.className = 'tool-meta-bar';
-  meta.textContent = `${request.source || 'camera'} · ${new Date().toLocaleTimeString()} · Local-only analysis`;
-
-  const openModal = () => {
-    const full = document.createElement('img');
-    full.src = dataUrl;
-    full.style.maxWidth = '100%';
-    full.style.maxHeight = '70vh';
-    full.style.objectFit = 'contain';
-    if (typeof openCardModal === 'function') {
-      openCardModal({
-        icon: '📷',
-        title: request.source === 'screen' ? 'Screen Snapshot' : 'Camera Snapshot',
-        badge: 'Local',
-        badgeClass: 'result-success',
-        bodyNode: full
-      });
-    }
-  };
-  card.addEventListener('click', openModal);
-  expandBtn.addEventListener('click', (e) => { e.stopPropagation(); openModal(); });
-
-  card.append(header, img, meta);
-}
-function renderDialogueCameraDeclined(request) {
-  const card = document.getElementById(`toolMsg-snapshot-${request.request_id}`);
-  if (!card || typeof card.replaceChildren !== 'function') return;
-  card.setAttribute('data-status', 'cancelled');
-  card.replaceChildren();
-
-  const header = document.createElement('div');
-  header.className = 'tool-msg-header';
-  const title = document.createElement('span');
-  title.className = 'tool-msg-title';
-  title.textContent = `${request.source === 'screen' ? '🖥️' : '📷'} ${request.source === 'screen' ? 'Screen · Snapshot' : 'Camera · Snapshot'}`;
-
-  const pill = document.createElement('span');
-  pill.className = 'tool-status-pill status-cancelled';
-  pill.textContent = '● Declined';
-  header.append(title, pill);
-
-  const p = document.createElement('p');
-  p.className = 'result-summary';
-  p.textContent = 'Capture was declined by the user.';
-
-  card.append(header, p);
-}
 function deliverSnapshot(request, dataUrl) {
   if (!sendAction('snapshot', { request_id:request.request_id, image:{ format:'image/jpeg', data_base64:dataUrl.split(',')[1] } })) return false;
-  renderDialogueCameraCompleted(request, dataUrl);
   renderArtifact({ artifact_type:'image', content:dataUrl });
   updateState('thinking');
   return true;
 }
 function cancelVisualCapture() {
-  if (pendingVisualCapture) {
-    const card = document.getElementById(`toolMsg-snapshot-${pendingVisualCapture.request_id}`);
-    if (card && card.getAttribute?.('data-status') === 'requested' && typeof card.remove === 'function') {
-      card.remove();
-    }
-  }
   pendingVisualCapture = null;
   if (captureDialog.open) captureDialog.close();
 }
 // The user said no: tell the waiting turn so the model can answer without the image.
 function declineVisualCapture() {
   const request = pendingVisualCapture;
-  if (request) renderDialogueCameraDeclined(request);
   cancelVisualCapture();
   if (request) sendAction('snapshot', { request_id:request.request_id, error:'The user declined the capture.' });
 }
@@ -866,7 +724,6 @@ function requestVisualCapture(request) {
   const live = liveSnapshot(request.source);
   if (live && deliverSnapshot(request, live)) return;
   pendingVisualCapture = request;
-  renderDialogueCameraPrompt(request);
   const why = request.question ? ` SAIL wants to know: “${request.question}”` : '';
   document.getElementById('captureTitle').textContent = request.source === 'screen' ? 'SAIL wants to see your screen' : 'SAIL wants to see your camera';
   document.getElementById('captureExplanation').textContent = (request.source === 'screen'

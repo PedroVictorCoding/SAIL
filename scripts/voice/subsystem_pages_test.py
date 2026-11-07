@@ -51,7 +51,7 @@ def check_pages(page, url, screenshots=None):
     registered = {name.lower() for name in re.findall(r"^\s*(\w+),", variants, re.M)}
     # Every registered subsystem gets one page; extra rooms (the Factory) have their own tests.
     assert len(ids) == len(set(ids)), "each page must appear once in the navigation"
-    assert registered - {"ui", "canvas"} <= set(ids), "the Ui subsystem is the interface itself; Canvas is contextual in Dialogue"
+    assert registered - {"ui"} <= set(ids), "the Ui subsystem is the interface itself"
     assert page.locator("#subsystemNav a").count() == len(ids)
     ids = [subsystem for subsystem in ids if subsystem != "factory"]
     # Card tabs follow the WAI-ARIA tabs pattern; arrow keys replace the old cycle buttons.
@@ -125,8 +125,8 @@ def check_pages(page, url, screenshots=None):
     page.goto(url + "/#home")
     page.evaluate("openSheet(document.getElementById('spacesSheet'))")
     page.locator('#spaceList [data-space="vision"]').click()
-    expect(page.locator("#subsystemTitle")).to_have_text("Dialogue")
-    assert page.evaluate("location.hash") == "#dialogue"
+    expect(page.locator("#subsystemTitle")).to_have_text("Canvas")
+    expect(page.locator("#canvasPanelCamera")).to_be_visible()
     assert page.locator("#pagePicker").count() == 0
     assert page.locator("#subsystemDirectory").count() == 0
     for width in (390, 820):
