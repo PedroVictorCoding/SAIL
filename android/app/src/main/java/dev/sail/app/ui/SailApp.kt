@@ -81,7 +81,10 @@ fun SailApp() {
             SailNavHost(nav, start)
         }
         val tab = TopLevel.of(route)
-        if (tab != null && config != null) {
+        // Lessons and reviews are focused, one step per screen: no tab bar, so a pending answer
+        // can't be abandoned by switching tabs. Their own Back handles leaving.
+        val focused = route == Routes.LESSON || route == Routes.REVIEW
+        if (tab != null && config != null && !focused) {
             BottomNav(selected = tab, onSelect = { nav.navigateTopLevel(it.route) })
         }
     }
