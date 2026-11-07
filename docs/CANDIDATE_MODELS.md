@@ -12,3 +12,5 @@ https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf
 
 https://huggingface.co/mradermacher/Kimi-Linear-48B-A3B-Instruct-abliterated-bf16-i1-GGUF
     
+
+Qwen3.6-35B-A3B-Q4_K_M (current)
