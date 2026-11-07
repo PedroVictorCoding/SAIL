@@ -120,6 +120,17 @@ class SailApi(
     }
 
     private fun <T> parse(response: Response, deserializer: DeserializationStrategy<T>): ApiResult<T> {
+        // Cloudflare Access answers an unauthenticated client by redirecting to its login page,
+        // which OkHttp follows. That's not SAIL speaking, so say what actually happened.
+        if (response.request.url.host.endsWith(".cloudflareaccess.com") ||
+            response.header("cf-access-domain") != null
+        ) {
+            return ApiResult.Err(
+                403,
+                "Cloudflare Access didn't let this phone through. Check the Access service " +
+                    "token and that a Service Auth policy for it is attached to the SAIL application.",
+            )
+        }
         val text = try {
             response.body?.string().orEmpty()
         } catch (error: IOException) {

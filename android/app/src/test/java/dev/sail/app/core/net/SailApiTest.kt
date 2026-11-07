@@ -114,4 +114,15 @@ class SailApiTest {
         assertEquals("secret", request.getHeader("CF-Access-Client-Secret"))
         assertEquals("Bearer $token", request.getHeader("Authorization"))
     }
+
+    @Test
+    fun cloudflareAccessLoginIsReportedAsAccessNotAsGarbage() = runTest {
+        server.enqueue(
+            MockResponse().setBody("<html>Sign in</html>").setHeader("Content-Type", "text/html")
+                .setHeader("cf-access-domain", "sail.example.com"),
+        )
+        val result = api.get<Course>("/api/health") as ApiResult.Err
+        assertEquals(403, result.status)
+        assertTrue(result.message.startsWith("Cloudflare Access"))
+    }
 }
