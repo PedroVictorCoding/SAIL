@@ -22,7 +22,7 @@ class SpeechPlayer(private val onDrained: () -> Unit, private val onError: (Stri
     private val queue = LinkedBlockingQueue<Item>()
     private val generation = AtomicInteger(0)
     private val pending = AtomicInteger(0)
-    private val worker = Thread(::run, "sail-speech").apply { isDaemon = true; start() }
+    private val worker = Thread(::playLoop, "sail-speech").apply { isDaemon = true; start() }
 
     val isPlaying: Boolean get() = pending.get() > 0
 
@@ -48,7 +48,7 @@ class SpeechPlayer(private val onDrained: () -> Unit, private val onError: (Stri
         queue.put(Item.Quit)
     }
 
-    private fun run() {
+    private fun playLoop() {
         var track: AudioTrack? = null
         var trackRate = 0
         var trackChannels = 0

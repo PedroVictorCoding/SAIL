@@ -81,7 +81,7 @@ class DialogueViewModel(private val api: SailApi) : ViewModel() {
     @Volatile private var turnFinished = false
 
     init {
-        viewModelScope.launch { session.events.collect(::onEvent) }
+        viewModelScope.launch { session.events.collect { onEvent(it) } }
         viewModelScope.launch {
             session.state.collect { socket ->
                 if (socket != SocketState.Open) {
