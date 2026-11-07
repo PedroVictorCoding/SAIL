@@ -54,13 +54,14 @@ const subsystemPages = [
     "name": "Arena",
     "icon": "arena",
     "subtitle": "Learn step by step",
-    "description": "Learn something step by step with an assessment, a lesson map and guided teaching.",
+    "description": "Learn something step by step with an assessment, a lesson map and guided teaching, or take short interactive courses.",
     "card": "memoryCard",
     "panel": "learnPanelMain",
-    "tabs": ["learnPanelMain"],
+    "tabs": ["learnPanelMain", "coursesPanelMain"],
     "settings": null,
     "details": [
       "Arena Learn: assessment, a lesson map and step-by-step teaching",
+      "Courses: short interactive lessons with spaced review",
       "Research collections"
     ]
   },
