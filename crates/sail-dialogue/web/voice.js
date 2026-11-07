@@ -217,10 +217,32 @@ function handleVoiceMessage(data) {
         }
         updateState('speaking');
         break;
-      case 'tool_started': updateToolActivity(data.tool, true); break;
+      case 'tool_started':
+        updateToolActivity(data.tool, true);
+        if (data.invocation_id && typeof SailToolRenderer !== 'undefined') {
+          SailToolRenderer.renderToolMessage({
+            invocation_id: data.invocation_id,
+            tool_name: data.tool,
+            status: 'executing'
+          });
+        }
+        break;
       case 'tool_completed': updateToolActivity(data.tool, false); break;
-      case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); logToolActivity(data.result); break;
-      case 'canvas': renderArtifact(data.artifact); break;
+      case 'tool_result':
+        updateToolActivity(data.result?.tool, false);
+        if (data.tool_message && typeof SailToolRenderer !== 'undefined') {
+          SailToolRenderer.renderToolMessage(data.tool_message);
+        } else {
+          renderToolResult(data.result);
+        }
+        logToolActivity(data.result);
+        break;
+      case 'canvas':
+        if (data.tool_message && typeof SailToolRenderer !== 'undefined') {
+          SailToolRenderer.renderToolMessage(data.tool_message);
+        }
+        renderArtifact(data.artifact);
+        break;
       case 'plan': window.renderPlanCard?.(data.plan); break;
       case 'approval_required':
         ambient({ type:'approval', session:data.session_id });
@@ -356,7 +378,7 @@ function renderToolResult(result) {
     if (succeeded && output) updateSystemCard(output);
     return;
   }
-  const container = document.createElement('article'); container.className = 'artifact-card';
+  const container = document.createElement('article'); container.className = 'artifact-card message-tool';
 
   const heading = document.createElement('div'); heading.className = 'artifact-heading';
   const title = document.createElement('span'); title.textContent = String(result?.tool || 'Local action').replaceAll(':', ' · ');
@@ -517,7 +539,21 @@ function renderToolResult(result) {
   expandBtn.addEventListener('click', (e) => { e.stopPropagation(); openModal(); });
 
   document.getElementById('canvasEmptyState')?.remove();
-  document.getElementById('canvasPanel').append(container);
+  const conv = document.getElementById('conversation');
+  const canvasPanel = document.getElementById('canvasPanel');
+  if (conv) {
+    conv.append(container);
+    if (typeof chatFollow !== 'undefined' && chatFollow?.resume) chatFollow.resume();
+  }
+  if (canvasPanel) {
+    if (!conv) {
+      canvasPanel.append(container);
+    } else if (typeof container.cloneNode === 'function') {
+      try {
+        canvasPanel.append(container.cloneNode(true));
+      } catch {}
+    }
+  }
 }
 
 function updateSystemCard(output) {

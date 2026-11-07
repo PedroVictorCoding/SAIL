@@ -162,3 +162,111 @@ pub struct ToolStep {
     pub approval_token: Option<Uuid>,
     pub foreground: bool,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolStatus {
+    Requested,
+    Executing,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl From<ToolState> for ToolStatus {
+    fn from(state: ToolState) -> Self {
+        match state {
+            ToolState::Queued | ToolState::PolicyPending => ToolStatus::Requested,
+            ToolState::Executing => ToolStatus::Executing,
+            ToolState::Completed => ToolStatus::Completed,
+            ToolState::Failed => ToolStatus::Failed,
+            ToolState::Cancelled => ToolStatus::Cancelled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactRef {
+    pub id: String,
+    pub artifact_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ToolPayload {
+    CameraCapture {
+        source: String,
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thumbnail_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifact_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        height: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        question: Option<String>,
+    },
+    Visualization {
+        viz_type: String,
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+    Table {
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        total_count: usize,
+    },
+    Document {
+        path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bytes: Option<usize>,
+        operation: String,
+    },
+    ExecutionResult {
+        summary: String,
+        success: bool,
+        output: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    InteractiveControls {
+        title: String,
+        summary: String,
+        controls: Vec<InteractiveControl>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InteractiveControl {
+    pub id: String,
+    pub label: String,
+    pub action: String,
+    pub params: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResultMessage {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub invocation_id: String,
+    pub tool_name: String,
+    pub status: ToolStatus,
+    pub payload: ToolPayload,
+    pub artifact_refs: Vec<ArtifactRef>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+

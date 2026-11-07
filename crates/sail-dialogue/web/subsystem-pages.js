@@ -81,21 +81,6 @@ const subsystemPages = [
     ]
   },
   {
-    "id": "canvas",
-    "name": "Canvas",
-    "icon": "canvas",
-    "subtitle": "Visual workspace",
-    "description": "Explore visual answers, diagrams, and the camera and desktop previews you choose to share.",
-    "card": "canvasCard",
-    "panel": "canvasPanelMain",
-    "settings": null,
-    "details": [
-      "Visual answers and diagrams",
-      "Structured conversation results",
-      "Camera and desktop previews"
-    ]
-  },
-  {
     "id": "flow",
     "name": "Flow",
     "icon": "flow",
@@ -261,6 +246,10 @@ function initializeSubsystemPages() {
     if (id === 'classic') {
       history.replaceState(null, '', '#home');
       id = 'home';
+    }
+    if (id === 'canvas') {
+      history.replaceState(null, '', '#dialogue');
+      id = 'dialogue';
     }
     if (id === 'spaces') return; // Spaces overlays the current workspace.
     const found = subsystemPages.find(entry => entry.id === id);
