@@ -979,3 +979,6 @@ html[data-sail-visuals=off] .tm-halo { animation: none; }
 
 .tm-crumbs { max-width: 100%; }
 .tm-crumbs h1 { overflow: hidden; text-overflow: ellipsis; }
+/* The map node popover duplicated the right-hand Context inspector and added little value.
+   Keep it hidden; selecting a node still updates the inspector and highlights the node. */
+#tmDetail { display: none !important; }
