@@ -34,8 +34,17 @@ opens from Home, and Settings from Home's top bar. The first run opens Settings.
 - The token is stored with Android Keystore-backed encryption (AndroidX Security), excluded
   from backups and device transfer, and sent as `Authorization: Bearer …` **only to the
   configured SAIL host**. Images from other hosts never get it.
-- Release builds allow HTTPS only. Debug builds also allow plain HTTP, for an emulator
-  (`http://10.0.2.2:<port>`) or a development server on the LAN or tailnet.
+- Release builds allow HTTPS with the system's certificate authorities only. Debug builds
+  also allow plain HTTP and trust CAs the owner installs on the phone, so a development SAIL
+  with its self-signed `SAIL-local` certificate works once that certificate is installed
+  (Settings › Security › Install from storage › CA certificate).
+- Over USB, `adb reverse tcp:8088 tcp:8088` lets the phone use `https://localhost:8088`
+  (the `SAIL-local` certificate covers `localhost`) without exposing SAIL on the network.
+- **Behind Cloudflare Access:** if `sail.spinethorns.com` is published through a Cloudflare
+  Tunnel, protect it with an Access application (owner-only policy) and add a *Service Auth*
+  policy with a service token. Enter its client ID and secret in Settings; the app sends
+  `CF-Access-Client-Id`/`-Secret` to the SAIL host only. Through a tunnel SAIL never hands
+  out the owner token (`/api/guardian/token` is refused, PR #410), so paste the token.
 - Microphone and camera permissions are asked for at the moment they're used.
 
 ## Building
