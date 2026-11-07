@@ -31,106 +31,11 @@
   <div id="subsystemNav" hidden></div>
 
   <div id="subsystemStore" hidden aria-hidden="true">
-        <article class="workspace-card system-card" id="systemCard" data-card="systemCard">
-          <header class="card-heading">
-            <div class="card-title"><span class="card-icon" aria-hidden="true">⌁</span><div><h3 id="systemCardHeading">System</h3><p id="systemCardSub">Local device status</p></div></div>
-            <div class="card-heading-actions">
-              <span class="card-live-badge" id="systemLiveBadge" title="Live telemetry"><i class="live-dot"></i>Live</span>
-              <div class="card-tabs" role="tablist" aria-label="System tabs">
-                <button type="button" class="card-tab active" data-tab-card="systemCard" data-tab-panel="systemPanelMetrics"><span>Metrics</span></button>
-                <button type="button" class="card-tab" data-tab-card="systemCard" data-tab-panel="systemPanelGuardian"><span>Guardian</span></button>
-              </div>
-              <button class="card-action" id="checkSystemBtn" type="button" aria-label="Check local system status" title="Ping metrics now">↻</button>
-            </div>
-          </header>
-          <div class="card-tab-panel active" id="systemPanelMetrics">
-            <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">—</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">—</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">—</strong></div></div>
-            <p class="card-footnote" id="systemNote">Telemetry auto-updates continuously in real time.</p>
-          </div>
-          <div class="card-tab-panel" id="systemPanelGuardian" hidden>
-            <div class="guardian-summary-lines">
-              <div class="summary-line"><span>Landlock LSM</span><strong class="good-text">Enforcing (nono 0.81.0)</strong></div>
-              <div class="summary-line"><span>Bubblewrap</span><strong class="good-text">Available · Sandboxed</strong></div>
-              <div class="summary-line"><span>Autonomy preset</span><strong id="guardianPresetBadge">Balanced</strong></div>
-              <div class="summary-line"><span>Filesystem write</span><strong class="warn-text">Restricted · Explicit approval</strong></div>
-              <div class="summary-line"><span>Web observation</span><strong class="good-text">Read-only autonomous</strong></div>
-            </div>
-            <p class="card-footnote">Guardian enforces least-privilege boundaries at the kernel level.</p>
-          </div>
-        </article>
 
-        <article class="workspace-card session-card" id="sessionCard" data-card="sessionCard">
-          <header class="card-heading">
-            <div class="card-title"><span class="card-icon" aria-hidden="true">◌</span><div><h3 id="sessionCardHeading">Voice session</h3><p id="sessionCardSub">Live browser session</p></div></div>
-            <div class="card-heading-actions">
-              <div class="card-tabs" role="tablist" aria-label="Session tabs">
-                <button type="button" class="card-tab active" data-tab-card="sessionCard" data-tab-panel="sessionPanelMain"><span>Session</span></button>
-                <button type="button" class="card-tab" data-tab-card="sessionCard" data-tab-panel="sessionPanelAudio"><span>Audio</span></button>
-              </div>
-              <span class="mini-state" id="sessionState">Ready</span>
-            </div>
-          </header>
-          <div class="card-tab-panel active" id="sessionPanelMain">
-            <div class="session-lines">
-              <div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div>
-              <div><span>Microphone</span><strong id="sessionMic">Off</strong></div>
-              <div><span>Generation speed</span><strong id="sessionTokensPerSec">—</strong></div>
-              <div><span>Time to first token</span><strong id="sessionTtft">—</strong></div>
-              <div><span>Live output</span><strong id="sessionGenStats">—</strong></div>
-              <div><span>VAD confidence</span><strong id="sessionConfidence">—</strong></div>
-              <div><span>Input level</span><strong id="sessionRms">—</strong></div>
-              <div><span>Recorded</span><strong id="sessionDuration">0:00 / 3:00</strong></div>
-            </div>
-            <div class="session-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-          </div>
-          <div class="card-tab-panel" id="sessionPanelAudio" hidden>
-            <div class="audio-diag-lines">
-              <div class="diag-line"><span>Worklet transport</span><strong class="good-text">16 kHz PCM Mono</strong></div>
-              <div class="diag-line"><span>Frame buffer</span><strong>512 samples (32 ms)</strong></div>
-              <div class="diag-line"><span>Resampler ratio</span><strong id="audioResampleRatio">Automatic (Hardware rate)</strong></div>
-              <div class="diag-line"><span>Turn taking mode</span><strong id="audioTurnMode">Automatic VAD</strong></div>
-              <div class="diag-line"><span>Capture state</span><strong id="audioCaptureState">Idle</strong></div>
-            </div>
-            <div class="audio-volume-bar-wrap">
-              <span>Input meter</span>
-              <div class="audio-volume-bar"><div class="audio-volume-fill" id="audioVolumeFill"></div></div>
-            </div>
-            <p class="card-footnote">Stateful area resampler processes raw audio directly on the audio thread.</p>
-          </div>
-        </article>
 
-        <article class="workspace-card models-card" id="modelsCard" data-card="modelsCard">
-          <header class="card-heading">
-            <div class="card-title"><span class="card-icon" aria-hidden="true">✳</span><div><h3 id="modelsCardHeading">Local models</h3><p id="modelsCardSub">Speech and language services</p></div></div>
-            <div class="card-heading-actions">
-              <span class="card-live-badge" id="modelsLiveBadge" title="Continuous health monitoring"><i class="live-dot"></i>Live</span>
-              <div class="card-tabs" role="tablist" aria-label="Model tabs">
-                <button type="button" class="card-tab active" data-tab-card="modelsCard" data-tab-panel="modelsPanelMain"><span>Models</span></button>
-                <button type="button" class="card-tab" data-tab-card="modelsCard" data-tab-panel="modelsPanelGovernor"><span>Governor</span></button>
-              </div>
-              <button class="card-action" id="modelsRefreshBtn" type="button" aria-label="Check local model status" title="Ping model health now">↻</button>
-            </div>
-          </header>
-          <div class="card-tab-panel active" id="modelsPanelMain">
-            <div class="model-summary" id="modelStatus" role="status">Checking local services…</div>
-            <div class="model-lines"><div><span>Language model</span><strong id="llmStatus">Checking…</strong></div><div><span>Voice workers</span><strong id="speechStatus">Checking…</strong></div><div><span>Capabilities</span><strong id="modelCapabilities">—</strong></div></div>
-          </div>
-          <div class="card-tab-panel" id="modelsPanelGovernor" hidden>
-            <div class="governor-metrics">
-              <div class="governor-row">
-                <div class="governor-label"><span>Adaptive CPU Load</span><strong id="governorCpuPercent">15%</strong></div>
-                <div class="governor-bar"><div class="governor-fill" id="governorCpuFill" style="width:15%;"></div></div>
-              </div>
-              <div class="governor-row">
-                <div class="governor-label"><span>Vision Feed Update Rate</span><strong id="governorFpsTarget">2.5 FPS (400 ms)</strong></div>
-                <div class="governor-bar"><div class="governor-fill governor-fps-fill" id="governorFpsFill" style="width:40%;"></div></div>
-              </div>
-              <div class="diag-line" style="margin-top:8px;"><span>Scaling policy</span><strong>Inverse CPU Matching</strong></div>
-              <div class="diag-line"><span>Resource state</span><strong id="governorStatusBadge" class="good-text">Optimal autonomy</strong></div>
-            </div>
-            <p class="card-footnote">Image update speeds automatically slow down during model inference or compilation.</p>
-          </div>
-        </article>
+
+
+
 
         <article class="workspace-card tools-card" id="toolsCard" data-card="toolsCard">
           <header class="card-heading">
@@ -139,7 +44,6 @@
               <div class="card-tabs" role="tablist" aria-label="Tools tabs">
                 <button type="button" class="card-tab active" data-tab-card="toolsCard" data-tab-panel="toolsPanelMain"><span>Tools</span></button>
                 <button type="button" class="card-tab" data-tab-card="toolsCard" data-tab-panel="toolsPanelActivity"><span>Activity</span></button>
-                <button type="button" class="card-tab" data-tab-card="toolsCard" data-tab-panel="toolsPanelSafetyReview" id="tabSafetyReviewBtn"><span>Safety <i class="safety-badge-dot" id="safetyBadgeDot" hidden></i></span></button>
               </div>
             </div>
           </header>
@@ -157,21 +61,7 @@
             </div>
             <p class="card-footnote">Chronological audit stream of authorized tool executions.</p>
           </div>
-          <div class="card-tab-panel" id="toolsPanelSafetyReview" hidden>
-            <div class="safety-review-container">
-              <div class="safety-review-header">
-                <div class="safety-review-status-info">
-                  <span class="safety-status-badge" id="safetyReviewStatusBadge">Status: Clean</span>
-                  <small id="safetyReviewLastRun">Last review: Checking…</small>
-                </div>
-                <button type="button" class="feed-btn" id="safetyReviewRunNowBtn" title="Run safety review now">Run now</button>
-              </div>
-              <div class="safety-findings-list" id="safetyFindingsList" aria-live="polite">
-                <p class="canvas-empty" id="safetyFindingsEmpty">No safety findings detected. All learned rules conform to security invariants.</p>
-              </div>
-            </div>
-            <p class="card-footnote">Daily Flow reevaluates learned approval rules and reports security findings.</p>
-          </div>
+
         </article>
 
         <article class="workspace-card canvas-card" id="canvasCard" data-card="canvasCard">
@@ -1060,6 +950,47 @@
             <button class="quiet-button" id="muteBtn" aria-pressed="false">Mute</button>
           </div>
         </div>
+
+        <div class="vscode-setting-item settings-runtime-card" data-search-terms="live browser session connection microphone audio diagnostics">
+          <article class="workspace-card session-card" id="sessionCard" data-card="sessionCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">◌</span><div><h3 id="sessionCardHeading">Voice session</h3><p id="sessionCardSub">Live browser session</p></div></div>
+            <div class="card-heading-actions">
+
+              <span class="mini-state" id="sessionState">Ready</span>
+            </div>
+          </header>
+          <div class="settings-runtime-section" id="sessionPanelMain">
+            <div class="session-lines">
+              <div><span>Connection</span><strong id="sessionConnection">Connecting</strong></div>
+              <div><span>Microphone</span><strong id="sessionMic">Off</strong></div>
+              <div><span>Generation speed</span><strong id="sessionTokensPerSec">—</strong></div>
+              <div><span>Time to first token</span><strong id="sessionTtft">—</strong></div>
+              <div><span>Live output</span><strong id="sessionGenStats">—</strong></div>
+              <div><span>VAD confidence</span><strong id="sessionConfidence">—</strong></div>
+              <div><span>Input level</span><strong id="sessionRms">—</strong></div>
+              <div><span>Recorded</span><strong id="sessionDuration">0:00 / 3:00</strong></div>
+            </div>
+            <div class="session-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="settings-runtime-section" id="sessionPanelAudio">
+            <h4>Audio diagnostics</h4>
+            <div class="audio-diag-lines">
+              <div class="diag-line"><span>Worklet transport</span><strong class="good-text">16 kHz PCM Mono</strong></div>
+              <div class="diag-line"><span>Frame buffer</span><strong>512 samples (32 ms)</strong></div>
+              <div class="diag-line"><span>Resampler ratio</span><strong id="audioResampleRatio">Automatic (Hardware rate)</strong></div>
+              <div class="diag-line"><span>Turn taking mode</span><strong id="audioTurnMode">Automatic VAD</strong></div>
+              <div class="diag-line"><span>Capture state</span><strong id="audioCaptureState">Idle</strong></div>
+            </div>
+            <div class="audio-volume-bar-wrap">
+              <span>Input meter</span>
+              <div class="audio-volume-bar"><div class="audio-volume-fill" id="audioVolumeFill"></div></div>
+            </div>
+            <p class="card-footnote">Stateful area resampler processes raw audio directly on the audio thread.</p>
+          </div>
+        </article>
+        </div>
+
       </section>
 
       <!-- 3. Guardian Security Category -->
@@ -1144,6 +1075,41 @@
           <p class="sheet-note" style="margin-bottom:8px;">Actions with "Always allow" are remembered and auto-executed without prompting.</p>
           <div id="guardianLearnedRules" role="status" aria-live="polite" style="display:flex; flex-direction:column; gap:6px;"></div>
         </div>
+
+        <div class="vscode-setting-item settings-runtime-card" data-search-terms="guardian system security status">
+          <div class="settings-runtime-section" id="systemPanelGuardian">
+            <h4>Security status</h4>
+            <div class="guardian-summary-lines">
+              <div class="summary-line"><span>Landlock LSM</span><strong class="good-text">Enforcing (nono 0.81.0)</strong></div>
+              <div class="summary-line"><span>Bubblewrap</span><strong class="good-text">Available · Sandboxed</strong></div>
+              <div class="summary-line"><span>Autonomy preset</span><strong id="guardianPresetBadge">Balanced</strong></div>
+              <div class="summary-line"><span>Filesystem write</span><strong class="warn-text">Restricted · Explicit approval</strong></div>
+              <div class="summary-line"><span>Web observation</span><strong class="good-text">Read-only autonomous</strong></div>
+            </div>
+            <p class="card-footnote">Guardian enforces least-privilege boundaries at the kernel level.</p>
+          </div>
+        </div>
+
+
+        <div class="vscode-setting-item settings-runtime-card" data-search-terms="guardian safety findings review">
+          <div class="settings-runtime-section" id="toolsPanelSafetyReview">
+            <h4>Safety review <i class="safety-badge-dot" id="safetyBadgeDot" hidden></i></h4>
+            <div class="safety-review-container">
+              <div class="safety-review-header">
+                <div class="safety-review-status-info">
+                  <span class="safety-status-badge" id="safetyReviewStatusBadge">Status: Clean</span>
+                  <small id="safetyReviewLastRun">Last review: Checking…</small>
+                </div>
+                <button type="button" class="feed-btn" id="safetyReviewRunNowBtn" title="Run safety review now">Run now</button>
+              </div>
+              <div class="safety-findings-list" id="safetyFindingsList" aria-live="polite">
+                <p class="canvas-empty" id="safetyFindingsEmpty">No safety findings detected. All learned rules conform to security invariants.</p>
+              </div>
+            </div>
+            <p class="card-footnote">Daily Flow reevaluates learned approval rules and reports security findings.</p>
+          </div>
+        </div>
+
       </section>
 
       <!-- 4. Models & Inference Category -->
@@ -1183,6 +1149,40 @@
             <span class="vscode-badge-tag" style="color:var(--accent);">16,384 Tokens (2.6GB KV)</span>
           </div>
         </div>
+
+        <div class="vscode-setting-item settings-runtime-card" data-search-terms="mind local models health governor compute resources">
+          <article class="workspace-card models-card" id="modelsCard" data-card="modelsCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">✳</span><div><h3 id="modelsCardHeading">Local models</h3><p id="modelsCardSub">Speech and language services</p></div></div>
+            <div class="card-heading-actions">
+              <span class="card-live-badge" id="modelsLiveBadge" title="Continuous health monitoring"><i class="live-dot"></i>Live</span>
+
+              <button class="card-action" id="modelsRefreshBtn" type="button" aria-label="Check local model status" title="Ping model health now">↻</button>
+            </div>
+          </header>
+          <div class="settings-runtime-section" id="modelsPanelMain">
+            <div class="model-summary" id="modelStatus" role="status">Checking local services…</div>
+            <div class="model-lines"><div><span>Language model</span><strong id="llmStatus">Checking…</strong></div><div><span>Voice workers</span><strong id="speechStatus">Checking…</strong></div><div><span>Capabilities</span><strong id="modelCapabilities">—</strong></div></div>
+          </div>
+          <div class="settings-runtime-section" id="modelsPanelGovernor">
+            <h4>Resource governor</h4>
+            <div class="governor-metrics">
+              <div class="governor-row">
+                <div class="governor-label"><span>Adaptive CPU Load</span><strong id="governorCpuPercent">15%</strong></div>
+                <div class="governor-bar"><div class="governor-fill" id="governorCpuFill" style="width:15%;"></div></div>
+              </div>
+              <div class="governor-row">
+                <div class="governor-label"><span>Vision Feed Update Rate</span><strong id="governorFpsTarget">2.5 FPS (400 ms)</strong></div>
+                <div class="governor-bar"><div class="governor-fill governor-fps-fill" id="governorFpsFill" style="width:40%;"></div></div>
+              </div>
+              <div class="diag-line" style="margin-top:8px;"><span>Scaling policy</span><strong>Inverse CPU Matching</strong></div>
+              <div class="diag-line"><span>Resource state</span><strong id="governorStatusBadge" class="good-text">Optimal autonomy</strong></div>
+            </div>
+            <p class="card-footnote">Image update speeds automatically slow down during model inference or compilation.</p>
+          </div>
+        </article>
+        </div>
+
       </section>
 
       <!-- 5. Forge Coding Agent Category -->
@@ -1241,6 +1241,25 @@
           <button class="quiet-button" id="settingsRefreshTelemetryBtn" type="button">Ping Metrics Now</button>
           <button class="quiet-button" id="settingsOsStatusBtn" type="button">Run OS Status Diagnostic</button>
         </div>
+
+        <div class="vscode-setting-item settings-runtime-card" data-search-terms="system metrics cpu memory telemetry">
+          <article class="workspace-card system-card" id="systemCard" data-card="systemCard">
+          <header class="card-heading">
+            <div class="card-title"><span class="card-icon" aria-hidden="true">⌁</span><div><h3 id="systemCardHeading">System</h3><p id="systemCardSub">Local device status</p></div></div>
+            <div class="card-heading-actions">
+              <span class="card-live-badge" id="systemLiveBadge" title="Live telemetry"><i class="live-dot"></i>Live</span>
+
+              <button class="card-action" id="checkSystemBtn" type="button" aria-label="Check local system status" title="Ping metrics now">↻</button>
+            </div>
+          </header>
+          <div class="settings-runtime-section" id="systemPanelMetrics">
+            <div class="system-metrics" id="systemMetrics" aria-live="polite"><div class="metric"><span>Compute</span><strong id="systemCpu">—</strong></div><div class="metric"><span>Memory</span><strong id="systemMemory">—</strong></div><div class="metric"><span>Load average</span><strong id="systemLoad">—</strong></div></div>
+            <p class="card-footnote" id="systemNote">Telemetry auto-updates continuously in real time.</p>
+          </div>
+
+        </article>
+        </div>
+
       </section>
     </div>
   </div>

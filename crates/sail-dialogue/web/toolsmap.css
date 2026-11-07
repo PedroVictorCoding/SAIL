@@ -965,3 +965,14 @@ html[data-sail-visuals=off] .tm-halo { animation: none; }
   .tm-np-art { display: none; }
   .tm-np-ctl { gap: 2px; }
 }
+
+/* The sidebar is hidden on phones; keep the return briefing reachable in the header. */
+.tm-away-mobile { display: none; }
+@media (max-width: 860px) {
+  .tm-away-mobile { display: inline-flex; }
+}
+
+/* A return briefing is a destination, so map-view controls do not belong in it. */
+.tm-root[data-mode="away"] .tm-ctl-mid { display: none; }
+.tm-root[data-mode="away"] .tm-stage .return-briefing-deck.tm-briefing:not([hidden]),
+.tm-root[data-mode="away"] .tm-briefing[hidden] + .tm-away-empty { bottom: 16px; }

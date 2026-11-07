@@ -197,11 +197,11 @@
     const nav = el('nav', {class: 'tm-side', 'aria-label': 'Main navigation'},
       el('div', {class: 'tm-brand'}, logo(), el('div', {}, el('strong', {text: 'SAIL'}), el('span', {class: 'tm-version', id: 'tmVersion', text: 'local'}))),
       el('ul', {class: 'tm-nav'},
-        navItem('home', 'Home', 'home'), navItem('dialogue', 'Dialogue', 'dialogue'), navItem('arena', 'Arena', 'arena'),
+        navItem('home', 'Home', 'home'), navItem('arena', 'Arena', 'arena'),
         navItem('canvas', 'Canvas', 'canvas'), navItem('forge', 'Forge', 'forge'), navItem('flow', 'Flow', 'flow'),
-        navItem('system', 'System', 'sense'), navItem('mind', 'Mind', 'mind'), navItem('memory', 'Memory', 'mesh'),
-        navItem('discover', 'Discover', 'discovery'),
-        navItem('entertainment', 'Entertainment', 'entertainment'), navItem('guardian', 'Guardian', 'guardian')),
+        navItem('memory', 'Memory', 'mesh'),
+        navItem('away', 'While You Were Away', 'away'),
+        navItem('entertainment', 'Entertainment', 'entertainment')),
       el('ul', {class: 'tm-nav tm-nav-2'},
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: (e) => openStation('forge', e.currentTarget, 'tasks')}, icon('tasks'), 'Tasks')),
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', id: 'terminalRailBtn', onclick: () => window.sailTerminal ? window.sailTerminal.focusTerminal() : document.getElementById('terminalCard')?.classList.toggle('terminal-fullscreen')}, icon('terminal'), 'Terminal')),
@@ -226,6 +226,7 @@
       el('ul', {class: 'tm-meters', id: 'tmMeters', 'aria-label': 'Host resources'}),
       el('button', {class: 'tm-bell', type: 'button', id: 'tmBell', 'aria-label': 'Approvals', onclick: (e) => openStation('guardian', e.currentTarget)},
         icon('guardian'), el('span', {class: 'tm-badge', id: 'tmBellCount', hidden: true})),
+      el('button', {class: 'tm-bell tm-away-mobile', type: 'button', 'aria-label': 'While You Were Away', onclick: () => window.sailNavigate?.('away')}, icon('away')),
       el('button', {class: 'tm-bell', type: 'button', 'aria-label': 'Settings', onclick: openSettings}, icon('settings')),
       el('span', {class: 'tm-avatar', 'aria-hidden': 'true'}));
 
@@ -235,14 +236,12 @@
         world = el('div', {class: 'tm-world'})),
       el('div', {class: 'tm-ctl tm-ctl-left'},
         el('button', {class: 'tm-btn', type: 'button', id: 'tmLive', 'aria-pressed': 'true', onclick: toggleLive}, el('span', {class: 'tm-status on', 'aria-hidden': 'true'}), 'Live'),
-        el('button', {class: 'tm-btn', type: 'button', id: 'tmBriefingBtn', 'aria-label': 'Session briefing deck', 'aria-pressed': 'false', onclick: toggleBriefing}, icon('discovery'), 'Briefing'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', id: 'tmPause', 'aria-pressed': 'false', 'aria-label': 'Pause animation', onclick: togglePause}, '❚❚'),
         el('label', {class: 'tm-sr', for: 'tmSpeed', text: 'Animation speed'}),
         el('select', {class: 'tm-btn', id: 'tmSpeed', onchange: (e) => { state.speed = Number(e.target.value); }},
           el('option', {value: '0.5', text: '0.5x'}), el('option', {value: '1', text: '1x', selected: true}), el('option', {value: '2', text: '2x'}))),
       el('div', {class: 'tm-ctl tm-ctl-mid', role: 'group', 'aria-label': 'Map view'},
-        modeBtn('topology', 'Topology'), modeBtn('map', 'Tools Map'), modeBtn('flows', 'Flows'), modeBtn('resources', 'Resources'),
-        modeBtn('away', 'While You Were Away')),
+        modeBtn('topology', 'Topology'), modeBtn('map', 'Tools Map'), modeBtn('flows', 'Flows'), modeBtn('resources', 'Resources')),
       el('div', {class: 'tm-ctl tm-ctl-right'},
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Fit map', onclick: fit}, '⛶'),
         el('button', {class: 'tm-btn tm-icon-btn', type: 'button', 'aria-label': 'Zoom out', onclick: () => zoom(1 / 1.2)}, '−'),
@@ -340,12 +339,12 @@
   function navItem(target, label, ic) {
     const attrs = {class: 'tm-nav-item', type: 'button', 'data-nav': target, onclick: (e) => navTo(target, e.currentTarget)};
     if (target === 'home') attrs.id = 'homeNav';
-    return el('li', {}, el('button', attrs, icon(ic), label));
+    return el('li', {}, el('button', attrs, icon(ic), label,
+      target === 'away' ? el('span', {class: 'tm-seg-dot', id: 'tmAwayDot', hidden: !state.awayFresh, title: 'New briefing'}) : null));
   }
   function modeBtn(mode, label) {
     return el('button', {class: 'tm-seg', type: 'button', 'data-mode': mode, 'aria-pressed': state.mode === mode ? 'true' : 'false', onclick: () => setMode(mode)},
-      icon({topology: 'mesh', map: 'spaces', flows: 'flow', resources: 'sense', away: 'away'}[mode]), label,
-      mode === 'away' ? el('span', {class: 'tm-seg-dot', id: 'tmAwayDot', hidden: !state.awayFresh, title: 'New briefing'}) : null);
+      icon({topology: 'mesh', map: 'spaces', flows: 'flow', resources: 'sense'}[mode]), label);
   }
 
   function buildWorld() {
@@ -1023,7 +1022,10 @@
       n.classList.toggle('selected', on);
       if (on) n.setAttribute('aria-current', 'page'); else n.removeAttribute('aria-current');
     }
-    $('#tmCrumb').textContent = state.tracker ? 'Tracker' : state.popup ? byId[state.popup].name : 'SAIL';
+    const mobileAway = root.querySelector('.tm-away-mobile');
+    if (current() === 'away') mobileAway?.setAttribute('aria-current', 'page');
+    else mobileAway?.removeAttribute('aria-current');
+    $('#tmCrumb').textContent = state.tracker ? 'Tracker' : state.popup ? byId[state.popup].name : state.mode === 'away' ? 'While You Were Away' : 'SAIL';
     svgRoot.querySelectorAll('.tm-station').forEach((g) => g.classList.toggle('selected', g.dataset.station === id));
     render();
   }
@@ -1068,12 +1070,12 @@
     render();
   }
   function navTo(target, trigger) {
-    if (target === 'home') { if (!pane.hidden) closePane(); else { select(null); fit(); } return; }
+    if (target === 'away' || target === 'home') { window.sailNavigate?.(target); return; }
     if (target === 'tracker') { state.trigger = trigger || document.activeElement; window.sailNavigate?.('tracker'); return; }
     openStation(target, trigger);
   }
   // The sidebar entry for what the centre shows.
-  function current() { return state.tracker ? 'tracker' : state.popup || 'home'; }
+  function current() { return state.tracker ? 'tracker' : state.popup || (state.mode === 'away' ? 'away' : 'home'); }
 
   // ------------------------------------------------------------------ centre pane
   // Stations with a page go through the router (#mind, #forge…) so links, reloads and
@@ -1216,14 +1218,6 @@
     const panel = document.getElementById('homeView'); if (!panel) return;
     chatSlot.append(panel);
   }
-  function toggleBriefing() {
-    const deck = document.getElementById('returnBriefingDeck');
-    if (!deck) return;
-    deck.hidden = !deck.hidden;
-    const btn = document.getElementById('tmBriefingBtn');
-    if (btn) btn.setAttribute('aria-pressed', String(!deck.hidden));
-    if (!deck.hidden) deck.focus?.();
-  }
   function toggleLive() {
     state.live = !state.live;
     $('#tmLive').setAttribute('aria-pressed', String(state.live));
@@ -1255,6 +1249,7 @@
     }
   }
   function openSettings() {
+    if (window.sailOpenSettings) { window.sailOpenSettings(); return; }
     if (window.openSheet && window.contextSheet) window.openSheet(window.contextSheet);
     else (document.getElementById('settingsOpen') || document.getElementById('settingsRail'))?.click();
   }
@@ -1285,7 +1280,14 @@
       else location.hash = '#home';
       return;
     }
-    if (page === 'home') { state.pending = null; hidePane(); return; }
+    if (page === 'home' || page === 'away') {
+      state.pending = null;
+      hidePane();
+      setMode(page === 'away' ? 'away' : 'map');
+      if (page === 'away') window.sailBriefing?.show();
+      select(null);
+      return;
+    }
     if (page === 'entertainment') {
       state.pending = null; showEntertainment();
       return;
@@ -1314,7 +1316,7 @@
   window.addEventListener('sail:briefing', (event) => {
     state.awayFresh = !!event.detail?.fresh;
     const dot = document.getElementById('tmAwayDot'); if (dot) dot.hidden = !state.awayFresh;
-    if (event.detail?.closed && state.mode === 'away' && root) setMode('map');
+    if (event.detail?.closed && state.mode === 'away' && root) window.sailNavigate?.('home');
   });
   document.getElementById('openFactorySettings')?.addEventListener('click', show);
   // Retire the browser-wide style preference; the map is now the workspace.
