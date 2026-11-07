@@ -125,8 +125,16 @@ async fn import(
     let request = ImportRequest {
         file_name: q.file_name,
         title: q.title.filter(|t| !t.is_empty()),
-        rights: parse_rights(q.rights.as_deref(), q.license.as_deref()).map_err(fail)?,
-        scope: q.scope.unwrap_or_else(|| "learning:general".into()),
+        rights: parse_rights(
+            q.rights.as_deref().filter(|r| !r.is_empty()),
+            q.license.as_deref(),
+        )
+        .map_err(fail)?,
+        // The web form sends empty fields for blanks: treat them as "not given".
+        scope: q
+            .scope
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "learning:general".into()),
     };
     let factory = s.factory.clone();
     let result = tokio::task::spawn_blocking(move || factory.import(&request, &body))
