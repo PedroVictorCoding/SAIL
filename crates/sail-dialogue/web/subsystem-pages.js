@@ -3,6 +3,8 @@
 // Mostly matches sail_common::SubsystemId; Agents and Forge are separate workspaces, and
 // Memory is Arena's store shown on its own page. `tabs` limits a shared card to the
 // tabs that belong to the page.
+const SETTINGS_ROUTES = {dialogue: 'voice', core: 'developer', system: 'developer', mind: 'models', guardian: 'guardian'};
+
 const subsystemPages = [
   {
     "id": "factory",
@@ -17,36 +19,6 @@ const subsystemPages = [
       "Subsystems and their connections on one map",
       "Select a station to inspect its status and tasks",
       "Pan and zoom the map, or switch to the list view"
-    ]
-  },
-  {
-    "id": "core",
-    "name": "Core",
-    "icon": "core",
-    "subtitle": "System coordination",
-    "description": "The local runtime connects SAIL’s subsystems and coordinates their work.",
-    "card": "systemCard",
-    "panel": "systemPanelMetrics",
-    "settings": null,
-    "details": [
-      "Device health and resource use",
-      "Event-driven coordination",
-      "Local service lifecycle"
-    ]
-  },
-  {
-    "id": "dialogue",
-    "name": "Dialogue",
-    "icon": "dialogue",
-    "subtitle": "Voice and conversation",
-    "description": "Talk with SAIL and manage speech, interruption, and turn taking.",
-    "card": "sessionCard",
-    "panel": "sessionPanelMain",
-    "settings": "voice",
-    "details": [
-      "Voice session and audio diagnostics",
-      "Streaming conversation",
-      "Microphone and turn-taking preferences"
     ]
   },
   {
@@ -112,18 +84,18 @@ const subsystemPages = [
     ]
   },
   {
-    "id": "discovery",
-    "name": "Discovery",
+    "id": "away",
+    "name": "While You Were Away",
     "icon": "discovery",
-    "subtitle": "Research and exploration",
-    "description": "Explore learning resources and knowledge gaps through SAIL’s curiosity engine.",
+    "subtitle": "Your return briefing",
+    "description": "Review the prepared music, learning, events and continuity for your return.",
     "card": null,
     "panel": null,
     "settings": null,
     "details": [
-      "Knowledge-gap identification",
-      "Learning resource discovery",
-      "Research interests"
+      "Staged music and learning",
+      "Upcoming events and relevant news",
+      "Project and host continuity"
     ]
   },
   {
@@ -143,21 +115,6 @@ const subsystemPages = [
     ]
   },
   {
-    "id": "mind",
-    "name": "Mind",
-    "icon": "mind",
-    "subtitle": "Models and inference",
-    "description": "Inspect local language and speech models alongside compute allocation.",
-    "card": "modelsCard",
-    "panel": "modelsPanelMain",
-    "settings": "models",
-    "details": [
-      "Local model availability",
-      "Speech and language services",
-      "Compute routing and resource budgets"
-    ]
-  },
-  {
     "id": "bridge",
     "name": "Bridge",
     "icon": "bridge",
@@ -170,21 +127,6 @@ const subsystemPages = [
       "Host and device integration",
       "Authorized filesystem and system tools",
       "Application connectors"
-    ]
-  },
-  {
-    "id": "guardian",
-    "name": "Guardian",
-    "icon": "guardian",
-    "subtitle": "Security and approvals",
-    "description": "Review security preferences and approvals for the actions SAIL may perform.",
-    "card": "toolsCard",
-    "panel": "toolsPanelSafetyReview",
-    "settings": "guardian",
-    "details": [
-      "Capability grants and access boundaries",
-      "Owner approvals and autonomy preferences",
-      "Safety review findings"
     ]
   },
   {
@@ -259,6 +201,15 @@ function initializeSubsystemPages() {
   function renderRoute(focus = true) {
     // Fragments may carry a deep-link query (`#arena?practice=…`); the route is the id.
     let id = location.hash.slice(1).split('?')[0] || 'home';
+    const settingsCategory = SETTINGS_ROUTES[id];
+    if (settingsCategory) {
+      history.replaceState(null, '', '#home');
+      id = 'home';
+    }
+    if (id === 'discovery') {
+      history.replaceState(null, '', '#away');
+      id = 'away';
+    }
     if (id === 'classic') {
       history.replaceState(null, '', '#home');
       id = 'home';
@@ -301,10 +252,15 @@ function initializeSubsystemPages() {
     currentPage = route; requestedPanel = null;
     if (workspace) workspace.scrollTop = 0;
     window.dispatchEvent(new CustomEvent('sail:page', {detail:route}));
+    if (settingsCategory) window.sailOpenSettings(settingsCategory);
     // The map restores focus to whatever opened a closed popup.
     if (focus && item) title.focus({ preventScroll:true });
   }
   window.sailNavigate = (id, panel = null) => {
+    if (SETTINGS_ROUTES[id]) {
+      window.sailOpenSettings(SETTINGS_ROUTES[id]);
+      return;
+    }
     requestedPanel = panel;
     if (location.hash === `#${id}`) renderRoute(); else location.hash = id;
   };

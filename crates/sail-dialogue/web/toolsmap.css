@@ -938,7 +938,7 @@ html[data-sail-visuals=off] .tm-halo { animation: none; }
 .tm-side > .tm-nav { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; }
 .tm-nav > li { display: flex; flex: 0 1 38px; min-height: 26px; }
 .tm-nav > li > .tm-nav-item { min-height: 0; }
-@media (max-height: 860px) {
+@media (min-width: 861px) and (max-height: 860px) {
   .tm-root { grid-template-rows: 56px minmax(0, 1fr) 104px; }
   .tm-root[data-activity-collapsed="true"] { grid-template-rows: 56px minmax(0, 1fr) 38px; }
   .tm-side { padding: 12px 8px 8px; gap: 5px; }
@@ -965,3 +965,20 @@ html[data-sail-visuals=off] .tm-halo { animation: none; }
   .tm-np-art { display: none; }
   .tm-np-ctl { gap: 2px; }
 }
+
+/* The sidebar is hidden on phones; keep the return briefing reachable in the header. */
+.tm-away-mobile { display: none; min-width: 44px; min-height: 44px; }
+@media (max-width: 860px) {
+  .tm-away-mobile { display: grid; }
+}
+
+/* A return briefing is a destination, so map-view controls do not belong in it. */
+.tm-root[data-mode="away"] .tm-ctl-mid { display: none; }
+.tm-root[data-mode="away"] .tm-stage .return-briefing-deck.tm-briefing:not([hidden]),
+.tm-root[data-mode="away"] .tm-briefing[hidden] + .tm-away-empty { bottom: 16px; }
+
+.tm-crumbs { max-width: 100%; }
+.tm-crumbs h1 { overflow: hidden; text-overflow: ellipsis; }
+/* The map node popover duplicated the right-hand Context inspector and added little value.
+   Keep it hidden; selecting a node still updates the inspector and highlights the node. */
+#tmDetail { display: none !important; }
