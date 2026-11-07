@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Release builds talk to SAIL over HTTPS only (#334). Debug builds override this file to
+     allow plain HTTP to an emulator host or a LAN dev server. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
