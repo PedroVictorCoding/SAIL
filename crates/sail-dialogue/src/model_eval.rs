@@ -806,7 +806,9 @@ pub struct EvalReport {
     pub cases: Vec<CaseResult>,
 }
 
-pub async fn run_tool_case(endpoint: &ChatEndpoint, case: &ToolCase) -> CaseResult {
+/// The system prompt, the user turn (with clock context) and the tools voice would offer
+/// for this case, built exactly as production builds them.
+pub fn tool_case_request(case: &ToolCase) -> (String, String, Vec<ToolDefinition>) {
     let user = vlm::with_memory_context(
         case.prompt,
         &prompt::clock_context(EVAL_UTC, "Europe/Lisbon", 0),
@@ -822,6 +824,11 @@ pub async fn run_tool_case(endpoint: &ChatEndpoint, case: &ToolCase) -> CaseResu
     } else {
         serde_json::from_value(vlm::selected_tool_definitions(&wire)).unwrap_or_default()
     };
+    (system, user, tools)
+}
+
+pub async fn run_tool_case(endpoint: &ChatEndpoint, case: &ToolCase) -> CaseResult {
+    let (system, user, tools) = tool_case_request(case);
     let offered: Vec<String> = tools.iter().map(|t| t.function.name.clone()).collect();
     let not_offered = case.accept[0] != NO_TOOL && !offered.iter().any(|o| o == case.accept[0]);
     let messages = vec![
@@ -1092,6 +1099,31 @@ pub fn gate(candidate: &EvalReport, baseline: &EvalReport) -> (bool, Vec<String>
 
 #[cfg(test)]
 mod tests {
+    /// Every tool case's expected tool must be among the tools voice offers. A miss is a
+    /// selection gap that no model can pass, so it is caught here without a model.
+    #[test]
+    fn every_tool_case_is_offered_its_expected_tool() {
+        let mut missing = Vec::new();
+        for case in super::tool_cases() {
+            if case.accept[0] == super::NO_TOOL {
+                continue;
+            }
+            let (_, _, tools) = super::tool_case_request(&case);
+            let offered: Vec<_> = tools.iter().map(|t| t.function.name.as_str()).collect();
+            if !case.accept.iter().any(|a| offered.contains(a)) {
+                missing.push(format!(
+                    "{}: expected {:?}, offered {offered:?}",
+                    case.id, case.accept
+                ));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "selection gaps:\n{}",
+            missing.join("\n")
+        );
+    }
+
     use super::*;
 
     fn reply(content: &str, call: Option<(&str, &str)>) -> Message {

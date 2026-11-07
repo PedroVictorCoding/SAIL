@@ -1408,13 +1408,85 @@ pub fn without_memory_context(content: &str) -> &str {
         .unwrap_or(content)
 }
 
+/// Words too common to say which tool a request needs ("and" otherwise matched "command",
+/// "what" matched every tool that reports something). English and Portuguese, as voice is.
+const SELECTION_STOPWORDS: &[&str] = &[
+    "the", "and", "for", "you", "your", "with", "that", "this", "these", "those", "what", "tell",
+    "say", "says", "said", "please", "can", "could", "would", "will", "want", "need", "just",
+    "about", "from", "into", "have", "has", "are", "was", "were", "its", "how", "why", "when",
+    "who", "which", "some", "any", "all", "also", "not", "now", "then", "than", "there", "here",
+    "them", "they", "our", "out", "let", "get", "give", "show", "does", "did", "doing", "should",
+    "know", "like", "que", "para", "com", "uma", "por", "não", "nao", "mais", "como", "dos", "das",
+    "meu", "minha", "isso", "este", "esta", "pode",
+];
+
+/// A query word matches a tool word when they are equal or one is a prefix of the other,
+/// so "reminders" finds "reminder" and "run" finds "runner", while "and" (a stopword) no
+/// longer matches inside "command".
+fn word_matches(query: &str, tool: &str) -> bool {
+    query == tool || tool.starts_with(query) || (tool.len() >= 4 && query.starts_with(tool))
+}
+
+/// Audio formats `studio_audio_analyze` measures.
+const AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "aif", "aiff", "ogg", "m4a", "opus"];
+
+/// A web address in the request: the web tools are what can act on it.
+fn mentions_url(text: &str) -> bool {
+    text.contains("http://") || text.contains("https://") || text.contains("www.")
+}
+
+/// Extensions of the file names or relative paths in the request, such as `md` for
+/// `README.md` or `txt` for `notes/todo.txt`: tokens with a short alphanumeric extension
+/// that are not web addresses.
+fn file_extensions(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .filter_map(|token| {
+            let token = token.trim_matches(|c: char| "'\"`()[]{},;:!?".contains(c));
+            let token = token.strip_suffix('.').unwrap_or(token);
+            if token.contains("://") || token.starts_with("www.") {
+                return None;
+            }
+            let (stem, ext) = token.rsplit_once('.')?;
+            (!stem.is_empty()
+                && (1..=5).contains(&ext.len())
+                && ext.chars().all(|c| c.is_ascii_alphanumeric())
+                && ext.chars().any(|c| c.is_ascii_alphabetic()))
+            .then(|| ext.to_lowercase())
+        })
+        .collect()
+}
+
+/// Tools that act on what the request points at, ranked above word matches: a URL needs
+/// a web tool and a file name a file tool (an audio file, Studio's analyzer first),
+/// whatever other words the request shares.
+fn structural_boost(query: &str, tool: &str) -> usize {
+    const BOOST: usize = 10;
+    let extensions = file_extensions(query);
+    let audio = extensions
+        .iter()
+        .any(|e| AUDIO_EXTENSIONS.contains(&e.as_str()));
+    match tool {
+        "web_read" | "web_speak" if mentions_url(query) => BOOST,
+        "studio_audio_analyze" if audio => BOOST + 1,
+        "fs_read" | "fs_write" | "fs_query" if !extensions.is_empty() => BOOST,
+        _ => 0,
+    }
+}
+
 /// Keep the model service's schema and byte budget bounded as tool packs grow.
 /// `memory_recall` is always offered once the context references archived `mem:` handles,
 /// because compaction relies on the model being able to fetch what was moved out, and
 /// `memory_search` is offered when the memory block says more facts match. Tools are ranked
-/// on the user's own words, never on the memory block.
+/// on the user's own words, never on the memory block: a URL or file name in them first
+/// (see [`structural_boost`]), then whole-word matches against each tool's name and
+/// description, ignoring [`SELECTION_STOPWORDS`].
 pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::Value {
-    let has_handles = messages.iter().any(|m| m.to_string().contains("mem:"));
+    // A real handle is `mem:` and a number; the system prompt's own "[mem:N]" is not one.
+    let has_handles = messages.iter().any(|m| {
+        let text = m.to_string();
+        text.match_indices("mem:")
+            .any(|(i, _)| text[i + 4..].starts_with(|c: char| c.is_ascii_digit()))
+    });
     let more_knowledge = messages
         .iter()
         .any(|m| m.to_string().contains(KNOWLEDGE_MORE_NOTE));
@@ -1436,10 +1508,15 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
             without_memory_context(&text).to_lowercase()
         })
         .unwrap_or_default();
-    let words: Vec<_> = query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() > 2)
-        .collect();
+    let tokens = |text: &str| -> Vec<String> {
+        text.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().count() > 2 && !SELECTION_STOPWORDS.contains(w))
+            .map(str::to_string)
+            .collect()
+    };
+    let mut words = tokens(&query);
+    words.dedup();
     let all = tool_definitions();
     let mut ranked: Vec<_> = all
         .as_array()
@@ -1447,16 +1524,14 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
         .iter()
         .enumerate()
         .map(|(i, tool)| {
-            let text = format!(
-                "{} {}",
-                tool["function"]["name"], tool["function"]["description"]
-            )
-            .to_lowercase();
-            (
-                words.iter().filter(|word| text.contains(**word)).count(),
-                i,
-                tool.clone(),
-            )
+            let name = tool["function"]["name"].as_str().unwrap_or_default();
+            let description = tool["function"]["description"].as_str().unwrap_or_default();
+            let tool_words = tokens(&format!("{} {description}", name.replace('_', " ")));
+            let hits = words
+                .iter()
+                .filter(|word| tool_words.iter().any(|t| word_matches(word, t)))
+                .count();
+            (hits + structural_boost(&query, name), i, tool.clone())
         })
         .collect();
     ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -1712,6 +1787,59 @@ mod schema_selection_tests {
             plain[0].clone(),
         ];
         assert_eq!(offered(&with_handles)[0], "memory_recall");
+        // The system prompt describes "[mem:N]" gists; that is not a handle.
+        let prompt_only = [
+            serde_json::json!({"role":"system","content":"... [mem:N] archived-turn gists ..."}),
+            plain[0].clone(),
+        ];
+        assert!(!offered(&prompt_only).contains(&"memory_recall".to_string()));
+    }
+
+    fn offered_for(prompt: &str) -> Vec<String> {
+        super::selected_tool_definitions(&[serde_json::json!({"role":"user","content":prompt})])
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_url_offers_both_web_tools_first() {
+        let offered = offered_for(
+            "Check https://docs.rs/tokio and tell me the latest version. No need to read it aloud.",
+        );
+        let rank = |name: &str| offered.iter().position(|o| o == name);
+        assert!(rank("web_read").is_some_and(|r| r <= 2), "{offered:?}");
+        assert!(rank("web_speak").is_some_and(|r| r <= 2), "{offered:?}");
+    }
+
+    #[test]
+    fn a_file_name_offers_the_file_tools() {
+        let offered = offered_for("Open README.md and tell me what it says.");
+        for tool in ["fs_read", "fs_query", "fs_write"] {
+            assert!(offered.contains(&tool.to_string()), "{tool}: {offered:?}");
+        }
+        // An audio file goes to Studio's analyzer ahead of the generic file tools.
+        let audio = offered_for("Measure the loudness of studio/mix.wav.");
+        assert_eq!(audio[1], "studio_audio_analyze", "{audio:?}");
+        assert!(super::file_extensions("see https://example.com/a.html or www.x.org").is_empty());
+        assert!(super::file_extensions("version 3.5 is out").is_empty());
+        assert_eq!(super::file_extensions("open notes/todo.txt."), ["txt"]);
+    }
+
+    #[test]
+    fn filler_words_do_not_rank_tools() {
+        // "and" used to match inside "command" and "what" every tool that reports.
+        assert!(!super::word_matches("and", "command"));
+        assert!(super::word_matches("run", "runner"));
+        assert!(super::word_matches("reminders", "reminder"));
+        assert!(super::SELECTION_STOPWORDS.contains(&"and"));
+        let offered = offered_for("Run cargo --version in the sandbox.");
+        assert!(
+            offered[..4].contains(&"command_execute".to_string()),
+            "{offered:?}"
+        );
     }
 
     #[test]
