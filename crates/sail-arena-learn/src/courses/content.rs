@@ -74,7 +74,7 @@ pub struct RunLimits {
 }
 
 /// What a correct answer is. Never serialized to a client.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum AnswerKey {
     /// The exact set of option ids (order-insensitive).
@@ -87,7 +87,7 @@ pub enum AnswerKey {
     Rust { stdout: String },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Step {
     pub id: String,
@@ -234,7 +234,7 @@ pub struct Objective {
     pub prerequisites: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Chapter {
     pub id: String,
@@ -242,7 +242,7 @@ pub struct Chapter {
     pub lessons: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lesson {
     pub id: String,
@@ -260,14 +260,14 @@ impl Lesson {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Diagnostic {
     pub id: String,
     pub steps: Vec<Step>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoursePackage {
     pub id: String,
