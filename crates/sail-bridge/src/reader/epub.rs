@@ -10,13 +10,16 @@ use std::collections::HashMap;
 
 use roxmltree::{Document, Node, ParsingOptions};
 
+use super::catalog::{language_label, normalize_isbn};
 use super::zip::Archive;
-use super::{Block, BlockKind, Parsed, ReaderError, Section, TocNode};
+use super::{Block, BlockKind, EmbeddedMetadata, Parsed, ReaderError, Section, TocNode};
 
 const OPS_NS: &str = "http://www.idpf.org/2007/ops";
 /// Where a link into each spine file lands: its section, and the block of each element id.
 type Targets = HashMap<String, (u32, HashMap<String, u32>)>;
 const MAX_TOC_NODES: usize = 4_000;
+/// Embedded covers are re-encoded by the Library; cap the raw image before decoding it.
+const MAX_EMBEDDED_COVER: usize = 8 * 1024 * 1024;
 const MAX_TOC_DEPTH: usize = 8;
 /// Font obfuscation is not DRM; the reader does not use embedded fonts anyway.
 const FONT_OBFUSCATION: [&str; 2] = [
@@ -74,6 +77,62 @@ pub fn parse(bytes: &[u8]) -> Result<Parsed, ReaderError> {
     let title = dc("title").into_iter().next();
     let authors = dc("creator");
     let language = dc("language").into_iter().next();
+    let subtitle = dc("subtitle").into_iter().next().or_else(|| {
+        let metadata = metadata?;
+        metadata.descendants().find_map(|meta| {
+            if meta.tag_name().name() != "meta"
+                || meta.attribute("property") != Some("title-type")
+                || collapse(&text_of(meta)) != "subtitle"
+            {
+                return None;
+            }
+            let id = meta.attribute("refines")?.strip_prefix('#')?;
+            let node = metadata.descendants().find(|node| {
+                node.attribute("id") == Some(id) && node.tag_name().name() == "title"
+            })?;
+            let text = collapse(&text_of(node));
+            (!text.is_empty()).then_some(text)
+        })
+    });
+    let publishers = dc("publisher").into_iter().take(2).collect::<Vec<_>>();
+    let subjects = dc("subject").into_iter().take(4).collect::<Vec<_>>();
+    let languages = dc("language")
+        .into_iter()
+        .map(|code| language_label(&code))
+        .take(2)
+        .collect::<Vec<_>>();
+    let isbn = dc("identifier")
+        .into_iter()
+        .filter_map(|value| {
+            let compact: String = value
+                .chars()
+                .filter(|character| character.is_ascii_digit() || matches!(character, 'X' | 'x'))
+                .collect();
+            normalize_isbn(&compact).ok()
+        })
+        .take(3)
+        .collect::<Vec<_>>();
+    let first_publish_year = dc("date").into_iter().find_map(|value| {
+        value
+            .split(|character: char| !character.is_ascii_digit())
+            .find(|part| part.len() == 4)
+            .and_then(|part| part.parse::<i64>().ok())
+            .filter(|year| (1000..=2100).contains(year))
+    });
+    let description = dc("description")
+        .into_iter()
+        .next()
+        .map(|value| value.chars().take(1600).collect::<String>())
+        .filter(|value| !value.trim().is_empty());
+    let embedded = EmbeddedMetadata {
+        subtitle,
+        first_publish_year,
+        publishers,
+        languages,
+        isbn,
+        subjects,
+        description,
+    };
 
     struct Item {
         href: String,
@@ -93,6 +152,59 @@ pub fn parse(bytes: &[u8]) -> Result<Parsed, ReaderError> {
             );
         }
     }
+    let cover_id = metadata.and_then(|metadata| {
+        metadata
+            .descendants()
+            .find(|node| {
+                node.tag_name().name() == "meta" && node.attribute("name") == Some("cover")
+            })
+            .and_then(|node| node.attribute("content"))
+    });
+    let cover_item = cover_id
+        .and_then(|id| manifest.get(id))
+        .or_else(|| {
+            manifest.values().find(|item| {
+                item.properties
+                    .split_whitespace()
+                    .any(|p| p == "cover-image")
+            })
+        })
+        .or_else(|| {
+            manifest.iter().find_map(|(id, item)| {
+                (item.media.starts_with("image/")
+                    && (id.to_ascii_lowercase().contains("cover")
+                        || item.href.to_ascii_lowercase().contains("cover")))
+                .then_some(item)
+            })
+        });
+    let mut cover_href = cover_item.and_then(|item| {
+        if item.media.starts_with("image/") {
+            Some(item.href.clone())
+        } else if item.media.contains("html") {
+            let text = archive.read_text(&item.href).ok()?;
+            let doc = parse_xml(&text).ok()?;
+            let src = doc
+                .descendants()
+                .find(|node| node.tag_name().name() == "img")
+                .and_then(|node| node.attribute("src"))?;
+            let href = join(&opf_dir, src).ok()?;
+            manifest
+                .values()
+                .any(|candidate| candidate.href == href && candidate.media.starts_with("image/"))
+                .then_some(href)
+        } else {
+            None
+        }
+    });
+    if cover_href.is_none() {
+        cover_href = manifest.values().find_map(|item| {
+            (item.media.starts_with("image/") && (item.href.to_ascii_lowercase().contains("cover")))
+                .then_some(item.href.clone())
+        });
+    }
+    let cover = cover_href
+        .and_then(|href| archive.read(&href).ok())
+        .filter(|bytes| !bytes.is_empty() && bytes.len() <= MAX_EMBEDDED_COVER);
     let spine = opf
         .descendants()
         .find(|n| n.tag_name().name() == "spine")
@@ -201,6 +313,8 @@ pub fn parse(bytes: &[u8]) -> Result<Parsed, ReaderError> {
         title,
         authors,
         language,
+        embedded,
+        cover,
         sections,
         toc,
     })
@@ -710,7 +824,7 @@ mod tests {
 
     fn opf(extra_manifest: &str, spine_attr: &str) -> String {
         format!(
-            r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>The Test Book</dc:title><dc:creator>Ada Writer</dc:creator><dc:language>en</dc:language></metadata><manifest><item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/><item id="c1" href="text/ch%201.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="text/ch2.xhtml" media-type="application/xhtml+xml"/>{extra_manifest}</manifest><spine{spine_attr}><itemref idref="cover"/><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#
+            r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>The Test Book</dc:title><dc:creator>Ada Writer</dc:creator><dc:language>en</dc:language><dc:publisher>Test Press</dc:publisher><dc:identifier>urn:isbn:9780765311788</dc:identifier><dc:date>2006-07-25</dc:date><dc:subject>Fantasy</dc:subject><dc:description>A test description.</dc:description></metadata><manifest><item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/><item id="c1" href="text/ch%201.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="text/ch2.xhtml" media-type="application/xhtml+xml"/>{extra_manifest}</manifest><spine{spine_attr}><itemref idref="cover"/><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#
         )
     }
 
@@ -733,12 +847,13 @@ mod tests {
     #[test]
     fn flattens_epub3_into_safe_blocks_with_nav_toc() {
         let opf = opf(
-            r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#,
+            r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="cover-image" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>"#,
             "",
         );
         let bytes = book(&[
             ("OEBPS/content.opf", opf.as_bytes()),
             ("OEBPS/cover.xhtml", COVER),
+            ("OEBPS/cover.jpg", b"embedded-jpeg"),
             ("OEBPS/text/ch 1.xhtml", CH1),
             ("OEBPS/text/ch2.xhtml", CH2),
             ("OEBPS/nav.xhtml", NAV),
@@ -747,6 +862,16 @@ mod tests {
         assert_eq!(parsed.title.as_deref(), Some("The Test Book"));
         assert_eq!(parsed.authors, ["Ada Writer"]);
         assert_eq!(parsed.language.as_deref(), Some("en"));
+        assert_eq!(parsed.cover.as_deref(), Some(b"embedded-jpeg".as_slice()));
+        assert_eq!(parsed.embedded.publishers, ["Test Press"]);
+        assert_eq!(parsed.embedded.languages, ["English"]);
+        assert_eq!(parsed.embedded.isbn, ["9780765311788"]);
+        assert_eq!(parsed.embedded.first_publish_year, Some(2006));
+        assert_eq!(parsed.embedded.subjects, ["Fantasy"]);
+        assert_eq!(
+            parsed.embedded.description.as_deref(),
+            Some("A test description.")
+        );
         // The image-only cover has no text and is skipped.
         assert_eq!(parsed.sections.len(), 2);
         let ch1: Vec<(BlockKind, &str)> = parsed.sections[0]
@@ -864,6 +989,30 @@ mod tests {
         assert!(matches!(parse(&bytes), Err(ReaderError::Invalid(_))));
     }
 
+    #[test]
+    fn reads_epub2_cover_meta_and_refined_subtitle() {
+        let opf = opf(
+            r#"<item id="cover-image" href="cover.jpg" media-type="image/jpeg"/>"#,
+            "",
+        )
+        .replace(
+            "</metadata>",
+            r##"<meta name="cover" content="cover-image"/><meta refines="#sub" property="title-type">subtitle</meta><dc:title id="sub">A Refined Subtitle</dc:title></metadata>"##,
+        );
+        let bytes = book(&[
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/cover.xhtml", COVER),
+            ("OEBPS/cover.jpg", b"epub2-jpeg"),
+            ("OEBPS/text/ch 1.xhtml", CH1),
+            ("OEBPS/text/ch2.xhtml", CH2),
+        ]);
+        let parsed = parse(&bytes).unwrap();
+        assert_eq!(parsed.cover.as_deref(), Some(b"epub2-jpeg".as_slice()));
+        assert_eq!(
+            parsed.embedded.subtitle.as_deref(),
+            Some("A Refined Subtitle")
+        );
+    }
     #[test]
     fn entity_rewrite_keeps_xml_entities_and_unknown_ampersands() {
         assert_eq!(

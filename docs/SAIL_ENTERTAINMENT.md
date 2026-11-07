@@ -137,8 +137,15 @@ when the narration reaches them. **Reading and read-aloud never call Mind, Agent
   markers are dropped, so footnotes don't interrupt narration. Drop-cap images keep their letter. The TOC comes
   from the EPUB 3 nav document, else the NCX, else the headings. Entries point to `(section, block)`, because
   chapters often share one file. Text files split at "Chapter …/Part …" lines, else every 150 paragraphs.
-- **Storage:** `<data root>/reader/library.json` (metadata and positions) and `books/<id>/{content.json,source.*}`,
-  all written atomically with mode 0600. The id comes from the SHA-256 of the file, so a re-import finds the
+- **Embedded details and cover:** on EPUB import, the package metadata supplies subtitle, publisher, language,
+  first-publication year, ISBN, subjects and description. The cover comes from the EPUB 3 `cover-image`
+  property, the EPUB 2 `cover` meta, an image referenced by a cover page, or a final image item whose id/path
+  names a cover. It is decoded with the same 4096px/64MiB limits and re-encoded as JPEG; invalid, SVG or
+  over-8 MiB source covers are ignored rather than failing the upload. If a file has no cover or no extra
+  metadata, import keeps the current filename title and typographic cover. Import never contacts a provider.
+  Owner-saved Open Library details take precedence; removing them restores the embedded metadata and cover.
+- **Storage:** `<data root>/reader/library.json` (metadata and positions) and
+  `books/<id>/{content.json,source.*,cover-<uuid>.jpg}`, all written atomically with mode 0600. The id comes from the SHA-256 of the file, so a re-import finds the
   existing book. Removing a book deletes SAIL's copy only; the owner's original file is never touched.
 - **Positions** are text anchors `{section, block, char}` (char = UTF-16 offset), never page numbers. Saves use
   revisions (`expected_revision`); a stale save gets 409 with the current position, and the reader offers
@@ -177,7 +184,7 @@ when the narration reaches them. **Reading and read-aloud never call Mind, Agent
   - there were no off-origin requests and no non-reader API calls.
 - **Limits:** with the host voice, reading aloud needs a connection to SAIL; offline it uses this device's voice,
   which pauses between sentences on slow devices (and the reader says so). Background or lock-screen playback and Android WebView are untested. Bookmarks, highlights, notes,
-  collections, cover images, in-book search and Relay handoff are the next phases of #333.
+  collections, in-book search and Relay handoff are the next phases of #333.
 
 ### Library composition and online book details
 
