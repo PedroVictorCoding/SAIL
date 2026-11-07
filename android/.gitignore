@@ -1,0 +1,14 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+captures/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# The repository root ignores "debug" (Rust build output); keep the debug source set.
+!/app/src/debug/
