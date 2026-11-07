@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -42,7 +43,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.LifecycleStartEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.sail.app.core.design.CardBaseBrush
 import dev.sail.app.core.design.CardShape
@@ -89,9 +92,21 @@ fun WorkspaceScreen() {
     var selectedId by rememberSaveable { mutableStateOf<String?>("core") }
     val pane = WorkspacePane.entries[paneIndex]
 
-    LifecycleStartEffect(Unit) {
-        vm.start()
-        onStopOrDispose { vm.stop() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> vm.start()
+                Lifecycle.Event.ON_STOP -> vm.stop()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) vm.start()
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            vm.stop()
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
