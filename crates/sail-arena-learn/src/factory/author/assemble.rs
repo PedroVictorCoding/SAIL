@@ -847,7 +847,7 @@ fn mentioning_anchors(
         .filter(|anchor| {
             lookup
                 .fragment(&anchor.fragment_id)
-                .is_some_and(|fragment| normalize_name(&fragment.text).contains(&name))
+                .is_some_and(|fragment| mentions_name(&fragment.text, &name))
         })
         .take(MAX_EDGE_ANCHORS)
         .cloned()
@@ -877,13 +877,29 @@ fn edge_is_supported(
             .fragment(&anchor.fragment_id)
             .is_some_and(|fragment| {
                 reading_order(&fragment) > prerequisite_order
-                    && normalize_name(&fragment.text).contains(&name)
+                    && mentions_name(&fragment.text, &name)
             })
     })
 }
 
-/// Reading order within a source: line ranges, then pages, then EPUB spine positions.
-/// Comparing different sources is not meaningful, so `source_id` is the first key.
+/// Whether `text` contains `normalized_name` as a whole word sequence.
+///
+/// Whole-word matching matters: a prerequisite named `move` must not be "mentioned" by a
+/// sentence that only contains `remove`. Both sides are normalised; padding with spaces makes
+/// the ends of the text word boundaries too.
+fn mentions_name(text: &str, normalized_name: &str) -> bool {
+    if normalized_name.is_empty() {
+        return false;
+    }
+    let haystack = format!(" {} ", normalize_name(text));
+    let needle = format!(" {normalized_name} ");
+    haystack.contains(&needle)
+}
+
+/// Reading order within a source: line ranges, then pages, then EPUB href/anchor order.
+/// Comparing different sources is not meaningful, so `source_id` is the first key. The
+/// contract's `SourceLocation::Epub` has no spine index, so href order is the deterministic
+/// approximation available here; a factory parser that knows the spine can extend this.
 fn reading_order(fragment: &SourceFragment) -> (String, u8, u64, String) {
     let (class, ordinal, tail) = match &fragment.location {
         SourceLocation::Lines { first, .. } => (0u8, u64::from(*first), String::new()),
@@ -1270,6 +1286,33 @@ mod tests {
         assert_eq!(borrowing.prerequisites[0].status, EdgeStatus::Supported);
         assert_eq!(report.supported_edges, 1);
         assert_eq!(borrowing.prerequisites[0].anchors.len(), 1);
+    }
+
+    #[test]
+    fn a_longer_word_containing_the_name_does_not_support_the_edge() {
+        let lookup = FakeLookup::new(vec![
+            fragment("f-a", "Move semantics transfer a value.", 1),
+            fragment("f-b", "Remove the old binding afterwards.", 10),
+        ]);
+        let (graph, _) = assemble_concept_graph(
+            "course.rust",
+            1,
+            &[batch(
+                &["f-a", "f-b"],
+                vec![
+                    proposed("a", "Move", &["f-a"], &[]),
+                    proposed("b", "Removal", &["f-b"], &[("a", "needed first")]),
+                ],
+            )],
+            &lookup,
+        )
+        .expect("graph assembles");
+        let dependent = graph
+            .concepts
+            .iter()
+            .find(|concept| concept.id == "b")
+            .expect("dependent");
+        assert_eq!(dependent.prerequisites[0].status, EdgeStatus::Proposed);
     }
 
     fn two_concept_graph() -> ConceptGraph {
