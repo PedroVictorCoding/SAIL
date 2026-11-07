@@ -1,0 +1,62 @@
+{
+  "briefing": {
+    "id": "briefing-2026-11-07",
+    "generated_at": "2026-11-07T14:15:00Z",
+    "local_time_str": "14:15 UTC",
+    "greeting": "Welcome back",
+    "headline": "Here's your return briefing.",
+    "away_duration_minutes": 48,
+    "staged_music": {
+      "uri": "spotify:track:4uLU6hMCjMI75M1A2tKUQC",
+      "name": "Music for 18 Musicians",
+      "by": "Steve Reich",
+      "kind": "track",
+      "circadian_slot": "afternoon",
+      "rationale": "Deep focus acoustic minimalism for afternoon engineering.",
+      "is_spotify": true,
+      "confirmed": false
+    },
+    "learning_plan": {
+      "session_id": "sess-01",
+      "topic": "Rust Async Pinning & Futures",
+      "rationale": "2 spaced repetition checks ready before new material.",
+      "status": "ready",
+      "estimated_minutes": 15,
+      "domain": "systems"
+    },
+    "events_to_watch": [
+      {
+        "id": "evt-1",
+        "title": "Architecture review: mobile Situation Room",
+        "due_at": "2026-11-07T16:00:00Z",
+        "due_relative": "in 1h 45m",
+        "urgency": "high",
+        "source": "Pulse",
+        "action_type": "reminder"
+      }
+    ],
+    "news_radar": [
+      {
+        "id": "radar-1",
+        "title": "Subsea cable telemetry expansion across North Atlantic",
+        "source": "Reuters",
+        "summary": "New optical repeaters improve latency and seismic sensing.",
+        "url": "https://example.com/subsea",
+        "relevant_interest": "infrastructure"
+      }
+    ],
+    "project_continuity": {
+      "active_workspace": "SAIL",
+      "forge_summary": "Working on native Android companion app",
+      "last_edited_file": "android/app/src/main/java/dev/sail/app/ui/SailApp.kt",
+      "suggested_action": "Verify Home & Tracker screens"
+    },
+    "system_sentinel": {
+      "host_health": "All core systems nominal.",
+      "storage_status": "76.9 GB free",
+      "memory_headroom": "2.0 / 30.0 GB",
+      "pending_guardian_approvals": 0
+    },
+    "dismissed": false
+  }
+}
