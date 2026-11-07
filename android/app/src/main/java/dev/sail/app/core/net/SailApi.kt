@@ -22,6 +22,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.IOException
+import javax.net.ssl.SSLException
 import kotlin.coroutines.resume
 
 /**
@@ -34,7 +35,10 @@ class SailApi(
     val json: Json = defaultJson,
     baseClient: OkHttpClient = OkHttpClient(),
 ) {
-    /** Shared client with the owner token added for SAIL's host only. Use it for images too. */
+    /**
+     * Shared client that adds the owner token (and the Cloudflare Access service token, if set)
+     * for SAIL's host only. Use it for images too.
+     */
     val client: OkHttpClient = baseClient.newBuilder()
         .addInterceptor(AuthInterceptor(config))
         .build()
@@ -105,6 +109,10 @@ class SailApi(
             .build()
         val response = try {
             client.newCall(request).await()
+        } catch (error: SSLException) {
+            // Reachable, but the phone doesn't trust SAIL's certificate (e.g. the self-signed
+            // SAIL-local one before it's installed): say so instead of "unreachable".
+            return ApiResult.Err(0, "This phone doesn't trust SAIL's certificate")
         } catch (error: IOException) {
             return ApiResult.Err(0, "SAIL is unreachable")
         }
@@ -153,9 +161,13 @@ class SailApi(
             val sameHost = request.url.host == current.baseUrl.host &&
                 request.url.port == current.baseUrl.port
             if (!sameHost) return chain.proceed(request)
-            return chain.proceed(
-                request.newBuilder().header("Authorization", "Bearer ${current.token}").build(),
-            )
+            val builder = request.newBuilder()
+            if (current.token.isNotEmpty()) builder.header("Authorization", "Bearer ${current.token}")
+            current.access?.let { access ->
+                builder.header("CF-Access-Client-Id", access.clientId)
+                builder.header("CF-Access-Client-Secret", access.clientSecret)
+            }
+            return chain.proceed(builder.build())
         }
     }
 

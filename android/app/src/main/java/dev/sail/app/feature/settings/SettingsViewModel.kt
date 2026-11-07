@@ -2,6 +2,7 @@ package dev.sail.app.feature.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.sail.app.core.net.AccessToken
 import dev.sail.app.core.net.ApiResult
 import dev.sail.app.core.net.Connection
 import dev.sail.app.core.net.SailApi
@@ -21,6 +22,9 @@ data class OwnerTokenResponse(val token: String, val configured: Boolean = true)
 data class SettingsUiState(
     val url: String,
     val token: String,
+    /** Optional Cloudflare Access service token (both parts or neither). */
+    val accessId: String = "",
+    val accessSecret: String = "",
     val busy: Boolean = false,
     /** Result of the last check, shown under the form. */
     val message: String? = null,
@@ -40,6 +44,8 @@ class SettingsViewModel(
         SettingsUiState(
             url = current?.baseUrl?.toString()?.trimEnd('/') ?: ServerSettings.DEFAULT_URL,
             token = current?.token.orEmpty(),
+            accessId = current?.access?.clientId.orEmpty(),
+            accessSecret = current?.access?.clientSecret.orEmpty(),
             persistent = settings.persistent,
             configured = current != null,
         ),
@@ -50,11 +56,27 @@ class SettingsViewModel(
 
     fun onTokenChange(value: String) = mutable.update { it.copy(token = value, message = null) }
 
+    fun onAccessIdChange(value: String) = mutable.update { it.copy(accessId = value, message = null) }
+
+    fun onAccessSecretChange(value: String) = mutable.update { it.copy(accessSecret = value, message = null) }
+
+    /** Null when both Access fields are empty; an error message when only one is filled. */
+    private fun accessToken(): Result<AccessToken?> {
+        val id = state.value.accessId.trim()
+        val secret = state.value.accessSecret.trim()
+        return when {
+            id.isEmpty() && secret.isEmpty() -> Result.success(null)
+            id.isEmpty() || secret.isEmpty() -> Result.failure(IllegalArgumentException("Enter both the Access client ID and secret, or neither"))
+            else -> Result.success(AccessToken(id, secret))
+        }
+    }
+
     /** Asks the server for its owner token (works only where the server allows it, e.g. on the tailnet). */
     fun fetchToken() {
         val url = ServerSettings.parseUrl(state.value.url) ?: return fail("Enter a valid server address")
+        val access = accessToken().getOrElse { return fail(it.message.orEmpty()) }
         launchBusy {
-            when (val result = probe(ServerConfig(url, "")).get("/api/guardian/token", OwnerTokenResponse.serializer())) {
+            when (val result = probe(ServerConfig(url, "", access)).get("/api/guardian/token", OwnerTokenResponse.serializer())) {
                 is ApiResult.Ok -> mutable.update {
                     it.copy(token = result.data.token, message = "Token received from SAIL", messageIsError = false)
                 }
@@ -68,7 +90,8 @@ class SettingsViewModel(
         val url = ServerSettings.parseUrl(state.value.url) ?: return fail("Enter a valid server address")
         val token = state.value.token.trim()
         if (token.length < 32) return fail("The owner token is at least 32 characters")
-        val draft = ServerConfig(url, token)
+        val access = accessToken().getOrElse { return fail(it.message.orEmpty()) }
+        val draft = ServerConfig(url, token, access)
         launchBusy {
             val api = probe(draft)
             val health = api.get("/api/health", JsonElement.serializer())

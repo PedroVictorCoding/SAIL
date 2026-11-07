@@ -102,4 +102,16 @@ class SailApiTest {
         if (other.requestCount > 0) assertNull(other.takeRequest().getHeader("Authorization"))
         other.shutdown()
     }
+
+    @Test
+    fun cloudflareAccessHeadersGoToSailOnly() = runTest {
+        val base = server.url("/").toString().trimEnd('/').toHttpUrl()
+        val withAccess = SailApi(config = { ServerConfig(base, token, AccessToken("id.access", "secret")) })
+        server.enqueue(MockResponse().setBody("""{"id":"a","title":"b"}"""))
+        withAccess.get<Course>("/api/health")
+        val request = server.takeRequest()
+        assertEquals("id.access", request.getHeader("CF-Access-Client-Id"))
+        assertEquals("secret", request.getHeader("CF-Access-Client-Secret"))
+        assertEquals("Bearer $token", request.getHeader("Authorization"))
+    }
 }

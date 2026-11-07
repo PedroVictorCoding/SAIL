@@ -70,6 +70,31 @@ fun SettingsScreen(onDone: () -> Unit, onBack: (() -> Unit)?) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                 modifier = Modifier.fillMaxWidth(),
             )
+            Text(
+                "Cloudflare Access (optional): only if SAIL is published behind Cloudflare Access. " +
+                    "Create a service token in Zero Trust › Access › Service Auth.",
+                color = SailColors.TextMuted,
+                fontSize = 13.sp,
+            )
+            OutlinedTextField(
+                value = state.accessId,
+                onValueChange = vm::onAccessIdChange,
+                label = { Text("Access client ID") },
+                singleLine = true,
+                enabled = !state.busy,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = state.accessSecret,
+                onValueChange = vm::onAccessSecretChange,
+                label = { Text("Access client secret") },
+                singleLine = true,
+                enabled = !state.busy,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth(),
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 SecondaryButton("Get token from SAIL", onClick = vm::fetchToken, enabled = !state.busy)
                 PrimaryButton(
