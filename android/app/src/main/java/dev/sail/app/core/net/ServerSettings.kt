@@ -53,11 +53,13 @@ class ServerSettings(context: Context) {
 
         /** Parses what the owner typed; adds https:// when no scheme was given. */
         fun parseUrl(input: String): HttpUrl? {
-            val trimmed = input.trim().trimEnd('/')
+            // Decide the scheme before trimming slashes: "https://" alone must stay invalid,
+            // not turn into "https:" and then the host "https".
+            val trimmed = input.trim()
             if (trimmed.isEmpty()) return null
             val withScheme = if ("://" in trimmed) trimmed else "https://$trimmed"
-            val url = withScheme.toHttpUrlOrNull() ?: return null
-            return url.takeIf { it.scheme == "https" || it.scheme == "http" }
+            val url = withScheme.trimEnd('/').toHttpUrlOrNull() ?: return null
+            return url.takeIf { (it.scheme == "https" || it.scheme == "http") && it.host.isNotBlank() }
         }
 
         private fun openEncrypted(context: Context): SharedPreferences? = try {
