@@ -965,3 +965,7 @@ html[data-sail-visuals=off] .tm-halo { animation: none; }
   .tm-np-art { display: none; }
   .tm-np-ctl { gap: 2px; }
 }
+
+/* The map node popover duplicated the right-hand Context inspector and added little value.
+   Keep it hidden; selecting a node still updates the inspector and highlights the node. */
+#tmDetail { display: none !important; }
