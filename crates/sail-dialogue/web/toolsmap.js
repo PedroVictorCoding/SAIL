@@ -203,7 +203,7 @@
         navItem('away', 'While You Were Away', 'away'),
         navItem('entertainment', 'Entertainment', 'entertainment')),
       el('ul', {class: 'tm-nav tm-nav-2'},
-        el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', onclick: (e) => openStation('forge', e.currentTarget, 'tasks')}, icon('tasks'), 'Tasks')),
+        navItem('pulse', 'Reminders', 'pulse'),
         el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', id: 'terminalRailBtn', onclick: () => window.sailTerminal ? window.sailTerminal.focusTerminal() : document.getElementById('terminalCard')?.classList.toggle('terminal-fullscreen')}, icon('terminal'), 'Terminal')),
         navItem('tracker', 'Tracker', 'sense')),
       el('section', {class: 'tm-np', id: 'tmNowPlaying', 'aria-label': 'Now playing', hidden: true}),
@@ -1025,7 +1025,7 @@
     const mobileAway = root.querySelector('.tm-away-mobile');
     if (current() === 'away') mobileAway?.setAttribute('aria-current', 'page');
     else mobileAway?.removeAttribute('aria-current');
-    $('#tmCrumb').textContent = state.tracker ? 'Tracker' : state.popup ? byId[state.popup].name : state.mode === 'away' ? 'While You Were Away' : 'SAIL';
+    $('#tmCrumb').textContent = current() === 'pulse' ? 'Reminders' : state.tracker ? 'Tracker' : state.popup ? byId[state.popup].name : state.mode === 'away' ? 'While You Were Away' : 'SAIL';
     svgRoot.querySelectorAll('.tm-station').forEach((g) => g.classList.toggle('selected', g.dataset.station === id));
     render();
   }
@@ -1070,12 +1070,12 @@
     render();
   }
   function navTo(target, trigger) {
-    if (target === 'away' || target === 'home') { window.sailNavigate?.(target); return; }
+    if (target === 'away' || target === 'home' || target === 'pulse') { window.sailNavigate?.(target); return; }
     if (target === 'tracker') { state.trigger = trigger || document.activeElement; window.sailNavigate?.('tracker'); return; }
     openStation(target, trigger);
   }
   // The sidebar entry for what the centre shows.
-  function current() { return state.tracker ? 'tracker' : state.popup || (state.mode === 'away' ? 'away' : 'home'); }
+  function current() { if (window.sailCurrentPage?.() === 'pulse') return 'pulse'; return state.tracker ? 'tracker' : state.popup || (state.mode === 'away' ? 'away' : 'home'); }
 
   // ------------------------------------------------------------------ centre pane
   // Stations with a page go through the router (#mind, #forge…) so links, reloads and
