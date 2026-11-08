@@ -65,7 +65,8 @@ pub struct AttemptRequest {
 
 pub struct CourseEngine {
     store: CourseStore,
-    tracks: Vec<Track>,
+    /// Embedded tracks plus published factory revisions. Readers clone a snapshot.
+    tracks: std::sync::RwLock<Vec<Track>>,
     clock: Clock,
     rust: Arc<dyn RustEvaluator>,
     /// One writer at a time, so idempotency checks and appends don't interleave.
@@ -88,7 +89,7 @@ impl CourseEngine {
     pub fn with_clock(store: CourseStore, rust: Arc<dyn RustEvaluator>, clock: Clock) -> Self {
         Self {
             store,
-            tracks: catalog(),
+            tracks: std::sync::RwLock::new(catalog()),
             clock,
             rust,
             write: tokio::sync::Mutex::new(()),
@@ -99,31 +100,83 @@ impl CourseEngine {
         (self.clock)()
     }
 
-    fn package(&self, course_id: &str) -> Result<&CoursePackage> {
-        let track = self
-            .tracks
+    /// A consistent copy of the catalog. Cheap: packages are shared behind `Arc`.
+    fn tracks(&self) -> Vec<Track> {
+        self.tracks
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// Serves a published Course Factory revision, replacing an older revision of the same
+    /// course. Embedded courses can't be replaced. Learner evidence is keyed by course,
+    /// lesson and step ids, so it carries over to the new revision.
+    pub fn publish_generated(&self, track: Track) -> Result<()> {
+        let Some(package) = &track.package else {
+            return Err(CourseError::Invalid(
+                "A published course needs a package.".into(),
+            ));
+        };
+        package.validate().map_err(CourseError::Invalid)?;
+        if package.id != track.id {
+            return Err(CourseError::Invalid(
+                "Package id and course id differ.".into(),
+            ));
+        }
+        let mut tracks = self.tracks.write().unwrap_or_else(|p| p.into_inner());
+        for other in tracks.iter().filter(|t| t.id != track.id) {
+            let Some(p) = &other.package else { continue };
+            if package.lessons.iter().any(|l| p.lesson(&l.id).is_some())
+                || package.reviews.iter().any(|r| p.review(&r.id).is_some())
+            {
+                return Err(CourseError::Conflict(format!(
+                    "Lesson or review ids of `{}` clash with `{}`.",
+                    track.id, other.id
+                )));
+            }
+        }
+        match tracks.iter_mut().find(|t| t.id == track.id) {
+            Some(existing) if existing.generated.is_none() => Err(CourseError::Conflict(format!(
+                "`{}` is a built-in course.",
+                track.id
+            ))),
+            Some(existing) if existing.generated >= track.generated => Ok(()),
+            Some(existing) => {
+                *existing = track;
+                Ok(())
+            }
+            None => {
+                tracks.push(track);
+                Ok(())
+            }
+        }
+    }
+
+    fn package(&self, course_id: &str) -> Result<Arc<CoursePackage>> {
+        let tracks = self.tracks();
+        let track = tracks
             .iter()
             .find(|t| t.id == course_id)
             .ok_or_else(|| CourseError::NotFound(format!("No course named `{course_id}`.")))?;
         track
             .package
-            .as_ref()
+            .clone()
             .ok_or_else(|| CourseError::Conflict(format!("{} has no lessons yet.", track.title)))
     }
 
-    fn lesson(&self, lesson_id: &str) -> Result<(&CoursePackage, &Lesson)> {
-        self.tracks
+    fn lesson(&self, lesson_id: &str) -> Result<(Arc<CoursePackage>, Lesson)> {
+        self.tracks()
             .iter()
-            .filter_map(|t| t.package.as_ref())
-            .find_map(|p| p.lesson(lesson_id).map(|l| (p, l)))
+            .filter_map(|t| t.package.clone())
+            .find_map(|p| p.lesson(lesson_id).cloned().map(|l| (p.clone(), l)))
             .ok_or_else(|| CourseError::NotFound(format!("No lesson named `{lesson_id}`.")))
     }
 
-    fn review(&self, review_id: &str) -> Result<(&CoursePackage, &Step)> {
-        self.tracks
+    fn review(&self, review_id: &str) -> Result<(Arc<CoursePackage>, Step)> {
+        self.tracks()
             .iter()
-            .filter_map(|t| t.package.as_ref())
-            .find_map(|p| p.review(review_id).map(|s| (p, s)))
+            .filter_map(|t| t.package.clone())
+            .find_map(|p| p.review(review_id).cloned().map(|s| (p.clone(), s)))
             .ok_or_else(|| CourseError::NotFound(format!("No review named `{review_id}`.")))
     }
 
@@ -133,7 +186,7 @@ impl CourseEngine {
         let events = self.store.events()?;
         let now = self.now();
         let courses: Vec<Value> = self
-            .tracks
+            .tracks()
             .iter()
             .map(|t| self.course_summary(t, &events, now))
             .collect();
@@ -171,8 +224,8 @@ impl CourseEngine {
     }
 
     pub fn course(&self, course_id: &str) -> Result<Value> {
-        let track = self
-            .tracks
+        let tracks = self.tracks();
+        let track = tracks
             .iter()
             .find(|t| t.id == course_id)
             .ok_or_else(|| CourseError::NotFound(format!("No course named `{course_id}`.")))?;
@@ -224,6 +277,7 @@ impl CourseEngine {
 
     pub fn next(&self, course_id: &str) -> Result<Value> {
         let p = self.package(course_id)?;
+        let p = &*p;
         let events = self.store.events()?;
         Ok(self.next_for(p, &events, self.now()))
     }
@@ -265,6 +319,7 @@ impl CourseEngine {
 
     pub fn lesson_view(&self, lesson_id: &str) -> Result<Value> {
         let (p, l) = self.lesson(lesson_id)?;
+        let (p, l) = (&*p, &l);
         let events = self.store.events()?;
         let done = completed_steps(l, &events);
         let current = l
@@ -292,6 +347,7 @@ impl CourseEngine {
 
     pub async fn lesson_attempt(&self, lesson_id: &str, req: AttemptRequest) -> Result<Value> {
         let (p, l) = self.lesson(lesson_id)?;
+        let (p, l) = (&*p, &l);
         let step_id = req
             .step_id
             .clone()
@@ -317,6 +373,7 @@ impl CourseEngine {
                 (
                     p,
                     l.step(id)
+                        .cloned()
                         .ok_or_else(|| CourseError::NotFound(format!("No step `{id}`.")))?,
                 )
             }
@@ -358,6 +415,7 @@ impl CourseEngine {
 
     pub async fn reveal(&self, lesson_id: &str, step_id: &str) -> Result<Value> {
         let (p, l) = self.lesson(lesson_id)?;
+        let (p, l) = (&*p, &l);
         let step = l
             .step(step_id)
             .ok_or_else(|| CourseError::NotFound(format!("No step `{step_id}`.")))?;
@@ -383,6 +441,7 @@ impl CourseEngine {
     /// The certified-advance gate. Enforced here, never in the client.
     pub async fn advance(&self, lesson_id: &str) -> Result<Value> {
         let (p, l) = self.lesson(lesson_id)?;
+        let (p, l) = (&*p, &l);
         let _guard = self.write.lock().await;
         let events = self.store.events()?;
         let now = self.now();
@@ -451,6 +510,7 @@ impl CourseEngine {
 
     pub async fn diagnostic_start(&self, course_id: &str) -> Result<Value> {
         let p = self.package(course_id)?;
+        let p = &*p;
         if p.diagnostic.is_none() {
             return Err(CourseError::Conflict(
                 "This course has no placement check.".into(),
@@ -480,7 +540,7 @@ impl CourseEngine {
         )
     }
 
-    fn diagnostic_course(&self, id: &str) -> Result<&CoursePackage> {
+    fn diagnostic_course(&self, id: &str) -> Result<Arc<CoursePackage>> {
         let events = self.store.events()?;
         let course = events
             .iter()
@@ -529,6 +589,7 @@ impl CourseEngine {
 
     pub async fn diagnostic_attempt(&self, id: &str, req: AttemptRequest) -> Result<Value> {
         let p = self.diagnostic_course(id)?;
+        let p = &*p;
         if let Some(prior) = self.replay(&req.attempt_id)? {
             return Ok(prior);
         }
@@ -580,6 +641,7 @@ impl CourseEngine {
     /// session, so a reloaded client can resume without side effects.
     pub fn diagnostic_view(&self, id: &str) -> Result<Value> {
         let p = self.diagnostic_course(id)?;
+        let p = &*p;
         let events = self.store.events()?;
         let finished = events
             .iter()
@@ -599,6 +661,7 @@ impl CourseEngine {
 
     pub fn diagnostic_report(&self, id: &str) -> Result<Value> {
         let p = self.diagnostic_course(id)?;
+        let p = &*p;
         let events = self.store.events()?;
         let projected = evidence::project(p, &events, self.now());
         let untested: Vec<&str> = projected
@@ -641,6 +704,7 @@ impl CourseEngine {
 
     pub fn reviews_due(&self, course_id: &str) -> Result<Value> {
         let p = self.package(course_id)?;
+        let p = &*p;
         let events = self.store.events()?;
         let queue = evidence::due_queue(p, &events, self.now());
         Ok(json!({
@@ -657,6 +721,7 @@ impl CourseEngine {
 
     pub async fn review_attempt(&self, review_id: &str, req: AttemptRequest) -> Result<Value> {
         let (p, step) = self.review(review_id)?;
+        let (p, step) = (&*p, &step);
         if let Some(prior) = self.replay(&req.attempt_id)? {
             return Ok(prior);
         }
@@ -673,6 +738,7 @@ impl CourseEngine {
 
     pub fn evidence(&self, course_id: &str) -> Result<Value> {
         let p = self.package(course_id)?;
+        let p = &*p;
         let events = self.store.events()?;
         Ok(json!({
             "objectives": label(&evidence::project(p, &events, self.now())),

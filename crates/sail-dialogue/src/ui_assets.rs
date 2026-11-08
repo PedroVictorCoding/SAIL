@@ -91,6 +91,8 @@ assets![
     ("/model-picker.js", "web/model-picker.js", JS),
     ("/courses.js", "web/courses.js", JS),
     ("/courses.css", "web/courses.css", CSS),
+    ("/learn-factory.js", "web/learn-factory.js", JS),
+    ("/learn-factory.css", "web/learn-factory.css", CSS),
     ("/memory.js", "web/memory.js", JS),
     ("/subsystem-pages.js", "web/subsystem-pages.js", JS),
     ("/briefing.js", "web/briefing.js", JS),
