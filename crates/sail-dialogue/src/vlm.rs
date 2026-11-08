@@ -1462,9 +1462,16 @@ fn names_file(text: &str) -> bool {
     if !file_extensions(text).is_empty() {
         return true;
     }
+    // A path has a slash and a letter in a segment: `src/main`, `./notes`, `~/x`. Dates
+    // (`12/11`, `24/7`) and `and/or`-style words are not paths.
     let has_path = text.split_whitespace().any(|token| {
-        let clean = token.trim_matches(|c: char| "'\"`()[]{},;:!?".contains(c));
-        !clean.contains("://") && !clean.starts_with("www.") && clean.contains('/')
+        let clean = token.trim_matches(|c: char| "'\"`()[]{},;:!?.".contains(c));
+        let lower = clean.to_lowercase();
+        clean.contains('/')
+            && !clean.contains("://")
+            && !clean.starts_with("www.")
+            && clean.chars().any(char::is_alphabetic)
+            && !["and/or", "e/ou", "n/a", "w/", "s/n"].contains(&lower.as_str())
     });
     if has_path {
         return true;
@@ -1498,29 +1505,14 @@ fn wants_web_speak(text: &str) -> bool {
         || lower.contains("lê em voz alta")
         || lower.contains("le em voz alta")
         || lower.contains("ouvir")
-        || lower.contains("ouve")
+        || lower.contains("ouve-")
         || lower.contains("ouça")
 }
 
-/// Whether a URL request asks for silent inspection or answers in text ("tell me",
-/// "no need to read it aloud", "check", "vê").
+/// Whether a URL request should get `web_read` ahead of `web_speak`: every time, unless
+/// the user asked to hear the page.
 fn prefers_web_read(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    lower.contains("no need to read")
-        || lower.contains("don't read")
-        || lower.contains("dont read")
-        || lower.contains("do not read")
-        || lower.contains("tell me")
-        || lower.contains("diz-me")
-        || lower.contains("diga-me")
-        || lower.contains("check")
-        || lower.contains("vê")
-        || lower.contains("ve ")
-        || lower.contains("ver ")
-        || lower.contains("silent")
-        || lower.contains("não precisa")
-        || lower.contains("nao precisa")
-        || !wants_web_speak(&lower)
+    !wants_web_speak(text)
 }
 
 /// Tools that act on what the request points at, ranked above word matches: a URL needs
@@ -2075,6 +2067,16 @@ mod schema_selection_tests {
             params: serde_json::json!({}),
         });
         assert!(!missing.success);
+    }
+
+    #[test]
+    fn dates_and_slash_words_are_not_file_paths() {
+        use crate::vlm::{names_file, wants_web_speak};
+        assert!(!names_file("O teste passou de 12/11 para 19/11."));
+        assert!(!names_file("Open 24/7, and/or on weekends."));
+        assert!(names_file("look at src/main"));
+        assert!(names_file("abre o README.md"));
+        assert!(!wants_web_speak("Houve uma mudança em https://example.com"));
     }
 
     #[test]
