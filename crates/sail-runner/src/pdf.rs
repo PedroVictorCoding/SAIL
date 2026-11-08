@@ -289,6 +289,29 @@ pub fn dispatch(
 mod tests {
     use super::*;
     #[test]
+    fn real_requests_match_the_guardian_standing_pdf_rule() {
+        let bytes = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF";
+        for operation in [
+            PdfOperation::PageCount,
+            PdfOperation::Pages { first: 1, last: 20 },
+        ] {
+            let request = PdfRequest::new(bytes, Uuid::new_v4(), operation).unwrap();
+            let sail_guardian::Capability::Tool(sail_guardian::ToolCapability::SandboxCommand {
+                request: json,
+                ..
+            }) = capability(&request).unwrap()
+            else {
+                panic!("PDF requests are sandbox commands");
+            };
+            assert_eq!(
+                sail_guardian::policy::standing_sandbox_protocol(&json),
+                Some(PROTOCOL),
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
     fn encryption_and_mismatched_frames_are_refused() {
         for bytes in [
             b"%PDF-1.7 /Encrypt 1 0 R".as_slice(),

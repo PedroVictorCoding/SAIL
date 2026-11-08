@@ -83,7 +83,29 @@ pub trait FileText: Send + Sync {
         max_pages: u32,
         cancel: CancellationToken,
     ) -> Result<Vec<(u32, String)>, String>;
+
+    /// Whether reading may start now: `Err(reason)` when the owner hasn't allowed sandboxed
+    /// PDF reading yet. Checked before every attempt, so background syncs never raise an
+    /// approval prompt per file.
+    fn ready(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
+
+/// Whether SAIL can read PDF text, for the status page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfReading {
+    /// The sandbox runner isn't installed or SAIL can't reach it.
+    NotInstalled,
+    /// Installed, waiting for the owner's one-time permission.
+    NeedsPermission,
+    Ready,
+}
+
+/// Most PDFs read per sync. Reading is local (sandbox jobs, no Moodle requests), but each
+/// file is a few runner jobs; a big first sync catches up over several syncs.
+pub const MAX_PDFS_PER_SYNC: usize = 15;
 
 /// Whether background model work may start now. Implemented over Mind's gate.
 pub trait AdmitModel: Send + Sync {
@@ -140,6 +162,8 @@ pub struct Status {
     pub unavailable_features: Vec<String>,
     /// Whether file text (PDFs) and model extraction are wired.
     pub reads_pdfs: bool,
+    /// Why PDFs are or aren't read.
+    pub pdf_reading: PdfReading,
     pub uses_model: bool,
     /// Moodle requests and downloaded bytes today, and the caps.
     pub usage_today: crate::store::Usage,
@@ -294,6 +318,15 @@ impl MoodleService {
         self.dir.join("files")
     }
 
+    /// Whether PDFs can be read now.
+    pub fn pdf_reading(&self) -> PdfReading {
+        match &self.deps.file_text {
+            None => PdfReading::NotInstalled,
+            Some(reader) if reader.ready().is_err() => PdfReading::NeedsPermission,
+            Some(_) => PdfReading::Ready,
+        }
+    }
+
     /// The status page.
     pub fn status(&self) -> Status {
         let creds = credentials::load(&self.dir);
@@ -316,7 +349,8 @@ impl MoodleService {
             last_error: cred_error.or(state.last_error.clone()),
             needs_sign_in: rt.needs_sign_in || !configured,
             unavailable_features: rt.unavailable.clone(),
-            reads_pdfs: self.deps.file_text.is_some(),
+            reads_pdfs: self.pdf_reading() == PdfReading::Ready,
+            pdf_reading: self.pdf_reading(),
             uses_model: self.deps.model.is_some(),
             usage_today: self.store.usage_today().unwrap_or_default(),
             limits: Limits {
@@ -459,6 +493,50 @@ impl MoodleService {
     /// Wake the loop regardless of the cooldown (used right after connecting).
     fn wake_now(&self) {
         self.wake.notify_one();
+    }
+
+    /// Re-read what's already stored (mirrored files, saved snapshots) without contacting
+    /// Moodle: used right after the owner allows PDF reading, so files already downloaded
+    /// are read now instead of at the next scheduled check. Skipped while a sync runs.
+    pub async fn reprocess_local(&self, cancel: CancellationToken) -> Result<SyncReport, String> {
+        let Ok(_guard) = self.sync_lock.try_lock() else {
+            return Err("A sync is running; it will read the files.".into());
+        };
+        let mut report = SyncReport::default();
+        let mut model_budget = MAX_MODEL_CALLS_PER_SYNC;
+        let mut pdf_budget = if self.pdf_reading() == PdfReading::Ready {
+            MAX_PDFS_PER_SYNC
+        } else {
+            0
+        };
+        for course in self.store.courses().map_err(|e| e.to_string())? {
+            let Some(snapshot) = self.store.snapshot(course.id).map_err(|e| e.to_string())? else {
+                continue;
+            };
+            report.courses += 1;
+            report.items += self
+                .refresh_items(
+                    &snapshot,
+                    &mut model_budget,
+                    &mut pdf_budget,
+                    &mut report,
+                    &cancel,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(report)
+    }
+
+    /// Start [`Self::reprocess_local`] in the background.
+    pub fn start_reprocess(self: &Arc<Self>) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.reprocess_local(CancellationToken::new()).await {
+                Ok(report) => info!(?report, "Moodle local re-read done"),
+                Err(reason) => info!(%reason, "Moodle local re-read skipped"),
+            }
+        });
     }
 
     /// Start the poll loop on the current runtime.
@@ -717,10 +795,21 @@ impl MoodleService {
         }
 
         let mut model_budget = MAX_MODEL_CALLS_PER_SYNC;
+        let mut pdf_budget = if self.pdf_reading() == PdfReading::Ready {
+            MAX_PDFS_PER_SYNC
+        } else {
+            0
+        };
         for snapshot in by_course.values() {
             check(&cancel)?;
             let items = self
-                .refresh_items(snapshot, &mut model_budget, &mut report, &cancel)
+                .refresh_items(
+                    snapshot,
+                    &mut model_budget,
+                    &mut pdf_budget,
+                    &mut report,
+                    &cancel,
+                )
                 .await?;
             report.items += items;
         }
@@ -801,12 +890,13 @@ impl MoodleService {
         &self,
         snapshot: &CourseSnapshot,
         model_budget: &mut usize,
+        pdf_budget: &mut usize,
         report: &mut SyncReport,
         cancel: &CancellationToken,
     ) -> Result<usize, MoodleError> {
         let course_id = snapshot.course.id;
         let mut docs = extract::docs::docs_from_snapshot(snapshot);
-        docs.extend(self.file_docs(snapshot, cancel).await?);
+        docs.extend(self.file_docs(snapshot, pdf_budget, cancel).await?);
 
         let mut incoming = extract::structured::items_from_snapshot(snapshot);
         let mut assessment = self.store.assessment(course_id).map_err(store_error)?;
@@ -901,6 +991,7 @@ impl MoodleService {
     async fn file_docs(
         &self,
         snapshot: &CourseSnapshot,
+        pdf_budget: &mut usize,
         cancel: &CancellationToken,
     ) -> Result<Vec<ExtractionDoc>, MoodleError> {
         let mut docs = Vec::new();
@@ -923,17 +1014,33 @@ impl MoodleService {
             let kind = file_kind(file);
             let pages = match kind {
                 FileKind::Pdf => {
+                    // Unread PDFs wait (unmarked) until reading is allowed and budget is left.
                     let Some(reader) = &self.deps.file_text else {
                         continue;
                     };
+                    if *pdf_budget == 0 || reader.ready().is_err() {
+                        continue;
+                    }
                     check(cancel)?;
+                    *pdf_budget -= 1;
                     match reader
                         .pdf_pages(&version.sha256, MAX_FILE_TEXT_PAGES, cancel.child_token())
                         .await
                     {
                         Ok(pages) => pages,
                         Err(reason) => {
+                            // The runner is down or refused: stop PDFs for this sync instead
+                            // of failing file after file. A refused file (encrypted,
+                            // malformed) would fail again; mark it so it isn't retried.
                             info!(%reason, file = %file.filename, "Moodle PDF text unavailable");
+                            let file_refused =
+                                reason.starts_with("PDF refused") && !reason.contains("Guardian");
+                            if file_refused {
+                                let _ =
+                                    self.store.mark_doc(&marker, snapshot.course.id, "rejected");
+                            } else {
+                                *pdf_budget = 0;
+                            }
                             continue;
                         }
                     }

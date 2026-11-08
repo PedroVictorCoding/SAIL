@@ -241,14 +241,14 @@ fn moodle_routes(
     };
     use sail_moodle::service::{MoodleService, ServiceDeps, default_dir, rest_factory};
     let dir = default_dir();
-    let pdf = sail_guardian::global_broker()
-        .ok()
-        .and_then(|broker| crate::learn_pdf::RunnerPdfText::from_env(dir.join("files"), broker))
-        .map(|runner| {
-            Arc::new(crate::moodle_model::MoodlePdf(
-                Arc::new(runner) as Arc<dyn PdfTextExtractor>
-            )) as Arc<dyn sail_moodle::service::FileText>
-        });
+    let pdf = sail_guardian::global_broker().ok().and_then(|broker| {
+        crate::learn_pdf::RunnerPdfText::from_env(dir.join("files"), broker.clone()).map(|runner| {
+            Arc::new(crate::moodle_model::MoodlePdf {
+                reader: Arc::new(runner) as Arc<dyn PdfTextExtractor>,
+                broker,
+            }) as Arc<dyn sail_moodle::service::FileText>
+        })
+    });
     let busy_mind = inference.clone();
     let deps = ServiceDeps {
         model: Some(Arc::new(crate::moodle_model::MoodleMind(MindAuthor::new(

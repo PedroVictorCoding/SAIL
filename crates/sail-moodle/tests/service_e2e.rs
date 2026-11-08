@@ -19,6 +19,7 @@ struct World {
     unauthorized: bool,
     calls: usize,
     downloads: usize,
+    pdf: bool,
 }
 
 struct FakeMoodle(Arc<Mutex<World>>);
@@ -45,6 +46,16 @@ fn file(size: u64) -> FileRef {
         mimetype: Some("text/plain".into()),
         url: "https://moodle.test/webservice/pluginfile.php/1/mod_resource/content/1/Enunciado.txt"
             .into(),
+    }
+}
+
+fn pdf_file() -> FileRef {
+    FileRef {
+        filename: "Ficha da UC.pdf".into(),
+        mimetype: Some("application/pdf".into()),
+        url: "https://moodle.test/webservice/pluginfile.php/1/mod_resource/content/1/Ficha.pdf"
+            .into(),
+        ..file(30)
     }
 }
 
@@ -91,7 +102,11 @@ impl MoodleApi for FakeMoodle {
                 url: None,
                 visible: true,
                 dates: vec![],
-                files: vec![file(w.file_size)],
+                files: if w.pdf {
+                    vec![file(w.file_size), pdf_file()]
+                } else {
+                    vec![file(w.file_size)]
+                },
             }],
         }])
     }
@@ -237,6 +252,7 @@ async fn connect_sync_change_extract_and_sign_out() {
         unauthorized: false,
         calls: 0,
         downloads: 0,
+        pdf: false,
     }));
     let model = Arc::new(ScriptedModel(Mutex::new(0)));
     let svc = service(&dir, world.clone(), model.clone());
@@ -386,6 +402,7 @@ async fn ended_courses_and_grades_are_refreshed_rarely() {
         unauthorized: false,
         calls: 0,
         downloads: 0,
+        pdf: false,
     }));
     let svc = service(&dir, world.clone(), Arc::new(ScriptedModel(Mutex::new(0))));
     svc.connect(Some("https://moodle.test"), Some(TOKEN), None)
@@ -402,5 +419,139 @@ async fn ended_courses_and_grades_are_refreshed_rarely() {
         "second sync {second} calls vs first {first}"
     );
     assert_eq!(world.lock().unwrap().downloads, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The sandbox reader, as the service sees it: allowed or not, and how often it was used.
+struct FakePdf {
+    allowed: Mutex<bool>,
+    refuse_with: Mutex<Option<String>>,
+    reads: Mutex<usize>,
+}
+
+#[async_trait::async_trait]
+impl sail_moodle::service::FileText for FakePdf {
+    fn ready(&self) -> Result<(), String> {
+        if *self.allowed.lock().unwrap() {
+            Ok(())
+        } else {
+            Err("not allowed".into())
+        }
+    }
+    async fn pdf_pages(
+        &self,
+        _: &str,
+        max_pages: u32,
+        _: CancellationToken,
+    ) -> Result<Vec<(u32, String)>, String> {
+        assert!(
+            *self.allowed.lock().unwrap(),
+            "read attempted without permission"
+        );
+        assert!(max_pages <= sail_moodle::service::MAX_FILE_TEXT_PAGES);
+        *self.reads.lock().unwrap() += 1;
+        if let Some(reason) = self.refuse_with.lock().unwrap().clone() {
+            return Err(reason);
+        }
+        Ok(vec![
+            (1, "Ficha da Unidade Curricular".into()),
+            (
+                2,
+                "Exame de época normal: 20 de janeiro de 2027, às 10h00.".into(),
+            ),
+        ])
+    }
+}
+
+#[tokio::test]
+async fn pdfs_wait_for_permission_then_are_read_locally() {
+    let dir = temp_dir("pdf");
+    let world = Arc::new(Mutex::new(World {
+        file_size: 10,
+        due: Utc::now() + Duration::days(5),
+        announcements: vec![],
+        unauthorized: false,
+        calls: 0,
+        downloads: 0,
+        pdf: true,
+    }));
+    let reader = Arc::new(FakePdf {
+        allowed: Mutex::new(false),
+        refuse_with: Mutex::new(Some("PDF refused: Guardian refused PDF extraction".into())),
+        reads: Mutex::new(0),
+    });
+    let factory: ApiFactory = {
+        let world = world.clone();
+        Arc::new(move |_| Ok(Arc::new(FakeMoodle(world.clone())) as Arc<dyn MoodleApi>))
+    };
+    let svc = MoodleService::open(
+        &dir,
+        factory,
+        ServiceDeps {
+            model: None,
+            admit: None,
+            file_text: Some(reader.clone()),
+            request_gap: Some(std::time::Duration::from_millis(1)),
+        },
+    )
+    .unwrap();
+    svc.connect(Some("https://moodle.test"), Some(TOKEN), None)
+        .await
+        .unwrap();
+
+    // Not allowed: the PDF is mirrored but never sent to the sandbox.
+    assert_eq!(
+        svc.status().pdf_reading,
+        sail_moodle::service::PdfReading::NeedsPermission
+    );
+    svc.sync_once(CancellationToken::new()).await.unwrap();
+    assert_eq!(world.lock().unwrap().downloads, 2);
+    assert_eq!(*reader.reads.lock().unwrap(), 0);
+
+    // Allowed, but Guardian refuses (e.g. the rule was just revoked): nothing is marked
+    // unreadable, so the file is read once things work.
+    *reader.allowed.lock().unwrap() = true;
+    let calls_before = world.lock().unwrap().calls;
+    svc.reprocess_local(CancellationToken::new()).await.unwrap();
+    assert_eq!(*reader.reads.lock().unwrap(), 1);
+    assert!(
+        svc.store()
+            .items(None, None, false)
+            .unwrap()
+            .iter()
+            .all(|i| i.when.date.to_string() != "2027-01-20")
+    );
+
+    // Working: the local re-read reads the stored PDF with no Moodle request at all.
+    *reader.refuse_with.lock().unwrap() = None;
+    let report = svc.reprocess_local(CancellationToken::new()).await.unwrap();
+    assert_eq!(report.courses, 1);
+    assert_eq!(*reader.reads.lock().unwrap(), 2);
+    assert_eq!(
+        world.lock().unwrap().calls,
+        calls_before,
+        "local re-read never calls Moodle"
+    );
+    let exam = svc
+        .store()
+        .items(None, None, false)
+        .unwrap()
+        .into_iter()
+        .find(|i| i.when.date.to_string() == "2027-01-20")
+        .expect("exam date from the PDF");
+    assert_eq!(exam.kind, ItemKind::Exam);
+    assert!(
+        exam.evidence[0].label.contains("Ficha da UC.pdf"),
+        "{:?}",
+        exam.evidence
+    );
+
+    // Read once per content hash.
+    svc.reprocess_local(CancellationToken::new()).await.unwrap();
+    assert_eq!(*reader.reads.lock().unwrap(), 2);
+    assert_eq!(
+        svc.status().pdf_reading,
+        sail_moodle::service::PdfReading::Ready
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

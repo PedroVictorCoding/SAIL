@@ -48,18 +48,46 @@ impl AdmitModel for MoodleGate {
     }
 }
 
-/// [`FileText`] over the runner PDF adapter.
-pub struct MoodlePdf(pub Arc<dyn PdfTextExtractor>);
+/// The sandbox operation an owner allows once for all PDFs (see Guardian's
+/// `STANDING_SANDBOX_PROTOCOLS`).
+pub const PDF_PROTOCOL: &str = "pdf-text-v1";
+
+/// PDF jobs authorize as Arena (`sail_runner::pdf::dispatch`), so the standing rule does too.
+/// One permission therefore covers Moodle files and Course Factory sources.
+pub const PDF_REQUESTER: sail_common::types::SubsystemId = sail_common::types::SubsystemId::Arena;
+
+/// [`FileText`] over the runner PDF adapter. It reads only while the owner's standing
+/// "read PDF text in the sandbox" rule exists, so background syncs never raise a prompt.
+pub struct MoodlePdf {
+    pub reader: Arc<dyn PdfTextExtractor>,
+    pub broker: Arc<sail_guardian::GuardianExecutionBroker>,
+}
 
 #[async_trait::async_trait]
 impl FileText for MoodlePdf {
+    fn ready(&self) -> Result<(), String> {
+        if self
+            .broker
+            .policy()
+            .allows_sandbox_operation(PDF_REQUESTER, PDF_PROTOCOL)
+        {
+            Ok(())
+        } else {
+            Err("PDF reading hasn't been allowed yet".into())
+        }
+    }
+
     async fn pdf_pages(
         &self,
         sha256: &str,
         max_pages: u32,
         cancel: CancellationToken,
     ) -> Result<Vec<(u32, String)>, String> {
-        let count = self.0.page_count(sha256).await.map_err(|e| e.to_string())?;
+        let count = self
+            .reader
+            .page_count(sha256)
+            .await
+            .map_err(|e| e.to_string())?;
         let last_wanted = count.min(max_pages);
         let mut out = Vec::new();
         let mut first = 1;
@@ -69,7 +97,7 @@ impl FileText for MoodlePdf {
             }
             let last = (first + PDF_TEXT_PAGES_PER_CALL - 1).min(last_wanted);
             let pages = self
-                .0
+                .reader
                 .pages(sha256, first, last, cancel.child_token())
                 .await
                 .map_err(|e| e.to_string())?;

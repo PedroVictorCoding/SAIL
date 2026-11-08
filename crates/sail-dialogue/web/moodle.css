@@ -188,6 +188,8 @@ main { flex: 1; padding: 16px 20px 24px; outline: none; }
 .md-usage dt, .md-conn dt { color: var(--md-subtle); }
 .md-usage dd, .md-conn dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 
+.md-usage dd.md-pdf { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 8px; }
+.md-pdf-note { flex-basis: 100%; text-align: right; color: var(--md-subtle); font-size: 12px; }
 .md-foot { padding: 10px 20px 16px; color: var(--md-subtle); font-size: 12px; text-align: center; }
 
 .md-dialog { background: var(--md-surface); color: var(--md-text); border: 1px solid var(--md-border); border-radius: var(--md-radius); padding: 22px; width: min(440px, calc(100vw - 32px)); }
