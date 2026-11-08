@@ -1701,6 +1701,62 @@ mod tests {
     }
 
     #[test]
+    fn every_stage_pair_matches_the_documented_rules() {
+        let store = FactoryStore::open_in_memory().expect("store");
+        store
+            .create_project(project("course.rust"))
+            .expect("project");
+        let stages = [
+            LessonStage::Queued,
+            LessonStage::SourceRetrieved,
+            LessonStage::DraftGenerated,
+            LessonStage::SchemaValidated,
+            LessonStage::SourceGrounded,
+            LessonStage::SubjectValidated,
+            LessonStage::ExerciseTested,
+            LessonStage::QualityReviewed,
+            LessonStage::Ready,
+            LessonStage::Published,
+            LessonStage::Failed,
+            LessonStage::Cancelled,
+            LessonStage::Blocked,
+            LessonStage::NeedsReview,
+            LessonStage::SourceInvalidated,
+        ];
+        for (from_index, from) in stages.into_iter().enumerate() {
+            for (to_index, to) in stages.into_iter().enumerate() {
+                let draft_id = format!("draft.{from_index}.{to_index}");
+                let mut stored = draft(
+                    &draft_id,
+                    "course.rust",
+                    "lesson.1",
+                    anchor("src-rust", 1, "hash-a"),
+                );
+                stored.stage = from;
+                store.save_draft(&stored).expect("draft");
+                // The three documented rules, written independently of the store code.
+                let expected = if from == to {
+                    false
+                } else if from.is_terminal() {
+                    from == LessonStage::NeedsReview && to == LessonStage::Ready
+                } else {
+                    to > from
+                };
+                let result = store.advance_stage(&draft_id, from, to);
+                assert_eq!(
+                    result.is_ok(),
+                    expected,
+                    "move {from:?} -> {to:?} should {}",
+                    if expected { "succeed" } else { "be refused" }
+                );
+                if expected {
+                    assert_eq!(result.expect("allowed"), to);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn invalid_inputs_are_refused_before_storage() {
         let store = FactoryStore::open_in_memory().expect("store");
         let mut bad = project("course.rust");
