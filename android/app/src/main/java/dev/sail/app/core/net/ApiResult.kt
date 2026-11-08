@@ -21,3 +21,6 @@ inline fun <T, R> ApiResult<T>.map(transform: (T) -> R): ApiResult<R> = when (th
 }
 
 fun <T> ApiResult<T>.getOrNull(): T? = (this as? ApiResult.Ok)?.data
+
+/** A non-JSON response body. Header names are lower-case. */
+class BinaryBody(val bytes: ByteArray, val headers: Map<String, String>)

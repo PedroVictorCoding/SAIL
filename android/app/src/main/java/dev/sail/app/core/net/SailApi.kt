@@ -78,6 +78,47 @@ class SailApi(
     suspend inline fun <reified B, reified T> putJson(path: String, body: B): ApiResult<T> =
         put(path, body, serializer<B>(), serializer<T>())
 
+    /**
+     * POST a JSON body and receive raw bytes, e.g. PCM from "/api/reader/speech". Errors are
+     * read like [call]'s: the server's `error` message when it sends one.
+     */
+    suspend fun <B> postForBytes(
+        path: String,
+        body: B,
+        bodySerializer: SerializationStrategy<B>,
+    ): ApiResult<BinaryBody> {
+        val target = url(path) ?: return ApiResult.Err(0, "SAIL isn't set up yet")
+        val request = Request.Builder()
+            .url(target)
+            .header("Accept", "application/octet-stream")
+            .header("Cache-Control", "no-store")
+            .post(encode(body, bodySerializer))
+            .build()
+        val response = try {
+            client.newCall(request).await()
+        } catch (error: SSLException) {
+            return ApiResult.Err(0, "This phone doesn't trust SAIL's certificate")
+        } catch (error: IOException) {
+            return ApiResult.Err(0, "SAIL is unreachable")
+        }
+        return response.use {
+            accessRefusal(it)?.let { refusal -> return@use refusal }
+            val bytes = try {
+                it.body?.bytes() ?: ByteArray(0)
+            } catch (error: IOException) {
+                return@use ApiResult.Err(0, "The response from SAIL was cut off")
+            }
+            if (!it.isSuccessful) {
+                ApiResult.Err(it.code, errorMessage(it.code, bytes.decodeToString()))
+            } else {
+                ApiResult.Ok(BinaryBody(bytes, it.headers.names().associate { name -> name.lowercase() to it.header(name).orEmpty() }))
+            }
+        }
+    }
+
+    suspend inline fun <reified B> postJsonForBytes(path: String, body: B): ApiResult<BinaryBody> =
+        postForBytes(path, body, serializer<B>())
+
     /** Absolute URL of a server path (covers, map tiles), or null when SAIL isn't configured. */
     fun url(path: String): HttpUrl? = config()?.baseUrl?.resolve(path)
 
@@ -120,17 +161,7 @@ class SailApi(
     }
 
     private fun <T> parse(response: Response, deserializer: DeserializationStrategy<T>): ApiResult<T> {
-        // Cloudflare Access answers an unauthenticated client by redirecting to its login page,
-        // which OkHttp follows. That's not SAIL speaking, so say what actually happened.
-        if (response.request.url.host.endsWith(".cloudflareaccess.com") ||
-            response.header("cf-access-domain") != null
-        ) {
-            return ApiResult.Err(
-                403,
-                "Cloudflare Access didn't let this phone through. Check the Access service " +
-                    "token and that a Service Auth policy for it is attached to the SAIL application.",
-            )
-        }
+        accessRefusal(response)?.let { return it }
         val text = try {
             response.body?.string().orEmpty()
         } catch (error: IOException) {
@@ -146,6 +177,23 @@ class SailApi(
         } catch (error: IllegalArgumentException) {
             ApiResult.Err(0, "SAIL sent a response this app doesn't understand")
         }
+    }
+
+    /**
+     * Cloudflare Access answers an unauthenticated client by redirecting to its login page,
+     * which OkHttp follows. That's not SAIL speaking, so say what actually happened.
+     */
+    private fun accessRefusal(response: Response): ApiResult.Err? {
+        if (!response.request.url.host.endsWith(".cloudflareaccess.com") &&
+            response.header("cf-access-domain") == null
+        ) {
+            return null
+        }
+        return ApiResult.Err(
+            403,
+            "Cloudflare Access didn't let this phone through. Check the Access service " +
+                "token and that a Service Auth policy for it is attached to the SAIL application.",
+        )
     }
 
     private fun errorMessage(status: Int, body: String): String {

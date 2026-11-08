@@ -23,7 +23,7 @@ opens from Home, and Settings from Home's top bar. The first run opens Settings.
 | Arena | `/api/learn/*` (courses, lessons, diagnostics, reviews, evidence) |
 | Workspace | `/api/health`, `/api/mind/*`, `/api/system/metrics`, `/api/plans` |
 | Library | `/api/reader/library`, `/api/reader/books/{id}`, `/api/music/library` |
-| Reader | `/api/reader/books/{id}`, `…/sections/{n}`, `…/position` (GET, PUT) |
+| Reader | `/api/reader/books/{id}`, `…/sections/{n}`, `…/position` (GET, PUT), `/api/reader/speech` (GET, POST) |
 | Tracker | `/api/tracker/*` |
 
 ### Reader
@@ -45,8 +45,27 @@ controls: back, contents, text settings, previous/next section and progress by t
 - **Text settings** are per phone (not sent to SAIL): Night, Paper or Sepia, 14–28 pt,
   serif or sans, and keep the screen on (default on). Changing the size or typeface keeps
   the same place at the top of the page.
-- Not in this build: read-aloud (`/api/reader/speech`), importing books from the phone,
-  and offline reading. Each section loads from SAIL when it's opened.
+- **Read-aloud** (♪ in the top bar) uses SAIL's host voice, the same Kokoro worker and
+  route as the web reader. The text is spoken literally, one sentence per request, and
+  never reaches a model. Sentences are cut the way the web reader cuts them. Up to two are
+  fetched ahead, and a 429 (the voice is reading another sentence) is retried after
+  300 ms. The sentence being read is highlighted and kept in view. Scrolling away stops
+  following until *Follow* is tapped. Reading continues into the next section. While
+  listening, the spoken sentence is the saved position. The bar has previous sentence,
+  play/pause, next sentence and stop. Voice and speed (0.7–1.5×) are in **Aa**. If another
+  app or a call takes the audio focus, narration pauses. If the host voice is down, the
+  reader says so; there is no on-phone fallback voice.
+- **Reading from a chosen sentence** is deliberate, so a stray touch can't move the voice:
+  - **Long-press** a sentence to mark it. Taps still only turn pages or toggle controls.
+  - A long press during a scroll, or within 450 ms after one, is ignored.
+  - The mark only underlines the sentence. Nothing moves until **Read from here** (or
+    **Listen from here**) is tapped on the card. While a mark is up, any other tap or Back
+    only clears it. The mark clears itself after 8 s.
+  - After a jump, **Undo** (8 s) returns to the sentence the voice was on, for re-reading
+    or for undoing a wrong skip.
+- Not in this build: background playback with a media notification (narration keeps
+  going with the screen on, which is the reader's default), importing books from the
+  phone, and offline reading. Each section loads from SAIL when it's opened.
 
 ## Connection and security
 

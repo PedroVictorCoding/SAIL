@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -40,7 +41,9 @@ class ReaderViewModelTest {
 
     private data class Save(val anchor: ReadingAnchor, val percent: Float, val revision: Long)
 
-    private class FakeSource(position: ReadingPosition?) : ReaderSource {
+    private class FakeSource(position: ReadingPosition?, val texts: List<String>? = null) : ReaderSource {
+        var speech: ApiResult<SpeechInfo> = ApiResult.Ok(SpeechInfo(available = true, voices = listOf("af_heart", "bf_emma")))
+        val spoken = mutableListOf<String>()
         val saves = mutableListOf<Save>()
         val loadedSections = mutableListOf<Int>()
         var next: ((Save) -> SaveOutcome)? = null
@@ -55,6 +58,7 @@ class ReaderViewModelTest {
         override suspend fun section(id: String, index: Int): ApiResult<ReaderSection> {
             loadedSections += index
             val count = detail.sections[index].blocks
+            texts?.let { t -> return ApiResult.Ok(ReaderSection(index, blocks = List(count) { ReaderBlock("p", t[index]) })) }
             return ApiResult.Ok(ReaderSection(index, blocks = List(count) { ReaderBlock("p", "x".repeat(100 / count)) }))
         }
 
@@ -64,6 +68,13 @@ class ReaderViewModelTest {
             next?.let { return it(save) }
             serverRevision = expectedRevision + 1
             return SaveOutcome.Saved(ReadingPosition(anchor, percent, serverRevision))
+        }
+
+        override suspend fun speechInfo(): ApiResult<SpeechInfo> = speech
+
+        override suspend fun speak(text: String, voice: String, speed: Float): SpeechOutcome {
+            spoken += text
+            return SpeechOutcome.Audio(Pcm(ByteArray(2), 24_000))
         }
     }
 
@@ -80,8 +91,13 @@ class ReaderViewModelTest {
     // Not backgroundScope: advanceUntilIdle stops once only background work is left.
     private val persist = CoroutineScope(dispatcher)
 
-    private fun reader(source: FakeSource, start: Int? = null, prefs: ReaderPrefsStore = MemoryPrefs()) =
-        ReaderViewModel(source, prefs, "b", start, persistScope = persist)
+    private fun reader(
+        source: FakeSource,
+        start: Int? = null,
+        prefs: ReaderPrefsStore = MemoryPrefs(),
+        sink: FakeSink? = null,
+    ) = ReaderViewModel(source, prefs, "b", start, persistScope = persist, sinkFactory = sink?.let { s -> { _ -> s } })
+
 
     /** Finish the scroll the ViewModel asked for, landing exactly where it asked. */
     private fun ReaderViewModel.land(anchor: ReadingAnchor? = null) {
@@ -271,5 +287,163 @@ class ReaderViewModelTest {
         advanceUntilIdle()
         assertTrue(vm.state.value.book is UiState.Empty)
         assertNotNull((vm.state.value.book as UiState.Empty).detail)
+    }
+
+    // --- Read-aloud -------------------------------------------------------------------
+
+    private fun oneBlockSource(position: ReadingPosition? = null): FakeSource {
+        val source = object {
+            val texts = List(3) { i -> "S${i}a. S${i}b. S${i}c." }
+        }
+        return FakeSource(position, source.texts)
+    }
+
+    @Test
+    fun `listening starts at the sentence on the page and saves the spoken place`() = runTest(dispatcher) {
+        val source = FakeSource(ReadingPosition(ReadingAnchor(1, 1, 0), 40f, revision = 2))
+        val sink = FakeSink()
+        val vm = reader(source, sink = sink)
+        advanceUntilIdle()
+        vm.land()
+
+        vm.listen()
+        runCurrent()
+        advanceTimeBy(30)
+        runCurrent()
+        val n = vm.state.value.narration
+        assertEquals(NarrationStatus.Playing, n.status)
+        assertEquals(1, n.segment?.block)
+        assertEquals("af_heart", n.voice)
+        // Looking elsewhere while listening doesn't move the saved place.
+        vm.visible(ReadingAnchor(1, 0, 0))
+        assertEquals(ReadingAnchor(1, 1, 0), vm.state.value.anchor)
+        vm.stopNarration()
+        advanceUntilIdle()
+        assertTrue(source.saves.any { it.anchor == ReadingAnchor(1, 1, 0) })
+    }
+
+    @Test
+    fun `an unavailable host voice is reported, not faked`() = runTest(dispatcher) {
+        val source = FakeSource(null).apply { speech = ApiResult.Ok(SpeechInfo(available = false, reason = "The host voice is not running.")) }
+        val vm = reader(source, sink = FakeSink())
+        advanceUntilIdle()
+        vm.land()
+        vm.listen()
+        advanceUntilIdle()
+        assertEquals(NarrationStatus.Off, vm.state.value.narration.status)
+        assertEquals("The host voice is not running.", vm.state.value.narration.message)
+        assertTrue(source.spoken.isEmpty())
+    }
+
+    @Test
+    fun `a long press only marks a sentence until it is confirmed`() = runTest(dispatcher) {
+        val source = oneBlockSource()
+        val vm = reader(source, sink = FakeSink())
+        advanceUntilIdle()
+        vm.land()
+        vm.listen()
+        advanceTimeBy(30)
+        runCurrent()
+        assertEquals(0, vm.state.value.narration.index)
+
+        vm.selectAt(block = 0, char = 11) // inside "S0c."
+        assertEquals("S0c.", vm.state.value.narration.pending?.text)
+        advanceTimeBy(60)
+        runCurrent()
+        // Still reading in order: the mark alone moved nothing.
+        assertTrue(vm.state.value.narration.index <= 1)
+
+        vm.confirmSelection()
+        advanceTimeBy(30)
+        runCurrent()
+        val n = vm.state.value.narration
+        assertNull(n.pending)
+        assertEquals(2, n.index)
+        assertEquals(NarrationStatus.Playing, n.status)
+        assertTrue(n.undo != null)
+    }
+
+    @Test
+    fun `undo returns to where the voice was`() = runTest(dispatcher) {
+        val vm = reader(oneBlockSource(), sink = FakeSink())
+        advanceUntilIdle()
+        vm.land()
+        vm.listen()
+        advanceTimeBy(30)
+        runCurrent()
+        val before = vm.state.value.narration.segment
+        vm.selectAt(0, 11)
+        vm.confirmSelection()
+        advanceTimeBy(30)
+        runCurrent()
+
+        vm.undoJump()
+        advanceTimeBy(30)
+        runCurrent()
+        assertEquals(before, vm.state.value.narration.segment)
+        assertNull(vm.state.value.narration.undo)
+    }
+
+    @Test
+    fun `an unconfirmed mark clears itself`() = runTest(dispatcher) {
+        val vm = reader(oneBlockSource(), sink = FakeSink())
+        advanceUntilIdle()
+        vm.land()
+        vm.selectAt(0, 6)
+        assertTrue(vm.state.value.narration.pending != null)
+        advanceTimeBy(8_001)
+        runCurrent()
+        assertNull(vm.state.value.narration.pending)
+        // Pressing a gap between blocks marks nothing.
+        vm.selectAt(9, 0)
+        assertNull(vm.state.value.narration.pending)
+    }
+
+    @Test
+    fun `confirming a mark while not listening starts listening there`() = runTest(dispatcher) {
+        val source = oneBlockSource()
+        val vm = reader(source, sink = FakeSink())
+        advanceUntilIdle()
+        vm.land()
+        vm.selectAt(0, 6)
+        vm.confirmSelection()
+        advanceTimeBy(30)
+        runCurrent()
+        assertEquals("S0b. ", vm.state.value.narration.segment?.text)
+        assertEquals("S0b. ", source.spoken.first())
+    }
+
+    @Test
+    fun `narration carries on into the next section`() = runTest(dispatcher) {
+        val source = oneBlockSource()
+        val vm = reader(source, sink = FakeSink())
+        advanceUntilIdle()
+        vm.land()
+        vm.listen()
+        // Section 0 is six sentences of ~100 ms each.
+        advanceTimeBy(800)
+        runCurrent()
+        vm.land()
+        advanceTimeBy(150)
+        runCurrent()
+        assertEquals(1, vm.state.value.sectionIndex)
+        assertTrue(source.spoken.contains("S1a. "))
+        assertTrue(vm.state.value.narration.active)
+    }
+
+    @Test
+    fun `scrolling away stops following until asked`() = runTest(dispatcher) {
+        val vm = reader(oneBlockSource(), sink = FakeSink())
+        advanceUntilIdle()
+        vm.land()
+        vm.listen()
+        advanceTimeBy(30)
+        runCurrent()
+        vm.userScrolled()
+        assertEquals(false, vm.state.value.narration.follow)
+        vm.followNarration()
+        assertEquals(true, vm.state.value.narration.follow)
+        vm.stopNarration()
+        advanceUntilIdle()
     }
 }
