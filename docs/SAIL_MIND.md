@@ -112,10 +112,28 @@ model's authors recommend.
 - `sail_model_eval` builds its bodies with the same `request_body::chat_body`, so a score
   is a score for what SAIL really sends.
 
-**Which work may think** is set by each caller, only after the model eval shows it helps
-(see the round 6 results in [Model eval](MODEL_EVAL.md)). The candidates are the Learn
-judge, Course Factory and Moodle extraction, the planner's background plans, memory
-consolidation and Forge.
+**Which work may think.** Each background job has one row in `request_body::Job`. Its
+built-in budget is set only after the model eval shows that thinking helps (see
+[Model eval](MODEL_EVAL.md)), and an environment variable overrides it, so the owner can
+trial a budget without a rebuild. The value is a number of tokens, or `off`/`0`.
+
+| Job | Caller | Override |
+|---|---|---|
+| Learn free-recall judge | `arena-learn/agent/judge.rs` | `SAIL_THINK_JUDGE` |
+| Course Factory authoring | `factory/author/prompts.rs` → `MindAuthor` | `SAIL_THINK_COURSE_AUTHORING` |
+| Moodle extraction | `sail-dialogue/moodle_model.rs` → `MindAuthor` | `SAIL_THINK_MOODLE` |
+| Background plans (never interactive ones) | `sail-agents/planning.rs` | `SAIL_THINK_PLANNING` |
+| Memory consolidation | `sail-core` proposer | `SAIL_THINK_MEMORY` |
+| Forge | `sail-forge/solver.rs` (calls llama-server directly) | `SAIL_FORGE_REASONING_BUDGET` (default 2048) |
+
+Forge streams with the same body builder. Only `delta.content` can become a patch, and
+thinking shows in its activity as "thinking (N tokens)", never as text. A turn that thinks
+without answering is retried like any other empty reply.
+
+**Output limit.** Mind's `ResourceLimits::max_output_tokens` is 4096, the largest answer
+budget a caller asks for (Course Factory lessons). It was 1024 until 2026-11-08, so Mind
+rejected every Moodle extraction (2048) as an invalid request. Tests now check that the
+authoring and extraction budgets fit. The planner and Arena turns keep their own 1024.
 
 **Not in this round:**
 
