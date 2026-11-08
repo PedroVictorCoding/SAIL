@@ -127,6 +127,9 @@ data class ReaderPrefs(
     val textSize: Int = DEFAULT_TEXT_SIZE,
     val serif: Boolean = true,
     val keepScreenOn: Boolean = true,
+    /** Narration voice; null uses the server's default. */
+    val voice: String? = null,
+    val speed: Float = 1f,
 ) {
     companion object {
         const val MIN_TEXT_SIZE = 14
