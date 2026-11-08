@@ -33,6 +33,7 @@ pub fn router(service: Arc<MoodleService>, authority: Option<ApprovalAuthority>)
         .route("/launch", post(launch))
         .route("/connect", post(connect).delete(disconnect))
         .route("/sync", post(sync_now))
+        .route("/pdf-permission", post(allow_pdfs).delete(stop_pdfs))
         .route("/courses", get(courses))
         .route("/changes", get(changes))
         .route("/changes/seen", post(mark_seen))
@@ -146,6 +147,49 @@ async fn disconnect(State(s): State<Arc<MoodleState>>, h: HeaderMap) -> Result<R
     authorize(&s, &h)?;
     s.service.disconnect().map_err(storage)?;
     Ok(no_store(json!({"ok": true})))
+}
+
+/// The owner allows sandboxed PDF reading once (a Guardian standing rule for the fixed
+/// `pdf-text-v1` operation; also listed and revocable under Guardian's rules). Refused when
+/// the runner isn't installed, so the permission is never granted for nothing.
+async fn allow_pdfs(State(s): State<Arc<MoodleState>>, h: HeaderMap) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    if s.service.pdf_reading() == sail_moodle::service::PdfReading::NotInstalled {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(
+                json!({"error":"The PDF sandbox isn't installed. Run scripts/setup-sail-runner.sh, then restart SAIL."}),
+            ),
+        ));
+    }
+    let broker = sail_guardian::global_broker().map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"Guardian is unavailable."})),
+        )
+    })?;
+    let rule = broker.policy().learn_pattern(
+        crate::moodle_model::PDF_REQUESTER,
+        sail_guardian::LearnedPattern::SandboxOperation {
+            protocol: crate::moodle_model::PDF_PROTOCOL.into(),
+        },
+        "Allowed by the owner on the School page".into(),
+    );
+    tracing::info!(rule_id = %rule.id, "Owner allowed sandboxed PDF reading");
+    // Read PDFs already mirrored now, locally; no Moodle requests.
+    s.service.start_reprocess();
+    Ok(no_store(json!(s.service.status())))
+}
+
+async fn stop_pdfs(State(s): State<Arc<MoodleState>>, h: HeaderMap) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    if let Ok(broker) = sail_guardian::global_broker() {
+        broker.policy().revoke_sandbox_operation(
+            crate::moodle_model::PDF_REQUESTER,
+            crate::moodle_model::PDF_PROTOCOL,
+        );
+    }
+    Ok(no_store(json!(s.service.status())))
 }
 
 async fn sync_now(State(s): State<Arc<MoodleState>>, h: HeaderMap) -> Result<Response, Failure> {

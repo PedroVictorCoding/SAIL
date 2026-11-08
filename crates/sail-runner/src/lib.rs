@@ -382,6 +382,9 @@ async fn execute_spec(
     command
         .args([
             "--unshare-all",
+            // `--unshare-all` only *tries* a user namespace; `--disable-userns` requires a
+            // real one, and bubblewrap 0.11 refuses the pair without this flag.
+            "--unshare-user",
             "--disable-userns",
             "--die-with-parent",
             "--new-session",

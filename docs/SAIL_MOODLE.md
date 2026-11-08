@@ -110,8 +110,22 @@ every claim it makes.
 
 - Model-extracted items whose page text later changes are dropped with it. Items from
   files are kept, because a file is read once per content hash.
-- Without the `sail-runner` PDF sandbox (`SAIL_RUNNER_SOCKET`/`SAIL_RUNNER_UID`), PDFs
-  are mirrored but not read. Only text and HTML files are read in that case.
+- PDFs are read only through the `sail-runner` sandbox, and only after the owner allows it
+  once (**Reads PDFs → Allow** on the School page).
+  - **Install:** `cargo build --release -p sail-runner`, then
+    `sudo scripts/setup-sail-runner.sh --user <you>`. Start SAIL again from a new login
+    shell; `run.sh` sets `SAIL_RUNNER_SOCKET`/`SAIL_RUNNER_UID` when the socket is
+    reachable.
+  - **Permission:** Allow stores one Guardian standing rule for the fixed `pdf-text-v1`
+    operation. It is listed and revocable under Guardian's rules and covers Course
+    Factory PDFs too.
+  - **Limits:**
+    - without the rule, syncs never attempt a PDF, so no approval prompts appear;
+    - at most 15 PDFs per sync and the first 40 pages of each;
+    - each file is read once per content hash;
+    - right after Allow, the files already mirrored are read locally, with no Moodle
+      requests.
+  - Without the sandbox, only text and HTML files are read.
 - Forum attachments carry the forum instance id as `module_id`, because the discussions
   API has no course-module id.
 

@@ -121,7 +121,7 @@ For v2 the runner:
 - mounts exactly the declared writable roots as per-job tmpfs mounts, collapsing overlapping
   declarations (for example `/work` covers `/work/scratch`);
 - runs with `--chdir` set to the plan's sandbox cwd, preserving the existing
-  `--unshare-all`/`--disable-userns`/`--cap-drop ALL`/`--clearenv`/cgroup/rlimit boundary,
+  `--unshare-all`/`--unshare-user`/`--disable-userns`/`--cap-drop ALL`/`--clearenv`/cgroup/rlimit boundary,
   and closes every inherited descriptor above stdio with `close_range` before exec;
 - returns the same correlated `CommandResult`.
 
@@ -301,6 +301,26 @@ adversarial suite. Unsafe raw execution is never a rollback option.
 
 
 ## 10. Course Factory PDF text operation
+
+**Setup on a host:** `sudo scripts/setup-sail-runner.sh --user <daemon-user>`. It does
+the following:
+- creates the `sail` group and the `sail-runner` user;
+- builds the root image with `scripts/build-runner-image.sh`: pdfinfo, pdftotext, their
+  library closure and Poppler/fontconfig data, with no shell;
+- makes the image root-owned with the v1 marker;
+- installs `deploy/runner/*` and enables the socket;
+- self-tests the sandbox as `sail-runner`.
+
+On Ubuntu with `kernel.apparmor_restrict_unprivileged_userns=1` and bubblewrap 0.11,
+`--disable-userns` needs an explicit `--unshare-user`. The runner passes it.
+
+**Standing permission:** a `pdf-text-v1` request is a Critical sandbox command, so it would
+need one approval per document. Guardian's `LearnedPattern::SandboxOperation` lets the
+owner allow that one fixed operation for every input. `standing_sandbox_protocol` accepts
+only the exact six-field request shape; any extra field, another protocol or a malformed
+digest is never covered. "Always allow" on a PDF prompt now learns this pattern instead
+of the single file. Background readers check `allows_sandbox_operation` before trying, so
+they never raise prompts.
 
 Provision **`poppler-utils` inside the administrator-owned runner root image**, including
 `/usr/bin/pdfinfo`, `/usr/bin/pdftotext`, their shared libraries and Poppler data/font resources.

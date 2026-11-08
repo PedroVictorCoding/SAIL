@@ -150,8 +150,32 @@
     row('Checks', `every ${Math.round(s.limits.sync_every_minutes / 60 * 10) / 10} h`);
     row('Requests today', `${s.usage_today.requests} of ${s.limits.requests_per_day}`);
     row('Downloaded today', `${bytes(s.usage_today.bytes)} of ${bytes(s.limits.download_bytes_per_day)}`);
-    row('Reads PDFs', s.reads_pdfs ? 'yes' : 'no (runner not set up)');
+    renderPdfRow(dl, s);
     if (s.unavailable_features?.length) row('Skipped', s.unavailable_features.join(', '));
+  }
+
+  // PDF reading: sandbox installed? owner allowed? One button either way.
+  function renderPdfRow(dl, s) {
+    const dd = el('dd', {class: 'md-pdf'});
+    dl.append(el('dt', {text: 'Reads PDFs'}), dd);
+    const mode = s.pdf_reading;
+    if (mode === 'not_installed') {
+      dd.append(el('span', {text: 'No'}),
+        el('span', {class: 'md-pdf-note', text: 'The PDF sandbox isn\'t installed. Run scripts/setup-sail-runner.sh with sudo, then restart SAIL.'}));
+      return;
+    }
+    const allowed = mode === 'ready';
+    const button = el('button', {class: `md-button md-small${allowed ? ' md-quiet' : ' md-primary'}`, type: 'button',
+      text: allowed ? 'Stop' : 'Allow',
+      'aria-label': allowed ? 'Stop reading PDFs' : 'Allow SAIL to read PDFs in the sandbox',
+      onclick: async () => {
+        button.disabled = true;
+        try { state.status = await request('/pdf-permission', {method: allowed ? 'DELETE' : 'POST'}); }
+        catch (err) { banner(err.message); }
+        await refreshAll();
+      }});
+    dd.append(el('span', {text: allowed ? 'Yes' : 'Waiting for you'}), button,
+      allowed ? null : el('span', {class: 'md-pdf-note', text: 'PDFs are read in an isolated sandbox with no network. Allowing this covers every PDF; you can stop it here or in Guardian.'}));
   }
 
   // ------------------------------------------------------------------ courses
