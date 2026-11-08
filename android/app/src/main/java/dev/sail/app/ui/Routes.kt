@@ -14,12 +14,16 @@ object Routes {
     const val WORKSPACE = "workspace"
     const val LIBRARY = "library"
     const val BOOK = "library/book/{bookId}"
+    /** The e-reader. `section` is optional: absent resumes at the saved position. */
+    const val READ = "library/read/{bookId}?section={section}"
     const val TRACKER = "tracker"
     const val SETTINGS = "settings"
 
     fun course(id: String) = "arena/course/${Uri.encode(id)}"
     fun lesson(id: String) = "arena/lesson/${Uri.encode(id)}"
     fun book(id: String) = "library/book/${Uri.encode(id)}"
+    fun read(id: String, section: Int? = null) =
+        "library/read/${Uri.encode(id)}" + (section?.let { "?section=$it" } ?: "")
 }
 
 enum class TopLevel(val route: String, val label: String, val icon: SailIcon) {
