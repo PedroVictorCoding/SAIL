@@ -117,6 +117,30 @@ async fn factory_library_queue_and_settings_contract() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{q}: {body}");
         assert!(body["error"].is_string());
     }
+    // Blank form fields mean "use the default", as the web form sends them.
+    let (status, body) = send(
+        &app,
+        upload(
+            "file_name=blank.md&title=&rights=&license=&scope=",
+            b"# Blank\n\nFields.\n",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["source"]["access_scope"], "learning:general");
+    assert_eq!(body["source"]["rights"]["kind"], "restricted");
+    let blank_id = body["source"]["source_id"].as_str().unwrap().to_string();
+    send(
+        &app,
+        json_req(
+            "DELETE",
+            &format!("/factory/sources/{blank_id}"),
+            None,
+            true,
+        ),
+    )
+    .await;
+
     // Unsupported formats are refused (new bytes: the same bytes would be a duplicate).
     let (status, _) = send(
         &app,
