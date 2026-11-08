@@ -1704,7 +1704,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 28);
+        assert_eq!(tools.len(), 32);
 
         let names: Vec<_> = tools
             .iter()
@@ -1738,6 +1738,40 @@ mod schema_selection_tests {
         for spotify in ["spotify_find", "spotify_play", "spotify_control"] {
             assert!(names.contains(&spotify), "{spotify}");
         }
+        for moodle in [
+            "moodle_upcoming",
+            "moodle_changes",
+            "moodle_course",
+            "moodle_search",
+        ] {
+            assert!(names.contains(&moodle), "{moodle}");
+        }
+    }
+
+    #[test]
+    fn school_questions_offer_the_moodle_tools_in_both_languages() {
+        let offered = |q: &str| -> Vec<String> {
+            super::selected_tool_definitions(&[serde_json::json!({"role":"user","content":q})])
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["function"]["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        for q in [
+            "when is my next exam?",
+            "quando é o próximo teste?",
+            "what deadlines do I have this week",
+            "qual é o prazo de entrega do projeto?",
+        ] {
+            assert!(
+                offered(q).contains(&"moodle_upcoming".to_string()),
+                "{q}: {:?}",
+                offered(q)
+            );
+        }
+        assert!(offered("how is the course graded").contains(&"moodle_course".to_string()));
+        assert!(offered("what changed on moodle").contains(&"moodle_changes".to_string()));
     }
 
     #[test]

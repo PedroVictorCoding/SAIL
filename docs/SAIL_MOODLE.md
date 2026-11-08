@@ -1,6 +1,6 @@
 # SAIL Moodle connector
 
-Status: M0 (contracts), November 2026. Crate: `crates/sail-moodle`.
+Status: round 1 integrated, November 2026. Crate: `crates/sail-moodle`. UI: `/moodle` (sidebar **School**).
 
 SAIL follows the owner's school Moodle (default `https://moodle26.iscte-iul.pt`). It tells
 them what changed (new or updated files, moved deadlines, announcements, grades), keeps a
@@ -27,9 +27,12 @@ every claim it makes.
    - **Paste the token.** Copy it from *Preferences → Security keys*
      (`/user/managetoken.php`) if the site shows one.
    - **SSO launch.** SAIL builds
-     `launch.php?service=moodle_mobile_app&passport=<random>&urlscheme=<scheme>`. The owner
-     opens it in their own browser and signs in through ISCTE's SSO. They then paste back
-     the `<scheme>://token=<base64>` address the browser lands on. SAIL decodes
+     `launch.php?service=moodle_mobile_app&passport=<random>&urlscheme=sailmoodle&confirmed=1`.
+     The owner opens it in their own browser and signs in through ISCTE's SSO.
+     `confirmed=1` makes Moodle end on a page with a "launch the app" link instead of a
+     bare redirect, which desktop browsers drop silently. Moodle carries the flag across
+     SSO in its `tool_mobile_launch` cookie. The owner copies that link's address
+     (`sailmoodle://token=<base64>`) back into SAIL. SAIL decodes
      `signature:::token[:::privatetoken]` and checks the signature, which is
      `md5(site_url + passport)`, before accepting it. The private token is thrown away.
    - The token goes in a `0600` file under the private SAIL data directory. It is never
@@ -60,8 +63,31 @@ every claim it makes.
 7. **Local model only, background priority.** Moodle data is private (vision decision
    15). Extraction runs through Mind at `WorkPriority::Background` behind the same
    admission gate as the Course Factory, so a voice turn always wins.
-8. **Polling, not push.** One sync every 30 minutes by default, with exponential backoff
-   on `Unavailable`. An `Unauthorized` reply stops syncing until the owner signs in again.
+8. **Conservative use of the school's server.** Every request goes through `pacer.rs`:
+   - **Pacing:**
+     - one request at a time, at least 1.5 s apart;
+     - at most 250 requests per sync and 1,200 per UTC day, counted in the store so a
+       restart doesn't reset them;
+     - at most 1 GiB of downloads per day.
+
+     A sync that runs out of budget stops cleanly and resumes next time.
+   - **Scheduling:**
+     - a sync every 3 h by default (`SAIL_MOODLE_SYNC_MINUTES`, never under 60);
+     - exponential backoff on failure, up to 6 h;
+     - manual "Check now" refused within 10 min of the last attempt;
+     - `Unauthorized` stops syncing until the owner signs in again.
+   - **What a sync reads:**
+     - Assignments, events and announcements are bulk calls covering all courses at once.
+     - Grades are re-read at most once a day per course.
+     - Submission status is read only for assignments due within the last 14 days or the
+       next 90 days, at most 40 per sync.
+     - Courses that ended more than 14 days ago are re-read weekly, and their files aren't
+       mirrored.
+     - At most 40 downloads per sync, smallest first.
+
+   A steady-state sync of a typical semester (about 8 courses) is roughly 30 requests,
+   which is about 240 a day. The official Moodle app makes more than that each time it
+   opens.
 9. **Untrusted input.** Course HTML, file names and file text are data. HTML is turned
    into plain text without running anything. File names are never used as paths. PDF text
    comes from the `sail-runner` sandbox (`pdftotext`), never from the daemon's own process.
@@ -75,9 +101,19 @@ every claim it makes.
 | Store | `store/**` | SQLite: snapshots, changes, file index, items, sync state |
 | Sync | `sync/**` | Snapshot diff, mirror plan |
 | Extract | `extract/**` | HTML to text, date finder, prompt, reply validation, merge |
-| Service | `service.rs` | Poll loop, orchestration, Mind adapter |
+| Service | `service.rs`, `pacer.rs`, `credentials.rs` | Poll loop, orchestration, request budgets, token file |
 | HTTP | `sail-dialogue/src/moodle_http.rs` | `/api/moodle`, owner token |
-| Tools | `sail-dialogue/src/execution.rs` | `moodle:*` read-only model tools |
+| Tools | `sail-dialogue/src/moodle_tools.rs` | `moodle:upcoming`, `moodle:changes`, `moodle:course`, `moodle:search` (read-only, answer from the last sync) |
+| UI | `sail-dialogue/web/moodle.{html,js,css}` | Sign-in, courses, dated items with their source quotes, changes, grading, files, usage |
+
+## Known limits
+
+- Model-extracted items whose page text later changes are dropped with it. Items from
+  files are kept, because a file is read once per content hash.
+- Without the `sail-runner` PDF sandbox (`SAIL_RUNNER_SOCKET`/`SAIL_RUNNER_UID`), PDFs
+  are mirrored but not read. Only text and HTML files are read in that case.
+- Forum attachments carry the forum instance id as `module_id`, because the discussions
+  API has no course-module id.
 
 ## Out of scope for now
 

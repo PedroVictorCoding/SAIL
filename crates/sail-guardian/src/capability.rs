@@ -116,6 +116,10 @@ impl Capability {
                         || tool == "spotify:find"
                         || tool == "spotify:play"
                         || tool == "spotify:control"
+                        || tool == "moodle:upcoming"
+                        || tool == "moodle:changes"
+                        || tool == "moodle:course"
+                        || tool == "moodle:search"
                         || tool == "studio:audio_analyze" =>
                 {
                     RiskLevel::Low

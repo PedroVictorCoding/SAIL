@@ -11,7 +11,10 @@
 //! See `docs/SAIL_MOODLE.md`.
 pub mod client;
 pub mod contracts;
+pub mod credentials;
 pub mod extract;
+pub mod pacer;
+pub mod service;
 pub mod store;
 pub mod sync;
 

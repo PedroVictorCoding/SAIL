@@ -77,7 +77,7 @@ fn try_parse_mention_at(
 
     // Must start on word boundary (or punctuation start)
     if start_idx > 0 {
-        let prev_char = text[..start_idx].chars().next_back().unwrap();
+        let prev_char = text[..start_idx].chars().next_back().unwrap_or(' ');
         if prev_char.is_alphanumeric() {
             return None;
         }
@@ -654,7 +654,7 @@ fn try_parse_numeric_date(
 
     // Word boundary after match: cannot be immediately followed by digit or letter
     if slice.len() > consumed {
-        let next_c = slice[consumed..].chars().next().unwrap();
+        let next_c = slice[consumed..].chars().next().unwrap_or(' ');
         if next_c.is_ascii_alphanumeric() {
             return None;
         }
@@ -732,7 +732,7 @@ fn match_month_name(slice: &str) -> Option<MonthInfo> {
             }
             // Ensure word boundary: next char cannot be alphanumeric
             if slice.len() > len {
-                let next_char = slice[len..].chars().next().unwrap();
+                let next_char = slice[len..].chars().next().unwrap_or(' ');
                 if next_char.is_alphanumeric() {
                     continue;
                 }
@@ -912,6 +912,8 @@ fn find_kind_hint(text: &str, span: &Range<usize>) -> Option<ItemKind> {
         (
             &[
                 "aula cancelada",
+                "cancelada",
+                "cancelado",
                 "adiada",
                 "sem aula",
                 "reposição",
@@ -934,19 +936,37 @@ fn find_kind_hint(text: &str, span: &Range<usize>) -> Option<ItemKind> {
         ),
     ];
 
+    // Score = characters between the keyword and the date, plus a large penalty for each
+    // sentence boundary in between, plus a small one for keywords after the date. In
+    // "Mini-teste no dia 19/11. Exame a 15 de janeiro" the 19/11 belongs to the mini-teste
+    // even though "Exame" starts closer. Offsets index `lower`, which can differ in length
+    // from `window_text` only for exotic case mappings; scores then stay approximate.
     let mut best_match: Option<(usize, ItemKind)> = None;
-    let target_offset = span.start - win_start;
+    let date_start = span.start - win_start;
+    let date_end = (span.end - win_start).min(lower.len());
 
     for (words, kind) in keyword_rules {
         for word in *words {
             let mut search_from = 0;
             while let Some(pos) = lower[search_from..].find(word) {
-                let actual_pos = search_from + pos;
-                let dist = actual_pos.abs_diff(target_offset);
-                if best_match.is_none() || dist < best_match.as_ref().unwrap().0 {
-                    best_match = Some((dist, *kind));
+                let kw_start = search_from + pos;
+                let kw_end = kw_start + word.len();
+                let (gap_start, gap_end, after) = if kw_end <= date_start {
+                    (kw_end, date_start, false)
+                } else if kw_start >= date_end {
+                    (date_end, kw_start, true)
+                } else {
+                    (date_start, date_start, false)
+                };
+                let between = lower.get(gap_start..gap_end).unwrap_or("");
+                let boundaries = between.matches(". ").count()
+                    + between.matches('\n').count()
+                    + between.matches("; ").count();
+                let score = (gap_end - gap_start) + boundaries * 1_000 + usize::from(after) * 5;
+                if best_match.is_none_or(|(best, _)| score < best) {
+                    best_match = Some((score, *kind));
                 }
-                search_from = actual_pos + word.len();
+                search_from = kw_end;
             }
         }
     }
@@ -975,6 +995,23 @@ mod tests {
             Some(NaiveTime::from_hms_opt(14, 30, 0).unwrap())
         );
         assert_eq!(hits[0].kind_hint, Some(ItemKind::Deadline));
+    }
+
+    #[test]
+    fn nearest_keyword_in_the_same_sentence_wins() {
+        let text =
+            "Mini-teste no dia 19/11/2026. Exame de época normal a 15 de janeiro de 2027, às 9h00.";
+        let hits = find_dates(text, sample_observed(), None);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].kind_hint, Some(ItemKind::Test));
+        assert_eq!(hits[1].kind_hint, Some(ItemKind::Exam));
+        let text = "A aula de 13/11/2026 está cancelada. Reposição a 20 de novembro de 2026.";
+        let hits = find_dates(text, sample_observed(), None);
+        assert_eq!(hits.len(), 2);
+        assert!(
+            hits.iter()
+                .all(|h| h.kind_hint == Some(ItemKind::ScheduleChange))
+        );
     }
 
     #[test]

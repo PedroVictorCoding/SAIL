@@ -228,6 +228,54 @@ fn factory_routes(
     ))
 }
 
+/// SAIL Moodle's owner API and poll loop. Extraction uses Mind at background priority
+/// behind the Course Factory's gate; PDFs are read by the runner sandbox when configured.
+/// The connector is unavailable (and logged) if its store can't be opened.
+fn moodle_routes(
+    inference: &sail_mind::MindService,
+    authority: Option<sail_guardian::authority::ApprovalAuthority>,
+) -> Option<Router> {
+    use sail_arena_learn::factory::{
+        contracts::PdfTextExtractor,
+        mind_author::{MindAuthor, MindGate},
+    };
+    use sail_moodle::service::{MoodleService, ServiceDeps, default_dir, rest_factory};
+    let dir = default_dir();
+    let pdf = sail_guardian::global_broker()
+        .ok()
+        .and_then(|broker| crate::learn_pdf::RunnerPdfText::from_env(dir.join("files"), broker))
+        .map(|runner| {
+            Arc::new(crate::moodle_model::MoodlePdf(
+                Arc::new(runner) as Arc<dyn PdfTextExtractor>
+            )) as Arc<dyn sail_moodle::service::FileText>
+        });
+    let busy_mind = inference.clone();
+    let deps = ServiceDeps {
+        model: Some(Arc::new(crate::moodle_model::MoodleMind(MindAuthor::new(
+            Arc::new(inference.clone()),
+            None,
+        )))),
+        admit: Some(Arc::new(crate::moodle_model::MoodleGate(MindGate::new(
+            sail_common::resources::global(),
+            Arc::new(move || busy_mind.has_work()),
+            Arc::new(|| false),
+        )))),
+        file_text: pdf,
+        request_gap: None,
+    };
+    match MoodleService::open(&dir, rest_factory(), deps) {
+        Ok(service) => {
+            sail_moodle::service::set_global(service.clone());
+            service.start(tokio_util::sync::CancellationToken::new());
+            Some(crate::moodle_http::router(service, authority))
+        }
+        Err(error) => {
+            warn!(%error, "Moodle store unavailable; Moodle connector disabled");
+            None
+        }
+    }
+}
+
 /// SAIL Tracker's owner API. The tracker is unavailable (and logged) if its store cannot be
 /// opened; the rest of Dialogue still starts. Its refresh loop only fetches while a board
 /// is open or was used recently.
@@ -296,6 +344,7 @@ pub async fn run_dialogue_server_with_plans(
         pulse.clone(),
     );
     let tracker_routes = tracker_routes(authority());
+    let moodle_routes = moodle_routes(&inference, authority());
     let reader_routes = crate::reader_http::routes(authority(), services.clone());
     let music_routes = crate::music_http::routes(authority());
     let system_routes = crate::system_http::router(authority());
@@ -367,6 +416,9 @@ pub async fn run_dialogue_server_with_plans(
     }
     if let Some(routes) = tracker_routes {
         app = app.nest_service("/api/tracker", routes);
+    }
+    if let Some(routes) = moodle_routes {
+        app = app.nest_service("/api/moodle", routes);
     }
     if let Some(routes) = reader_routes {
         app = app.nest_service("/api/reader", routes);

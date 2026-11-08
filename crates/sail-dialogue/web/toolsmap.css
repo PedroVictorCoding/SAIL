@@ -553,7 +553,7 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-pane-back { display: none; grid-area: back; justify-self: start; min-height: 44px; }
 .tm-pane-back span { font-size: 18px; line-height: 1; }
 .tm-pane-main { grid-area: main; min-height: 0; overflow-y: auto; padding-right: 6px; scrollbar-width: thin; scrollbar-color: #3b4148 transparent; }
-.tm-pane-main[hidden], .tm-pane-tracker[hidden] { display: none; }
+.tm-pane-main[hidden], .tm-pane-tracker[hidden], .tm-tracker-frame[hidden] { display: none; }
 .tm-pane-main .subsystem-page { max-width: 1200px; }
 /* Arena is the workspace itself, rather than a card inside a page. */
 .tm-pane[data-mode="arena"] { padding: 0; overflow: hidden; }

@@ -84,7 +84,27 @@ fn extract_title_with_ordinal(text: &str, hit: &DateMention, kind: ItemKind) -> 
         window_end = (window_end + 1).min(text.len());
     }
 
-    let window = &text[window_start..window_end];
+    // Keep only the date's own sentence: "Mini-teste a 19/11. Exame de época normal…" must
+    // not title the mini-teste after the exam. Split on ". " and newlines, not on the dot
+    // of "1.º".
+    let mut window = &text[window_start..window_end];
+    let date_at = hit.span.start - window_start;
+    if let Some(cut) = window[..date_at]
+        .rfind(". ")
+        .or_else(|| window[..date_at].rfind('\n'))
+    {
+        window = &window[cut + 1..];
+    }
+    let date_at = hit.span.start - (window.as_ptr() as usize - text.as_ptr() as usize);
+    let after_date = &window[date_at.min(window.len())..];
+    if let Some(cut) = after_date.find(". ").or_else(|| after_date.find('\n')) {
+        window = &window[..date_at + cut];
+    }
+    let base_name = if kind == ItemKind::Test && window.to_lowercase().contains("mini-teste") {
+        "Mini-teste"
+    } else {
+        base_name
+    };
     let ordinals = [
         ("1.º", "1.º"),
         ("1º", "1.º"),
@@ -116,9 +136,20 @@ fn extract_title_with_ordinal(text: &str, hit: &DateMention, kind: ItemKind) -> 
         ("epoca especial", "Época Especial"),
     ];
 
-    let lower = window.to_lowercase();
+    // Weekdays aren't ordinals ("segunda-feira" is Monday, "terça-feira" Tuesday).
+    let lower = window.to_lowercase().replace("-feira", " feira");
     for (ord_key, ord_display) in ordinals {
-        if lower.contains(ord_key) {
+        let is_season =
+            ord_key.contains("época") || ord_key.contains("epoca") || ord_key.contains("recurso");
+        if is_season && kind != ItemKind::Exam {
+            continue;
+        }
+        let found = lower.match_indices(ord_key).any(|(at, m)| {
+            let next = lower[at + m.len()..].chars().next().unwrap_or(' ');
+            !(ord_key.chars().all(char::is_alphabetic) && next.is_alphabetic())
+                && !lower[at + m.len()..].starts_with(" feira")
+        });
+        if found {
             if kind == ItemKind::Exam && ord_key.contains("recurso") {
                 return "Exame - Época de Recurso".to_string();
             } else if kind == ItemKind::Exam && ord_key.contains("especial") {
@@ -145,7 +176,7 @@ fn extract_surrounding_quote(text: &str, span: &std::ops::Range<usize>) -> Strin
             .next_back()
             .map(|(idx, _)| idx)
             .unwrap_or(0);
-        let ch = text[prev_idx..].chars().next().unwrap();
+        let ch = text[prev_idx..].chars().next().unwrap_or('\n');
         if ch == '\n' || ch == '.' || ch == '!' || ch == '?' {
             // If punctuation, quote starts after it
             break;
@@ -156,7 +187,7 @@ fn extract_surrounding_quote(text: &str, span: &std::ops::Range<usize>) -> Strin
 
     // Advance quote_start past leading whitespace
     while quote_start < span.start {
-        let ch = text[quote_start..].chars().next().unwrap();
+        let ch = text[quote_start..].chars().next().unwrap_or('\n');
         if ch.is_whitespace() || ch == '.' || ch == '!' || ch == '?' {
             quote_start += ch.len_utf8();
         } else {
@@ -168,7 +199,7 @@ fn extract_surrounding_quote(text: &str, span: &std::ops::Range<usize>) -> Strin
     let mut quote_end = span.end;
     let mut chars_after = 0;
     while quote_end < text.len() && chars_after < 150 {
-        let ch = text[quote_end..].chars().next().unwrap();
+        let ch = text[quote_end..].chars().next().unwrap_or('\n');
         quote_end += ch.len_utf8();
         chars_after += 1;
         if ch == '\n' || ch == '.' || ch == '!' || ch == '?' {
@@ -201,7 +232,7 @@ fn extract_surrounding_quote(text: &str, span: &std::ops::Range<usize>) -> Strin
             if end_idx >= text.len() {
                 break;
             }
-            let ch_len = text[end_idx..].chars().next().unwrap().len_utf8();
+            let ch_len = text[end_idx..].chars().next().unwrap_or('\n').len_utf8();
             end_idx += ch_len;
         }
 
@@ -214,6 +245,34 @@ fn extract_surrounding_quote(text: &str, span: &std::ops::Range<usize>) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn titles(text: &str) -> Vec<String> {
+        let doc = ExtractionDoc {
+            id: "d".into(),
+            course_id: 1,
+            course_name: "C".into(),
+            source: DocSource::SectionSummary { section_id: 1 },
+            label: "l".into(),
+            text: text.into(),
+            observed_at: chrono::DateTime::from_timestamp(1_762_600_000, 0).unwrap(),
+            term: None,
+        };
+        let hits = crate::extract::find_dates(text, doc.observed_at, None);
+        items_from_patterns(&doc, &hits)
+            .into_iter()
+            .map(|i| i.title)
+            .collect()
+    }
+
+    #[test]
+    fn titles_stay_inside_their_sentence_and_skip_weekdays() {
+        assert_eq!(
+            titles("Mini-teste no dia 19/11/2026. Exame de época normal a 15 de janeiro de 2027."),
+            vec!["Mini-teste", "Exame - Época Normal"]
+        );
+        assert_eq!(titles("Teste na segunda-feira, 16/11/2026."), vec!["Teste"]);
+        assert_eq!(titles("O 2.º teste é a 14/12/2026."), vec!["2.º Teste"]);
+    }
     use crate::contracts::{DocSource, ItemKind};
     use chrono::{NaiveDate, Utc};
 

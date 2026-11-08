@@ -184,24 +184,34 @@ pub fn merge(existing: &[AcademicItem], incoming: &[AcademicItem]) -> Vec<Academ
         title_groups.entry(key).or_default().push(id.clone());
     }
 
-    for ids in title_groups.values() {
-        if ids.len() > 1 {
+    for ((_, kind, _), ids) in &title_groups {
+        // Only one-off events can conflict. Class changes, labs and other dates repeat
+        // legitimately under the same title (a cancellation and its make-up class).
+        let one_off = !matches!(
+            kind,
+            ItemKind::ScheduleChange | ItemKind::Lab | ItemKind::Other
+        );
+        if one_off && ids.len() > 1 {
             // Check if they have different dates
             let dates: BTreeSet<NaiveDate> = ids
                 .iter()
-                .map(|id| by_id.get(id).unwrap().when.date)
+                .filter_map(|id| by_id.get(id).map(|item| item.when.date))
                 .collect();
 
             if dates.len() > 1 {
                 // Conflict!
                 // If any item has Moodle origin, Moodle wins; others become Uncertain.
                 // Otherwise all become Uncertain.
-                let has_moodle = ids
-                    .iter()
-                    .any(|id| by_id.get(id).unwrap().origin == ItemOrigin::Moodle);
+                let has_moodle = ids.iter().any(|id| {
+                    by_id
+                        .get(id)
+                        .is_some_and(|item| item.origin == ItemOrigin::Moodle)
+                });
 
                 for id in ids {
-                    let item = by_id.get_mut(id).unwrap();
+                    let Some(item) = by_id.get_mut(id) else {
+                        continue;
+                    };
                     if has_moodle {
                         if item.origin != ItemOrigin::Moodle {
                             item.confidence = Confidence::Uncertain;
