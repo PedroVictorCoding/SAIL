@@ -5,13 +5,17 @@
 //! goes through the same checks whether it comes from the web UI, the Android app or a
 //! test. Nothing here calls a model: model work only happens in queued jobs.
 use super::contracts::{
-    AuthoringJob, EducationalSource, IngestionStatus, Invalidation, PriorityReason, SourceRights,
-    sha256_hex,
+    AuthoringJob, ConceptGraph, CourseProject, CurriculumPlan, EducationalSource, FragmentLookup,
+    IngestionStatus, Invalidation, LessonStage, PlanStatus, PriorityReason, ProjectStatus,
+    QueuedJob, SourceRights, ValidationReceipt, sha256_hex,
 };
 use super::jobs::{JobError, JobQueue, MAX_RECENT, Pending, Recent};
+use super::pipeline::{LessonRow, Pipeline, course_id_for, lesson_rows};
 use super::settings::{FactorySettings, SettingsError, SettingsStore};
 use super::sources::{SourceError, SourceRegistry};
-use serde::Serialize;
+use super::store::StoreError;
+use crate::courses::content::Domain;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Longest scope string the owner may set. Scopes are short labels like `learning:rust`.
@@ -143,6 +147,8 @@ pub struct FactoryService {
     jobs: Arc<JobQueue>,
     settings: Arc<SettingsStore>,
     clock: Clock,
+    /// Course generation. `None` keeps the library usable when the store can't open.
+    pipeline: Option<Arc<Pipeline>>,
 }
 
 impl FactoryService {
@@ -157,7 +163,20 @@ impl FactoryService {
             jobs,
             settings,
             clock,
+            pipeline: None,
         }
+    }
+
+    /// Enables the course routes over `pipeline` (which shares this service's stores).
+    pub fn with_pipeline(mut self, pipeline: Arc<Pipeline>) -> Self {
+        self.pipeline = Some(pipeline);
+        self
+    }
+
+    pub fn pipeline(&self) -> Result<&Arc<Pipeline>, FactoryError> {
+        self.pipeline
+            .as_ref()
+            .ok_or_else(|| FactoryError::Conflict("course generation is unavailable".into()))
     }
 
     pub fn jobs(&self) -> &Arc<JobQueue> {
@@ -223,11 +242,15 @@ impl FactoryService {
                 continue;
             }
             let fragment_count = self.sources.fragments(&source.source_id)?.len();
+            let pages = self
+                .pipeline
+                .as_ref()
+                .and_then(|p| p.pdf_progress(&source.source_id, source.revision));
             out.push(SourceView {
                 source,
                 fragment_count,
-                pages_done: None,
-                pages_total: None,
+                pages_done: pages.map(|p| p.0),
+                pages_total: pages.map(|p| p.1),
             });
         }
         out.sort_by_key(|a| std::cmp::Reverse(a.source.imported_ms));
@@ -248,7 +271,14 @@ impl FactoryService {
             },
             "the source was removed",
         )?;
-        Ok(Invalidation::default())
+        let Some(pipeline) = &self.pipeline else {
+            return Ok(Invalidation::default());
+        };
+        let affected = self.sources.affected_by(id)?;
+        let deps = pipeline.deps();
+        deps.store
+            .invalidate(&affected, Some(deps.packages.as_ref()))
+            .map_err(store_err)
     }
 
     pub fn jobs_view(&self) -> Result<JobsView, FactoryError> {
@@ -277,6 +307,455 @@ impl FactoryService {
     pub fn save_settings(&self, s: &FactorySettings) -> Result<FactorySettings, FactoryError> {
         self.settings.save(s)?;
         Ok(*s)
+    }
+}
+
+fn store_err(e: StoreError) -> FactoryError {
+    match e {
+        StoreError::Invalid(m) => FactoryError::Invalid(m),
+        StoreError::NotFound(m) => FactoryError::NotFound(m),
+        StoreError::Conflict(m) => FactoryError::Conflict(m),
+        other => FactoryError::Store(other.to_string()),
+    }
+}
+
+/// Longest course level text, e.g. "Second-year undergraduate".
+pub const MAX_LEVEL_CHARS: usize = 120;
+/// Most sources one course may draw on.
+pub const MAX_COURSE_SOURCES: usize = 16;
+
+/// `POST /factory/courses`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NewCourse {
+    pub title: String,
+    pub domain: Domain,
+    #[serde(default)]
+    pub level: String,
+    pub source_ids: Vec<String>,
+}
+
+/// Counts for the course list.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Progress {
+    pub planned: usize,
+    pub published: usize,
+    pub needs_review: usize,
+    pub failed: usize,
+    pub queued_jobs: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CourseSummary {
+    pub course: CourseProject,
+    pub progress: Progress,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CourseDetail {
+    pub course: CourseProject,
+    pub graph: Option<ConceptGraph>,
+    pub plan: Option<CurriculumPlan>,
+    pub lessons: Vec<LessonRow>,
+}
+
+/// One citation in the draft inspector. Location and chapter only: the owner opens the
+/// book for the text.
+#[derive(Debug, Clone, Serialize)]
+pub struct Citation {
+    pub fragment_id: String,
+    pub chapter_path: Vec<String>,
+    pub location: Option<super::contracts::SourceLocation>,
+    pub quality: Option<super::contracts::QualityStatus>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DraftSummary {
+    pub draft_id: String,
+    pub course_id: String,
+    pub lesson_plan_id: String,
+    pub stage: LessonStage,
+    pub output: serde_json::Value,
+    pub output_hash: String,
+    pub built_from: Vec<super::contracts::SourceAnchorSet>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DraftDetail {
+    pub draft: DraftSummary,
+    pub receipts: Vec<ValidationReceipt>,
+    pub citations: Vec<Citation>,
+}
+
+impl FactoryService {
+    fn enqueue_all(&self, follow: Vec<super::jobs::FollowUp>) -> Result<(), FactoryError> {
+        let now = (self.clock)();
+        for f in follow {
+            self.jobs.enqueue(f.job, f.reasons, f.tie_break, now)?;
+        }
+        Ok(())
+    }
+
+    fn project(&self, id: &str) -> Result<CourseProject, FactoryError> {
+        self.pipeline()?
+            .deps()
+            .store
+            .project(id)
+            .map_err(store_err)?
+            .ok_or_else(|| FactoryError::NotFound(format!("course {id}")))
+    }
+
+    /// Start a course over library sources. Mapping begins as soon as every source is
+    /// extracted (right away for EPUB, Markdown and text).
+    pub fn create_course(&self, req: &NewCourse) -> Result<CourseProject, FactoryError> {
+        let pipeline = self.pipeline()?;
+        let title = req.title.trim();
+        if title.is_empty() || title.chars().count() > MAX_TITLE_CHARS {
+            return Err(FactoryError::Invalid(format!(
+                "the title must be 1–{MAX_TITLE_CHARS} characters"
+            )));
+        }
+        if req.level.chars().count() > MAX_LEVEL_CHARS {
+            return Err(FactoryError::Invalid("the level is too long".into()));
+        }
+        if req.source_ids.is_empty() || req.source_ids.len() > MAX_COURSE_SOURCES {
+            return Err(FactoryError::Invalid(format!(
+                "a course needs 1–{MAX_COURSE_SOURCES} sources"
+            )));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for id in &req.source_ids {
+            if !seen.insert(id) {
+                return Err(FactoryError::Invalid(format!(
+                    "source {id} is listed twice"
+                )));
+            }
+            if self.sources.source(id).is_none() {
+                return Err(FactoryError::NotFound(format!("source {id}")));
+            }
+        }
+        let project = CourseProject {
+            course_id: course_id_for(title),
+            title: title.into(),
+            domain: req.domain,
+            source_ids: req.source_ids.clone(),
+            // The store wants a level; an owner who left it blank means "no particular level".
+            level: match req.level.trim() {
+                "" => "General".into(),
+                level => level.into(),
+            },
+            status: ProjectStatus::Extracting,
+            created_ms: (self.clock)(),
+        };
+        let project = pipeline
+            .deps()
+            .store
+            .create_project(project)
+            .map_err(store_err)?;
+        let follow = pipeline
+            .start_mapping(&project.course_id)
+            .map_err(FactoryError::Store)?;
+        self.enqueue_all(follow)?;
+        self.project(&project.course_id)
+    }
+
+    pub fn courses(&self) -> Result<Vec<CourseSummary>, FactoryError> {
+        let pipeline = self.pipeline()?;
+        let store = &pipeline.deps().store;
+        let active = self.jobs.active()?;
+        let mut out = Vec::new();
+        for course in store.projects().map_err(store_err)? {
+            let mut progress = Progress {
+                queued_jobs: active
+                    .iter()
+                    .filter(|p| job_course(&p.queued.job) == Some(course.course_id.as_str()))
+                    .count(),
+                ..Progress::default()
+            };
+            if let Some(plan) = store.latest_plan(&course.course_id).map_err(store_err)? {
+                let drafts = store.drafts_for(&course.course_id).map_err(store_err)?;
+                for row in lesson_rows(&plan, &drafts, None) {
+                    progress.planned += 1;
+                    match row.stage {
+                        Some(LessonStage::Published) => progress.published += 1,
+                        Some(LessonStage::NeedsReview) => progress.needs_review += 1,
+                        Some(LessonStage::Failed) => progress.failed += 1,
+                        _ => {}
+                    }
+                }
+            }
+            out.push(CourseSummary { course, progress });
+        }
+        out.sort_by_key(|c| std::cmp::Reverse(c.course.created_ms));
+        Ok(out)
+    }
+
+    pub fn course(&self, id: &str) -> Result<CourseDetail, FactoryError> {
+        let pipeline = self.pipeline()?;
+        let deps = pipeline.deps();
+        let course = self.project(id)?;
+        let graph = deps.store.latest_graph(id).map_err(store_err)?;
+        let plan = deps.store.latest_plan(id).map_err(store_err)?;
+        let published = deps
+            .packages
+            .latest(id)
+            .map_err(|e| FactoryError::Store(e.to_string()))?
+            .map(|r| r.revision);
+        let lessons = match &plan {
+            Some(plan) => {
+                let drafts = deps.store.drafts_for(id).map_err(store_err)?;
+                lesson_rows(plan, &drafts, published)
+            }
+            None => Vec::new(),
+        };
+        Ok(CourseDetail {
+            course,
+            graph,
+            plan,
+            lessons,
+        })
+    }
+
+    /// The owner approves a proposed plan: lesson generation starts.
+    pub fn approve_plan(&self, id: &str, revision: u64) -> Result<CurriculumPlan, FactoryError> {
+        let pipeline = self.pipeline()?;
+        let store = &pipeline.deps().store;
+        let course = self.project(id)?;
+        if !matches!(
+            course.status,
+            ProjectStatus::AwaitingPlanApproval | ProjectStatus::Generating
+        ) {
+            return Err(FactoryError::Conflict(
+                "there is no plan waiting for approval".into(),
+            ));
+        }
+        let plan = store.approve_plan(id, revision).map_err(store_err)?;
+        store
+            .set_project_status(id, ProjectStatus::Generating)
+            .map_err(store_err)?;
+        self.enqueue_all(pipeline.lesson_jobs(&plan))?;
+        Ok(plan)
+    }
+
+    /// Pause one course: its queued jobs wait (nothing is lost). Resume works out where it
+    /// was from what is stored.
+    pub fn set_course_paused(&self, id: &str, paused: bool) -> Result<CourseProject, FactoryError> {
+        let pipeline = self.pipeline()?;
+        let store = &pipeline.deps().store;
+        let course = self.project(id)?;
+        if paused {
+            if matches!(
+                course.status,
+                ProjectStatus::Complete | ProjectStatus::Failed { .. }
+            ) {
+                return Err(FactoryError::Conflict(
+                    "a finished course can't be paused".into(),
+                ));
+            }
+            return store
+                .set_project_status(id, ProjectStatus::Paused)
+                .map_err(store_err);
+        }
+        if course.status != ProjectStatus::Paused {
+            return Ok(course);
+        }
+        let plan = store.latest_plan(id).map_err(store_err)?;
+        let status = match &plan {
+            Some(p) if p.status == PlanStatus::OwnerApproved => ProjectStatus::Generating,
+            Some(_) => ProjectStatus::AwaitingPlanApproval,
+            None if store.latest_graph(id).map_err(store_err)?.is_some() => ProjectStatus::Mapping,
+            None => ProjectStatus::Extracting,
+        };
+        let restarting = status == ProjectStatus::Extracting;
+        let course = store.set_project_status(id, status).map_err(store_err)?;
+        if restarting {
+            self.enqueue_all(pipeline.start_mapping(id).map_err(FactoryError::Store)?)?;
+        }
+        Ok(course)
+    }
+
+    /// "Generate the next lesson now": the first planned lesson without a usable draft
+    /// jumps the queue.
+    pub fn next_lesson(&self, id: &str) -> Result<QueuedJob, FactoryError> {
+        let pipeline = self.pipeline()?;
+        let store = &pipeline.deps().store;
+        let course = self.project(id)?;
+        if course.status != ProjectStatus::Generating {
+            return Err(FactoryError::Conflict(
+                "approve the plan first (or resume the course)".into(),
+            ));
+        }
+        let plan = store
+            .latest_plan(id)
+            .map_err(store_err)?
+            .filter(|p| p.status == PlanStatus::OwnerApproved)
+            .ok_or_else(|| FactoryError::Conflict("the plan isn't approved".into()))?;
+        let drafts = store.drafts_for(id).map_err(store_err)?;
+        let next = lesson_rows(&plan, &drafts, None)
+            .into_iter()
+            .find(|row| {
+                row.stage
+                    .is_none_or(|s| s.is_terminal() && s != LessonStage::Published)
+            })
+            .ok_or_else(|| FactoryError::Conflict("every lesson already has a draft".into()))?;
+        let job = AuthoringJob::GenerateLesson {
+            course_id: id.into(),
+            plan_revision: plan.revision,
+            lesson_plan_id: next.lesson_plan_id,
+        };
+        let reasons = vec![PriorityReason::OwnerRequest];
+        let now = (self.clock)();
+        self.jobs.enqueue(job.clone(), reasons.clone(), now, now)?;
+        Ok(QueuedJob {
+            job,
+            priority: super::jobs::priority(&reasons, now),
+            reasons,
+        })
+    }
+
+    pub fn draft(&self, id: &str) -> Result<DraftDetail, FactoryError> {
+        let pipeline = self.pipeline()?;
+        let draft = pipeline
+            .deps()
+            .store
+            .draft(id)
+            .map_err(store_err)?
+            .ok_or_else(|| FactoryError::NotFound(format!("draft {id}")))?;
+        let output: serde_json::Value = serde_json::from_str(&draft.raw_json)
+            .map_err(|e| FactoryError::Store(e.to_string()))?;
+        let mut cited: Vec<String> = draft
+            .output
+            .claims
+            .iter()
+            .flat_map(|c| c.fragment_ids.iter().cloned())
+            .collect();
+        cited.sort();
+        cited.dedup();
+        let citations = cited
+            .into_iter()
+            .map(|fragment_id| {
+                let f = self.sources.fragment(&fragment_id);
+                Citation {
+                    chapter_path: f
+                        .as_ref()
+                        .map(|f| f.chapter_path.clone())
+                        .unwrap_or_default(),
+                    location: f.as_ref().map(|f| f.location.clone()),
+                    quality: f.map(|f| f.quality),
+                    fragment_id,
+                }
+            })
+            .collect();
+        let receipts = pipeline.receipts(id);
+        Ok(DraftDetail {
+            draft: DraftSummary {
+                draft_id: draft.draft_id,
+                course_id: draft.course_id,
+                lesson_plan_id: draft.lesson_plan_id,
+                stage: draft.stage,
+                output,
+                output_hash: draft.output_hash,
+                built_from: draft.built_from,
+            },
+            receipts,
+            citations,
+        })
+    }
+
+    /// The owner publishes a draft the checks passed (`ready`) or couldn't fully verify
+    /// (`needs_review`). A draft with a failed check can't be published.
+    pub fn publish_draft(&self, id: &str) -> Result<(String, u64), FactoryError> {
+        let pipeline = self.pipeline()?;
+        let deps = pipeline.deps();
+        let draft = deps
+            .store
+            .draft(id)
+            .map_err(store_err)?
+            .ok_or_else(|| FactoryError::NotFound(format!("draft {id}")))?;
+        match draft.stage {
+            LessonStage::NeedsReview => {
+                deps.store
+                    .advance_stage(id, LessonStage::NeedsReview, LessonStage::Ready)
+                    .map_err(store_err)?;
+            }
+            LessonStage::Ready | LessonStage::Published => {}
+            other => {
+                return Err(FactoryError::Conflict(format!(
+                    "a draft in stage {other:?} can't be published"
+                )));
+            }
+        }
+        // Publish now rather than through the queue: the owner is waiting, and assembly
+        // calls no model.
+        let step = pipeline.publish_now(&draft.course_id);
+        if let super::jobs::JobOutcome::Failed { reason, .. } = step.outcome {
+            return Err(FactoryError::Conflict(reason));
+        }
+        self.enqueue_all(step.follow_ups)?;
+        let revision = deps
+            .packages
+            .latest(&draft.course_id)
+            .map_err(|e| FactoryError::Store(e.to_string()))?
+            .map(|r| r.revision)
+            .unwrap_or(0);
+        Ok((draft.course_id, revision))
+    }
+
+    /// The owner rejects a draft; a new one is written. The reason goes to the log only:
+    /// it is owner text and never reaches a prompt.
+    pub fn reject_draft(&self, id: &str, reason: &str) -> Result<DraftSummary, FactoryError> {
+        let pipeline = self.pipeline()?;
+        let store = &pipeline.deps().store;
+        let draft = store
+            .draft(id)
+            .map_err(store_err)?
+            .ok_or_else(|| FactoryError::NotFound(format!("draft {id}")))?;
+        match draft.stage {
+            LessonStage::Ready => {}
+            // A terminal review can only move to Ready; go through it to fail the draft.
+            LessonStage::NeedsReview => {
+                store
+                    .advance_stage(id, LessonStage::NeedsReview, LessonStage::Ready)
+                    .map_err(store_err)?;
+            }
+            other => {
+                return Err(FactoryError::Conflict(format!(
+                    "a draft in stage {other:?} can't be rejected"
+                )));
+            }
+        }
+        store
+            .advance_stage(id, LessonStage::Ready, LessonStage::Failed)
+            .map_err(store_err)?;
+        tracing::info!(draft = %id, reason = %reason.chars().take(200).collect::<String>(), "course factory: owner rejected a draft");
+        let now = (self.clock)();
+        self.jobs.enqueue(
+            AuthoringJob::GenerateLesson {
+                course_id: draft.course_id.clone(),
+                plan_revision: draft.plan_revision,
+                lesson_plan_id: draft.lesson_plan_id.clone(),
+            },
+            vec![PriorityReason::OwnerRequest],
+            now,
+            now,
+        )?;
+        self.draft(id).map(|d| d.draft)
+    }
+}
+
+/// The course a job belongs to, if any.
+pub fn job_course(job: &AuthoringJob) -> Option<&str> {
+    match job {
+        AuthoringJob::ExtractConcepts { course_id, .. }
+        | AuthoringJob::BuildConceptGraph { course_id }
+        | AuthoringJob::BuildCurriculum { course_id, .. }
+        | AuthoringJob::GenerateLesson { course_id, .. }
+        | AuthoringJob::GenerateExerciseVariant { course_id, .. }
+        | AuthoringJob::GenerateReviewAssessment { course_id, .. }
+        | AuthoringJob::PublishCourseRevision { course_id } => Some(course_id),
+        AuthoringJob::ExtractSource { .. }
+        | AuthoringJob::ExtractPdfPages { .. }
+        | AuthoringJob::ValidateDraft { .. } => None,
     }
 }
 

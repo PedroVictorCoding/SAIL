@@ -19,6 +19,7 @@ pub mod contracts;
 pub mod ingest;
 pub mod jobs;
 pub mod mind_author;
+pub mod pipeline;
 pub mod registry;
 pub mod service;
 pub mod settings;
