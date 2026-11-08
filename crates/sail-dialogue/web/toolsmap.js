@@ -1124,7 +1124,12 @@
     if (!routed) { $('#tmPaneTitle').textContent = byId[id].name; $('#tmPaneAbout').textContent = byId[id].about; }
     if (state.popup !== id || pane.hidden || state.frame) paneMain.scrollTop = 0;
     state.frame = null;
-    showPane(id === 'arena' ? 'arena' : 'station');
+    const activeRoute = state.route || window.sailCurrentPage?.();
+    const mode = id === 'arena' || activeRoute === 'arena' ? 'arena'
+      : id === 'terminal' || activeRoute === 'terminal' ? 'terminal'
+      : id === 'flow' || activeRoute === 'flow' ? 'flow'
+      : 'station';
+    showPane(mode);
     state.popup = id;
     select(id);
   }

@@ -241,6 +241,7 @@ function initializeSubsystemPages() {
     content.replaceChildren();
     if (home) home.hidden = true;
     page.hidden = !item;
+    if (page) page.dataset.page = route;
     if (workspace) workspace.setAttribute('aria-label', `${item?.name || (route === 'entertainment' ? 'Entertainment' : 'Home')} workspace`);
     document.title = `SAIL — ${item?.name || {tracker: 'Tracker', moodle: 'School', entertainment: 'Entertainment'}[route] || 'Workspace'}`;
     document.querySelectorAll('[data-page]').forEach(link => {
