@@ -320,7 +320,10 @@ async fn a_book_becomes_a_published_served_lesson() {
     // Asking again changes nothing and calls no model: every step checks what's stored.
     let calls = rig.model.calls.load(Ordering::SeqCst);
     assert_eq!(calls, 3, "one concept batch, one plan, one lesson");
-    rig.service.approve_plan(&course, plan.revision).unwrap();
+    assert!(
+        rig.service.approve_plan(&course, plan.revision).is_err(),
+        "a complete course has no plan waiting"
+    );
     assert!(
         rig.service.next_lesson(&course).is_err(),
         "nothing is left to write"
