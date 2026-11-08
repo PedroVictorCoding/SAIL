@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/courses.css">
 <link rel="stylesheet" href="/learn-factory.css">
 <link rel="stylesheet" href="/ambient-backdrop.css">
+<link rel="stylesheet" href="/flow.css">
 </head>
 <body>
 <main class="app-shell" id="appShell" data-state="idle">
@@ -197,6 +198,22 @@
           </div>
         </article>
 
+        <section id="flowCard" class="workspace-card flow-workspace" aria-label="Flow workflow editor">
+          <div class="flow-toolbar"><h3>Workflow studio</h3><button class="tm-btn" id="flowNew" type="button">New workflow</button><button class="tm-btn" id="flowRefresh" type="button">Refresh</button></div>
+          <p>Connect text operations and conditions. Save a version, run it locally, and inspect each result. No model or external service is required.</p>
+          <p id="flowStatus" class="flow-status" role="status" aria-live="polite">Open Flow to load workflows.</p>
+          <div class="flow-layout">
+            <aside aria-label="Saved workflows"><h4>Saved workflows</h4><div id="flowSaved" class="flow-saved"></div></aside>
+            <div style="min-width:0">
+              <label>Workflow name<input id="flowName" maxlength="120" disabled></label><p id="flowDraftState">Draft</p>
+              <div class="flow-actions"><button class="tm-btn" id="flowAdd" type="button" disabled>Add node</button><button class="tm-btn" id="flowSave" type="button" disabled>Save version</button><button class="tm-btn" id="flowDelete" type="button" disabled>Delete workflow</button></div>
+              <div class="flow-stage" tabindex="0" role="region" aria-label="Workflow graph"><svg id="flowEdges" class="flow-edges" aria-hidden="true"></svg><div id="flowGraph" class="flow-graph"></div></div>
+              <div class="flow-edit"><div id="flowNodeSettings"></div><div><label>Run input<textarea id="flowInput" rows="5" disabled maxlength="4096" placeholder="Enter text for the manual trigger"></textarea></label><button class="tm-btn" id="flowRun" type="button" disabled>Run saved workflow</button></div></div>
+              <p><small>Available now: manual triggers, text transforms, conditional branches and saved results. Scheduled triggers, connectors, approval nodes and Skillsmith generation are not available yet.</small></p>
+            </div>
+          </div>
+          <h4>Executions</h4><div class="flow-runs" id="flowRuns"></div>
+        </section>
         <article class="workspace-card pulse-card" id="pulseCard" data-card="pulseCard">
           <header class="card-heading">
             <div class="card-title"><span class="card-icon" aria-hidden="true">◷</span><div><h3 id="pulseCardHeading">Pulse</h3><p id="pulseCardSub">Local reminders and timing</p></div></div>
@@ -1332,6 +1349,7 @@
 <script src="/learn-factory.js" defer></script>
 <link rel="stylesheet" href="/toolsmap.css">
 <script src="/toolsmap.js" defer></script>
+<script src="/flow.js" defer></script>
 <script src="/ui.js" defer></script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js" defer></script>

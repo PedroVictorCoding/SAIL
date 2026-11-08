@@ -299,6 +299,7 @@ pub async fn run_dialogue_server_with_plans(
     let reader_routes = crate::reader_http::routes(authority(), services.clone());
     let music_routes = crate::music_http::routes(authority());
     let system_routes = crate::system_http::router(authority());
+    let flow_routes = crate::flow_http::router(authority());
     // The model Mind started with (SAIL_MODEL_PATH, else the saved default, else Qwen).
     let model_routes =
         crate::mind_models_http::router(authority(), sail_common::models::primary_model_path());
@@ -336,6 +337,7 @@ pub async fn run_dialogue_server_with_plans(
         )
         .merge(crate::ui_assets::router())
         .nest_service("/api/system", system_routes)
+        .nest_service("/api/flow", flow_routes)
         .nest_service("/api/mind/models", model_routes)
         .nest_service("/api/spotify", spotify_routes)
         .nest_service("/api/briefing", briefing_routes)
