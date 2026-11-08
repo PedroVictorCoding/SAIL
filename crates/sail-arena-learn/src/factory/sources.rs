@@ -110,7 +110,7 @@ impl SourceRegistry {
             return Ok(existing);
         }
         let id = uuid::Uuid::new_v4().to_string();
-        let extracted = ingest::extract(file_name, bytes, &id, 1)?;
+        let extracted = extract_or_queue(file_name, bytes, &id, 1)?;
         let source = EducationalSource {
             source_id: id,
             title: title.unwrap_or(file_name).to_string(),
@@ -163,7 +163,7 @@ impl SourceRegistry {
             .checked_add(1)
             .filter(|n| *n <= i64::MAX as u64)
             .ok_or_else(|| SourceError::Invalid("revision exhausted".into()))?;
-        let extracted = ingest::extract(file_name, bytes, source_id, source.revision)?;
+        let extracted = extract_or_queue(file_name, bytes, source_id, source.revision)?;
         source.content_hash = hash;
         source.source_type = extracted.source_type;
         source.status = extracted.status.clone();
@@ -171,6 +171,114 @@ impl SourceRegistry {
         persist(&tx, &source, &extracted)?;
         tx.commit().map_err(store)?;
         Ok(source)
+    }
+    /// Append a retried PDF chunk atomically. Existing slots must contain identical data;
+    /// a removed or superseded revision can never receive late worker output.
+    pub fn append_fragments(
+        &self,
+        source_id: &str,
+        revision: u64,
+        fragments: &[SourceFragment],
+    ) -> Result<(), SourceError> {
+        if fragments.len() > ingest::MAX_FRAGMENTS {
+            return Err(SourceError::Invalid("fragment chunk cap".into()));
+        }
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(store)?;
+        let source = active_revision(&tx, source_id, revision)?;
+        if source.source_type != super::contracts::SourceType::PdfText
+            && source.source_type != super::contracts::SourceType::PdfScanned
+        {
+            return Err(SourceError::Invalid(
+                "page appends require a PDF source".into(),
+            ));
+        }
+        let mut slots = std::collections::BTreeMap::<u32, usize>::new();
+        for fragment in fragments {
+            let super::contracts::SourceLocation::Page { physical, .. } = fragment.location else {
+                return Err(SourceError::Invalid(
+                    "PDF fragment must have a page location".into(),
+                ));
+            };
+            let slot = slots.entry(physical).or_default();
+            let identity =
+                serde_json::to_vec(&(source_id, revision, physical, *slot)).map_err(store)?;
+            if physical == 0
+                || physical as usize > ingest::MAX_PAGES
+                || fragment.source_id != source_id
+                || fragment.source_revision != revision
+                || fragment.text.is_empty()
+                || fragment.text.contains('\0')
+                || fragment.text.len() > ingest::MAX_FRAGMENT_BYTES
+                || sha256_hex(fragment.text.as_bytes()) != fragment.content_hash
+                || fragment.fragment_id != sha256_hex(&identity)
+            {
+                return Err(SourceError::Invalid(
+                    "invalid PDF fragment identity/content".into(),
+                ));
+            }
+            if fragment.chapter_path.len() > ingest::MAX_DEPTH
+                || fragment
+                    .chapter_path
+                    .iter()
+                    .any(|part| part.len() > ingest::MAX_FRAGMENT_BYTES || part.contains('\0'))
+            {
+                return Err(SourceError::Invalid("invalid fragment chapter path".into()));
+            }
+            let record = serde_json::to_string(fragment).map_err(store)?;
+            if record.len() > 2 * MAX_METADATA_BYTES {
+                return Err(SourceError::Invalid("fragment record cap".into()));
+            }
+            if let Some(existing) = tx
+                .query_row(
+                    "SELECT record FROM learn_factory_sources_fragments WHERE fragment_id=?1",
+                    [&fragment.fragment_id],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(store)?
+            {
+                if existing != record {
+                    return Err(SourceError::Invalid("conflicting fragment retry".into()));
+                }
+            } else {
+                let position = physical as usize * ingest::MAX_FRAGMENTS + *slot;
+                tx.execute("INSERT INTO learn_factory_sources_fragments(fragment_id,source_id,revision,position,record) VALUES(?1,?2,?3,?4,?5)",
+                    params![fragment.fragment_id, source_id, revision as i64, position as i64, record]).map_err(store)?;
+            }
+            *slot += 1;
+        }
+        let (count, bytes): (i64, i64) = tx.query_row("SELECT COUNT(*), COALESCE(SUM(length(CAST(record AS BLOB))),0) FROM learn_factory_sources_fragments WHERE source_id=?1 AND revision=?2", params![source_id, revision as i64], |r| Ok((r.get(0)?,r.get(1)?))).map_err(store)?;
+        if count > ingest::MAX_FRAGMENTS as i64 || bytes > ingest::MAX_EXTRACTED_BYTES as i64 {
+            return Err(SourceError::Invalid("source fragment storage cap".into()));
+        }
+        tx.commit().map_err(store)
+    }
+    /// Persist only the current revision's extraction state; stale jobs cannot overwrite it.
+    pub fn set_status(
+        &self,
+        source_id: &str,
+        revision: u64,
+        status: IngestionStatus,
+    ) -> Result<(), SourceError> {
+        if matches!(status, IngestionStatus::Removed) {
+            return Err(SourceError::Invalid(
+                "use remove to tombstone a source".into(),
+            ));
+        }
+        if serde_json::to_vec(&status).map_err(store)?.len() > MAX_METADATA_BYTES {
+            return Err(SourceError::Invalid("status cap".into()));
+        }
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(store)?;
+        let mut source = active_revision(&tx, source_id, revision)?;
+        source.status = status;
+        tx.execute("UPDATE learn_factory_sources_revisions SET record=?1 WHERE source_id=?2 AND revision=?3", params![serde_json::to_string(&source).map_err(store)?, source_id, revision as i64]).map_err(store)?;
+        tx.commit().map_err(store)
     }
     /// Fetch current metadata, including a removal tombstone for invalidation consumers.
     pub fn get(&self, id: &str) -> Result<Option<EducationalSource>, SourceError> {
@@ -289,6 +397,37 @@ impl SourceRegistry {
         result
     }
 }
+fn active_revision(
+    conn: &Connection,
+    id: &str,
+    revision: u64,
+) -> Result<EducationalSource, SourceError> {
+    let source =
+        get_on(conn, id)?.ok_or_else(|| SourceError::Invalid("source not found".into()))?;
+    if source.revision != revision || matches!(source.status, IngestionStatus::Removed) {
+        return Err(SourceError::Invalid(
+            "source revision is stale or removed".into(),
+        ));
+    }
+    Ok(source)
+}
+
+fn extract_or_queue(
+    file_name: &str,
+    bytes: &[u8],
+    id: &str,
+    revision: u64,
+) -> Result<Extracted, IngestError> {
+    match ingest::extract(file_name, bytes, id, revision) {
+        Err(IngestError::NeedsSandbox(_)) => Ok(Extracted {
+            source_type: super::contracts::SourceType::PdfText,
+            status: IngestionStatus::Queued,
+            fragments: Vec::new(),
+        }),
+        result => result,
+    }
+}
+
 fn verify_blob(path: &Path, hash: &str) -> Result<(), SourceError> {
     let metadata = std::fs::symlink_metadata(path).map_err(store)?;
     if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES as u64 {
@@ -429,6 +568,70 @@ mod tests {
                 "learning:test",
             )
             .unwrap()
+    }
+    #[test]
+    fn sandbox_sources_queue_and_chunk_retries_are_atomic() {
+        use crate::factory::{contracts::PdfPageText, ingest::pdf_text::fragments_from_pages};
+        let dir = Directory::new();
+        let registry = SourceRegistry::open_in_memory(dir.0.clone()).unwrap();
+        let source = registry
+            .import(
+                "modern.pdf",
+                b"%PDF-1.7 /XRef /Prev",
+                None,
+                None,
+                SourceRights::Restricted,
+                "private",
+            )
+            .unwrap();
+        assert_eq!(source.status, IngestionStatus::Queued);
+        assert!(registry.fragments(&source.source_id).unwrap().is_empty());
+        let pages = [PdfPageText {
+            page: 1,
+            label: None,
+            text: "Definition: a pulse marks an event.".into(),
+        }];
+        let fragments = fragments_from_pages(&source.source_id, 1, &pages).unwrap();
+        registry
+            .append_fragments(&source.source_id, 1, &fragments)
+            .unwrap();
+        registry
+            .append_fragments(&source.source_id, 1, &fragments)
+            .unwrap();
+        assert_eq!(registry.fragments(&source.source_id).unwrap(), fragments);
+        let mut changed = fragments.clone();
+        changed[0].chapter_path.push("Changed retry".into());
+        assert!(
+            registry
+                .append_fragments(&source.source_id, 1, &changed)
+                .is_err()
+        );
+        registry
+            .set_status(&source.source_id, 1, IngestionStatus::Indexed)
+            .unwrap();
+        assert_eq!(
+            registry.get(&source.source_id).unwrap().unwrap().status,
+            IngestionStatus::Indexed
+        );
+        registry
+            .replace(&source.source_id, "modern.pdf", b"%PDF-1.7 /XRef different")
+            .unwrap();
+        assert!(
+            registry
+                .append_fragments(&source.source_id, 1, &fragments)
+                .is_err()
+        );
+        assert!(
+            registry
+                .set_status(&source.source_id, 1, IngestionStatus::Indexed)
+                .is_err()
+        );
+        registry.remove(&source.source_id).unwrap();
+        assert!(
+            registry
+                .set_status(&source.source_id, 2, IngestionStatus::Indexed)
+                .is_err()
+        );
     }
     #[test]
     fn idempotence_revisions_lookup_and_invalidation() {

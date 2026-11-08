@@ -39,3 +39,28 @@ The ignored `rust_book_quality_counts` test evaluates lopdf directly on the owne
 fixture, independently of production acceptance. It samples at most 20 pages evenly
 across the book and emits counts only. Run it under an external timeout; it does not
 certify safe production loading or validate extracted formulas/layout.
+
+
+## Resumable modern PDF extraction
+
+`IngestError::NeedsSandbox` distinguishes unsupported structures/filters from malformed or
+DRM-protected inputs. Imports/replacements preserve the blob and create a `Queued` revision
+with no fragments. Jobs use the shared `contracts::PdfTextExtractor` port; the concrete
+`RunnerPdfText` adapter is in Dialogue and requires the Guardian broker and runner setup
+specified in `docs/SANDBOX_RUNTIME.md`. No new in-process modern-PDF loader is enabled.
+
+`pdf_text::fragments_from_pages` handles a standalone <=20-page chunk. For sequential jobs,
+use `fragments_from_pages_with_carry(..., &mut PdfCarry)` and persist the returned carry only
+when the chunk commits. Fragment identities derive from source/revision/physical page/local
+slot; changing chunk boundaries does not change ids. Printed labels are used when supplied.
+Prose is split at paragraph boundaries; headings are heuristic and low-confidence. Empty
+pages are explicit OCR-unavailable placeholders. NULs, oversized pages/chunks and invalid
+ordering are refused.
+
+`SourceRegistry::append_fragments(id, revision, fragments)` atomically appends an entire chunk
+with identical retries as no-ops; conflicting retries and stale/removed revisions fail.
+`set_status(id, revision, status)` protects status from stale workers as well. The caller
+must serialize jobs per source revision and checkpoint carry after durable append; after a
+crash it can replay the same chunk and carry safely. Existing per-source fragment/byte caps
+still apply. A runner that is unavailable must leave work waiting/needs-review, never report
+an empty successful import.

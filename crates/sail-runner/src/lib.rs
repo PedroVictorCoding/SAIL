@@ -29,6 +29,8 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+pub mod pdf;
+
 pub const PLAN_PROTOCOL: &str = "execution-plan-v1";
 const MAX_FRAME: usize = 64 * 1024;
 
@@ -167,6 +169,7 @@ struct LaunchSpec {
     cwd: String,
     limits: CommandLimits,
     write_roots: Vec<String>,
+    input: Option<Vec<u8>>,
 }
 
 impl LaunchSpec {
@@ -179,6 +182,7 @@ impl LaunchSpec {
             cwd: "/work".into(),
             limits: plan.limits,
             write_roots: vec!["/work".into(), "/tmp".into()],
+            input: None,
         }
     }
 
@@ -190,6 +194,7 @@ impl LaunchSpec {
             argv: plan.argv.clone(),
             cwd: plan.cwd.clone(),
             limits,
+            input: None,
             write_roots: normalize_roots(
                 plan.write_roots
                     .iter()
@@ -409,7 +414,11 @@ async fn execute_spec(
         .arg(&spec.executable)
         .args(&spec.argv)
         .env_clear()
-        .stdin(Stdio::null())
+        .stdin(if spec.input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -459,6 +468,17 @@ async fn execute_spec(
             );
         }
     };
+    let is_document = spec.input.is_some();
+    let input_task = spec.input.map(|input| {
+        let stdin = child.stdin.take();
+        tokio::spawn(async move {
+            if let Some(mut stdin) = stdin {
+                stdin.write_all(&input).await?;
+                stdin.shutdown().await?;
+            }
+            Ok::<(), io::Error>(())
+        })
+    });
     let overflow = CancellationToken::new();
     let stdout = tokio::spawn(capture(
         child.stdout.take().unwrap(),
@@ -480,6 +500,19 @@ async fn execute_spec(
     group.kill();
     let _ = child.kill().await;
     let _ = child.wait().await;
+    if let Some(mut input_task) = input_task {
+        // A successful process must have consumed the complete authorized input. Abort
+        // on cancellation/timeout so no writer retains private bytes after the job ends.
+        if status == CommandStatus::Completed
+            && !matches!(
+                tokio::time::timeout(Duration::from_secs(1), &mut input_task).await,
+                Ok(Ok(Ok(())))
+            )
+        {
+            status = CommandStatus::Failed;
+        }
+        input_task.abort();
+    }
     let read = async {
         Ok::<_, io::Error>((
             stdout.await.map_err(io::Error::other)??,
@@ -498,13 +531,20 @@ async fn execute_spec(
     if overflow.is_cancelled() {
         status = CommandStatus::OutputLimit;
     }
+    if is_document && std::str::from_utf8(&out).is_err() {
+        status = CommandStatus::Failed;
+    }
     CommandResult {
         version: 1,
         request_id: spec.request_id,
         correlation_id: spec.correlation_id,
         status,
         exit_code,
-        stdout: sail_common::diagnostics::redact(&String::from_utf8_lossy(&out)),
+        stdout: if is_document {
+            String::from_utf8_lossy(&out).into_owned()
+        } else {
+            sail_common::diagnostics::redact(&String::from_utf8_lossy(&out))
+        },
         stderr: sail_common::diagnostics::redact(&String::from_utf8_lossy(&err)),
         output_truncated: overflow.is_cancelled(),
         elapsed_ms: start.elapsed().as_millis() as u64,
@@ -551,11 +591,22 @@ pub async fn serve(listener: UnixListener, config: Arc<RunnerConfig>) -> io::Res
                 tokio::time::timeout(Duration::from_secs(2), stream.read_exact(&mut bytes))
                     .await
                     .map_err(io::Error::other)??;
+                let incoming = decode_frame(&bytes)?;
+                let pdf_input = if let Incoming::Pdf(request) = &incoming {
+                    request.validate()?;
+                    let mut input = vec![0; request.input_bytes];
+                    tokio::time::timeout(Duration::from_secs(30), stream.read_exact(&mut input))
+                        .await.map_err(io::Error::other)??;
+                    Some(input)
+                } else { None };
                 let cancel = CancellationToken::new();
                 let task = async {
-                    match decode_frame(&bytes)? {
+                    match incoming {
                         Incoming::Command(plan) => {
                             Ok::<CommandResult, io::Error>(execute(&config, &plan, cancel.clone()).await)
+                        }
+                        Incoming::Pdf(request) => {
+                            Ok::<CommandResult, io::Error>(pdf::execute(&config, &request, pdf_input.unwrap_or_default(), cancel.clone()).await)
                         }
                         Incoming::Plan(plan) => Ok::<CommandResult, io::Error>(
                             execute_plan(&config, &plan, cancel.clone()).await,
@@ -584,6 +635,7 @@ pub async fn serve(listener: UnixListener, config: Arc<RunnerConfig>) -> io::Res
 enum Incoming {
     Command(CommandPlan),
     Plan(Box<ExecutionPlan>),
+    Pdf(pdf::PdfRequest),
 }
 
 #[derive(serde::Deserialize)]
@@ -595,7 +647,10 @@ struct PlanFrame {
 fn decode_frame(bytes: &[u8]) -> io::Result<Incoming> {
     let value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|error| io::Error::other(error.to_string()))?;
-    if value.get("protocol").and_then(|value| value.as_str()) == Some(PLAN_PROTOCOL) {
+    if value.get("protocol").and_then(|value| value.as_str()) == Some(pdf::PROTOCOL) {
+        let request = serde_json::from_value(value).map_err(io::Error::other)?;
+        Ok(Incoming::Pdf(request))
+    } else if value.get("protocol").and_then(|value| value.as_str()) == Some(PLAN_PROTOCOL) {
         let frame: PlanFrame =
             serde_json::from_value(value).map_err(|error| io::Error::other(error.to_string()))?;
         if frame.protocol != PLAN_PROTOCOL {
@@ -802,6 +857,29 @@ fn exchange(
     read_timeout_ms: u64,
     should_cancel: Arc<dyn Fn() -> bool + Send + Sync>,
 ) -> io::Result<CommandResult> {
+    exchange_input(
+        socket,
+        expected_runner_uid,
+        request_id,
+        correlation_id,
+        frame,
+        read_timeout_ms,
+        should_cancel,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn exchange_input(
+    socket: &Path,
+    expected_runner_uid: u32,
+    request_id: Uuid,
+    correlation_id: Uuid,
+    frame: &[u8],
+    read_timeout_ms: u64,
+    should_cancel: Arc<dyn Fn() -> bool + Send + Sync>,
+    input: Option<&[u8]>,
+) -> io::Result<CommandResult> {
     use std::io::Read;
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     let mut peer = std::mem::MaybeUninit::<libc::ucred>::uninit();
@@ -850,10 +928,19 @@ fn exchange(
     }
     stream.write_all(&(frame.len() as u32).to_be_bytes())?;
     stream.write_all(frame)?;
+    if let Some(input) = input {
+        stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+        stream.write_all(input)?;
+    }
     let mut size = [0; 4];
     stream.read_exact(&mut size)?;
     let size = u32::from_be_bytes(size) as usize;
-    if size > 2 * 1024 * 1024 {
+    let response_limit = if input.is_some() {
+        pdf::MAX_RESULT_FRAME
+    } else {
+        2 * 1024 * 1024
+    };
+    if size > response_limit {
         return Err(io::Error::other("command result frame limit"));
     }
     let mut bytes = vec![0; size];
@@ -865,7 +952,9 @@ fn exchange(
     {
         return Err(io::Error::other("command result correlation mismatch"));
     }
-    result.stdout = sail_common::diagnostics::redact(&result.stdout);
+    if input.is_none() {
+        result.stdout = sail_common::diagnostics::redact(&result.stdout);
+    }
     result.stderr = sail_common::diagnostics::redact(&result.stderr);
     Ok(result)
 }

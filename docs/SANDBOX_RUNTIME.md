@@ -298,3 +298,41 @@ download with an independent external listener.
 
 Rollback: the offline Forge path remains the default until the networked path passes the
 adversarial suite. Unsafe raw execution is never a rollback option.
+
+
+## 10. Course Factory PDF text operation
+
+Provision **`poppler-utils` inside the administrator-owned runner root image**, including
+`/usr/bin/pdfinfo`, `/usr/bin/pdftotext`, their shared libraries and Poppler data/font resources.
+Installing these on the daemon host alone does not configure the sandbox. The adapter uses
+`SAIL_RUNNER_SOCKET` and `SAIL_RUNNER_UID`; missing configuration returns `None`/`Unavailable`.
+No executable override, host path, shell command, password, network or credential is accepted.
+
+`pdf-text-v1` sends a <=64 KiB JSON header followed by exactly `input_bytes` binary bytes.
+The header contains the SHA-256 digest, request/correlation ids, and either `page_count` or
+`pages {first,last}` (1-based, <=20 pages, <=5,000 physical pages). The service validates the
+<=256 MiB declared input before allocation, bounds upload time to 30 seconds, then verifies
+both the digest and encryption-name preflight before starting Poppler. Escaped `/Encrypt`
+names are refused before Poppler can attempt even empty-password decryption. `pdfinfo`
+encryption flags are checked again by the adapter.
+
+The existing dedicated-UID bwrap/cgroup executor supplies the same command limits: 30 seconds
+wall time, 10 seconds CPU, 512 MiB RAM, no swap, 32 pids, 64 fds and 32 MiB scratch. PDF stdout
+and stderr each stop at 128 KiB; overflow fails the job. The JSON result remains <=2 MiB.
+Cancellation/revocation closes the socket and kills the job cgroup. Invalid UTF-8, a page-count
+mismatch, parser diagnostics, failure or truncation never becomes indexed text. Document stdout
+is data, not diagnostic output, so it is not redacted; parser stderr is replaced with a fixed
+message to keep private source text out of receipts.
+
+`learn_pdf::RunnerPdfText::from_env(blob_dir, broker)` implements the shared asynchronous
+`PdfTextExtractor`. Guardian authorizes the exact digest and operation. The normal trait path
+uses broker policy and waits (`Unavailable`) when approval is required. An approval flow can
+retain `prepare(hash, operation)` and pass that exact request plus its token to `run_prepared`
+on a blocking worker. It must not recreate the request after approval or bypass the broker.
+
+The pure classic-PDF parser retains its loader guards. Modern PDFs are stored as `Queued`
+without fragments and processed by resumable page jobs. Text-only extraction has no bookmarks,
+printed page labels or OCR; inferred hierarchy is low-confidence, and empty pages remain
+unvalidated placeholders. The ignored Rust Book host probe is a bounded, counts-only
+compatibility check, **not evidence of a deployed runner sandbox**. Verify the dedicated UID,
+root image, cancellation, limits and socket round trip on the deployment host before release.
