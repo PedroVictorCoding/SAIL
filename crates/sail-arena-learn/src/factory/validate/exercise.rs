@@ -193,7 +193,14 @@ impl ExerciseTestsValidator {
                 return Verdict::Unavailable { reason };
             }
             RustRun::CompileFailed { .. } => {
-                // Compile failure means `known_bad` was rejected before printing the sentinel.
+                // A `known_bad` that doesn't compile proves nothing about the hidden tests: a
+                // typo would "pass" this check. It must compile and then fail a test.
+                return Verdict::Fail {
+                    reasons: vec![format!(
+                        "step `{}`: known_bad doesn't compile, so it can't show that the hidden tests catch a wrong answer",
+                        fixture.step_id
+                    )],
+                };
             }
             RustRun::Compiled { stdout, .. } => {
                 if stdout_contains_sentinel(&stdout) {

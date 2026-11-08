@@ -615,6 +615,8 @@ impl Worker {
         let job = claimed.queued.job.clone();
         let task_id = claimed.task_id.clone();
         let child = cancel.child_token();
+        // The budget prices the whole job, not only the model call inside it: retrieval and
+        // validation around a model call are small, and over-counting is the safe side.
         let started = (self.clock)();
         let step = self.handler.run(&job, child).await;
         let ended = (self.clock)();
@@ -636,17 +638,24 @@ impl Worker {
             step.outcome
         };
         let mut queued = 0;
+        let mut outcome = outcome;
         if outcome == JobOutcome::Done {
             // Follow-ups are queued before the job is marked done: a crash in between
-            // re-runs this job, and dedupe keys keep the follow-ups single.
+            // re-runs this job, and dedupe keys keep the follow-ups single. If one can't be
+            // queued, the job isn't done either: it retries, so a stage is never lost.
+            let mut lost = Vec::new();
             for f in step.follow_ups {
-                if self
-                    .queue
-                    .enqueue(f.job, f.reasons, f.tie_break, ended)
-                    .is_ok()
-                {
-                    queued += 1;
+                match self.queue.enqueue(f.job, f.reasons, f.tie_break, ended) {
+                    Ok(_) => queued += 1,
+                    Err(e) => lost.push(e.to_string()),
                 }
+            }
+            if let Some(first) = lost.first() {
+                tracing::warn!(task = %task_id, lost = lost.len(), error = %first, "course factory: couldn't queue the next stage");
+                outcome = JobOutcome::Failed {
+                    reason: format!("couldn't queue {} follow-up job(s): {first}", lost.len()),
+                    retryable: true,
+                };
             }
         }
         if let Err(e) = self.queue.finish(claimed, outcome.clone(), ended) {

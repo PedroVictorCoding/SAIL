@@ -132,14 +132,25 @@ impl SettingsStore {
             .map_err(store_err)
     }
 
-    /// Stored settings, or the defaults when none were saved or the stored row is from an
-    /// incompatible older shape (it is then replaced on the next save).
+    /// Stored settings, or the defaults when none were saved. A stored row that no longer
+    /// parses or validates fails closed: the defaults come back **switched off**, so a
+    /// damaged row can't re-enable generation the owner turned off. Saving replaces it.
     pub fn settings(&self) -> Result<FactorySettings, SettingsError> {
-        Ok(self
-            .get("settings")?
-            .and_then(|json| serde_json::from_str::<FactorySettings>(&json).ok())
-            .filter(|s| s.validate().is_ok())
-            .unwrap_or_default())
+        let Some(json) = self.get("settings")? else {
+            return Ok(FactorySettings::default());
+        };
+        match serde_json::from_str::<FactorySettings>(&json) {
+            Ok(s) if s.validate().is_ok() => Ok(s),
+            _ => {
+                tracing::warn!(
+                    "course factory: stored settings are unreadable; generation is off until they're saved again"
+                );
+                Ok(FactorySettings {
+                    enabled: false,
+                    ..FactorySettings::default()
+                })
+            }
+        }
     }
 
     pub fn save(&self, settings: &FactorySettings) -> Result<(), SettingsError> {
@@ -235,6 +246,15 @@ mod tests {
         };
         assert!(store.save(&endless).is_err());
         assert_eq!(store.settings().unwrap(), FactorySettings::default());
+    }
+
+    #[test]
+    fn a_damaged_settings_row_fails_closed() {
+        let store = SettingsStore::open_in_memory().unwrap();
+        store.put("settings", "{\"enabled\":tru").unwrap();
+        assert!(!store.settings().unwrap().enabled);
+        store.save(&FactorySettings::default()).unwrap();
+        assert!(store.settings().unwrap().enabled);
     }
 
     #[test]

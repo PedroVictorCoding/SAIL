@@ -44,7 +44,7 @@ resumed. It is a feature of Arena Learn, not a new application: published output
      model call loses only that call: the job resumes from its last completed stage, and
      partial tokens are never kept.
    - Maps `AuthorModelError::Unavailable` to *waiting for model* (backoff, no retry loop). It
-     maps `Preempted` and `NotAdmitted` to *requeued*, and `Failed` to a retry, bounded at 3.
+     maps `Preempted` and `NotAdmitted` to *requeued*, and `Failed` to a retry with backoff, bounded at 5 (`jobs::MAX_FAILURES`).
 5. **Model output is data.** Replies are parsed into `deny_unknown_fields` structs. Ids, revisions,
    anchors, receipts and publish decisions are assigned by the server. A fragment id that the
    prompt didn't include is a grounding failure.

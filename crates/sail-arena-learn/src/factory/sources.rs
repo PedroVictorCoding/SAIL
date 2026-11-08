@@ -102,9 +102,10 @@ impl SourceRegistry {
             .map_err(store)?;
         if let Some(existing) = by_hash(&tx, &hash)? {
             if matches!(existing.status, IngestionStatus::Removed) {
-                return Err(SourceError::Invalid(
-                    "source was removed; use replace to restore its id".into(),
-                ));
+                return Err(SourceError::Invalid(format!(
+                    "these bytes belong to removed source {}; use replace to restore it",
+                    existing.source_id
+                )));
             }
             self.write_blob(&hash, bytes)?;
             return Ok(existing);

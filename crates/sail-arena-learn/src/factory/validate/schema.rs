@@ -691,49 +691,43 @@ fn contains_data_url(lower: &str) -> bool {
     false
 }
 
+/// Any `on<name>=` attribute inside an open tag (`<img src=x onpointerdown=…>`). Matching
+/// the shape instead of a list of handler names keeps up with new DOM events; requiring an
+/// unclosed `<` before it keeps ordinary code such as `let online = true;` legal.
 fn contains_inline_event_handler(lower: &str) -> bool {
-    const HANDLERS: &[&str] = &[
-        "onerror",
-        "onload",
-        "onclick",
-        "ondblclick",
-        "onmouseover",
-        "onmouseout",
-        "onmouseenter",
-        "onmouseleave",
-        "onmousedown",
-        "onmouseup",
-        "onfocus",
-        "onblur",
-        "onchange",
-        "onsubmit",
-        "onreset",
-        "onkeydown",
-        "onkeyup",
-        "onkeypress",
-        "oninput",
-        "onanimationstart",
-        "ontoggle",
-        "onwheel",
-        "onpaste",
-        "oncopy",
-        "oncut",
-    ];
-    for handler in HANDLERS {
-        let mut search_from = 0;
-        while let Some(pos) = lower[search_from..].find(handler) {
-            let abs = search_from + pos;
-            let before_ok = abs == 0 || {
-                let b = lower.as_bytes()[abs - 1];
-                !b.is_ascii_alphanumeric() && b != b'_'
-            };
-            let after = &lower[abs + handler.len()..];
-            let after_trimmed = after.trim_start();
-            if before_ok && after_trimmed.starts_with('=') {
-                return true;
+    let bytes = lower.as_bytes();
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        let at_boundary = i == 0 || {
+            let b = bytes[i - 1];
+            !b.is_ascii_alphanumeric() && b != b'_' && b != b'-'
+        };
+        if at_boundary && bytes[i] == b'o' && bytes[i + 1] == b'n' {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j].is_ascii_lowercase() {
+                j += 1;
             }
-            search_from = abs + handler.len();
+            let name_len = j - (i + 2);
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if name_len >= 2 && j < bytes.len() && bytes[j] == b'=' {
+                // Inside a tag: the last `<` that starts a tag name (`<img`, `</p`, not the
+                // `<` of `a < b`) comes after the last `>`.
+                let before = &bytes[..i];
+                let open = (0..before.len()).rev().find(|&k| {
+                    before[k] == b'<'
+                        && before
+                            .get(k + 1)
+                            .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'/')
+                });
+                let close = before.iter().rposition(|&b| b == b'>');
+                if open.is_some_and(|o| close.is_none_or(|c| o > c)) {
+                    return true;
+                }
+            }
         }
+        i += 1;
     }
     false
 }
@@ -931,5 +925,36 @@ fn synthetic_review_for_objective(objective_id: &str, idx: usize) -> Step {
         hints: Vec::new(),
         correct: Vec::new(),
         solution: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod handler_tests {
+    use super::contains_inline_event_handler as h;
+
+    #[test]
+    fn any_event_attribute_in_a_tag_is_caught() {
+        for text in [
+            "<img src=x onerror=alert(1)>",
+            "<div onpointerdown=\"x()\">",
+            "<a href=# onauxclick = steal()>",
+            "<p onscroll=go>",
+            "<svg><g onfocusin=x>",
+        ] {
+            assert!(h(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn code_and_prose_with_on_words_are_fine() {
+        for text in [
+            "let online = true;",
+            "let onset = 3; if a < b { onset = 4; }",
+            "Go on = ahead.",
+            "<b>bold</b> then onward = forward",
+            "x = 1 <= 2; one = 1",
+        ] {
+            assert!(!h(text), "{text}");
+        }
     }
 }
