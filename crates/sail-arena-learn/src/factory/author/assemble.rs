@@ -18,7 +18,7 @@ use crate::factory::contracts::{
     Concept, ConceptGraph, ConceptId, ConceptProposal, ContentHash, CurriculumPlan,
     CurriculumProposal, EdgeStatus, FragmentId, FragmentLookup, LessonPlanKind, ObjectiveId,
     ObjectiveSpec, PlanStatus, PrerequisiteEdge, SourceAnchor, SourceAnchorSet, SourceFragment,
-    SourceLocation, ValidatorKind,
+    SourceId, SourceLocation, ValidatorKind,
 };
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
@@ -96,6 +96,15 @@ pub enum AssembleError {
     InvalidEdit(String),
     #[error("proposal too large: {0}")]
     TooLarge(String),
+    /// A resolved anchor names a source revision the lookup cannot describe. Without the
+    /// source revision's own content hash the graph could not be invalidated safely later,
+    /// so assembly fails closed instead of recording a fragment hash as a source hash.
+    #[error("source `{source_id}` revision {revision} is not resolvable: {reason}")]
+    UnresolvedSource {
+        source_id: SourceId,
+        revision: u64,
+        reason: &'static str,
+    },
 }
 
 /// A concept while batches are still being merged.
@@ -281,7 +290,7 @@ pub fn assemble_concept_graph(
     let graph = ConceptGraph {
         course_id: course_id.to_owned(),
         revision,
-        built_from: built_from(&concepts),
+        built_from: built_from(&concepts, fragments)?,
         concepts,
     };
     let cycles = detect_cycles(&graph.concepts);
@@ -912,23 +921,48 @@ fn reading_order(fragment: &SourceFragment) -> (String, u8, u64, String) {
     (fragment.source_id.clone(), class, ordinal, tail)
 }
 
-fn built_from(concepts: &[Concept]) -> Vec<SourceAnchorSet> {
-    let mut revisions: BTreeMap<(String, u64), ContentHash> = BTreeMap::new();
+/// The source revisions a graph was built from, keyed by `(source_id, revision)`.
+///
+/// `SourceAnchorSet.content_hash` is the **source revision's** content hash — the same value
+/// [`crate::factory::sources::SourceRegistry::affected_by`] reports and the grounding
+/// validator compares against `EducationalSource::content_hash`. Storing a fragment hash
+/// would make later invalidation unable to match the graph, so the source record is resolved
+/// here and a missing or moved source is an error rather than a fabricated hash.
+fn built_from(
+    concepts: &[Concept],
+    lookup: &dyn FragmentLookup,
+) -> Result<Vec<SourceAnchorSet>, AssembleError> {
+    let mut revisions: BTreeMap<(SourceId, u64), ContentHash> = BTreeMap::new();
     for concept in concepts {
-        for anchor in &concept.anchors {
-            revisions
-                .entry((anchor.source_id.clone(), anchor.source_revision))
-                .or_insert_with(|| anchor.content_hash.clone());
-        }
-        for edge in &concept.prerequisites {
-            for anchor in &edge.anchors {
-                revisions
-                    .entry((anchor.source_id.clone(), anchor.source_revision))
-                    .or_insert_with(|| anchor.content_hash.clone());
+        let anchors = concept.anchors.iter().chain(
+            concept
+                .prerequisites
+                .iter()
+                .flat_map(|edge| edge.anchors.iter()),
+        );
+        for anchor in anchors {
+            let key = (anchor.source_id.clone(), anchor.source_revision);
+            if revisions.contains_key(&key) {
+                continue;
             }
+            let source = lookup.source(&anchor.source_id).ok_or_else(|| {
+                AssembleError::UnresolvedSource {
+                    source_id: anchor.source_id.clone(),
+                    revision: anchor.source_revision,
+                    reason: "the source record is not available",
+                }
+            })?;
+            if source.revision != anchor.source_revision {
+                return Err(AssembleError::UnresolvedSource {
+                    source_id: anchor.source_id.clone(),
+                    revision: anchor.source_revision,
+                    reason: "the lookup returned a different current revision",
+                });
+            }
+            revisions.insert(key, source.content_hash);
         }
     }
-    revisions
+    Ok(revisions
         .into_iter()
         .map(
             |((source_id, source_revision), content_hash)| SourceAnchorSet {
@@ -937,7 +971,7 @@ fn built_from(concepts: &[Concept]) -> Vec<SourceAnchorSet> {
                 content_hash,
             },
         )
-        .collect()
+        .collect())
 }
 
 fn normalize_name(name: &str) -> String {
@@ -1060,27 +1094,58 @@ pub fn objective_id(concept_id: &str, ordinal: usize) -> ObjectiveId {
 mod tests {
     use super::*;
     use crate::factory::contracts::{
-        EducationalSource, FragmentKind, LessonPlan, ProposedConcept, QualityStatus, UnitPlan,
+        EducationalSource, FragmentKind, IngestionStatus, LessonPlan, ProposedConcept,
+        QualityStatus, SourceRights, SourceType, UnitPlan,
     };
 
     struct FakeLookup {
         fragments: BTreeMap<FragmentId, SourceFragment>,
+        sources: BTreeMap<SourceId, EducationalSource>,
     }
 
     impl FakeLookup {
         fn new(fragments: Vec<SourceFragment>) -> Self {
+            let mut sources = BTreeMap::new();
+            for fragment in &fragments {
+                sources
+                    .entry(fragment.source_id.clone())
+                    .or_insert_with(|| EducationalSource {
+                        source_id: fragment.source_id.clone(),
+                        title: "Synthetic source".to_owned(),
+                        authors: Vec::new(),
+                        source_type: SourceType::Markdown,
+                        content_hash: format!("source-hash-{}", fragment.source_id),
+                        revision: fragment.source_revision,
+                        language: "en".to_owned(),
+                        access_scope: "learning:test".to_owned(),
+                        rights: SourceRights::Restricted,
+                        status: IngestionStatus::Indexed,
+                        imported_ms: 0,
+                    });
+            }
             Self {
                 fragments: fragments
                     .into_iter()
                     .map(|fragment| (fragment.fragment_id.clone(), fragment))
                     .collect(),
+                sources,
+            }
+        }
+
+        fn without_sources(fragments: Vec<SourceFragment>) -> Self {
+            Self {
+                fragments: fragments
+                    .into_iter()
+                    .map(|fragment| (fragment.fragment_id.clone(), fragment))
+                    .collect(),
+                sources: BTreeMap::new(),
             }
         }
     }
 
     impl FragmentLookup for FakeLookup {
-        fn source(&self, _id: &str) -> Option<EducationalSource> {
-            None
+        fn source(&self, id: &str) -> Option<EducationalSource> {
+            self.sources.get(id).cloned()
         }
         fn fragment(&self, id: &str) -> Option<SourceFragment> {
             self.fragments.get(id).cloned()
@@ -1168,9 +1233,34 @@ mod tests {
         let (graph, report) = graph.expect("graph assembles");
         assert_eq!(graph.concepts[0].anchors.len(), 1);
         assert_eq!(graph.concepts[0].anchors[0].fragment_id, "f-1");
+        // The anchor binds the fragment, but `built_from` must name the *source* revision:
+        // `SourceRegistry::affected_by` and the grounding validator use source hashes.
+        assert_eq!(graph.concepts[0].anchors[0].content_hash, "hash-f-1");
         assert!(report.dropped_fragment_ids.contains(&"f-9".to_owned()));
         assert_eq!(graph.built_from.len(), 1);
-        assert_eq!(graph.built_from[0].content_hash, "hash-f-1");
+        assert_eq!(graph.built_from[0].content_hash, "source-hash-src-rust");
+    }
+
+    #[test]
+    fn a_source_the_lookup_cannot_describe_is_a_typed_error() {
+        let lookup = FakeLookup::without_sources(vec![fragment("f-1", "ownership", 1)]);
+        let result = assemble_concept_graph(
+            "course.rust",
+            1,
+            &[batch(
+                &["f-1"],
+                vec![proposed("rust.ownership", "Ownership", &["f-1"], &[])],
+            )],
+            &lookup,
+        );
+        assert!(matches!(
+            result,
+            Err(AssembleError::UnresolvedSource {
+                source_id,
+                revision: 1,
+                ..
+            }) if source_id == "src-rust"
+        ));
     }
 
     #[test]
