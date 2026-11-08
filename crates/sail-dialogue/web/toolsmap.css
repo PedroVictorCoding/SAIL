@@ -555,19 +555,44 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-pane-main { grid-area: main; min-height: 0; overflow-y: auto; padding-right: 6px; scrollbar-width: thin; scrollbar-color: #3b4148 transparent; }
 .tm-pane-main[hidden], .tm-pane-tracker[hidden] { display: none; }
 .tm-pane-main .subsystem-page { max-width: 1200px; }
-/* Arena is the workspace itself, rather than a card inside a page. */
-.tm-pane[data-mode="arena"] { padding: 0; overflow: hidden; }
-.tm-pane[data-mode="arena"] .tm-pane-main { padding: 0; overflow: hidden; }
-.tm-pane[data-mode="arena"] .subsystem-page {
-  display: flex; flex-direction: column; height: 100%; min-height: 0; max-width: none;
+/* Full-pane workspaces: Arena, Terminal, and Flow take the full center space rather than a card inside a page. */
+.tm-pane[data-mode="arena"],
+.tm-pane[data-mode="terminal"],
+.tm-pane[data-mode="flow"] { padding: 0; overflow: hidden; }
+
+.tm-pane[data-mode="arena"] .tm-pane-main,
+.tm-pane[data-mode="terminal"] .tm-pane-main { padding: 0; overflow: hidden; height: 100%; display: flex; flex-direction: column; }
+.tm-pane[data-mode="flow"] .tm-pane-main { padding: 0; overflow-y: auto; height: 100%; }
+
+.tm-pane[data-mode="arena"] .subsystem-page,
+.tm-pane[data-mode="terminal"] .subsystem-page,
+.tm-pane[data-mode="flow"] .subsystem-page {
+  display: flex; flex-direction: column; height: 100%; min-height: 0; max-width: none; flex: 1;
 }
+.tm-pane[data-mode="flow"] .subsystem-page {
+  min-height: 100%; height: auto;
+}
+
 /* Retain the route heading as the pane's accessible name and focus target. */
-.tm-pane[data-mode="arena"] .subsystem-header {
+.tm-pane[data-mode="arena"] .subsystem-header,
+.tm-pane[data-mode="terminal"] .subsystem-header,
+.tm-pane[data-mode="flow"] .subsystem-header {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
-.tm-pane[data-mode="arena"] .subsystem-about { display: none; }
-.tm-pane[data-mode="arena"] .subsystem-content { flex: 1; min-height: 0; gap: 0; grid-template-rows: minmax(0, 1fr); }
+
+.tm-pane[data-mode="arena"] .subsystem-about,
+.tm-pane[data-mode="terminal"] .subsystem-about,
+.tm-pane[data-mode="flow"] .subsystem-about { display: none; }
+
+.tm-pane[data-mode="arena"] .subsystem-content,
+.tm-pane[data-mode="terminal"] .subsystem-content,
+.tm-pane[data-mode="flow"] .subsystem-content { flex: 1; min-height: 0; gap: 0; }
+
+.tm-pane[data-mode="arena"] .subsystem-content { grid-template-rows: minmax(0, 1fr); }
+.tm-pane[data-mode="terminal"] .subsystem-content { display: flex; flex-direction: column; height: 100%; }
+.tm-pane[data-mode="flow"] .subsystem-content { display: flex; flex-direction: column; }
+
 .tm-pane[data-mode="arena"] #memoryCard {
   min-height: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; transform: none;
 }
@@ -576,6 +601,41 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-pane[data-mode="arena"] .lh-root { margin: 0; border-radius: 0; }
 .tm-pane[data-mode="arena"] .lh-shell { flex: 1; height: 100%; min-height: 0; max-height: none; }
 .tm-pane[data-mode="arena"] #memoryPanelMain { overflow-y: auto; padding: var(--space-4); }
+
+/* Terminal full workspace */
+.tm-pane[data-mode="terminal"] #terminalCard {
+  min-height: 0; height: 100%; flex: 1; padding: 0; border: 0; border-radius: 0;
+  box-shadow: none; background: transparent; transform: none; display: flex; flex-direction: column;
+}
+.tm-pane[data-mode="terminal"] #terminalCard::after { display: none; }
+.tm-pane[data-mode="terminal"] #terminalCard .card-heading {
+  margin: 0; padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border);
+  background: var(--surface); border-radius: 0; flex-shrink: 0;
+}
+.tm-pane[data-mode="terminal"] #terminalCard .card-tab-panel {
+  flex: 1; height: 100%; min-height: 0; display: flex; flex-direction: column;
+  padding: var(--space-3) var(--space-4) var(--space-3); background: #080a0f; overflow: hidden;
+}
+.tm-pane[data-mode="terminal"] #terminalCard .terminal-quick-bar {
+  flex-shrink: 0; padding: 0 0 var(--space-2); margin: 0;
+}
+.tm-pane[data-mode="terminal"] #terminalCard .terminal-container {
+  flex: 1; height: 100%; min-height: 0; max-height: none; width: 100%;
+  border: 0; border-radius: 0; box-shadow: none; background: transparent;
+}
+.tm-pane[data-mode="terminal"] #terminalCard .terminal-container:focus-within {
+  outline: none;
+}
+.tm-pane[data-mode="terminal"] #terminalCard .card-footnote { display: none; }
+
+/* Flow full workspace */
+.tm-pane[data-mode="flow"] #flowCard {
+  min-height: 100%; margin: 0; border: 0; border-radius: 0; box-shadow: none; transform: none;
+  background: radial-gradient(ellipse at 50% 100%, rgb(92 205 164 / .07), transparent 50%), var(--sail-surface);
+  padding: var(--space-4) var(--space-5); box-sizing: border-box; flex: 1;
+}
+.tm-pane[data-mode="flow"] #flowCard::after { display: none; }
+.tm-pane[data-mode="flow"] .flow-stage { min-height: 220px; max-height: 520px; }
 @media (max-width: 820px) {
   .tm-pane[data-mode="arena"] .lh-root { overflow-y: auto; }
   .tm-pane[data-mode="arena"] .lh-shell { height: auto; min-height: 100%; flex: 1 0 auto; }
@@ -605,6 +665,9 @@ html.tm-active, html.tm-active body { overflow: hidden; }
   .tm-chat { height: 78svh; min-height: 520px; }
   .tm-pane { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; grid-template-areas: "back" "main"; padding: 12px; min-height: auto; }
   .tm-pane[data-mode="tracker"], .tm-pane[data-mode="entertainment"] { grid-template-rows: auto 80svh; grid-template-areas: "back" "trk"; padding: 8px; }
+  .tm-pane[data-mode="terminal"] { grid-template-rows: auto minmax(360px, 75svh); padding: 8px; }
+  .tm-pane[data-mode="flow"] { padding: 8px; }
+  .tm-pane[data-mode="flow"] #flowCard { padding: 12px; }
   .tm-pane-back { display: inline-flex; }
   .tm-pane-main { min-height: auto; overflow: visible; padding: 0; }
   .tm-root {
