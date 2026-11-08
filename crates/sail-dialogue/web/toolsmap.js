@@ -28,7 +28,7 @@
       about: 'The host: CPU, GPU, memory, storage and throughput that every subsystem shares.'},
     {id: 'vision', name: 'Vision', sub: 'Camera · OCR · VLM', u: -9.4, v: 13.4, icon: 'vision', page: 'canvas',
       about: 'Camera and screen previews you choose to share, read by the vision model.'},
-    {id: 'flow', name: 'Flow', sub: 'Automation · Workflows', u: -7.8, v: 17.8, icon: 'flow', page: 'flow', endpoint: '/api/flow/workflows',
+    {id: 'flow', name: 'Flow', sub: 'Automation · Workflows', u: -7.8, v: 17.8, icon: 'flow', page: 'flow', endpoint: '/api/flow/status',
       about: 'Versioned local workflows with deterministic nodes, branches and saved execution results.'},
     {id: 'canvas', name: 'Canvas', sub: 'Projects · Notes', u: -5, v: 21.2, icon: 'canvas', page: 'canvas',
       about: 'Visual answers, diagrams and structured results from conversations.'},
@@ -524,7 +524,7 @@
     const jobs = {
       metrics: '/api/system/metrics', mind: '/api/mind/status', health: '/api/health',
       guardian: '/api/guardian/status', audit: '/api/guardian/audit', approvals: '/api/guardian/approvals',
-      workflows: '/api/flow/workflows', plans: '/api/plans/', reminders: '/api/pulse/reminders', tracker: '/api/tracker/config',
+      workflows: '/api/flow/status', plans: '/api/plans/', reminders: '/api/pulse/reminders', tracker: '/api/tracker/config',
       spotify: '/api/spotify/status',
     };
     const res = {};
@@ -576,7 +576,7 @@
         state.planStates[p.id] = p.state;
       }
     }
-    state.workflows = res.workflows?.workflows || null;
+    state.workflows = res.workflows || null;
     if (res.reminders) state.reminders = res.reminders.reminders || [];
     if (!state.activity.length) log('core', 'Tools Map connected');
     render();
@@ -598,7 +598,7 @@
       case 'dialogue': return state.health?.speech ? 'on' : 'idle';
       case 'guardian': return state.approvals ? 'warn' : state.guardian ? 'on' : 'idle';
       case 'forge': return state.plans.some((p) => p.plan.state === 'running') ? 'on' : state.plans.some((p) => p.plan.state === 'awaiting_approval') ? 'warn' : 'idle';
-      case 'flow': return state.workflows ? 'idle' : 'off';
+      case 'flow': return state.workflows ? state.workflows.paused ? 'warn' : state.workflows.running ? 'on' : 'idle' : 'off';
       case 'discover': return state.latency.discover != null ? 'on' : 'idle';
       default: return 'idle';
     }
@@ -611,7 +611,7 @@
       case 'mind': { const md = state.mind?.models?.[0]; return md ? `${md.model.split('/').pop().slice(0, 18)} · ${modelState(md)}` : 'No model status'; }
       case 'guardian': return `${state.approvals} pending approval${state.approvals === 1 ? '' : 's'}`;
       case 'forge': return `${state.plans.filter((p) => p.plan.state === 'running').length} running · ${state.plans.filter((p) => p.plan.state === 'awaiting_approval').length} awaiting`;
-      case 'flow': return state.workflows ? `${state.workflows.length} saved workflows` : 'Workflow service unavailable';
+      case 'flow': return state.workflows ? `${state.workflows.workflows} workflows · ${state.workflows.running} running · ${state.workflows.paused} paused` : 'Workflow service unavailable';
       case 'vision': return g ? `GPU ${pct(g.busy_percent)}` : 'GPU unavailable';
       default: return state.latency[id] != null ? `${state.latency[id]} ms` : byId[id].sub;
     }

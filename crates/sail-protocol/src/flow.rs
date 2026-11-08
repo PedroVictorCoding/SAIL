@@ -81,3 +81,12 @@ pub struct StartRun {
     pub revision: u32,
     pub input: String,
 }
+
+/// Lightweight status for the global shell; excludes workflow inputs and receipts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Status {
+    pub version: u16,
+    pub workflows: usize,
+    pub running: usize,
+    pub paused: usize,
+}

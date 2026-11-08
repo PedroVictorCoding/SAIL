@@ -106,6 +106,7 @@ limit and return `Cache-Control: no-store`:
 
 | Method and path | Contract |
 | --- | --- |
+| `GET /api/flow/status` | Counts only for the Tools Map; no inputs or receipts |
 | `GET /api/flow/workflows` | Latest saved workflows and bounded execution history |
 | `POST /api/flow/workflows` | `SaveWorkflow {expected_revision, workflow}` |
 | `POST /api/flow/runs` | `StartRun {id, workflow_id, revision, input}` |

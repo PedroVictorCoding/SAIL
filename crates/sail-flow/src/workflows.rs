@@ -189,6 +189,28 @@ impl Store {
         *guard = next;
         Ok(out)
     }
+    pub fn status(&self) -> Result<Status> {
+        let s = self.state.lock().map_err(|_| Error::Storage)?;
+        Ok(Status {
+            version: VERSION,
+            workflows: s
+                .workflows
+                .iter()
+                .map(|w| w.id)
+                .collect::<HashSet<_>>()
+                .len(),
+            running: s
+                .runs
+                .iter()
+                .filter(|r| r.state == RunState::Running)
+                .count(),
+            paused: s
+                .runs
+                .iter()
+                .filter(|r| r.state == RunState::Paused)
+                .count(),
+        })
+    }
     pub fn list(&self) -> Result<(Vec<Workflow>, Vec<Run>)> {
         let s = self.state.lock().map_err(|_| Error::Storage)?;
         let latest = s

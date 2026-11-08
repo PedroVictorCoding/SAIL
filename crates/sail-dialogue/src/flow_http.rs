@@ -55,6 +55,7 @@ pub fn router(authority: Option<ApprovalAuthority>) -> Router {
 fn router_with_store(store: Option<Arc<Store>>, authority: Option<ApprovalAuthority>) -> Router {
     Router::new()
         .route("/workflows", get(list).post(save))
+        .route("/status", get(status))
         .route("/runs", post(start))
         .route("/workflows/:id/delete", post(delete_workflow))
         .route("/runs/:id/delete", post(delete_run))
@@ -79,6 +80,11 @@ async fn blocking<T: Send + 'static>(
         .await
         .map_err(|_| fail(Error::Storage))?
         .map_err(fail)
+}
+async fn status(State(s): State<Arc<HttpState>>, h: HeaderMap) -> Reply {
+    let store = authorize(&s, &h)?;
+    let status = blocking(move || store.status()).await?;
+    Ok(Json(json!(status)))
 }
 async fn list(State(s): State<Arc<HttpState>>, h: HeaderMap) -> Reply {
     let store = authorize(&s, &h)?;
@@ -224,6 +230,10 @@ mod tests {
         }
         let (_, data) = request(&app, "/workflows", None, token).await;
         assert_eq!(data["runs"][0]["state"], "completed");
+        let (_, status) = request(&app, "/status", None, token).await;
+        assert_eq!(status["workflows"], 1);
+        assert_eq!(status["running"], 0);
+        assert!(status.get("runs").is_none());
         assert_eq!(data["runs"][0]["receipts"][2]["output"], "HELLO");
         assert_eq!(
             request(&app, "/runs", Some(run), token).await.0,
