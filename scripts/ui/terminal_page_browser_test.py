@@ -53,11 +53,18 @@ def main():
         page.wait_for_timeout(400)
         assert page.evaluate("location.hash") == "#terminal"
         assert page.locator("#subsystemTitle").text_content() == "Terminal"
+        assert page.locator("#tmPane").get_attribute("data-mode") == "terminal"
         assert page.locator("#tmPane #subsystemPage").is_visible()
         assert page.locator("#subsystemContent #terminalCard").is_visible()
         assert page.locator("#terminalContainer").is_visible()
         assert page.locator("#terminalRailBtn").get_attribute("aria-current") == "page"
         assert "selected" in page.locator("#terminalRailBtn").get_attribute("class")
+
+        # Verify Terminal full-pane borderless presentation
+        term_border = page.evaluate("window.getComputedStyle(document.getElementById('terminalCard')).borderTopWidth")
+        assert term_border == "0px", f"Expected 0px border on terminalCard, got {term_border}"
+        term_radius = page.evaluate("window.getComputedStyle(document.getElementById('terminalCard')).borderTopLeftRadius")
+        assert term_radius == "0px", f"Expected 0px border-radius on terminalCard, got {term_radius}"
 
         # 2. Return to home
         page.locator("#homeNav").click()
@@ -81,7 +88,18 @@ def main():
         assert page.evaluate("location.hash") == "#terminal"
         assert page.locator("#subsystemContent #terminalCard").is_visible()
 
-        # 5. Responsive layout check
+        # 5. Flow page check (verify full-pane borderless presentation)
+        page.goto(f"http://127.0.0.1:{server.server_port}/#flow")
+        page.wait_for_timeout(400)
+        assert page.evaluate("location.hash") == "#flow"
+        assert page.locator("#tmPane").get_attribute("data-mode") == "flow"
+        assert page.locator("#subsystemContent #flowCard").is_visible()
+        flow_border = page.evaluate("window.getComputedStyle(document.getElementById('flowCard')).borderTopWidth")
+        assert flow_border == "0px", f"Expected 0px border on flowCard, got {flow_border}"
+        flow_radius = page.evaluate("window.getComputedStyle(document.getElementById('flowCard')).borderTopLeftRadius")
+        assert flow_radius == "0px", f"Expected 0px border-radius on flowCard, got {flow_radius}"
+
+        # 6. Responsive layout check
         for width in [1440, 820, 390]:
             page.set_viewport_size({"width": width, "height": 844})
             page.wait_for_timeout(200)
