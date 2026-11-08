@@ -116,6 +116,16 @@
         }
       });
 
+      // Listen for page navigation to terminal
+      window.addEventListener('sail:page', (e) => {
+        if (e.detail === 'terminal') {
+          setTimeout(() => {
+            this.updateTerminalSize();
+            this.term.focus();
+          }, 50);
+        }
+      });
+
       // Resize observer to update PTY rows and cols
       if (window.ResizeObserver && this.container) {
         const ro = new ResizeObserver(() => this.updateTerminalSize());
@@ -289,14 +299,15 @@
 
     focusTerminal() {
       if (!this.terminalCard) return;
-      // Switch to home view if currently on a subsystem page
-      const homeNav = document.getElementById('homeNav');
-      if (homeNav) homeNav.click();
-
-      this.terminalCard.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
+      if (window.sailNavigate) {
+        window.sailNavigate('terminal');
+      } else {
+        location.hash = '#terminal';
+      }
       setTimeout(() => {
+        this.updateTerminalSize();
         this.term.focus();
-      }, 300);
+      }, 100);
     }
   }
 
