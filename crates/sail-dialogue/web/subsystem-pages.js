@@ -159,6 +159,21 @@ const subsystemPages = [
       "Snooze, cancel and one-time delivery",
       "Quiet hours and opt-in spoken reminders"
     ]
+  },
+  {
+    "id": "terminal",
+    "name": "Terminal",
+    "icon": "terminal",
+    "subtitle": "Interactive developer shell",
+    "description": "Run shell commands in your host workspace with live ANSI terminal output.",
+    "card": "terminalCard",
+    "panel": "terminalPanel",
+    "settings": null,
+    "details": [
+      "Interactive PTY host shell over WebSocket",
+      "Tab completion, history, ANSI colors, and Ctrl+C",
+      "Quick developer commands: git, cargo, and directory inspection"
+    ]
   }
 ];
 
