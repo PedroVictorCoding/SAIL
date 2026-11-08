@@ -28,6 +28,7 @@ sail-arena-learn.workspace = true
 sail-continuity.workspace = true
 sail-pulse.workspace = true
 sail-tracker.workspace = true
+sail-moodle.workspace = true
 sail-flow.workspace = true
 sail-canvas.workspace = true
 sail-guardian.workspace = true

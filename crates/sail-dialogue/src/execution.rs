@@ -77,6 +77,24 @@ impl Tool for SpotifyTool {
             })
     }
 }
+/// Read-only Moodle tools over the local store (`sail-moodle`). They answer from the last
+/// sync and never call Moodle.
+struct MoodleTool(&'static str);
+#[async_trait]
+impl Tool for MoodleTool {
+    async fn execute(&self, _context: ToolContext, input: Value) -> Result<Value, ToolFailure> {
+        let service = sail_moodle::service::global().ok_or_else(|| ToolFailure {
+            message: "Moodle is not available in this session".into(),
+            retryable: false,
+        })?;
+        crate::moodle_tools::execute(&service, self.0, &input)
+            .map(|value| Value::String(value.to_string()))
+            .map_err(|message| ToolFailure {
+                message,
+                retryable: false,
+            })
+    }
+}
 /// How many offered alternatives the model sees besides the best match.
 const SPOTIFY_ALTERNATIVES: usize = 4;
 pub(crate) async fn execute_spotify_tool(
@@ -230,7 +248,7 @@ impl Tool for Canvas {
 /// Dialogue's tools as the model sees them, in the order the voice tool list offers them
 /// (ties in tool selection keep this order). `vision_frame` and `memory_recall` are not
 /// here: they act on the current turn's image and archive, not through the scheduler.
-pub(crate) const MODEL_TOOL_ORDER: [&str; 24] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 28] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -250,6 +268,10 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 24] = [
     "spotify:find",
     "spotify:play",
     "spotify:control",
+    "moodle:upcoming",
+    "moodle:changes",
+    "moodle:course",
+    "moodle:search",
     "forge:enqueue",
     "forge:status",
     "forge:list",
@@ -566,6 +588,72 @@ pub fn registry() -> Arc<ToolRegistry> {
                     concurrency_limit,
                 },
                 Arc::new(SpotifyTool(id)),
+            )
+            .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
+    }
+
+    let course = || {
+        string(
+            120,
+            "Optional course: its name, a fragment of it (e.g. 'cálculo') or its short name",
+        )
+    };
+    let moodle_tools: [KernelTool; 4] = [
+        (
+            "moodle:upcoming",
+            "List the user's upcoming school exams, tests, deadlines and other dated items from their Moodle course pages (last sync), with how sure SAIL is and the quote each came from. Portuguese: exame, teste, frequência, entrega, prazo, quando, próximo, escola, cadeira, disciplina.",
+            json!({
+                "days": {"type":"integer","minimum":1,"maximum":366,"description":"How many days ahead; default 30"},
+                "course": course()
+            }),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "moodle:changes",
+            "What changed on the user's school Moodle recently: new or updated files, moved deadlines, announcements, released grades. Portuguese: novidades, avisos, ficheiros, notas, mudou.",
+            json!({
+                "since_days": {"type":"integer","minimum":1,"maximum":180,"description":"How many days back; default 7"},
+                "course": course()
+            }),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "moodle:course",
+            "Everything SAIL knows about one school Moodle course: how it is graded (weights, minimum grade), dated items, released grades and recent changes. Portuguese: avaliação, nota, cadeira, disciplina, UC.",
+            json!({"course": course()}),
+            &["course"],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "moodle:search",
+            "Search the user's school Moodle items and changes (titles and source quotes) for a word or phrase. Portuguese: procurar.",
+            json!({"query": string(100, "What to look for, e.g. 'projeto' or 'recurso'"), "course": course()}),
+            &["query"],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+    ];
+    for (id, description, properties, required, effect, concurrency_limit) in moodle_tools {
+        registry
+            .register(
+                ToolDescriptor {
+                    id: id.into(),
+                    version: 1,
+                    description: description.into(),
+                    input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+                    output_schema: json!({"type":"string","maxLength":65536}),
+                    security_effect: effect,
+                    required_capabilities: vec![id.into()],
+                    timeout_ms: 5000,
+                    resource_class: "io".into(),
+                    concurrency_limit,
+                },
+                Arc::new(MoodleTool(id)),
             )
             .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
     }

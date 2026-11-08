@@ -59,13 +59,20 @@
   const PAGE_STATION = {bridge: 'core', agents: 'forge', flow: 'flow', pulse: 'core'};
   // Tabs of the right-hand Dialogue column: the conversation, and Context (the open
   // system's status), which has its own row of views.
+  // Full-pane pages served on their own route and shown in a frame: the Tracker board
+  // and the School (Moodle) page. Each frame is created once and kept, so switching
+  // between them doesn't reload either.
+  const FRAMES = {
+    tracker: {src: '/tracker', title: 'Tracker', id: 'tmTracker'},
+    moodle: {src: '/moodle', title: 'School', id: 'tmMoodle'},
+  };
   const COLUMN_TABS = ['chat', 'context'];
   const INFO_TABS = ['overview', 'tasks', 'logs', 'config'];
   for (const s of STATIONS) if (s.page && !PAGE_STATION[s.page]) PAGE_STATION[s.page] = s.id;
   for (const s of STATIONS) { s.gx = (s.u + s.v) / 2; s.gy = (s.v - s.u) / 2; }
 
   const state = {
-    on: false, built: false, selected: null, popup: null, tracker: false, pending: null, trigger: null, tab: 'chat', info: 'overview', chatScroll: null, mode: 'map', music: null,
+    on: false, built: false, selected: null, popup: null, frame: null, pending: null, trigger: null, tab: 'chat', info: 'overview', chatScroll: null, mode: 'map', music: null,
     live: true, paused: false, speed: 1, k: 1, tx: 0, ty: 0,
     metrics: null, mind: null, health: null, guardian: null, approvals: 0, plans: [], reminders: [], workflows: null,
     activityCollapsed: (() => { try { return localStorage.getItem('sail_tm_activity_collapsed') !== 'false'; } catch (_) { return true; } })(),
@@ -97,6 +104,7 @@
     const stroke = {fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round'};
     if (name === 'forge') { s.append(svg('path', {d: 'M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16', ...stroke})); return s; }
     if (name === 'away') { s.append(svg('path', {d: 'M3 12a9 9 0 1 0 2.6-6.4L3 8M3 3v5h5M12 7v5l3 2', ...stroke})); return s; }
+    if (name === 'school') { s.append(svg('path', {d: 'M2 9l10-5 10 5-10 5-10-5zM6 11v5c0 1.4 2.7 3 6 3s6-1.6 6-3v-5M22 9v6', ...stroke})); return s; }
     if (name === 'tasks') { s.append(svg('path', {d: 'M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01', ...stroke})); return s; }
     s.removeAttribute('viewBox');
     s.append(svg('use', {href: `/icons.svg#${name}`}));
@@ -205,7 +213,8 @@
       el('ul', {class: 'tm-nav tm-nav-2'},
         navItem('pulse', 'Reminders', 'pulse'),
         navItem('terminal', 'Terminal', 'terminal'),
-        navItem('tracker', 'Tracker', 'sense')),
+        navItem('tracker', 'Tracker', 'sense'),
+        navItem('moodle', 'School', 'school')),
       el('section', {class: 'tm-np', id: 'tmNowPlaying', 'aria-label': 'Now playing', hidden: true}),
       el('div', {class: 'tm-sidecard'},
         el('p', {class: 'tm-sidecard-title'}, el('span', {class: 'tm-status', id: 'tmCoreDot'}), el('span', {id: 'tmCoreState', text: 'Connecting…'})),
@@ -1027,7 +1036,7 @@
     const mobileAway = root.querySelector('.tm-away-mobile');
     if (current() === 'away') mobileAway?.setAttribute('aria-current', 'page');
     else mobileAway?.removeAttribute('aria-current');
-    $('#tmCrumb').textContent = current() === 'pulse' ? 'Reminders' : state.tracker ? 'Tracker' : state.route === 'terminal' ? 'Terminal' : state.popup ? byId[state.popup].name : state.mode === 'away' ? 'While You Were Away' : 'SAIL';
+    $('#tmCrumb').textContent = current() === 'pulse' ? 'Reminders' : state.frame ? FRAMES[state.frame].title : state.route === 'terminal' ? 'Terminal' : state.popup ? byId[state.popup].name : state.mode === 'away' ? 'While You Were Away' : 'SAIL';
     svgRoot.querySelectorAll('.tm-station').forEach((g) => g.classList.toggle('selected', g.dataset.station === id));
     render();
   }
@@ -1073,11 +1082,11 @@
   }
   function navTo(target, trigger) {
     if (target === 'away' || target === 'home' || target === 'pulse' || target === 'terminal') { window.sailNavigate?.(target); return; }
-    if (target === 'tracker') { state.trigger = trigger || document.activeElement; window.sailNavigate?.('tracker'); return; }
+    if (FRAMES[target]) { state.trigger = trigger || document.activeElement; window.sailNavigate?.(target); return; }
     openStation(target, trigger);
   }
   // The sidebar entry for what the centre shows.
-  function current() { if (window.sailCurrentPage?.() === 'pulse') return 'pulse'; return state.tracker ? 'tracker' : (state.route === 'terminal' ? 'terminal' : (state.popup || (state.mode === 'away' ? 'away' : 'home'))); }
+  function current() { if (window.sailCurrentPage?.() === 'pulse') return 'pulse'; return state.frame ? state.frame : (state.route === 'terminal' ? 'terminal' : (state.popup || (state.mode === 'away' ? 'away' : 'home'))); }
 
   // ------------------------------------------------------------------ centre pane
   // Stations with a page go through the router (#mind, #forge…) so links, reloads and
@@ -1113,8 +1122,8 @@
     const page = document.getElementById('subsystemPage');
     if (page) page.hidden = !routed;
     if (!routed) { $('#tmPaneTitle').textContent = byId[id].name; $('#tmPaneAbout').textContent = byId[id].about; }
-    if (state.popup !== id || pane.hidden || state.tracker) paneMain.scrollTop = 0;
-    state.tracker = false;
+    if (state.popup !== id || pane.hidden || state.frame) paneMain.scrollTop = 0;
+    state.frame = null;
     const activeRoute = state.route || window.sailCurrentPage?.();
     const mode = id === 'arena' || activeRoute === 'arena' ? 'arena'
       : id === 'terminal' || activeRoute === 'terminal' ? 'terminal'
@@ -1124,13 +1133,20 @@
     state.popup = id;
     select(id);
   }
-  function showTracker() {
-    if (!trackerHost.firstChild) {
-      trackerHost.append(
-        el('span', {class: 'tm-sr', id: 'tmTrackerLabel', text: 'Tracker'}),
-        el('iframe', {class: 'tm-tracker-frame', id: 'tmTracker', src: '/tracker', title: 'Tracker'}));
+  function showFrame(name) {
+    const spec = FRAMES[name];
+    if (!trackerHost.querySelector('#tmTrackerLabel')) {
+      trackerHost.append(el('span', {class: 'tm-sr', id: 'tmTrackerLabel'}));
     }
-    state.popup = null; state.tracker = true;
+    $('#tmTrackerLabel').textContent = spec.title;
+    if (!document.getElementById(spec.id)) {
+      trackerHost.append(el('iframe', {class: 'tm-tracker-frame', id: spec.id, src: spec.src, title: spec.title}));
+    }
+    for (const [key, other] of Object.entries(FRAMES)) {
+      const frame = document.getElementById(other.id);
+      if (frame) frame.hidden = key !== name;
+    }
+    state.popup = null; state.frame = name;
     showPane('tracker');
     select(null);
   }
@@ -1199,7 +1215,7 @@
         entertainmentHost.append(panel);
       }
     }
-    state.tracker = false; state.popup = 'entertainment';
+    state.frame = null; state.popup = 'entertainment';
     showPane('entertainment');
     switchMedia(mediaTab);
     select('entertainment');
@@ -1208,7 +1224,7 @@
     if (pane.hidden) return;
     readerVisibility(false);
     pane.hidden = true; stage.hidden = false;
-    state.popup = null; state.tracker = false;
+    state.popup = null; state.frame = null;
     document.documentElement.classList.remove('tm-pane-open');
     select(state.selected);
     const back = state.trigger?.isConnected && stage.contains(state.trigger) ? state.trigger : $('#tmViewport');
@@ -1300,10 +1316,10 @@
       state.pending = null; showEntertainment();
       return;
     }
-    if (page === 'tracker') {
+    if (FRAMES[page]) {
       const requested = !!state.trigger;
-      state.pending = null; showTracker();
-      if (requested) $('#tmTracker').focus({preventScroll: true});
+      state.pending = null; showFrame(page);
+      if (requested) document.getElementById(FRAMES[page].id)?.focus({preventScroll: true});
       return;
     }
     // Two stations can share a page (Memory and Arena); keep the one that was chosen.

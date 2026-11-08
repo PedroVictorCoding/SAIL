@@ -1,0 +1,27 @@
+{
+  "events": [
+    {
+      "id": 900,
+      "name": "Quiz 1",
+      "description": "<p>Quiz de avaliação.</p>",
+      "courseid": 7,
+      "coursemoduleid": 77,
+      "modulename": "quiz",
+      "eventtype": "course",
+      "timestart": 1800000000,
+      "timeduration": 3600,
+      "location": "Sala A"
+    },
+    {
+      "id": 901,
+      "name": "Feriado",
+      "description": "",
+      "courseid": 0,
+      "modulename": null,
+      "eventtype": "site",
+      "timestart": 1800003600,
+      "timeduration": 0,
+      "location": ""
+    }
+  ]
+}

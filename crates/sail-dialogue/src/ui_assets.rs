@@ -66,6 +66,9 @@ const CSS: &str = "text/css; charset=utf-8";
 assets![
     ("/", "web/index.html", HTML),
     ("/tracker", "web/tracker.html", HTML),
+    ("/moodle", "web/moodle.html", HTML),
+    ("/moodle.js", "web/moodle.js", JS),
+    ("/moodle.css", "web/moodle.css", CSS),
     ("/reader", "web/reader.html", HTML),
     ("/reader.js", "web/reader.js", JS),
     ("/reader.css", "web/reader.css", CSS),
