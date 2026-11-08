@@ -1,0 +1,66 @@
+[
+  {
+    "id": 100,
+    "section": 1,
+    "name": "Semana 1",
+    "summary": "<p>Introdução à unidade curricular.</p>",
+    "visible": 1,
+    "modules": [
+      {
+        "id": 101,
+        "modname": "resource",
+        "instance": 55,
+        "name": "Enunciado",
+        "description": "<p>Leia com atenção.</p>",
+        "url": "https://moodle.example.test/mod/resource/view.php?id=101",
+        "visible": 1,
+        "dates": [
+          { "label": "Aberto:", "timestamp": 1767225600 }
+        ],
+        "contents": [
+          {
+            "type": "file",
+            "filename": "Enunciado.pdf",
+            "filepath": "/",
+            "filesize": 12345,
+            "timemodified": 1767225600,
+            "mimetype": "application/pdf",
+            "fileurl": "https://moodle.example.test/pluginfile.php/1/mod_resource/content/1/Enunciado.pdf?token=deadbeef&forcedownload=1"
+          }
+        ]
+      },
+      {
+        "id": 102,
+        "modname": "assign",
+        "instance": 501,
+        "name": "Projeto 1",
+        "description": "<p>Entrega até ao fim do semestre.</p>",
+        "url": "https://moodle.example.test/mod/assign/view.php?id=102",
+        "visible": 1,
+        "dates": [
+          { "label": "Entrega:", "timestamp": 1800000000 }
+        ],
+        "contents": []
+      }
+    ]
+  },
+  {
+    "id": 200,
+    "section": 2,
+    "name": "Semana 2",
+    "summary": "",
+    "visible": 1,
+    "modules": [
+      {
+        "id": 201,
+        "modname": "forum",
+        "instance": 800,
+        "name": "Avisos",
+        "description": "",
+        "visible": 1,
+        "dates": [],
+        "contents": []
+      }
+    ]
+  }
+]

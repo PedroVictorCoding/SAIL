@@ -1,0 +1,35 @@
+{
+  "discussions": [
+    {
+      "id": 9001,
+      "course": 7,
+      "forum": 800,
+      "name": "Data do 1.º teste",
+      "message": "<p>O teste é a 12 de dezembro, às 14h30.</p>",
+      "userfullname": "Docente Exemplo",
+      "created": 1800000000,
+      "modified": 1800000100,
+      "attachments": [
+        {
+          "filename": "Calendario.pdf",
+          "filepath": "/",
+          "filesize": 500,
+          "timemodified": 1800000000,
+          "mimetype": "application/pdf",
+          "fileurl": "https://moodle.example.test/pluginfile.php/1/mod_forum/attachment/9001/Calendario.pdf?token=abc"
+        }
+      ]
+    },
+    {
+      "id": 9002,
+      "course": 7,
+      "forum": 800,
+      "name": "Sem alterações",
+      "message": "<p>Mantém-se o horário.</p>",
+      "userfullname": "Docente Exemplo",
+      "created": 1799990000,
+      "modified": 1799990000,
+      "attachments": []
+    }
+  ]
+}

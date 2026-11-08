@@ -1,0 +1,11 @@
+{
+  "sitename": "ISCTE Moodle",
+  "userid": 42,
+  "fullname": "Pessoa Exemplo",
+  "release": "4.5.2 (Build: 20250210)",
+  "functions": [
+    { "name": "core_webservice_get_site_info", "version": "4.5.2" },
+    { "name": "core_course_get_contents", "version": "4.5.2" }
+  ],
+  "downloadfiles": 1
+}

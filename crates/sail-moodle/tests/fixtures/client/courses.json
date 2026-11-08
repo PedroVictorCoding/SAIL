@@ -1,0 +1,20 @@
+[
+  {
+    "id": 7,
+    "shortname": "LEIC",
+    "fullname": "Licenciatura em Engenharia Informática",
+    "startdate": 1767225600,
+    "enddate": 1782864000,
+    "visible": 1,
+    "timemodified": 1767225601
+  },
+  {
+    "id": 8,
+    "shortname": "MEI",
+    "fullname": "Mestrado em Engenharia Informática",
+    "startdate": 0,
+    "enddate": 0,
+    "visible": 0,
+    "timemodified": 0
+  }
+]
