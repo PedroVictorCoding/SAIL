@@ -435,7 +435,10 @@ impl Default for ResourceLimits {
             max_response_bytes: 128 * 1024,
             max_images: 2,
             max_image_bytes: 4_000_000,
-            max_output_tokens: 1024,
+            // Course Factory lessons ask for up to 4096 answer tokens and Moodle extraction
+            // for 2048; at 1024 Mind rejected every one of those as an invalid request.
+            // Callers set their own, smaller budgets (voice uses a few hundred).
+            max_output_tokens: 4096,
             queue_timeout_ms: 30_000,
             inference_timeout_ms: 180_000,
         }

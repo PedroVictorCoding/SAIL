@@ -1109,7 +1109,9 @@ impl Engine {
                         tools: tools::definitions(role),
                         tool_choice: ToolChoice::Auto,
                         generation: Generation {
-                            max_tokens: sail_protocol::ResourceLimits::default().max_output_tokens,
+                            // Kept at Mind's old limit when that grew for Course Factory: a
+                            // live turn must stay short.
+                            max_tokens: 1024,
                             temperature: 0.3,
                             reasoning_budget: None,
                         },

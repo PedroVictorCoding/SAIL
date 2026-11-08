@@ -317,3 +317,102 @@ mod tests {
         assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
     }
 }
+
+/// Background work that may think. Live voice, Arena turns and anything else someone is
+/// waiting on are deliberately absent: they always answer directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Job {
+    /// Arena Learn's free-recall judge.
+    Judge,
+    /// Course Factory authoring (concepts, curriculum, lessons, review variants).
+    CourseAuthoring,
+    /// Moodle date and grading-rule extraction.
+    MoodleExtraction,
+    /// Background task plans (never interactive ones).
+    Planning,
+    /// Memory consolidation proposals.
+    MemoryConsolidation,
+}
+
+impl Job {
+    /// Every job, for docs and diagnostics.
+    pub const ALL: [Job; 5] = [
+        Job::Judge,
+        Job::CourseAuthoring,
+        Job::MoodleExtraction,
+        Job::Planning,
+        Job::MemoryConsolidation,
+    ];
+
+    /// The environment variable that overrides this job's budget: a number of tokens, or
+    /// `0`/`off` for no thinking. Lets the owner trial a budget without a rebuild.
+    pub fn env_var(self) -> &'static str {
+        match self {
+            Job::Judge => "SAIL_THINK_JUDGE",
+            Job::CourseAuthoring => "SAIL_THINK_COURSE_AUTHORING",
+            Job::MoodleExtraction => "SAIL_THINK_MOODLE",
+            Job::Planning => "SAIL_THINK_PLANNING",
+            Job::MemoryConsolidation => "SAIL_THINK_MEMORY",
+        }
+    }
+
+    /// The built-in budget, set from the model eval (`docs/MODEL_EVAL.md`). A job stays at
+    /// `None` until a measured run shows thinking helps it enough to pay for the time.
+    pub fn default_budget(self) -> Option<u32> {
+        match self {
+            Job::Judge
+            | Job::CourseAuthoring
+            | Job::MoodleExtraction
+            | Job::Planning
+            | Job::MemoryConsolidation => None,
+        }
+    }
+
+    /// The budget this job uses now: the environment override if it parses, else the
+    /// built-in default. An unreadable override is ignored rather than guessed at.
+    pub fn budget(self) -> Option<u32> {
+        match std::env::var(self.env_var()) {
+            Ok(value) => parse_budget(&value).unwrap_or_else(|| self.default_budget()),
+            Err(_) => self.default_budget(),
+        }
+    }
+}
+
+/// `"off"`/`"0"` means `Some(None)` (explicitly off); a number is a budget; anything else is
+/// `None` (not understood).
+fn parse_budget(value: &str) -> Option<Option<u32>> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("off") {
+        return Some(None);
+    }
+    value
+        .parse::<u32>()
+        .ok()
+        .map(|n| (n > 0).then_some(n.min(sail_protocol::MAX_REASONING_BUDGET)))
+}
+
+#[cfg(test)]
+mod job_tests {
+    use super::*;
+
+    #[test]
+    fn budget_overrides_parse_conservatively() {
+        assert_eq!(parse_budget("512"), Some(Some(512)));
+        assert_eq!(parse_budget(" off "), Some(None));
+        assert_eq!(parse_budget("0"), Some(None));
+        assert_eq!(
+            parse_budget("999999"),
+            Some(Some(sail_protocol::MAX_REASONING_BUDGET))
+        );
+        assert_eq!(parse_budget("lots"), None);
+        assert_eq!(parse_budget("-5"), None);
+    }
+
+    #[test]
+    fn every_job_has_its_own_override() {
+        let mut vars: Vec<_> = Job::ALL.iter().map(|j| j.env_var()).collect();
+        vars.sort();
+        vars.dedup();
+        assert_eq!(vars.len(), Job::ALL.len());
+    }
+}

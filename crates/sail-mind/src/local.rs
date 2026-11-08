@@ -583,13 +583,9 @@ impl LocalGemmaBackend {
             .as_array()
             .ok_or_else(|| protocol("/tokenize did not return tokens"))?
             .len();
-        if count
-            .saturating_add(images * 1280)
-            .saturating_add(
-                crate::request_body::total_output_tokens(&self.family(), &request.generation)
-                    as usize,
-            )
-            > caps.context_tokens
+        if count.saturating_add(images * 1280).saturating_add(
+            crate::request_body::total_output_tokens(&self.family(), &request.generation) as usize,
+        ) > caps.context_tokens
         {
             return Err(InferenceError::new(
                 ErrorCode::ResourceLimit,
@@ -667,8 +663,7 @@ impl LocalGemmaBackend {
         if !state.finished {
             return Err(protocol("Local model disconnected before a finish reason"));
         }
-        if state.reason == "length" && state.content.trim().is_empty() && state.calls.is_empty()
-        {
+        if state.reason == "length" && state.content.trim().is_empty() && state.calls.is_empty() {
             return Err(InferenceError::new(
                 ErrorCode::ResourceLimit,
                 "Model used its whole output budget without answering",
@@ -759,10 +754,7 @@ impl StreamState {
         if let Some(usage) = value.get("usage") {
             self.input_tokens = usage["prompt_tokens"].as_u64().map(|n| n as u32);
             self.output_tokens = usage["completion_tokens"].as_u64().map(|n| n as u32);
-            if self
-                .output_tokens
-                .is_some_and(|n| n > self.output_limit)
-            {
+            if self.output_tokens.is_some_and(|n| n > self.output_limit) {
                 return Err(InferenceError::new(
                     ErrorCode::ResourceLimit,
                     "Model exceeded output token budget",
@@ -949,7 +941,9 @@ impl InferenceBackend for LocalGemmaBackend {
         let _start = tokio::time::timeout(SHUTDOWN_STARTUP_WAIT, self.startup.lock())
             .await
             .inspect_err(|_| {
-                tracing::warn!("A model start is still in progress; stopping without waiting for it")
+                tracing::warn!(
+                    "A model start is still in progress; stopping without waiting for it"
+                )
             })
             .ok();
         if let Some(mut child) = self.process.lock().await.take()

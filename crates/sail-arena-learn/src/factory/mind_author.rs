@@ -73,7 +73,7 @@ impl MindAuthor {
             generation: Generation {
                 max_tokens: prompt.max_output_tokens,
                 temperature: AUTHOR_TEMPERATURE,
-                reasoning_budget: None,
+                reasoning_budget: prompt.reasoning_budget,
             },
         }
     }
@@ -245,6 +245,7 @@ mod tests {
             user: "user".into(),
             schema: "lesson",
             max_output_tokens: 900,
+            reasoning_budget: None,
         }
     }
 

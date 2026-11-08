@@ -29,6 +29,7 @@ impl ExtractModel for MoodleMind {
             user: prompt.user.clone(),
             schema: "moodle_extraction",
             max_output_tokens: prompt.max_output_tokens,
+            reasoning_budget: sail_common::request_body::Job::MoodleExtraction.budget(),
         };
         self.0.complete(&prompt, cancel).await.map_err(|e| match e {
             AuthorModelError::Preempted(m) => ExtractModelError::Preempted(m),
@@ -105,5 +106,30 @@ impl FileText for MoodlePdf {
             first = last + 1;
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sail_moodle::{DocSource, ExtractionDoc};
+
+    /// Mind rejects an answer budget over its output limit as an invalid request. Until
+    /// 2026-11-08 the limit was 1024 and this prompt asked for 2048, so every model
+    /// extraction on a real Moodle failed with `InvalidRequest`.
+    #[test]
+    fn the_extraction_prompt_fits_minds_output_limit() {
+        let doc = ExtractionDoc {
+            id: "doc".into(),
+            course_id: 1,
+            course_name: "Compiladores".into(),
+            source: DocSource::AssignmentBrief { assignment_id: 2 },
+            label: "Trabalho".into(),
+            text: "Entrega do compilador até 2026-12-01.".into(),
+            observed_at: chrono::Utc::now(),
+            term: None,
+        };
+        let prompt = sail_moodle::extract::prompt::build_prompt(&doc, &[]);
+        let limit = sail_protocol::ResourceLimits::default().max_output_tokens;
+        assert!(prompt.max_output_tokens <= limit);
     }
 }

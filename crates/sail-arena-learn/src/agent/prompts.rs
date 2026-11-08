@@ -212,7 +212,8 @@ mod tests {
             name: "p".into(),
             statement: "x".repeat(MAX_GRAPH_CONTEXT_BYTES - 1),
         }];
-        let reply = u64::from(sail_protocol::ResourceLimits::default().max_output_tokens);
+        // The live turn's own reply budget (agent/turn.rs).
+        let reply = 1024u64;
         for role in [
             AgentRole::Prober,
             AgentRole::Teacher,

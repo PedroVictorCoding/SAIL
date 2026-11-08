@@ -318,7 +318,7 @@ fn memory_proposer(service: sail_mind::MindService) -> sail_flow::memory::Propos
         request.generation = sail_protocol::Generation {
             max_tokens: 768,
             temperature: 0.0,
-            reasoning_budget: None,
+            reasoning_budget: sail_common::request_body::Job::MemoryConsolidation.budget(),
         };
         let service = service.clone();
         let cancel = tokio_util::sync::CancellationToken::new();
