@@ -743,6 +743,116 @@ impl FactoryService {
     }
 }
 
+/// Most owner edits in one request.
+pub const MAX_GRAPH_EDITS: usize = 200;
+
+/// One owner edit of the concept map, as JSON: `{"op": "rename", "concept_id": …, "name": …}`.
+/// Mirrors [`super::author::assemble::GraphEdit`], which stays free of serde so model
+/// output can never be parsed into an edit.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OwnerGraphEdit {
+    Rename {
+        concept_id: String,
+        name: String,
+    },
+    Merge {
+        from: Vec<String>,
+        into: String,
+    },
+    Remove {
+        concept_id: String,
+    },
+    Reorder {
+        order: Vec<String>,
+    },
+    ConfirmEdge {
+        concept_id: String,
+        requires: String,
+    },
+    RejectEdge {
+        concept_id: String,
+        requires: String,
+    },
+}
+
+impl From<OwnerGraphEdit> for super::author::assemble::GraphEdit {
+    fn from(e: OwnerGraphEdit) -> Self {
+        use super::author::assemble::GraphEdit as G;
+        match e {
+            OwnerGraphEdit::Rename { concept_id, name } => G::Rename { concept_id, name },
+            OwnerGraphEdit::Merge { from, into } => G::Merge { from, into },
+            OwnerGraphEdit::Remove { concept_id } => G::Remove { concept_id },
+            OwnerGraphEdit::Reorder { order } => G::Reorder { order },
+            OwnerGraphEdit::ConfirmEdge {
+                concept_id,
+                requires,
+            } => G::ConfirmEdge {
+                concept_id,
+                requires,
+            },
+            OwnerGraphEdit::RejectEdge {
+                concept_id,
+                requires,
+            } => G::RejectEdge {
+                concept_id,
+                requires,
+            },
+        }
+    }
+}
+
+impl FactoryService {
+    /// The owner edits the concept map while the plan waits for approval. The edited map is
+    /// a new revision, and a new plan is proposed from it.
+    pub fn edit_graph(
+        &self,
+        id: &str,
+        base_revision: u64,
+        edits: Vec<OwnerGraphEdit>,
+    ) -> Result<ConceptGraph, FactoryError> {
+        if edits.is_empty() || edits.len() > MAX_GRAPH_EDITS {
+            return Err(FactoryError::Invalid(format!(
+                "send 1–{MAX_GRAPH_EDITS} edits"
+            )));
+        }
+        let pipeline = self.pipeline()?;
+        let store = &pipeline.deps().store;
+        let course = self.project(id)?;
+        if course.status != ProjectStatus::AwaitingPlanApproval {
+            return Err(FactoryError::Conflict(
+                "the concept map can be edited while its plan waits for approval".into(),
+            ));
+        }
+        let graph = store
+            .latest_graph(id)
+            .map_err(store_err)?
+            .ok_or_else(|| FactoryError::NotFound("concept map".into()))?;
+        if graph.revision != base_revision {
+            return Err(FactoryError::Conflict(format!(
+                "the map changed (now revision {}); reload and edit again",
+                graph.revision
+            )));
+        }
+        let edits: Vec<super::author::assemble::GraphEdit> =
+            edits.into_iter().map(Into::into).collect();
+        let next = super::author::assemble::apply_owner_edits(&graph, &edits)
+            .map_err(|e| FactoryError::Invalid(e.to_string()))?;
+        let next = store.save_graph(next).map_err(store_err)?;
+        let now = (self.clock)();
+        self.jobs.enqueue(
+            AuthoringJob::BuildCurriculum {
+                course_id: id.into(),
+                concept_graph_revision: next.revision,
+            },
+            vec![PriorityReason::OwnerRequest],
+            now,
+            now,
+        )?;
+        Ok(next)
+    }
+}
+
 /// The course a job belongs to, if any.
 pub fn job_course(job: &AuthoringJob) -> Option<&str> {
     match job {

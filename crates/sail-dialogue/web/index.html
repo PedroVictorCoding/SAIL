@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/courses.css">
+<link rel="stylesheet" href="/learn-factory.css">
 <link rel="stylesheet" href="/ambient-backdrop.css">
 </head>
 <body>
@@ -269,9 +270,10 @@
         <header class="card-heading learn-card-tabs">
           <div class="card-title"><h2 class="sr-only">Arena</h2></div>
           <div class="card-heading-actions">
-            <div class="card-tabs" role="tablist" aria-label="Arena: switch between Learn and Courses">
+            <div class="card-tabs" role="tablist" aria-label="Arena: switch between Learn, Courses and the Course Factory">
               <button type="button" class="card-tab active" role="tab" aria-selected="true" data-tab-card="memoryCard" data-tab-panel="learnPanelMain" id="learnTab"><span>Arena Learn</span></button>
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="coursesPanelMain" id="coursesTab" tabindex="-1"><span>Arena Courses</span></button>
+              <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="learnFactoryPanel" id="factoryTab" tabindex="-1"><span>Course Factory</span></button>
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelMain" id="memoryTab"><span>Memory</span></button>
             </div>
           </div>
@@ -614,6 +616,7 @@
           </div>
         </div>
         <div class="card-tab-panel courses-root" id="coursesPanelMain" role="tabpanel" aria-labelledby="coursesTab" hidden></div>
+        <div class="card-tab-panel" id="learnFactoryPanel" role="tabpanel" aria-labelledby="factoryTab" hidden></div>
         <div class="card-tab-panel" id="memoryPanelMain" role="tabpanel" aria-labelledby="memoryTab" hidden>
           <header class="card-heading"><div class="card-title"><h2>Remembered knowledge</h2></div><div class="card-heading-actions"><button class="quiet-button" id="memoryRefresh" type="button">Refresh</button><button class="quiet-button" id="memoryExport" type="button">Export</button></div></header>
           <form id="memorySearch" class="memory-search"><label for="memoryQuery">Search memory</label><input id="memoryQuery" maxlength="1000" placeholder="Names, preferences, facts…"><button class="quiet-button" type="submit">Search</button></form>
@@ -1326,6 +1329,7 @@
 <script src="/learn.js" defer></script>
 <script src="/model-picker.js" defer></script>
 <script src="/courses.js" defer></script>
+<script src="/learn-factory.js" defer></script>
 <link rel="stylesheet" href="/toolsmap.css">
 <script src="/toolsmap.js" defer></script>
 <script src="/ui.js" defer></script>

@@ -78,15 +78,21 @@ fn learn_services(
             let engine = Arc::new(engine);
             let mut router = crate::learn_http::router_with_pulse(engine.clone(), authority, pulse);
             match sail_arena_learn::courses::CourseStore::open(&path) {
-                Ok(courses) => router = router.merge(course_routes(courses, course_authority)),
+                Ok(courses) => {
+                    let courses = course_engine(courses);
+                    router = router.merge(crate::learn_courses_http::router(
+                        courses.clone(),
+                        course_authority,
+                    ));
+                    match factory_routes(&path, courses, inference, factory_authority) {
+                        Ok(routes) => router = router.merge(routes),
+                        Err(error) => {
+                            warn!(%error, "Course Factory unavailable; course generation disabled")
+                        }
+                    }
+                }
                 Err(error) => {
                     warn!(%error, "Interactive Courses store unavailable; courses disabled")
-                }
-            }
-            match factory_routes(&path, factory_authority) {
-                Ok(routes) => router = router.merge(routes),
-                Err(error) => {
-                    warn!(%error, "Course Factory unavailable; course generation disabled")
                 }
             }
             (Some(engine), Some(router))
@@ -98,49 +104,124 @@ fn learn_services(
     }
 }
 
-/// Interactive Courses (#386). Learner Rust runs only through `sail-runner`; without it,
-/// Rust steps report `unavailable`.
-fn course_routes(
-    store: sail_arena_learn::courses::CourseStore,
-    authority: Option<sail_guardian::authority::ApprovalAuthority>,
-) -> Router {
-    use sail_arena_learn::courses::{CourseEngine, NoSandbox, RustEvaluator};
-    let rust: Arc<dyn RustEvaluator> =
-        match crate::learn_courses_http::RunnerRustEvaluator::from_env() {
-            Some(runner) => Arc::new(runner),
-            None => Arc::new(NoSandbox),
-        };
-    crate::learn_courses_http::router(Arc::new(CourseEngine::new(store, rust)), authority)
+/// Learner Rust (and generated exercises' hidden tests) runs only through `sail-runner`;
+/// without it, Rust steps and checks report `unavailable`.
+fn rust_evaluator() -> Arc<dyn sail_arena_learn::courses::RustEvaluator> {
+    match crate::learn_courses_http::RunnerRustEvaluator::from_env() {
+        Some(runner) => Arc::new(runner),
+        None => Arc::new(sail_arena_learn::courses::NoSandbox),
+    }
 }
 
-/// Course Factory owner API. Sources and settings live in the Learn database; jobs in
-/// their own Continuity file next to it, recovered here so a job a crash interrupted runs
-/// again. No model is called from these routes.
+/// Interactive Courses (#386): the engine both the learner routes and the Course Factory
+/// publish into.
+fn course_engine(
+    store: sail_arena_learn::courses::CourseStore,
+) -> Arc<sail_arena_learn::courses::CourseEngine> {
+    Arc::new(sail_arena_learn::courses::CourseEngine::new(
+        store,
+        rust_evaluator(),
+    ))
+}
+
+/// How often the factory worker looks for due work when the queue is idle.
+const FACTORY_IDLE_SLEEP: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Course Factory: owner API plus the background worker. Sources, settings, the project
+/// store, the package registry and receipts live in the Learn database; jobs in their own
+/// Continuity file next to it, recovered here so a job a crash interrupted runs again.
+/// Published generated courses are loaded into the course engine before routes serve.
 fn factory_routes(
     learn_db: &std::path::Path,
+    engine: Arc<sail_arena_learn::courses::CourseEngine>,
+    inference: &sail_mind::MindService,
     authority: Option<sail_guardian::authority::ApprovalAuthority>,
 ) -> std::result::Result<Router, String> {
     use sail_arena_learn::factory::{
-        jobs::JobQueue, service::FactoryService, settings::SettingsStore, sources::SourceRegistry,
+        contracts::PdfTextExtractor,
+        jobs::{JobQueue, Worker},
+        mind_author::{MindAuthor, MindGate},
+        pipeline::{Pipeline, PipelineDeps},
+        registry::PackageRegistry,
+        service::FactoryService,
+        settings::SettingsStore,
+        sources::SourceRegistry,
+        store::FactoryStore,
+        validate::ValidationSuite,
     };
+    let err = |e: &dyn std::fmt::Display| e.to_string();
     let dir = learn_db
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| sail_common::storage::data_path("arena"));
-    let sources =
-        SourceRegistry::open(learn_db, dir.join("factory-sources")).map_err(|e| e.to_string())?;
-    let settings = SettingsStore::open(learn_db).map_err(|e| e.to_string())?;
-    let tasks = sail_continuity::Continuity::open(dir.join("factory-jobs.db"))
-        .map_err(|e| e.to_string())?;
+    let blob_dir = dir.join("factory-sources");
+    let sources = Arc::new(SourceRegistry::open(learn_db, blob_dir.clone()).map_err(|e| err(&e))?);
+    let settings = Arc::new(SettingsStore::open(learn_db).map_err(|e| err(&e))?);
+    let store = Arc::new(FactoryStore::open(learn_db).map_err(|e| err(&e))?);
+    let packages = Arc::new(PackageRegistry::open(learn_db).map_err(|e| err(&e))?);
+    for revision in packages.latest_all().map_err(|e| err(&e))? {
+        let loaded = revision
+            .to_track()
+            .map_err(|e| e.to_string())
+            .and_then(|track| engine.publish_generated(track).map_err(|e| e.to_string()));
+        if let Err(error) = loaded {
+            warn!(%error, course = %revision.course_id, "Generated course couldn't be loaded");
+        }
+    }
+    let tasks =
+        sail_continuity::Continuity::open(dir.join("factory-jobs.db")).map_err(|e| err(&e))?;
     if let Err(error) = tasks.recover() {
         warn!(%error, "Course Factory job recovery failed; interrupted jobs may wait");
     }
-    let factory = FactoryService::new(
-        Arc::new(sources),
-        Arc::new(JobQueue::new(Arc::new(tasks))),
-        Arc::new(settings),
-        Arc::new(|| chrono::Utc::now().timestamp_millis()),
+    let jobs = Arc::new(JobQueue::new(Arc::new(tasks)));
+    let pdf: Option<Arc<dyn PdfTextExtractor>> = sail_guardian::global_broker()
+        .ok()
+        .and_then(|broker| crate::learn_pdf::RunnerPdfText::from_env(blob_dir, broker))
+        .map(|runner| Arc::new(runner) as Arc<dyn PdfTextExtractor>);
+    if pdf.is_none() {
+        tracing::info!("Course Factory: PDF text sandbox not configured; modern PDFs will wait");
+    }
+    let clock: Arc<dyn Fn() -> i64 + Send + Sync> =
+        Arc::new(|| chrono::Utc::now().timestamp_millis());
+    let pipeline = Arc::new(
+        Pipeline::open(
+            learn_db,
+            PipelineDeps {
+                sources: sources.clone(),
+                store,
+                packages,
+                engine,
+                settings: settings.clone(),
+                model: Arc::new(MindAuthor::new(Arc::new(inference.clone()), None)),
+                pdf,
+                validators: Arc::new(ValidationSuite::new(rust_evaluator())),
+                clock: clock.clone(),
+            },
+        )
+        .map_err(|e| err(&e))?,
     );
+    let busy_mind = inference.clone();
+    let gate = Arc::new(MindGate::new(
+        sail_common::resources::global(),
+        Arc::new(move || busy_mind.has_work()),
+        Arc::new(|| false),
+    ));
+    let worker = Worker::new(
+        jobs.clone(),
+        settings.clone(),
+        pipeline.clone(),
+        gate,
+        clock.clone(),
+    );
+    tokio::spawn(async move {
+        worker
+            .run(
+                tokio_util::sync::CancellationToken::new(),
+                FACTORY_IDLE_SLEEP,
+            )
+            .await
+    });
+    let factory = FactoryService::new(sources, jobs, settings, clock).with_pipeline(pipeline);
     Ok(crate::learn_factory_http::router(
         Arc::new(factory),
         authority,

@@ -14,6 +14,7 @@ use sail_arena_learn::factory::ingest::MAX_FILE_BYTES;
 use sail_arena_learn::factory::service::{
     FactoryError, FactoryService, ImportRequest, parse_rights,
 };
+use sail_arena_learn::factory::service::{NewCourse, OwnerGraphEdit};
 use sail_arena_learn::factory::settings::FactorySettings;
 use sail_guardian::authority::ApprovalAuthority;
 use serde::Deserialize;
@@ -44,6 +45,16 @@ pub fn router(factory: Arc<FactoryService>, authority: Option<ApprovalAuthority>
         .route("/factory/jobs/pause", post(pause))
         .route("/factory/jobs/resume", post(resume))
         .route("/factory/settings", get(settings).put(save_settings))
+        .route("/factory/courses", get(courses).post(create_course))
+        .route("/factory/courses/:id", get(course))
+        .route("/factory/courses/:id/plan/approve", post(approve_plan))
+        .route("/factory/courses/:id/graph/edits", post(edit_graph))
+        .route("/factory/courses/:id/pause", post(pause_course))
+        .route("/factory/courses/:id/resume", post(resume_course))
+        .route("/factory/courses/:id/next", post(next_lesson))
+        .route("/factory/drafts/:id", get(draft))
+        .route("/factory/drafts/:id/publish", post(publish_draft))
+        .route("/factory/drafts/:id/reject", post(reject_draft))
         .layer(axum::extract::DefaultBodyLimit::max(JSON_BODY_LIMIT))
         .with_state(state);
     upload.merge(rest)
@@ -191,4 +202,142 @@ async fn save_settings(
 ) -> Reply {
     authorize(&s, &h)?;
     ok(json!({"settings": s.factory.save_settings(&body).map_err(fail)?}))
+}
+
+/// Run a blocking service call off the async runtime. Course operations read and write
+/// SQLite and may assemble a package, so they never run on a runtime thread.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, FactoryError> + Send + 'static,
+) -> Result<T, (StatusCode, Json<Value>)> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|_| {
+            fail(FactoryError::Store(
+                "the request stopped unexpectedly".into(),
+            ))
+        })?
+        .map_err(fail)
+}
+
+async fn courses(State(s): State<Arc<FactoryState>>, h: HeaderMap) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    ok(json!({"courses": blocking(move || f.courses()).await?}))
+}
+
+async fn create_course(
+    State(s): State<Arc<FactoryState>>,
+    h: HeaderMap,
+    Json(body): Json<NewCourse>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    ok(json!({"course": blocking(move || f.create_course(&body)).await?}))
+}
+
+async fn course(State(s): State<Arc<FactoryState>>, h: HeaderMap, Path(id): Path<String>) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    ok(blocking(move || f.course(&id)).await?)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevisionBody {
+    revision: u64,
+}
+
+async fn approve_plan(
+    State(s): State<Arc<FactoryState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<RevisionBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    ok(json!({"plan": blocking(move || f.approve_plan(&id, body.revision)).await?}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditsBody {
+    base_revision: u64,
+    edits: Vec<OwnerGraphEdit>,
+}
+
+async fn edit_graph(
+    State(s): State<Arc<FactoryState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<EditsBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    let graph = blocking(move || f.edit_graph(&id, body.base_revision, body.edits)).await?;
+    ok(json!({"graph": graph}))
+}
+
+async fn pause_course(
+    State(s): State<Arc<FactoryState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    ok(json!({"course": blocking(move || f.set_course_paused(&id, true)).await?}))
+}
+
+async fn resume_course(
+    State(s): State<Arc<FactoryState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    ok(json!({"course": blocking(move || f.set_course_paused(&id, false)).await?}))
+}
+
+async fn next_lesson(
+    State(s): State<Arc<FactoryState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    ok(json!({"queued": blocking(move || f.next_lesson(&id)).await?}))
+}
+
+async fn draft(State(s): State<Arc<FactoryState>>, h: HeaderMap, Path(id): Path<String>) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    ok(blocking(move || f.draft(&id)).await?)
+}
+
+async fn publish_draft(
+    State(s): State<Arc<FactoryState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    let (course_id, revision) = blocking(move || f.publish_draft(&id)).await?;
+    ok(json!({"course_id": course_id, "revision": revision}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RejectBody {
+    #[serde(default)]
+    reason: String,
+}
+
+async fn reject_draft(
+    State(s): State<Arc<FactoryState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<RejectBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let f = s.factory.clone();
+    ok(json!({"draft": blocking(move || f.reject_draft(&id, &body.reason)).await?}))
 }

@@ -209,5 +209,36 @@ async fn factory_library_queue_and_settings_contract() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
+    // Course routes need the owner too, and answer 409 when generation isn't configured
+    // (this app has no pipeline), never 500.
+    let (status, _) = send(&app, json_req("GET", "/factory/courses", None, false)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, body) = send(&app, json_req("GET", "/factory/courses", None, true)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let course = json!({"title": "T", "domain": "rust", "source_ids": ["x"]});
+    let (status, _) = send(
+        &app,
+        json_req("POST", "/factory/courses", Some(course), true),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let sneaky = json!({"title": "T", "domain": "rust", "source_ids": ["x"], "publish": true});
+    let (status, _) = send(
+        &app,
+        json_req("POST", "/factory/courses", Some(sneaky), true),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unknown fields are refused"
+    );
+    let (status, _) = send(
+        &app,
+        json_req("POST", "/factory/drafts/d/publish", None, true),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
     let _ = std::fs::remove_dir_all(blobs);
 }

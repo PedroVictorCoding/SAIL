@@ -29,11 +29,12 @@ const subsystemPages = [
     "description": "Learn something step by step with an assessment, a lesson map and guided teaching, or take short interactive courses.",
     "card": "memoryCard",
     "panel": "learnPanelMain",
-    "tabs": ["learnPanelMain", "coursesPanelMain"],
+    "tabs": ["learnPanelMain", "coursesPanelMain", "learnFactoryPanel"],
     "settings": null,
     "details": [
       "Arena Learn: assessment, a lesson map and step-by-step teaching",
       "Courses: short interactive lessons with spaced review",
+      "Course Factory: turn your books and notes into checked courses",
       "Research collections"
     ]
   },
