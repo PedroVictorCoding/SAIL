@@ -299,17 +299,23 @@ document.querySelectorAll('.card-tabs[role="tablist"]').forEach(list => {
   });
   // Arrow keys move between tabs (WAI-ARIA tabs pattern), replacing the old cycle buttons.
   list.addEventListener('keydown', (e) => {
-    const index = tabs.indexOf(document.activeElement);
+    const visible = tabs.filter(t => !t.hidden);
+    const index = visible.indexOf(document.activeElement);
     if (index < 0) return;
     const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
-    let next = step === undefined ? null : (index + step + tabs.length) % tabs.length;
+    let next = step === undefined ? null : (index + step + visible.length) % visible.length;
     if (e.key === 'Home') next = 0;
-    if (e.key === 'End') next = tabs.length - 1;
+    if (e.key === 'End') next = visible.length - 1;
     if (next === null) return;
     e.preventDefault();
-    tabs[next].click();
-    tabs[next].focus();
+    visible[next].click();
+    visible[next].focus();
   });
+});
+
+document.getElementById('openLiveTranscriptBtn')?.addEventListener('click', () => {
+  closeSheet();
+  window.sailNavigate?.('memory', 'memoryPanelTranscript');
 });
 
 // --- Adaptive Feed Engine: Inversely Throttled Vision Feeds ---

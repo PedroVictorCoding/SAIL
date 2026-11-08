@@ -292,6 +292,7 @@
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="coursesPanelMain" id="coursesTab" tabindex="-1"><span>Arena Courses</span></button>
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="learnFactoryPanel" id="factoryTab" tabindex="-1"><span>Course Factory</span></button>
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelMain" id="memoryTab"><span>Memory</span></button>
+              <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelTranscript" id="transcriptTab" tabindex="-1"><span class="lt-tab-dot" id="transcriptTabDot" hidden aria-hidden="true"></span><span>Live Transcript</span></button>
             </div>
           </div>
         </header>
@@ -641,6 +642,68 @@
           <div class="memory-layout"><div id="memoryEntities" aria-label="Remembered entities"></div><section id="memoryDetail" aria-label="Memory details"></section></div>
           <details><summary>Change history</summary><ol id="memoryHistory"></ol></details>
         </div>
+        <div class="card-tab-panel lt-panel" id="memoryPanelTranscript" role="tabpanel" aria-labelledby="transcriptTab" hidden>
+          <div class="lt-card" id="ltCard" data-state="off">
+            <header class="lt-header">
+              <div class="lt-title-wrap">
+                <label for="ltTitleInput" class="sr-only">Session or lesson title</label>
+                <input id="ltTitleInput" class="lt-title-input" type="text" value="Live lesson transcript" maxlength="120" placeholder="Untitled lecture, lesson or meeting">
+              </div>
+              <span class="lt-status-pill" id="ltStatusPill" data-state="off" role="status" aria-live="polite">
+                <i class="lt-status-dot" aria-hidden="true"></i>
+                <span id="ltStatusText">Off</span>
+              </span>
+            </header>
+
+            <section class="lt-hero" aria-label="Live recording controls">
+              <button type="button" class="lt-orb-btn" id="ltMicOrb" aria-label="Start or pause live transcription" aria-pressed="false" title="Start or pause live transcription">
+                <span class="lt-orb-ring" aria-hidden="true"></span>
+                <span class="lt-orb-core" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>
+                </span>
+              </button>
+
+              <div class="lt-hero-main">
+                <p class="lt-substatus" id="ltSubStatus">Enable Listen without reply or press Record to transcribe a lesson live.</p>
+                <div class="lt-timer" id="ltTimer" aria-label="Elapsed recording time">00:00</div>
+                <div class="lt-controls">
+                  <button type="button" class="lt-ctrl-btn lt-ctrl-pause" id="ltPauseBtn" aria-label="Start or pause recording" title="Start or pause recording">
+                    <span class="lt-ctrl-icon" id="ltPauseIcon" aria-hidden="true">▶</span>
+                    <span id="ltPauseLabel">Record</span>
+                  </button>
+                  <button type="button" class="lt-ctrl-btn lt-ctrl-stop" id="ltStopBtn" aria-label="Stop live transcription" title="Stop and disable Listen without reply" disabled>
+                    <span class="lt-ctrl-icon" aria-hidden="true">■</span>
+                    <span>Stop</span>
+                  </button>
+                  <button type="button" class="quiet-button lt-mode-btn" id="ltEnableBtn" aria-pressed="false">Enable Listen without reply</button>
+                  <button type="button" class="quiet-button lt-action-btn" id="ltCopyBtn" hidden>Copy</button>
+                  <button type="button" class="quiet-button lt-action-btn" id="ltExportBtn" hidden>Export .txt</button>
+                  <button type="button" class="quiet-button lt-action-btn" id="ltClearBtn" hidden>Clear</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="lt-stream" id="ltStream" aria-label="Live transcript entries">
+              <div class="lt-segments" id="ltSegments" role="log" aria-live="polite" aria-relevant="additions"></div>
+              <p class="lt-partial" id="ltPartial" aria-live="polite" hidden></p>
+              <p class="lt-empty" id="ltEmpty">With everyone’s consent, press Record (or enable Listen without reply and start the microphone). SAIL transcribes speech continuously without interrupting or replying.</p>
+            </section>
+
+            <section class="lt-answer" id="ltAnswer" aria-live="polite" hidden>
+              <div class="lt-answer-head">
+                <strong id="ltAnswerQuestion"></strong>
+                <button type="button" class="quiet-button lt-answer-close" id="ltAnswerClose" aria-label="Dismiss answer">×</button>
+              </div>
+              <p class="lt-answer-body" id="ltAnswerBody"></p>
+            </section>
+
+            <form class="lt-ask-form" id="ltAskForm">
+              <label for="ltAskInput" class="sr-only">Ask SAIL about this transcript</label>
+              <input id="ltAskInput" type="text" maxlength="4000" placeholder="Ask SAIL a question about this lesson or conversation…" autocomplete="off">
+              <button type="submit" class="quiet-button">Ask SAIL</button>
+            </form>
+          </div>
+        </div>
       </article>
     </div>
 
@@ -956,6 +1019,7 @@
           </div>
           <div class="vscode-setting-control">
             <button class="quiet-button" id="liveContextBtn" type="button" aria-pressed="false" aria-describedby="liveContextDescription" disabled>Enable listening context</button>
+            <button class="quiet-button" id="openLiveTranscriptBtn" type="button">Open live transcript</button>
             <span id="liveContextStatus" role="status" aria-live="polite">Listening context off</span>
           </div>
         </div>

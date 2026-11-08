@@ -88,6 +88,7 @@ function connectWs() {
     ambient({ type:'connect', socket:generation });
     setConnection('Connected · local session', true);
     micBtn.disabled = false; document.getElementById('liveContextBtn').disabled = false;
+    window.sailLiveTranscript?.sync?.();
     if (orbState === 'disconnected') updateState('idle');
     sendAction('forge:list');
   };
@@ -96,6 +97,7 @@ function connectWs() {
     if (generation !== wsGeneration) return;
     ambient({ type:'disconnect', socket:generation });
     liveContextReplyPending = false; liveContextEnabled = false; renderLiveContext(); document.getElementById('liveContextBtn').disabled = true;
+    window.sailLiveTranscript?.sync?.();
     learningSession = null; learningEnabled = true; renderLearning();
     pendingApprovalActions.clear(); lastToolCalls.clear();
     cancelVisualCapture(); captureHeld = false; turnInProgress = false; stopMic(); stopPlayback(); for (const tool of activeTools.keys()) updateToolActivity(tool, false); setConnection('Disconnected · reconnecting…', false); updateState('disconnected'); micBtn.disabled = true;
@@ -121,9 +123,11 @@ function handleVoiceMessage(data) {
         applyControl(data.control); announceClientSpeech(); break;
       case 'live_context_state':
         discardListeningCapture(); liveContextReplyPending = false;
-        liveContextEnabled = data.enabled === true; renderLiveContext(); ambient({ type:'listen_only', enabled:liveContextEnabled }); break;
+        liveContextEnabled = data.enabled === true; renderLiveContext(); ambient({ type:'listen_only', enabled:liveContextEnabled });
+        window.sailLiveTranscript?.onStateChange?.(liveContextEnabled); break;
       case 'live_context_observed':
-        transcriptBox.textContent = `Context · ${data.text}`; break;
+        transcriptBox.textContent = `Context · ${data.text}`;
+        window.sailLiveTranscript?.onObserved?.(data.text); break;
       case 'learning_state':
         learningEnabled = data.enabled !== false; renderLearning(); break;
       case 'telemetry':
@@ -138,7 +142,11 @@ function handleVoiceMessage(data) {
         document.getElementById('telVad').textContent = `VAD inference: ${(data.vad_us / 1000).toFixed(2)}ms · round trip: ${(data.vad_roundtrip_us / 1000).toFixed(2)}ms`;
         document.getElementById('telConf').textContent = `Confidence: ${(data.confidence * 100).toFixed(0)}%`;
         document.getElementById('telRms').textContent = `RMS: ${data.rms.toFixed(3)}`; break;
-      case 'transcript': transcriptBox.textContent = `${data.is_final ? 'You said' : 'Listening'} · ${data.text}`; document.getElementById('liveTranscript').textContent = data.text; break;
+      case 'transcript':
+        transcriptBox.textContent = `${data.is_final ? 'You said' : 'Listening'} · ${data.text}`;
+        document.getElementById('liveTranscript').textContent = data.text;
+        if (liveContextEnabled && !data.is_final) window.sailLiveTranscript?.onPartial?.(data.text);
+        break;
       case 'capture_limit':
         stopMic(); setCaptureHeld(true); updateState('holding'); transcriptBox.textContent = data.message; ambient({ type:'warning', message:data.message }); break;
       case 'turn_committed':
@@ -150,7 +158,7 @@ function handleVoiceMessage(data) {
         turnGenStart = performance.now();
         turnFirstTokenTime = 0;
         turnTokenCount = 0;
-        appendConversation('You', data.transcript);
+        appendConversation('You', window.sailLiveTranscript?.consumePendingQuestion?.(data.transcript) || data.transcript);
         responseNode = appendConversation('SAIL', '');
         updateState('thinking');
         document.getElementById('sessionTokensPerSec').textContent = 'Calculating…';
@@ -161,6 +169,7 @@ function handleVoiceMessage(data) {
         responseText += data.text;
         if (!responseNode) responseNode = appendConversation('SAIL', '');
         setMessageText(responseNode, responseText);
+        window.sailLiveTranscript?.onAnswerDelta?.(responseText);
         if (!turnTokenCount) updateState('generating');
         if (data.token_count !== undefined) {
           turnTokenCount = data.token_count;
@@ -181,6 +190,7 @@ function handleVoiceMessage(data) {
         setCaptureHeld(false);
         turnInProgress = false;
         document.getElementById('assistantAnnounce').textContent = responseNode?.lastChild?.innerText || responseText;
+        window.sailLiveTranscript?.onAnswerComplete?.(responseText || responseNode?.lastChild?.innerText);
         turnFinished = true;
         if (!pendingAudio && !playingSources.size) finishPlayback();
         if (data.latency_ms) setConnection(`Connected · local turn ${(data.latency_ms / 1000).toFixed(1)}s`, true);
@@ -278,6 +288,7 @@ function applyControl(control) {
     : `Waits ${settings.pause_ms / 1000} seconds of silence. Send turn submits immediately. Recording is held at the 3-minute limit.`;
   const profile = { low_power: 'LowPower', balanced: 'Balanced', high_performance: 'HighPerformance' }[control.profile];
   tierIdx = Math.max(0, tiers.indexOf(profile)); tierBtn.textContent = tiers[tierIdx];
+  window.sailLiveTranscript?.sync?.();
 }
 function formatCaptureTime(milliseconds) {
   const seconds = Math.floor(milliseconds / 1000); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2,'0')}`;
@@ -869,6 +880,7 @@ async function startMic() {
     micSource.connect(processor); processor.connect(audioCtx.destination);
     isRecording = true; micBtn.setAttribute('aria-label', 'Stop microphone'); micBtn.title = 'Stop microphone'; micBtn.classList.add('active'); document.getElementById('micStatus').textContent = 'On'; document.getElementById('sessionMic').textContent = isMuted ? 'Muted' : 'On'; document.getElementById('micLiveIndicator').hidden = false; document.getElementById('muteDockBtn').hidden = false; document.getElementById('endTurnBtn').hidden = false;
     ambient({ type:'mic_denied', denied:false }); ambient({ type:'capture', active:!isMuted }); updateState('listening');
+    window.sailLiveTranscript?.sync?.();
   } catch (error) { stopMic(); if (error.name === 'NotAllowedError') ambient({ type:'mic_denied' }); showError(error.name === 'NotAllowedError' ? 'Microphone permission denied. Allow microphone access in browser settings.' : `Microphone: ${error.message}`); }
   finally { micBtn.disabled = false; }
 }
@@ -880,6 +892,7 @@ function stopMic(discardClientCapture = true) {
   micSource?.disconnect(); micSource = null; micStream = null;
   micBtn.setAttribute('aria-label', 'Start microphone'); micBtn.title = 'Start microphone'; micBtn.classList.remove('active'); document.getElementById('micStatus').textContent = 'Off'; document.getElementById('sessionMic').textContent = 'Off'; document.getElementById('micLiveIndicator').hidden = true; document.getElementById('muteDockBtn').hidden = true; document.getElementById('endTurnBtn').hidden = true;
   if (!playingSources.size && !turnInProgress) updateState('idle');
+  window.sailLiveTranscript?.sync?.();
 }
 function toggleMute() { sendAction('toggle_mute'); }
 function cycleTier() { sendAction('set_tier', { profile: tiers[(tierIdx + 1) % tiers.length] }); }
@@ -901,7 +914,7 @@ function runKernelTool(tool, params = {}, approval_token) {
     lastToolCalls.set(normalizeToolName(tool), {tool,params}); updateToolActivity(tool, true);
   }
 }
-function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('assistantAnnounce').textContent = ''; document.getElementById('canvasClearBtn').click(); }
+function resetSession() { interrupt(); sendAction('reset'); responseNode = null; document.getElementById('conversation').replaceChildren(); document.getElementById('assistantAnnounce').textContent = ''; document.getElementById('canvasClearBtn').click(); window.sailLiveTranscript?.onSessionReset?.(); }
 async function checkModels() {
   const summary = document.getElementById('modelStatus'); summary.textContent = 'Checking local model status…'; summary.className = 'model-summary';
   const modelsCard = document.getElementById('modelsCard'); modelsCard.setAttribute('data-state', 'active');
@@ -1060,19 +1073,28 @@ function renderLiveContext() {
   document.getElementById('liveContextStatus').textContent = liveContextEnabled
     ? 'Listening context enabled · start microphone to capture; type to ask'
     : 'Listening context off';
+  window.sailLiveTranscript?.sync?.();
 }
-document.getElementById('liveContextBtn').addEventListener('click', async () => {
+async function setLiveContext(wantEnabled = !liveContextEnabled) {
   const button = document.getElementById('liveContextBtn');
-  button.disabled = true;
+  const ltBtn = document.getElementById('ltEnableBtn');
+  if (button) button.disabled = true;
+  if (ltBtn) ltBtn.disabled = true;
   const connection = ws;
   try {
-    const owner_token = liveContextEnabled ? undefined : await getOrFetchOwnerToken();
+    const owner_token = wantEnabled ? await getOrFetchOwnerToken() : undefined;
     if (ws !== connection || ws.readyState !== WebSocket.OPEN) return;
     stopPlayback();
-    sendAction('set_live_context', {enabled: !liveContextEnabled, owner_token});
+    sendAction('set_live_context', {enabled: Boolean(wantEnabled), owner_token});
   } catch (error) { showError(error.message); }
-  finally { button.disabled = !ws || ws.readyState !== WebSocket.OPEN; }
-});
+  finally {
+    const connected = Boolean(ws && ws.readyState === WebSocket.OPEN);
+    if (button) button.disabled = !connected;
+    window.sailLiveTranscript?.sync?.();
+  }
+}
+window.setLiveContext = setLiveContext;
+document.getElementById('liveContextBtn').addEventListener('click', () => setLiveContext(!liveContextEnabled));
 
 function renderLearning() {
   const indicator = document.getElementById('learningIndicator');

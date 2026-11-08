@@ -43,14 +43,15 @@ const subsystemPages = [
     "name": "Memory",
     "icon": "mesh",
     "subtitle": "What SAIL remembers",
-    "description": "Search, review and export what SAIL remembers from your conversations.",
+    "description": "Search, review and export what SAIL remembers from your conversations, or transcribe a live lesson without replies.",
     "card": "memoryCard",
     "panel": "memoryPanelMain",
-    "tabs": ["memoryPanelMain"],
+    "tabs": ["memoryPanelMain", "memoryPanelTranscript"],
     "settings": null,
     "details": [
       "Episodic memory",
       "Associative knowledge graph",
+      "Live lesson and conversation transcript (Listen without reply)",
       "Change history and export"
     ]
   },
@@ -261,7 +262,8 @@ function initializeSubsystemPages() {
       settings.onclick = () => { openSheet(contextSheet); contextSheet.querySelector(`[data-settings-tab="${item.settings}"]`)?.click(); };
       if (item.card) {
         const card = document.getElementById(item.card); content.append(card); showCardTabs(card, item.tabs);
-        const panel = item.tabs && !item.tabs.includes(requestedPanel) ? item.panel : requestedPanel || item.panel;
+        const defaultPanel = (item.id === 'memory' && typeof liveContextEnabled !== 'undefined' && liveContextEnabled) ? 'memoryPanelTranscript' : item.panel;
+        const panel = item.tabs && !item.tabs.includes(requestedPanel) ? defaultPanel : requestedPanel || defaultPanel;
         if (panel) switchCardTab(item.card, panel);
       }
 
