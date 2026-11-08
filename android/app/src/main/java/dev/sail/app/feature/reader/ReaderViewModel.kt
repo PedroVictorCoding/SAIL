@@ -41,10 +41,34 @@ data class ReaderUiState(
     val conflict: ReadingPosition? = null,
     val save: SaveStatus = SaveStatus.Idle,
     val prefs: ReaderPrefs = ReaderPrefs(),
+    val narration: NarrationUi = NarrationUi(),
 ) {
     val sectionIndex: Int get() = (section as? UiState.Ready)?.data?.index ?: anchor.section
     val hasPrevious: Boolean get() = sectionIndex > 0
     val hasNext: Boolean get() = sectionIndex < sections.size - 1
+}
+
+/** Read-aloud as the screen shows it. */
+data class NarrationUi(
+    val status: NarrationStatus = NarrationStatus.Off,
+    /** The sentence being read (highlighted), in the loaded section. */
+    val segment: Segment? = null,
+    val index: Int = 0,
+    val count: Int = 0,
+    /** The page keeps the spoken sentence in view until the owner scrolls away. */
+    val follow: Boolean = true,
+    /** A sentence the owner long-pressed; nothing moves until they confirm it. */
+    val pending: Segment? = null,
+    /** Where narration was before the last confirmed jump, for Undo. */
+    val undo: Segment? = null,
+    val message: String? = null,
+    val voices: List<String> = emptyList(),
+    val voice: String? = null,
+    val speed: Float = 1f,
+    val speedRange: SpeedRange = SpeedRange(),
+) {
+    val active: Boolean get() = status != NarrationStatus.Off
+    val playing: Boolean get() = status == NarrationStatus.Playing || status == NarrationStatus.Loading
 }
 
 /**
@@ -61,6 +85,10 @@ class ReaderViewModel(
     private val startSection: Int?,
     private val persistScope: CoroutineScope,
     private val saveDelayMs: Long = 650,
+    /** Builds the audio output; it calls back when another app takes the audio focus. */
+    sinkFactory: ((onFocusLost: () -> Unit) -> PcmSink)? = null,
+    private val selectionTimeoutMs: Long = 8_000,
+    private val undoTimeoutMs: Long = 8_000,
 ) : ViewModel() {
     private val mutable = MutableStateFlow(ReaderUiState(prefs = prefsStore.load()))
     val state: StateFlow<ReaderUiState> = mutable.asStateFlow()
@@ -73,9 +101,230 @@ class ReaderViewModel(
     private var saveJob: Job? = null
     private val saving = Mutex()
 
+    private var segments: List<Segment> = emptyList()
+    private var speech: SpeechInfo? = null
+    private var continueNarration = false
+    private var selectionJob: Job? = null
+    private var undoJob: Job? = null
+    private val narrator: Narrator? = sinkFactory?.let { factory ->
+        Narrator(
+            scope = viewModelScope,
+            speaker = { text, voice, speed -> source.speak(text, voice, speed) },
+            sink = factory { viewModelScope.launch { pauseNarration() } },
+            onStarted = ::segmentStarted,
+            onEnded = ::narrationEnded,
+        )
+    }
+
     init {
         load()
+        narrator?.let { engine ->
+            viewModelScope.launch {
+                engine.state.collect { narrated ->
+                    mutable.update { current ->
+                        val n = current.narration
+                        current.copy(
+                            narration = n.copy(
+                                status = narrated.status,
+                                index = narrated.index,
+                                count = engine.segments.size,
+                                segment = if (narrated.status == NarrationStatus.Off) null else engine.segments.getOrNull(narrated.index),
+                                message = narrated.error ?: n.message.takeIf { narrated.status == NarrationStatus.Off },
+                            ),
+                        )
+                    }
+                }
+            }
+        }
     }
+
+    // --- Read-aloud -----------------------------------------------------------------------
+
+    /** Start reading aloud from the top of the page, or from segment [from] of this section. */
+    fun listen(from: Int? = null) {
+        val engine = narrator ?: return
+        if (mutable.value.section !is UiState.Ready) return
+        viewModelScope.launch {
+            val info = speech ?: run {
+                narrationUi { it.copy(status = NarrationStatus.Loading, message = null) }
+                when (val result = source.speechInfo()) {
+                    is ApiResult.Ok -> result.data
+                    is ApiResult.Err -> {
+                        narrationUi { it.copy(status = NarrationStatus.Off, message = result.message) }
+                        return@launch
+                    }
+                }
+            }
+            if (!info.available) {
+                narrationUi { it.copy(status = NarrationStatus.Off, message = info.reason ?: "The host voice is not running.") }
+                return@launch
+            }
+            speech = info
+            val (voice, speed) = voiceAndSpeed(info)
+            narrationUi {
+                it.copy(follow = true, message = null, voices = info.voices, voice = voice, speed = speed, speedRange = info.speed)
+            }
+            val start = from ?: segmentIndexAt(segments, mutable.value.anchor)
+            engine.load(segments, start, voice, speed, autoplay = true)
+        }
+    }
+
+    fun togglePlay() {
+        val engine = narrator ?: return
+        if (mutable.value.narration.playing) engine.pause() else engine.play()
+    }
+
+    fun pauseNarration() {
+        narrator?.pause()
+    }
+
+    fun previousSegment() {
+        val engine = narrator ?: return
+        if (!engine.active) return
+        val index = engine.state.value.index
+        if (index > 0) engine.seek(index - 1)
+    }
+
+    fun nextSegment() {
+        val engine = narrator ?: return
+        if (!engine.active) return
+        val index = engine.state.value.index
+        when {
+            index + 1 < engine.segments.size -> engine.seek(index + 1)
+            mutable.value.hasNext -> {
+                continueNarration = mutable.value.narration.playing
+                openSection(ReadingAnchor(mutable.value.sectionIndex + 1, 0, 0), toEnd = false, userMove = false)
+            }
+        }
+    }
+
+    fun stopNarration() {
+        narrator?.stop()
+        continueNarration = false
+        clearSelection()
+        undoJob?.cancel()
+        narrationUi { it.copy(undo = null, follow = true) }
+        flush()
+    }
+
+    /** The owner scrolled or turned the page while listening: stop pulling the page along. */
+    fun userScrolled() {
+        if (mutable.value.narration.active && mutable.value.narration.follow) narrationUi { it.copy(follow = false) }
+    }
+
+    fun dismissNarrationMessage() {
+        narrationUi { it.copy(message = null) }
+    }
+
+    fun followNarration() {
+        narrationUi { it.copy(follow = true) }
+    }
+
+    fun setVoice(voice: String) {
+        updatePrefs { it.copy(voice = voice) }
+        applyVoice()
+    }
+
+    fun setSpeed(speed: Float) {
+        val range = mutable.value.narration.speedRange
+        updatePrefs { it.copy(speed = speed.coerceIn(range.min, range.max)) }
+        applyVoice()
+    }
+
+    /**
+     * Step one of choosing a sentence: a long press marks it. Narration keeps going until
+     * [confirmSelection]; the mark clears itself after a few seconds.
+     */
+    fun selectAt(block: Int, char: Int) {
+        if (mutable.value.section !is UiState.Ready || narrator == null) return
+        val index = segmentAt(segments, block, char) ?: return
+        narrationUi { it.copy(pending = segments[index]) }
+        selectionJob?.cancel()
+        selectionJob = viewModelScope.launch {
+            delay(selectionTimeoutMs)
+            clearSelection()
+        }
+    }
+
+    fun clearSelection() {
+        selectionJob?.cancel()
+        narrationUi { it.copy(pending = null) }
+    }
+
+    /** Step two: read from the marked sentence. The previous place stays available as Undo. */
+    fun confirmSelection() {
+        val engine = narrator ?: return
+        val target = mutable.value.narration.pending ?: return
+        val index = segments.indexOf(target).takeIf { it >= 0 } ?: return clearSelection()
+        clearSelection()
+        if (!engine.active || mutable.value.narration.status == NarrationStatus.Error) {
+            listen(from = index)
+            return
+        }
+        val before = engine.segments.getOrNull(engine.state.value.index)
+        if (before != null && before != target) {
+            narrationUi { it.copy(undo = before) }
+            undoJob?.cancel()
+            undoJob = viewModelScope.launch {
+                delay(undoTimeoutMs)
+                narrationUi { it.copy(undo = null) }
+            }
+        }
+        narrationUi { it.copy(follow = true) }
+        engine.seek(index)
+        engine.play()
+    }
+
+    fun undoJump() {
+        val engine = narrator ?: return
+        val back = mutable.value.narration.undo ?: return
+        undoJob?.cancel()
+        narrationUi { it.copy(undo = null, follow = true) }
+        val index = engine.segments.indexOf(back)
+        if (index >= 0) {
+            engine.seek(index)
+            engine.play()
+        }
+    }
+
+    private fun applyVoice() {
+        val info = speech ?: return
+        val (voice, speed) = voiceAndSpeed(info)
+        narrationUi { it.copy(voice = voice, speed = speed) }
+        narrator?.configure(voice, speed)
+    }
+
+    private fun voiceAndSpeed(info: SpeechInfo): Pair<String, Float> {
+        val prefs = mutable.value.prefs
+        val voice = prefs.voice?.takeIf { it in info.voices }
+            ?: info.defaultVoice.takeIf { info.voices.isEmpty() || it in info.voices }
+            ?: info.voices.first()
+        return voice to prefs.speed.coerceIn(info.speed.min, info.speed.max)
+    }
+
+    private fun segmentStarted(index: Int) {
+        val segment = narrator?.segments?.getOrNull(index) ?: return
+        if (segment.anchor.section != mutable.value.sectionIndex) return
+        // The spoken sentence is the reading position while listening.
+        setAnchor(segment.anchor, scroll = mutable.value.scroll)
+        markDirty()
+    }
+
+    private fun narrationEnded() {
+        if (mutable.value.hasNext) {
+            continueNarration = true
+            openSection(ReadingAnchor(mutable.value.sectionIndex + 1, 0, 0), toEnd = false, userMove = false)
+        } else {
+            narrator?.stop()
+            narrationUi { it.copy(message = "End of the book") }
+        }
+    }
+
+    private inline fun narrationUi(crossinline transform: (NarrationUi) -> NarrationUi) {
+        mutable.update { it.copy(narration = transform(it.narration)) }
+    }
+
+    // --- Reading ----------------------------------------------------------------------------
 
     fun load() {
         mutable.update { it.copy(book = UiState.Loading) }
@@ -139,6 +388,8 @@ class ReaderViewModel(
     fun visible(anchor: ReadingAnchor) {
         val current = mutable.value
         if (current.scroll != null || current.conflict != null) return
+        // While listening, the place is the spoken sentence, not wherever the owner looks.
+        if (current.narration.active) return
         if (current.section !is UiState.Ready || anchor.section != current.sectionIndex) return
         if (anchor == current.anchor) return
         setAnchor(anchor, scroll = null)
@@ -187,6 +438,7 @@ class ReaderViewModel(
     }
 
     override fun onCleared() {
+        narrator?.stop()
         flush()
     }
 
@@ -208,8 +460,23 @@ class ReaderViewModel(
                     }
                     pendingUserMove = userMove
                     scrollToken++
-                    mutable.update { it.copy(section = UiState.Ready(section)) }
+                    segments = segmentSection(section.blocks, index)
+                    selectionJob?.cancel()
+                    undoJob?.cancel()
+                    mutable.update {
+                        it.copy(section = UiState.Ready(section), narration = it.narration.copy(pending = null, undo = null))
+                    }
                     setAnchor(anchor, scroll = ScrollRequest(anchor, toEnd, scrollToken))
+                    // Narration follows the reader into the new section (or carries on into it).
+                    val engine = narrator
+                    val info = speech
+                    if (engine != null && info != null && (engine.active || continueNarration)) {
+                        val autoplay = continueNarration || mutable.value.narration.playing
+                        continueNarration = false
+                        val (voice, speed) = voiceAndSpeed(info)
+                        engine.load(segments, segmentIndexAt(segments, anchor), voice, speed, autoplay)
+                        narrationUi { it.copy(follow = true) }
+                    }
                 }
             }
         }

@@ -204,7 +204,7 @@
         navItem('entertainment', 'Entertainment', 'entertainment')),
       el('ul', {class: 'tm-nav tm-nav-2'},
         navItem('pulse', 'Reminders', 'pulse'),
-        el('li', {}, el('button', {class: 'tm-nav-item', type: 'button', id: 'terminalRailBtn', onclick: () => window.sailTerminal ? window.sailTerminal.focusTerminal() : document.getElementById('terminalCard')?.classList.toggle('terminal-fullscreen')}, icon('terminal'), 'Terminal')),
+        navItem('terminal', 'Terminal', 'terminal'),
         navItem('tracker', 'Tracker', 'sense')),
       el('section', {class: 'tm-np', id: 'tmNowPlaying', 'aria-label': 'Now playing', hidden: true}),
       el('div', {class: 'tm-sidecard'},
@@ -339,6 +339,7 @@
   function navItem(target, label, ic) {
     const attrs = {class: 'tm-nav-item', type: 'button', 'data-nav': target, onclick: (e) => navTo(target, e.currentTarget)};
     if (target === 'home') attrs.id = 'homeNav';
+    if (target === 'terminal') attrs.id = 'terminalRailBtn';
     return el('li', {}, el('button', attrs, icon(ic), label,
       target === 'away' ? el('span', {class: 'tm-seg-dot', id: 'tmAwayDot', hidden: !state.awayFresh, title: 'New briefing'}) : null));
   }
@@ -1026,7 +1027,7 @@
     const mobileAway = root.querySelector('.tm-away-mobile');
     if (current() === 'away') mobileAway?.setAttribute('aria-current', 'page');
     else mobileAway?.removeAttribute('aria-current');
-    $('#tmCrumb').textContent = current() === 'pulse' ? 'Reminders' : state.tracker ? 'Tracker' : state.popup ? byId[state.popup].name : state.mode === 'away' ? 'While You Were Away' : 'SAIL';
+    $('#tmCrumb').textContent = current() === 'pulse' ? 'Reminders' : state.tracker ? 'Tracker' : state.route === 'terminal' ? 'Terminal' : state.popup ? byId[state.popup].name : state.mode === 'away' ? 'While You Were Away' : 'SAIL';
     svgRoot.querySelectorAll('.tm-station').forEach((g) => g.classList.toggle('selected', g.dataset.station === id));
     render();
   }
@@ -1071,12 +1072,12 @@
     render();
   }
   function navTo(target, trigger) {
-    if (target === 'away' || target === 'home' || target === 'pulse') { window.sailNavigate?.(target); return; }
+    if (target === 'away' || target === 'home' || target === 'pulse' || target === 'terminal') { window.sailNavigate?.(target); return; }
     if (target === 'tracker') { state.trigger = trigger || document.activeElement; window.sailNavigate?.('tracker'); return; }
     openStation(target, trigger);
   }
   // The sidebar entry for what the centre shows.
-  function current() { if (window.sailCurrentPage?.() === 'pulse') return 'pulse'; return state.tracker ? 'tracker' : state.popup || (state.mode === 'away' ? 'away' : 'home'); }
+  function current() { if (window.sailCurrentPage?.() === 'pulse') return 'pulse'; return state.tracker ? 'tracker' : (state.route === 'terminal' ? 'terminal' : (state.popup || (state.mode === 'away' ? 'away' : 'home'))); }
 
   // ------------------------------------------------------------------ centre pane
   // Stations with a page go through the router (#mind, #forge…) so links, reloads and
@@ -1276,6 +1277,7 @@
   }
   function route(page) {
     apply();
+    state.route = page;
     if (page === 'classic') {
       if (window.sailNavigate) window.sailNavigate('home');
       else location.hash = '#home';
