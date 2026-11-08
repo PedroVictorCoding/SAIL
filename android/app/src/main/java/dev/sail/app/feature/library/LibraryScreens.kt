@@ -60,6 +60,7 @@ import dev.sail.app.core.design.FlatCard
 import dev.sail.app.core.design.GlowCard
 import dev.sail.app.core.design.Hue
 import dev.sail.app.core.design.LoadingSkeleton
+import dev.sail.app.core.design.PrimaryButton
 import dev.sail.app.core.design.PillShape
 import dev.sail.app.core.design.RowShape
 import dev.sail.app.core.design.SailColors
@@ -78,7 +79,7 @@ import java.util.Locale
 
 /** Search, Books/Notes/Media tabs, Continue reading, Your library. */
 @Composable
-fun LibraryScreen(onOpenBook: (bookId: String) -> Unit) {
+fun LibraryScreen(onOpenBook: (bookId: String) -> Unit, onReadBook: (bookId: String) -> Unit) {
     val vm = sailViewModel { LibraryViewModel(LibraryRepository(it.api)) }
     val state by vm.state.collectAsStateWithLifecycle()
     val selectedTab = state.tab
@@ -142,7 +143,7 @@ fun LibraryScreen(onOpenBook: (bookId: String) -> Unit) {
                                 ContinueReadingCard(
                                     book = featured,
                                     coverUrl = vm.coverUrl(featured),
-                                    onOpenBook = onOpenBook,
+                                    onOpenBook = onReadBook,
                                 )
                             }
                         }
@@ -214,7 +215,7 @@ fun LibraryScreen(onOpenBook: (bookId: String) -> Unit) {
 
 /** One book: cover, metadata, sections and the saved reading position. */
 @Composable
-fun BookScreen(bookId: String, onBack: () -> Unit) {
+fun BookScreen(bookId: String, onBack: () -> Unit, onRead: (bookId: String, section: Int?) -> Unit) {
     val vm = sailViewModel(key = bookId) { BookViewModel(LibraryRepository(it.api), bookId) }
     val state by vm.state.collectAsStateWithLifecycle()
     val readyBook = when (val current = state) {
@@ -248,13 +249,14 @@ fun BookScreen(bookId: String, onBack: () -> Unit) {
             is UiState.Ready -> BookDetail(
                 detail = current.data,
                 coverUrl = vm.coverUrl(current.data.book),
+                onRead = { section -> onRead(current.data.book.id, section) },
             )
         }
     }
 }
 
 @Composable
-private fun BookDetail(detail: ReaderBookDetail, coverUrl: String?) {
+private fun BookDetail(detail: ReaderBookDetail, coverUrl: String?, onRead: (section: Int?) -> Unit) {
     val book = detail.book
     val toc = remember(detail.toc) { tocTitles(detail.toc) }
     LazyColumn(
@@ -309,6 +311,20 @@ private fun BookDetail(detail: ReaderBookDetail, coverUrl: String?) {
                 }
             }
         }
+        if (detail.sections.isNotEmpty()) {
+            item {
+                PrimaryButton(
+                    text = when {
+                        book.isFinished -> "Read again"
+                        book.isStarted -> "Continue reading"
+                        else -> "Start reading"
+                    },
+                    // A finished book starts again from the beginning; otherwise resume.
+                    onClick = { onRead(if (book.isFinished) 0 else null) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
         item { PositionCard(book) }
         if (!book.description.isNullOrBlank()) {
             item {
@@ -338,6 +354,7 @@ private fun BookDetail(detail: ReaderBookDetail, coverUrl: String?) {
                     section = section,
                     tocTitle = toc[section.index],
                     current = book.position?.anchor?.section == section.index,
+                    onClick = { onRead(section.index) },
                 )
             }
         }
@@ -380,7 +397,7 @@ private fun PositionCard(book: ReaderBook) {
 }
 
 @Composable
-private fun SectionRow(section: SectionInfo, tocTitle: String?, current: Boolean) {
+private fun SectionRow(section: SectionInfo, tocTitle: String?, current: Boolean, onClick: () -> Unit) {
     val trailing: (@Composable RowScope.() -> Unit)? = if (current) {
         { SailPill("Here", dot = Hue.Library.hot) }
     } else {
@@ -391,6 +408,7 @@ private fun SectionRow(section: SectionInfo, tocTitle: String?, current: Boolean
             ?: tocTitle?.takeIf { it.isNotBlank() }
             ?: "Section ${section.index + 1}",
         meta = "${groupedNumber(section.chars)} chars · ${section.blocks} blocks",
+        onClick = onClick,
         leading = {
             Box(
                 modifier = Modifier

@@ -22,8 +22,31 @@ opens from Home, and Settings from Home's top bar. The first run opens Settings.
 | Dialogue | `/ws/voice`, `/api/guardian/*`, `/api/speech/transcribe` |
 | Arena | `/api/learn/*` (courses, lessons, diagnostics, reviews, evidence) |
 | Workspace | `/api/health`, `/api/mind/*`, `/api/system/metrics`, `/api/plans` |
-| Library | `/api/reader/*`, `/api/music/library` |
+| Library | `/api/reader/library`, `/api/reader/books/{id}`, `/api/music/library` |
+| Reader | `/api/reader/books/{id}`, `…/sections/{n}`, `…/position` (GET, PUT) |
 | Tracker | `/api/tracker/*` |
+
+### Reader
+
+Library › a book › **Start/Continue reading** (or a section row, or the Continue reading
+card) opens the e-reader full-screen, with no tab bar. It shows one section at a time from
+the server's plain-text blocks (headings, paragraphs, quotes, lists, preformatted text and
+breaks; never book HTML). Tap the right or left third of the page to turn a page, which
+continues into the next or previous section at the edges. Tap the middle to show the
+controls: back, contents, text settings, previous/next section and progress by text.
+
+- **Position:** the anchor (section, block, UTF-16 offset of the first line at least half
+  visible) and the percent (code points before the anchor over the book's total, the
+  same measure as the web reader) are saved 650 ms after the page settles, and right away
+  when the app goes to the background or the reader closes. Saves send the last
+  revision seen. If another device saved since then, SAIL answers 409, and the reader
+  stops saving and asks whether to go to the other device's place or keep this one. It
+  never overwrites the other place silently.
+- **Text settings** are per phone (not sent to SAIL): Night, Paper or Sepia, 14–28 pt,
+  serif or sans, and keep the screen on (default on). Changing the size or typeface keeps
+  the same place at the top of the page.
+- Not in this build: read-aloud (`/api/reader/speech`), importing books from the phone,
+  and offline reading. Each section loads from SAIL when it's opened.
 
 ## Connection and security
 
@@ -71,7 +94,7 @@ android/app/src/main/java/dev/sail/app/
   core/design/    theme, glow material, shared components, icons, safe Markdown
   core/           AppContainer, sailViewModel, UiState
   ui/             SailApp (navigation, bottom bar), Routes
-  feature/<name>/ Models (DTOs) · Repository · ViewModel · Screen
+  feature/<name>/ Models (DTOs) · Repository · ViewModel · Screen (reader/ is the e-reader)
 ```
 
 Icons are generated from `assets/source/icons/sail-icons.svg` by

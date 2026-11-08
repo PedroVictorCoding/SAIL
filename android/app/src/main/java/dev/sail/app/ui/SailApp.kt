@@ -55,6 +55,7 @@ import dev.sail.app.feature.dialogue.DialogueScreen
 import dev.sail.app.feature.home.HomeScreen
 import dev.sail.app.feature.library.BookScreen
 import dev.sail.app.feature.library.LibraryScreen
+import dev.sail.app.feature.reader.ReaderScreen
 import dev.sail.app.feature.settings.SettingsScreen
 import dev.sail.app.feature.tracker.TrackerScreen
 import dev.sail.app.feature.workspace.WorkspaceScreen
@@ -90,7 +91,8 @@ fun SailApp() {
         // Lessons and reviews are focused, one step per screen: no tab bar, so a pending answer
         // can't be abandoned by switching tabs. Their own Back handles leaving.
         // Other screens (a diagnostic on the course path) hold a NavLock while work is pending.
-        val focused = route == Routes.LESSON || route == Routes.REVIEW || navLock.locked
+        // The reader is full-screen too: the page is the whole screen.
+        val focused = route == Routes.LESSON || route == Routes.REVIEW || route == Routes.READ || navLock.locked
         if (tab != null && config != null && !focused) {
             BottomNav(selected = tab, onSelect = { nav.navigateTopLevel(it.route) })
         }
@@ -154,7 +156,10 @@ private fun SailNavHost(nav: NavHostController, start: String) {
             WorkspaceScreen()
         }
         composable(Routes.LIBRARY) {
-            LibraryScreen(onOpenBook = { nav.navigate(Routes.book(it)) })
+            LibraryScreen(
+                onOpenBook = { nav.navigate(Routes.book(it)) },
+                onReadBook = { nav.navigate(Routes.read(it)) },
+            )
         }
         composable(
             Routes.BOOK,
@@ -162,6 +167,23 @@ private fun SailNavHost(nav: NavHostController, start: String) {
         ) { backStack ->
             BookScreen(
                 bookId = backStack.arguments?.getString("bookId").orEmpty(),
+                onBack = { nav.popBackStack() },
+                onRead = { bookId, section -> nav.navigate(Routes.read(bookId, section)) },
+            )
+        }
+        composable(
+            Routes.READ,
+            arguments = listOf(
+                navArgument("bookId") { type = NavType.StringType },
+                navArgument("section") {
+                    type = NavType.IntType
+                    defaultValue = -1
+                },
+            ),
+        ) { backStack ->
+            ReaderScreen(
+                bookId = backStack.arguments?.getString("bookId").orEmpty(),
+                startSection = backStack.arguments?.getInt("section")?.takeIf { it >= 0 },
                 onBack = { nav.popBackStack() },
             )
         }
