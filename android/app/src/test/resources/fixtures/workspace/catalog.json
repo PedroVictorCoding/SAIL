@@ -1,0 +1,22 @@
+{
+  "models": [
+    {
+      "id": "qwen2.5-7b",
+      "name": "Qwen 2.5 7B",
+      "summary": "Balanced local reasoning",
+      "size_gb": 4.7,
+      "active_params_b": 7.0,
+      "total_params_b": 7.6,
+      "vision": false,
+      "source": "local",
+      "installed": true,
+      "running": true,
+      "default": true
+    }
+  ],
+  "running": "qwen2.5-7b",
+  "running_file": "qwen2.5-7b-instruct.gguf",
+  "default": "qwen2.5-7b",
+  "restart_required": false,
+  "env_override": false
+}

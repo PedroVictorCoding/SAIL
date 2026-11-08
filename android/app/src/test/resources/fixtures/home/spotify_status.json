@@ -1,0 +1,18 @@
+{
+  "configured": true,
+  "connected": true,
+  "redirect_uri": "https://127.0.0.1:8420/api/spotify/callback",
+  "now_playing": {
+    "is_playing": true,
+    "name": "Avril 14th",
+    "by": "Aphex Twin",
+    "album": "Drukqs",
+    "image": "https://i.scdn.co/image/example",
+    "uri": "spotify:track:2MZSXhq4XDJWu6coGoXX1V",
+    "progress_ms": 42000,
+    "duration_ms": 125000,
+    "device": "SAIL Studio Monitor",
+    "context": "spotify:playlist:37i9dQZF1DX4sWSpwq3LiO"
+  },
+  "can_stream": true
+}

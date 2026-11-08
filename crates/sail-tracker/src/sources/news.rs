@@ -2,6 +2,7 @@
 //! five outlets shows once, with its five sources.
 use chrono::DateTime;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -59,8 +60,27 @@ fn web_link(s: &str) -> Option<String> {
     matches!(u.scheme(), "http" | "https").then(|| u.to_string())
 }
 
+/// XML 1.0 forbids most C0 controls (and U+FFFE/U+FFFF), but real feeds occasionally
+/// contain them. Drop only the illegal characters before parsing so one stray backspace in
+/// a publisher's description cannot take the whole source offline.
+fn valid_xml_char(c: char) -> bool {
+    matches!(c, '\u{9}' | '\u{A}' | '\u{D}')
+        || ('\u{20}'..='\u{D7FF}').contains(&c)
+        || ('\u{E000}'..='\u{FFFD}').contains(&c)
+        || c >= '\u{10000}'
+}
+
+fn sanitize_xml(xml: &str) -> Cow<'_, str> {
+    if xml.chars().all(valid_xml_char) {
+        Cow::Borrowed(xml)
+    } else {
+        Cow::Owned(xml.chars().filter(|c| valid_xml_char(*c)).collect())
+    }
+}
+
 pub fn parse_feed(xml: &str) -> Result<Vec<RawItem>, FeedError> {
-    let doc = roxmltree::Document::parse(xml).map_err(|e| FeedError(e.to_string()))?;
+    let xml = sanitize_xml(xml);
+    let doc = roxmltree::Document::parse(xml.as_ref()).map_err(|e| FeedError(e.to_string()))?;
     let root = doc.root_element();
     let mut items = Vec::new();
     match root.tag_name().name() {
@@ -257,6 +277,21 @@ pub fn cluster(items: Vec<crate::store::StoredHeadline>, threshold: f64) -> Vec<
 mod tests {
     use super::*;
     use crate::store::StoredHeadline;
+
+    #[test]
+    fn strips_invalid_xml_control_characters_instead_of_failing() {
+        let rss = "<rss><channel><item><title>Good \u{1f600}</title>\
+            <link>https://example.com/a</link>\
+            <description>bad\u{8}text</description></item></channel></rss>";
+        let items = parse_feed(rss).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Good \u{1f600}");
+        assert_eq!(
+            sanitize_xml("\u{0}\u{1}\u{8}\u{b}\u{c}\u{1f}\u{fffe}\u{ffff}"),
+            ""
+        );
+        assert_eq!(sanitize_xml("a\tb\nc\rd\u{7f}"), "a\tb\nc\rd\u{7f}");
+    }
 
     #[test]
     fn parses_rss_and_atom() {

@@ -25,6 +25,17 @@ KILL_FIRST=false
 ACTION="run"
 # Keep the model server loaded across SAIL restarts unless --no-persist / SAIL_LLAMA_PERSIST=0.
 export SAIL_LLAMA_PERSIST="${SAIL_LLAMA_PERSIST:-1}"
+# The sandbox runner reads PDFs (scripts/setup-sail-runner.sh). Use it when it's installed
+# and this shell can reach its socket (membership of the `sail` group).
+if [[ -z "${SAIL_RUNNER_SOCKET:-}" ]] && id -u sail-runner >/dev/null 2>&1; then
+  if [[ -S /run/sail-runner/command.sock && -w /run/sail-runner/command.sock ]]; then
+    export SAIL_RUNNER_SOCKET=/run/sail-runner/command.sock
+    SAIL_RUNNER_UID="$(id -u sail-runner)"
+    export SAIL_RUNNER_UID
+  elif [[ -d /run/sail-runner ]]; then
+    echo "note: the PDF runner is installed but this shell can't reach it; open a new login shell (group 'sail') and restart SAIL" >&2
+  fi
+fi
 EXTRA_ARGS=()
 
 # 2. Parse command-line flags

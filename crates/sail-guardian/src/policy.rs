@@ -13,18 +13,71 @@ use sail_common::types::SubsystemId;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum LearnedPattern {
-    AnyToolInvocation { tool_name: String },
-    KernelTool { tool_name: String },
-    FilesystemReadPrefix { prefix: PathBuf },
-    FilesystemWritePrefix { prefix: PathBuf },
-    SystemOperation { operation: String },
+    AnyToolInvocation {
+        tool_name: String,
+    },
+    KernelTool {
+        tool_name: String,
+    },
+    FilesystemReadPrefix {
+        prefix: PathBuf,
+    },
+    FilesystemWritePrefix {
+        prefix: PathBuf,
+    },
+    SystemOperation {
+        operation: String,
+    },
+    /// One fixed sandbox operation, for any input: e.g. "read PDF text" (`pdf-text-v1`),
+    /// whatever the document. Only protocols in [`STANDING_SANDBOX_PROTOCOLS`] qualify.
+    SandboxOperation {
+        protocol: String,
+    },
     ExactCapability(Capability),
+}
+
+/// Sandbox protocols an owner may allow once for every input. Each is a fixed operation
+/// chosen by SAIL, not by the requester: no executable, argv, network, mount or credential
+/// in the request, only the input digest/size, ids and a bounded operation. The job still
+/// runs in the dedicated-UID runner sandbox; the rule only removes the per-file prompt.
+pub const STANDING_SANDBOX_PROTOCOLS: &[(&str, &str)] =
+    &[("pdf-text-v1", "Read PDF text in the sandbox")];
+
+/// The fixed protocol of a sandbox request, if it is one of
+/// [`STANDING_SANDBOX_PROTOCOLS`] and has exactly that protocol's request shape. Any extra
+/// field (a smuggled executable, path or network setting) disqualifies it.
+pub fn standing_sandbox_protocol(request: &str) -> Option<&'static str> {
+    let value: serde_json::Value = serde_json::from_str(request).ok()?;
+    let object = value.as_object()?;
+    let protocol = object.get("protocol")?.as_str()?;
+    let (known, _) = STANDING_SANDBOX_PROTOCOLS
+        .iter()
+        .find(|(name, _)| *name == protocol)?;
+    const PDF_FIELDS: [&str; 6] = [
+        "protocol",
+        "request_id",
+        "correlation_id",
+        "input_bytes",
+        "input_sha256",
+        "operation",
+    ];
+    let shape_ok = object.len() == PDF_FIELDS.len()
+        && PDF_FIELDS.iter().all(|field| object.contains_key(*field))
+        && object["input_sha256"]
+            .as_str()
+            .is_some_and(|d| d.len() == 64 && d.bytes().all(|b| b.is_ascii_hexdigit()))
+        && object["input_bytes"].is_u64();
+    shape_ok.then_some(*known)
 }
 
 impl LearnedPattern {
     pub fn matches(&self, capability: &Capability) -> bool {
         match (self, capability) {
             (LearnedPattern::ExactCapability(expected), actual) => expected == actual,
+            (
+                LearnedPattern::SandboxOperation { protocol },
+                Capability::Tool(ToolCapability::SandboxCommand { request, .. }),
+            ) => standing_sandbox_protocol(request) == Some(protocol.as_str()),
             (
                 LearnedPattern::AnyToolInvocation { tool_name },
                 Capability::Tool(ToolCapability::Invocation { tool, .. }),
@@ -91,6 +144,15 @@ impl LearnedPattern {
                     operation: "os_telemetry".into(),
                 }
             }
+            Capability::Tool(ToolCapability::SandboxCommand { request, .. })
+                if standing_sandbox_protocol(request).is_some() =>
+            {
+                LearnedPattern::SandboxOperation {
+                    protocol: standing_sandbox_protocol(request)
+                        .unwrap_or_default()
+                        .to_string(),
+                }
+            }
             other => LearnedPattern::ExactCapability(other.clone()),
         }
     }
@@ -106,6 +168,11 @@ impl LearnedPattern {
                 format!("Write: {}", prefix.display())
             }
             LearnedPattern::SystemOperation { operation } => format!("System: {operation}"),
+            LearnedPattern::SandboxOperation { protocol } => STANDING_SANDBOX_PROTOCOLS
+                .iter()
+                .find(|(name, _)| name == protocol)
+                .map(|(_, label)| format!("{label} ({protocol})"))
+                .unwrap_or_else(|| format!("Sandbox: {protocol}")),
             LearnedPattern::ExactCapability(cap) => format!("{cap:?}"),
         }
     }
@@ -186,7 +253,20 @@ impl PolicyEngine {
         capability: &Capability,
         description: String,
     ) -> LearnedApprovalRule {
-        let pattern = LearnedPattern::from_capability(capability);
+        self.learn_pattern(
+            requester,
+            LearnedPattern::from_capability(capability),
+            description,
+        )
+    }
+
+    /// Store an owner-approved standing rule. Callers must have authenticated the owner.
+    pub fn learn_pattern(
+        &self,
+        requester: SubsystemId,
+        pattern: LearnedPattern,
+        description: String,
+    ) -> LearnedApprovalRule {
         let rule = LearnedApprovalRule {
             id: Uuid::new_v4(),
             requester,
@@ -220,6 +300,45 @@ impl PolicyEngine {
             }
         }
         None
+    }
+
+    /// Whether a standing rule allows `protocol` for `requester`, without counting a use.
+    /// Background work checks this first so it never raises an approval prompt per file.
+    pub fn allows_sandbox_operation(&self, requester: SubsystemId, protocol: &str) -> bool {
+        let wanted = LearnedPattern::SandboxOperation {
+            protocol: protocol.to_string(),
+        };
+        self.learned_rules
+            .read()
+            .map(|rules| {
+                rules
+                    .iter()
+                    .any(|r| r.requester == requester && r.pattern == wanted)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Remove the standing rule for `protocol`, if any. Returns whether one was removed.
+    pub fn revoke_sandbox_operation(&self, requester: SubsystemId, protocol: &str) -> bool {
+        let wanted = LearnedPattern::SandboxOperation {
+            protocol: protocol.to_string(),
+        };
+        let ids: Vec<Uuid> = self
+            .learned_rules
+            .read()
+            .map(|rules| {
+                rules
+                    .iter()
+                    .filter(|r| r.requester == requester && r.pattern == wanted)
+                    .map(|r| r.id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut any = false;
+        for id in ids {
+            any |= self.revoke_learned_rule(id);
+        }
+        any
     }
 
     pub fn is_learned_approved(&self, requester: SubsystemId, capability: &Capability) -> bool {
@@ -471,6 +590,68 @@ impl Default for PolicyEngine {
 mod tests {
     use super::*;
     use crate::capability::{FsCapability, ToolCapability};
+
+    fn pdf_request(digest: &str, extra: Option<(&str, serde_json::Value)>) -> Capability {
+        let mut request = serde_json::json!({
+            "protocol": "pdf-text-v1",
+            "request_id": Uuid::new_v4(),
+            "correlation_id": Uuid::new_v4(),
+            "input_bytes": 1234,
+            "input_sha256": digest,
+            "operation": {"pages": {"first": 1, "last": 20}},
+        });
+        if let Some((key, value)) = extra {
+            request[key] = value;
+        }
+        Capability::Tool(ToolCapability::SandboxCommand {
+            request_digest: "0".repeat(64),
+            request: request.to_string(),
+        })
+    }
+
+    #[test]
+    fn one_pdf_approval_covers_every_pdf_but_nothing_else() {
+        let temp_dir = std::env::temp_dir().join(format!("sail-pdf-rule-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let policy = PolicyEngine::with_persistence(temp_dir.join("learned_rules.json"));
+        let first = pdf_request(&"a".repeat(64), None);
+        let other_file = pdf_request(&"b".repeat(64), None);
+        assert!(!policy.allows_sandbox_operation(SubsystemId::Arena, "pdf-text-v1"));
+        assert!(!policy.is_learned_approved(SubsystemId::Arena, &other_file));
+
+        // "Always allow" on one PDF prompt learns the operation, not the exact file.
+        let rule = policy.learn_approval(SubsystemId::Arena, &first, "always".into());
+        assert_eq!(
+            rule.pattern,
+            LearnedPattern::SandboxOperation {
+                protocol: "pdf-text-v1".into()
+            }
+        );
+        assert!(rule.pattern.display_label().contains("Read PDF text"));
+        assert!(policy.allows_sandbox_operation(SubsystemId::Arena, "pdf-text-v1"));
+        assert!(policy.is_learned_approved(SubsystemId::Arena, &other_file));
+        assert!(!policy.is_learned_approved(SubsystemId::Forge, &other_file));
+
+        // A smuggled field, another protocol or a command plan is never covered.
+        let smuggled = pdf_request(&"c".repeat(64), Some(("executable", "/bin/sh".into())));
+        assert!(!policy.is_learned_approved(SubsystemId::Arena, &smuggled));
+        let mut other_protocol = pdf_request(&"d".repeat(64), None);
+        if let Capability::Tool(ToolCapability::SandboxCommand { request, .. }) =
+            &mut other_protocol
+        {
+            *request = request.replace("pdf-text-v1", "command-v1");
+        }
+        assert!(!policy.is_learned_approved(SubsystemId::Arena, &other_protocol));
+        let bad_digest = pdf_request("not-a-digest", None);
+        assert!(!policy.is_learned_approved(SubsystemId::Arena, &bad_digest));
+
+        // The rule survives a restart and can be revoked by operation.
+        let reloaded = PolicyEngine::with_persistence(temp_dir.join("learned_rules.json"));
+        assert!(reloaded.allows_sandbox_operation(SubsystemId::Arena, "pdf-text-v1"));
+        assert!(reloaded.revoke_sandbox_operation(SubsystemId::Arena, "pdf-text-v1"));
+        assert!(!reloaded.is_learned_approved(SubsystemId::Arena, &other_file));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn test_learned_approval_rules_lifecycle() {

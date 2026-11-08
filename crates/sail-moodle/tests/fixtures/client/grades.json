@@ -1,0 +1,30 @@
+{
+  "usergrades": [
+    {
+      "courseid": 7,
+      "userid": 42,
+      "gradeitems": [
+        {
+          "id": 1,
+          "itemname": "Teste 1",
+          "gradeformatted": "15,50",
+          "grademin": 0,
+          "grademax": 20,
+          "percentageformatted": "77,5 %",
+          "feedback": "<p>Bom trabalho.</p>",
+          "timemodified": 1800000000
+        },
+        {
+          "id": 2,
+          "itemname": "Exame",
+          "gradeformatted": "",
+          "grademin": 0,
+          "grademax": 20,
+          "percentageformatted": "",
+          "feedback": "",
+          "timemodified": 0
+        }
+      ]
+    }
+  ]
+}

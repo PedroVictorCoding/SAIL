@@ -74,7 +74,7 @@ pub struct RunLimits {
 }
 
 /// What a correct answer is. Never serialized to a client.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum AnswerKey {
     /// The exact set of option ids (order-insensitive).
@@ -87,7 +87,7 @@ pub enum AnswerKey {
     Rust { stdout: String },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Step {
     pub id: String,
@@ -234,7 +234,7 @@ pub struct Objective {
     pub prerequisites: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Chapter {
     pub id: String,
@@ -242,7 +242,7 @@ pub struct Chapter {
     pub lessons: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lesson {
     pub id: String,
@@ -260,14 +260,14 @@ impl Lesson {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Diagnostic {
     pub id: String,
     pub steps: Vec<Step>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoursePackage {
     pub id: String,
@@ -433,11 +433,13 @@ fn validate_step(s: &Step, objectives: &BTreeSet<&str>) -> Result<(), String> {
 /// A track in the catalog. Planned tracks are listed honestly, with no lessons.
 #[derive(Debug, Clone)]
 pub struct Track {
-    pub id: &'static str,
-    pub title: &'static str,
+    pub id: String,
+    pub title: String,
     pub domain: Domain,
-    pub summary: &'static str,
-    pub package: Option<CoursePackage>,
+    pub summary: String,
+    pub package: Option<std::sync::Arc<CoursePackage>>,
+    /// `Some(revision)` for a course published by the Course Factory; `None` when embedded.
+    pub generated: Option<u64>,
 }
 
 const RUST_SYSTEMS: &str = include_str!("../../courses/rust-systems.json");
@@ -451,25 +453,28 @@ pub fn catalog() -> Vec<Track> {
         serde_json::from_str(PHILOSOPHY_LOGIC).expect("embedded philosophy-logic course parses");
     vec![
         Track {
-            id: "rust-systems",
-            title: "Rust & Systems Programming",
+            id: "rust-systems".into(),
+            title: "Rust & Systems Programming".into(),
             domain: Domain::Rust,
-            summary: "Ownership, borrowing and the type system, checked by the real compiler.",
-            package: Some(rust),
+            summary: "Ownership, borrowing and the type system, checked by the real compiler.".into(),
+            package: Some(std::sync::Arc::new(rust)),
+            generated: None,
         },
         Track {
-            id: "philosophy-logic",
-            title: "Philosophy & Logic",
+            id: "philosophy-logic".into(),
+            title: "Philosophy & Logic".into(),
             domain: Domain::Philosophy,
-            summary: "Validity, soundness and formal fallacies, judged by logical form only.",
-            package: Some(logic),
+            summary: "Validity, soundness and formal fallacies, judged by logical form only.".into(),
+            package: Some(std::sync::Arc::new(logic)),
+            generated: None,
         },
         Track {
-            id: "physics-engineering",
-            title: "Physics, Math & Engineering",
+            id: "physics-engineering".into(),
+            title: "Physics, Math & Engineering".into(),
             domain: Domain::Physics,
-            summary: "Units, motion, circuits and control, with validated simulations. Lessons are being written.",
+            summary: "Units, motion, circuits and control, with validated simulations. Lessons are being written.".into(),
             package: None,
+            generated: None,
         },
     ]
 }

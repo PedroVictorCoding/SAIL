@@ -13,6 +13,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
    self.path='/vendor/xterm/'+self.path.split('/')[-1]
   if self.path=='/':
    html=(root/'index.html').read_text()
+   html=html.replace('id="subsystemStore" hidden aria-hidden="true"', 'id="subsystemStore"')
    html=re.sub(r'<script.*?</script>',lambda m:m.group(0) if any(x in m.group(0) for x in ['/terminal.js','/vendor/']) else '',html,flags=re.S)
    self.send_response(200); self.end_headers();self.wfile.write(html.encode()); return
   super().do_GET()

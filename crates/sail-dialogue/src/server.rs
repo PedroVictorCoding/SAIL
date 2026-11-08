@@ -62,6 +62,7 @@ fn learn_services(
     arena: &Arc<sail_arena::ArenaSubsystem>,
     authority: Option<sail_guardian::authority::ApprovalAuthority>,
     course_authority: Option<sail_guardian::authority::ApprovalAuthority>,
+    factory_authority: Option<sail_guardian::authority::ApprovalAuthority>,
     pulse: Option<Arc<sail_pulse::Pulse>>,
 ) -> (Option<Arc<sail_arena_learn::Engine>>, Option<Router>) {
     use sail_arena_learn::{Engine, SqliteEventStore, agent::ArenaKnowledge, agent::MindModel};
@@ -77,7 +78,19 @@ fn learn_services(
             let engine = Arc::new(engine);
             let mut router = crate::learn_http::router_with_pulse(engine.clone(), authority, pulse);
             match sail_arena_learn::courses::CourseStore::open(&path) {
-                Ok(courses) => router = router.merge(course_routes(courses, course_authority)),
+                Ok(courses) => {
+                    let courses = course_engine(courses);
+                    router = router.merge(crate::learn_courses_http::router(
+                        courses.clone(),
+                        course_authority,
+                    ));
+                    match factory_routes(&path, courses, inference, factory_authority) {
+                        Ok(routes) => router = router.merge(routes),
+                        Err(error) => {
+                            warn!(%error, "Course Factory unavailable; course generation disabled")
+                        }
+                    }
+                }
                 Err(error) => {
                     warn!(%error, "Interactive Courses store unavailable; courses disabled")
                 }
@@ -91,19 +104,176 @@ fn learn_services(
     }
 }
 
-/// Interactive Courses (#386). Learner Rust runs only through `sail-runner`; without it,
-/// Rust steps report `unavailable`.
-fn course_routes(
+/// Learner Rust (and generated exercises' hidden tests) runs only through `sail-runner`;
+/// without it, Rust steps and checks report `unavailable`.
+fn rust_evaluator() -> Arc<dyn sail_arena_learn::courses::RustEvaluator> {
+    match crate::learn_courses_http::RunnerRustEvaluator::from_env() {
+        Some(runner) => Arc::new(runner),
+        None => Arc::new(sail_arena_learn::courses::NoSandbox),
+    }
+}
+
+/// Interactive Courses (#386): the engine both the learner routes and the Course Factory
+/// publish into.
+fn course_engine(
     store: sail_arena_learn::courses::CourseStore,
+) -> Arc<sail_arena_learn::courses::CourseEngine> {
+    Arc::new(sail_arena_learn::courses::CourseEngine::new(
+        store,
+        rust_evaluator(),
+    ))
+}
+
+/// How often the factory worker looks for due work when the queue is idle.
+const FACTORY_IDLE_SLEEP: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Course Factory: owner API plus the background worker. Sources, settings, the project
+/// store, the package registry and receipts live in the Learn database; jobs in their own
+/// Continuity file next to it, recovered here so a job a crash interrupted runs again.
+/// Published generated courses are loaded into the course engine before routes serve.
+fn factory_routes(
+    learn_db: &std::path::Path,
+    engine: Arc<sail_arena_learn::courses::CourseEngine>,
+    inference: &sail_mind::MindService,
     authority: Option<sail_guardian::authority::ApprovalAuthority>,
-) -> Router {
-    use sail_arena_learn::courses::{CourseEngine, NoSandbox, RustEvaluator};
-    let rust: Arc<dyn RustEvaluator> =
-        match crate::learn_courses_http::RunnerRustEvaluator::from_env() {
-            Some(runner) => Arc::new(runner),
-            None => Arc::new(NoSandbox),
-        };
-    crate::learn_courses_http::router(Arc::new(CourseEngine::new(store, rust)), authority)
+) -> std::result::Result<Router, String> {
+    use sail_arena_learn::factory::{
+        contracts::PdfTextExtractor,
+        jobs::{JobQueue, Worker},
+        mind_author::{MindAuthor, MindGate},
+        pipeline::{Pipeline, PipelineDeps},
+        registry::PackageRegistry,
+        service::FactoryService,
+        settings::SettingsStore,
+        sources::SourceRegistry,
+        store::FactoryStore,
+        validate::ValidationSuite,
+    };
+    let err = |e: &dyn std::fmt::Display| e.to_string();
+    let dir = learn_db
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| sail_common::storage::data_path("arena"));
+    let blob_dir = dir.join("factory-sources");
+    let sources = Arc::new(SourceRegistry::open(learn_db, blob_dir.clone()).map_err(|e| err(&e))?);
+    let settings = Arc::new(SettingsStore::open(learn_db).map_err(|e| err(&e))?);
+    let store = Arc::new(FactoryStore::open(learn_db).map_err(|e| err(&e))?);
+    let packages = Arc::new(PackageRegistry::open(learn_db).map_err(|e| err(&e))?);
+    for revision in packages.latest_all().map_err(|e| err(&e))? {
+        let loaded = revision
+            .to_track()
+            .map_err(|e| e.to_string())
+            .and_then(|track| engine.publish_generated(track).map_err(|e| e.to_string()));
+        if let Err(error) = loaded {
+            warn!(%error, course = %revision.course_id, "Generated course couldn't be loaded");
+        }
+    }
+    let tasks =
+        sail_continuity::Continuity::open(dir.join("factory-jobs.db")).map_err(|e| err(&e))?;
+    if let Err(error) = tasks.recover() {
+        warn!(%error, "Course Factory job recovery failed; interrupted jobs may wait");
+    }
+    let jobs = Arc::new(JobQueue::new(Arc::new(tasks)));
+    let pdf: Option<Arc<dyn PdfTextExtractor>> = sail_guardian::global_broker()
+        .ok()
+        .and_then(|broker| crate::learn_pdf::RunnerPdfText::from_env(blob_dir, broker))
+        .map(|runner| Arc::new(runner) as Arc<dyn PdfTextExtractor>);
+    if pdf.is_none() {
+        tracing::info!("Course Factory: PDF text sandbox not configured; modern PDFs will wait");
+    }
+    let clock: Arc<dyn Fn() -> i64 + Send + Sync> =
+        Arc::new(|| chrono::Utc::now().timestamp_millis());
+    let pipeline = Arc::new(
+        Pipeline::open(
+            learn_db,
+            PipelineDeps {
+                sources: sources.clone(),
+                store,
+                packages,
+                engine,
+                settings: settings.clone(),
+                model: Arc::new(MindAuthor::new(Arc::new(inference.clone()), None)),
+                pdf,
+                validators: Arc::new(ValidationSuite::new(rust_evaluator())),
+                clock: clock.clone(),
+            },
+        )
+        .map_err(|e| err(&e))?,
+    );
+    let busy_mind = inference.clone();
+    let gate = Arc::new(MindGate::new(
+        sail_common::resources::global(),
+        Arc::new(move || busy_mind.has_work()),
+        Arc::new(|| false),
+    ));
+    let worker = Worker::new(
+        jobs.clone(),
+        settings.clone(),
+        pipeline.clone(),
+        gate,
+        clock.clone(),
+    );
+    tokio::spawn(async move {
+        worker
+            .run(
+                tokio_util::sync::CancellationToken::new(),
+                FACTORY_IDLE_SLEEP,
+            )
+            .await
+    });
+    let factory = FactoryService::new(sources, jobs, settings, clock).with_pipeline(pipeline);
+    Ok(crate::learn_factory_http::router(
+        Arc::new(factory),
+        authority,
+    ))
+}
+
+/// SAIL Moodle's owner API and poll loop. Extraction uses Mind at background priority
+/// behind the Course Factory's gate; PDFs are read by the runner sandbox when configured.
+/// The connector is unavailable (and logged) if its store can't be opened.
+fn moodle_routes(
+    inference: &sail_mind::MindService,
+    authority: Option<sail_guardian::authority::ApprovalAuthority>,
+) -> Option<Router> {
+    use sail_arena_learn::factory::{
+        contracts::PdfTextExtractor,
+        mind_author::{MindAuthor, MindGate},
+    };
+    use sail_moodle::service::{MoodleService, ServiceDeps, default_dir, rest_factory};
+    let dir = default_dir();
+    let pdf = sail_guardian::global_broker().ok().and_then(|broker| {
+        crate::learn_pdf::RunnerPdfText::from_env(dir.join("files"), broker.clone()).map(|runner| {
+            Arc::new(crate::moodle_model::MoodlePdf {
+                reader: Arc::new(runner) as Arc<dyn PdfTextExtractor>,
+                broker,
+            }) as Arc<dyn sail_moodle::service::FileText>
+        })
+    });
+    let busy_mind = inference.clone();
+    let deps = ServiceDeps {
+        model: Some(Arc::new(crate::moodle_model::MoodleMind(MindAuthor::new(
+            Arc::new(inference.clone()),
+            None,
+        )))),
+        admit: Some(Arc::new(crate::moodle_model::MoodleGate(MindGate::new(
+            sail_common::resources::global(),
+            Arc::new(move || busy_mind.has_work()),
+            Arc::new(|| false),
+        )))),
+        file_text: pdf,
+        request_gap: None,
+    };
+    match MoodleService::open(&dir, rest_factory(), deps) {
+        Ok(service) => {
+            sail_moodle::service::set_global(service.clone());
+            service.start(tokio_util::sync::CancellationToken::new());
+            Some(crate::moodle_http::router(service, authority))
+        }
+        Err(error) => {
+            warn!(%error, "Moodle store unavailable; Moodle connector disabled");
+            None
+        }
+    }
 }
 
 /// SAIL Tracker's owner API. The tracker is unavailable (and logged) if its store cannot be
@@ -165,12 +335,20 @@ pub async fn run_dialogue_server_with_plans(
     };
     let live_context_authority = authority();
     let memory_routes = crate::memory_http::router_with_arena(arena.clone(), authority());
-    let (learn_engine, learn_routes) =
-        learn_services(&inference, &arena, authority(), authority(), pulse.clone());
+    let (learn_engine, learn_routes) = learn_services(
+        &inference,
+        &arena,
+        authority(),
+        authority(),
+        authority(),
+        pulse.clone(),
+    );
     let tracker_routes = tracker_routes(authority());
+    let moodle_routes = moodle_routes(&inference, authority());
     let reader_routes = crate::reader_http::routes(authority(), services.clone());
     let music_routes = crate::music_http::routes(authority());
     let system_routes = crate::system_http::router(authority());
+    let flow_routes = crate::flow_http::router(authority());
     // The model Mind started with (SAIL_MODEL_PATH, else the saved default, else Qwen).
     let model_routes =
         crate::mind_models_http::router(authority(), sail_common::models::primary_model_path());
@@ -196,6 +374,7 @@ pub async fn run_dialogue_server_with_plans(
         sail_guardian::global_broker().ok(),
         active_token.clone(),
     );
+    let proxy_guard = crate::proxy_guard::ProxyGuard::new(active_token.as_deref());
     let owner_token = active_token;
     let mut app = Router::new()
         .nest_service("/api/guardian", approval_routes)
@@ -207,6 +386,7 @@ pub async fn run_dialogue_server_with_plans(
         )
         .merge(crate::ui_assets::router())
         .nest_service("/api/system", system_routes)
+        .nest_service("/api/flow", flow_routes)
         .nest_service("/api/mind/models", model_routes)
         .nest_service("/api/spotify", spotify_routes)
         .nest_service("/api/briefing", briefing_routes)
@@ -237,13 +417,21 @@ pub async fn run_dialogue_server_with_plans(
     if let Some(routes) = tracker_routes {
         app = app.nest_service("/api/tracker", routes);
     }
+    if let Some(routes) = moodle_routes {
+        app = app.nest_service("/api/moodle", routes);
+    }
     if let Some(routes) = reader_routes {
         app = app.nest_service("/api/reader", routes);
     }
     if let Some(routes) = music_routes {
         app = app.nest_service("/api/music", routes);
     }
-    let app = app.layer(axum::middleware::from_fn(cross_origin_isolation));
+    let app = app
+        .layer(axum::middleware::from_fn_with_state(
+            proxy_guard,
+            crate::proxy_guard::guard,
+        ))
+        .layer(axum::middleware::from_fn(cross_origin_isolation));
     match (
         std::env::var("SAIL_TLS_CERT"),
         std::env::var("SAIL_TLS_KEY"),

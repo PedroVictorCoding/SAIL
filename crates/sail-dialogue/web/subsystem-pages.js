@@ -29,11 +29,12 @@ const subsystemPages = [
     "description": "Learn something step by step with an assessment, a lesson map and guided teaching, or take short interactive courses.",
     "card": "memoryCard",
     "panel": "learnPanelMain",
-    "tabs": ["learnPanelMain", "coursesPanelMain"],
+    "tabs": ["learnPanelMain", "coursesPanelMain", "learnFactoryPanel"],
     "settings": null,
     "details": [
       "Arena Learn: assessment, a lesson map and step-by-step teaching",
       "Courses: short interactive lessons with spaced review",
+      "Course Factory: turn your books and notes into checked courses",
       "Research collections"
     ]
   },
@@ -74,14 +75,14 @@ const subsystemPages = [
     "name": "Flow",
     "icon": "flow",
     "subtitle": "Workflows and automation",
-    "description": "Coordinate workflows through triggers, conditions, and scheduled execution.",
-    "card": null,
+    "description": "Build and run local workflows with connected nodes, conditions and persisted execution results.",
+    "card": "flowCard",
     "panel": null,
     "settings": null,
     "details": [
-      "Workflow triggers",
-      "Automation nodes and conditions",
-      "Execution scheduling"
+      "Manual triggers and deterministic text operations",
+      "Editable nodes and conditional branches",
+      "Saved workflow versions and execution receipts"
     ]
   },
   {
@@ -159,6 +160,21 @@ const subsystemPages = [
       "Snooze, cancel and one-time delivery",
       "Quiet hours and opt-in spoken reminders"
     ]
+  },
+  {
+    "id": "terminal",
+    "name": "Terminal",
+    "icon": "terminal",
+    "subtitle": "Interactive developer shell",
+    "description": "Run shell commands in your host workspace with live ANSI terminal output.",
+    "card": "terminalCard",
+    "panel": "terminalPanel",
+    "settings": null,
+    "details": [
+      "Interactive PTY host shell over WebSocket",
+      "Tab completion, history, ANSI colors, and Ctrl+C",
+      "Quick developer commands: git, cargo, and directory inspection"
+    ]
   }
 ];
 
@@ -218,7 +234,7 @@ function initializeSubsystemPages() {
     if (id === 'spaces') return; // Spaces overlays the current workspace.
     const found = subsystemPages.find(entry => entry.id === id);
     const item = found?.id === 'factory' ? null : found;
-    const route = item?.id || (id === 'tracker' || id === 'entertainment' ? id : 'home');
+    const route = item?.id || (id === 'tracker' || id === 'moodle' || id === 'entertainment' ? id : 'home');
     if (!found && route === 'home' && id !== 'home') history.replaceState(null, '', '#home');
     closeSheet();
     // Move original nodes so socket updates, form state, and listeners stay live.
@@ -226,8 +242,9 @@ function initializeSubsystemPages() {
     content.replaceChildren();
     if (home) home.hidden = true;
     page.hidden = !item;
+    if (page) page.dataset.page = route;
     if (workspace) workspace.setAttribute('aria-label', `${item?.name || (route === 'entertainment' ? 'Entertainment' : 'Home')} workspace`);
-    document.title = `SAIL — ${item?.name || {tracker: 'Tracker', entertainment: 'Entertainment'}[route] || 'Workspace'}`;
+    document.title = `SAIL — ${item?.name || {tracker: 'Tracker', moodle: 'School', entertainment: 'Entertainment'}[route] || 'Workspace'}`;
     document.querySelectorAll('[data-page]').forEach(link => {
       const page = link.dataset.page === 'factory' ? 'home' : link.dataset.page;
       const selected = page === route; link.classList.toggle('selected', selected);

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>SAIL School</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/moodle.css">
+</head>
+<body>
+<a class="md-skip" href="#mdMain">Skip to content</a>
+<header class="md-bar">
+  <a class="md-button md-back" href="/" target="_top" aria-label="Back to SAIL home">← SAIL</a>
+  <div class="md-heading">
+    <h1>School</h1>
+    <p class="md-sub" id="mdSite">Moodle</p>
+  </div>
+  <p class="md-pill" id="mdState" role="status" data-state="loading"><span class="md-dot" aria-hidden="true"></span><span id="mdStateText">Loading…</span></p>
+  <div class="md-actions">
+    <button class="md-button" id="mdSync" type="button" hidden>Check now</button>
+    <button class="md-button" id="mdSettingsOpen" type="button" hidden>Connection</button>
+  </div>
+</header>
+<p class="md-banner" id="mdBanner" role="alert" hidden></p>
+
+<main id="mdMain" tabindex="-1">
+  <section class="md-connect" id="mdConnect" aria-labelledby="mdConnectTitle" hidden>
+    <h2 id="mdConnectTitle">Connect your school's Moodle</h2>
+    <p class="md-lead">SAIL reads your courses, deadlines, announcements, files and grades, and finds exam and test dates for you. It only reads. It never submits or posts, and everything stays on this computer.</p>
+    <label class="md-field md-site"><span>Moodle address</span><input id="mdSiteUrl" type="url" spellcheck="false" autocomplete="off" value="https://moodle26.iscte-iul.pt"></label>
+    <ol class="md-steps">
+      <li>
+        <h3>Sign in with your school account</h3>
+        <p>This opens your school's own sign-in page in a new tab. SAIL never sees your password.</p>
+        <button class="md-button md-primary" id="mdLaunch" type="button">Open the sign-in page</button>
+      </li>
+      <li>
+        <h3>Copy the app link back here</h3>
+        <p>After you sign in, Moodle shows a page with a link like <q>Click here to launch the app</q>, and your browser may ask to open an app. Cancel that. Then right-click the link, choose <q>Copy link address</q>, and paste it below. It starts with <code>sailmoodle://token=</code>. The sign-in link works for 10 minutes.</p>
+        <div class="md-row">
+          <label class="md-field md-grow"><span>Address after sign-in</span><input id="mdRedirect" spellcheck="false" autocomplete="off" placeholder="sailmoodle://token=…"></label>
+          <button class="md-button md-primary" id="mdRedirectGo" type="button">Connect</button>
+        </div>
+      </li>
+    </ol>
+    <details class="md-alt">
+      <summary>Use a security key instead</summary>
+      <p>If your Moodle shows a key for "Moodle mobile web service" under Preferences → Security keys, you can paste it here.</p>
+      <div class="md-row">
+        <label class="md-field md-grow"><span>Security key</span><input id="mdToken" spellcheck="false" autocomplete="off" maxlength="64"></label>
+        <button class="md-button" id="mdTokenGo" type="button">Connect</button>
+      </div>
+    </details>
+    <p class="md-error" id="mdConnectError" role="alert"></p>
+  </section>
+
+  <div class="md-workspace" id="mdWorkspace" hidden>
+    <nav class="md-nav" aria-label="Courses">
+      <h2 class="md-nav-title">Courses</h2>
+      <ul class="md-courses" id="mdCourses"></ul>
+    </nav>
+
+    <section class="md-primary-col" aria-label="Upcoming and changes">
+      <div class="md-stats" id="mdStats"></div>
+      <section class="md-card" aria-labelledby="mdUpcomingTitle">
+        <header class="md-card-head">
+          <h2 id="mdUpcomingTitle">Coming up</h2>
+          <p class="md-hint">Dates from Moodle are confirmed. Dates SAIL read from course pages and files show the sentence they came from.</p>
+        </header>
+        <ol class="md-timeline" id="mdItems"></ol>
+      </section>
+      <section class="md-card" aria-labelledby="mdChangesTitle">
+        <header class="md-card-head md-card-head-row">
+          <h2 id="mdChangesTitle">What changed</h2>
+          <button class="md-button md-small" id="mdSeenAll" type="button">Mark all as seen</button>
+        </header>
+        <ul class="md-changes" id="mdChanges"></ul>
+      </section>
+    </section>
+
+    <aside class="md-side" aria-label="Course details">
+      <section class="md-card" aria-labelledby="mdGradingTitle">
+        <h2 id="mdGradingTitle">How it's graded</h2>
+        <div id="mdGrading"></div>
+      </section>
+      <section class="md-card" aria-labelledby="mdFilesTitle">
+        <h2 id="mdFilesTitle">Files</h2>
+        <ul class="md-files" id="mdFiles"></ul>
+      </section>
+      <section class="md-card md-usage" aria-labelledby="mdUsageTitle">
+        <h2 id="mdUsageTitle">Moodle usage</h2>
+        <dl id="mdUsage"></dl>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<footer class="md-foot">Read-only and local. SAIL checks Moodle a few times a day, one request at a time, within a daily limit.</footer>
+
+<dialog class="md-dialog" id="mdSettings" aria-labelledby="mdSettingsTitle">
+  <form method="dialog">
+    <h2 id="mdSettingsTitle">Connection</h2>
+    <dl class="md-conn" id="mdConn"></dl>
+    <p class="md-hint">Disconnecting deletes SAIL's Moodle key. Courses, changes and files already saved stay on this computer.</p>
+    <div class="md-dialog-foot">
+      <button class="md-button md-danger" id="mdDisconnect" type="button">Disconnect</button>
+      <button class="md-button md-primary" value="close">Close</button>
+    </div>
+  </form>
+</dialog>
+<script src="/moodle.js" defer></script>
+</body>
+</html>

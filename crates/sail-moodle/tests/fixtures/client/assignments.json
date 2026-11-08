@@ -1,0 +1,43 @@
+{
+  "courses": [
+    {
+      "id": 7,
+      "shortname": "LEIC",
+      "fullname": "Licenciatura em Engenharia Informática",
+      "assignments": [
+        {
+          "id": 501,
+          "cmid": 101,
+          "course": 7,
+          "name": "Projeto 1",
+          "intro": "<p>Construa um protótipo.</p>",
+          "allowsubmissionsfromdate": 1767225600,
+          "duedate": 1800000000,
+          "cutoffdate": 1800086400,
+          "introattachments": [
+            {
+              "type": "file",
+              "filename": "Brief.pdf",
+              "filepath": "/",
+              "filesize": 1000,
+              "timemodified": 1767225600,
+              "mimetype": "application/pdf",
+              "fileurl": "https://moodle.example.test/pluginfile.php/1/mod_assign/introattachment/0/Brief.pdf?token=abc"
+            }
+          ]
+        },
+        {
+          "id": 502,
+          "cmid": 102,
+          "course": 7,
+          "name": "Projeto 2",
+          "intro": "",
+          "allowsubmissionsfromdate": 0,
+          "duedate": 0,
+          "cutoffdate": 0,
+          "introattachments": []
+        }
+      ]
+    }
+  ]
+}

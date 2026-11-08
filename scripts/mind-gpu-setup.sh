@@ -9,19 +9,25 @@
 #  2. Build llama.cpp with Vulkan at a pinned release into /srv/sail/llama.cpp-vulkan (the
 #     runtime SSD; builds and binaries are hot paths). The CPU build is left untouched.
 #  3. Check that llama-server lists the AMD device.
-#  4. Benchmark each model with llama-bench: CPU only, then all layers on the GPU with the
-#     MoE experts kept in system RAM (--n-cpu-moe), sweeping how many layers' experts stay
-#     on the CPU. Results go to $SAIL_DATA/mind/bench/ as JSON.
-#  5. Recommend the fastest configuration. Only when it beats CPU-only on BOTH prompt
-#     processing and generation does it write $SAIL_DATA/mind/gpu.env, which run.sh loads.
-#     Otherwise SAIL stays on CPU (vision §5: enable Vulkan only after measuring).
+#  4. Benchmark every catalog model whose weights are installed (sail_common::models::CATALOG,
+#     looked up in $SAIL_RUNTIME/models and $SAIL_DATA/models), or the --model paths given,
+#     with llama-bench: CPU only, then all layers on the GPU with the MoE experts kept in
+#     system RAM (--n-cpu-moe), sweeping how many layers' experts stay on the CPU. Results
+#     go to $SAIL_DATA/mind/bench/ as JSON.
+#  5. Recommend the fastest configuration for the default model (the one saved in Settings >
+#     Models, else the primary). Only when it beats CPU-only on BOTH prompt processing and
+#     generation does it write $SAIL_DATA/mind/gpu.env, which run.sh loads. Otherwise SAIL
+#     stays on CPU (vision §5: enable Vulkan only after measuring). gpu.env holds one
+#     configuration, so re-run this after changing the default model.
 #
 # Run it on the SAIL host, with SAIL stopped (the benchmark needs the RAM and the GPU), as
-# the account that runs SAIL. It needs no root except to install build packages, which it
-# only prints.
+# the account that runs SAIL, without sudo. It needs no root except to install build
+# packages, which it only prints.
 set -euo pipefail
 
-LLAMA_TAG="${LLAMA_TAG:-b11600}"                 # 2026-10-13; has --cpu-moe/--n-cpu-moe
+# The commit SAIL's own llama-server is built from (/home/main/llama.cpp, build 12014). It
+# has --cpu-moe/--n-cpu-moe and the lfm3 architecture (LFM3 Omni) that b11600 lacked.
+LLAMA_TAG="${LLAMA_TAG:-b12014}"
 LLAMA_REPO="https://github.com/ggml-org/llama.cpp"
 RUNTIME="${SAIL_RUNTIME:-/srv/sail}"
 BUILD_DIR="${SAIL_LLAMA_VULKAN_DIR:-$RUNTIME/llama.cpp-vulkan}"
@@ -41,7 +47,7 @@ while [[ $# -gt 0 ]]; do
     --model) MODELS+=("${2:?}"); shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -50,12 +56,42 @@ say() { printf '\n== %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 run() { if [[ $DRY_RUN == 1 ]]; then printf 'would run:'; printf ' %q' "$@"; printf '\n'; else "$@"; fi; }
 
-if [[ ${#MODELS[@]} -eq 0 ]]; then
-  for m in "$RUNTIME/models/Qwen3.6-35B-A3B-Q4_K_M.gguf"; do
-    [[ -f $m ]] && MODELS+=("$m")
+# "<id> <file>" per catalog model, primary first, read from the Rust catalog so the list
+# here never drifts from Settings > Models.
+CATALOG_RS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/crates/sail-common/src/models.rs"
+catalog() {
+  python3 - "$CATALOG_RS" <<'CATALOG_PY'
+import re, sys
+src = open(sys.argv[1]).read()
+primary = re.search(r'PRIMARY_MODEL_FILE: &str = "([^"]+)"', src).group(1)
+block = src[src.index("pub const CATALOG"):]
+for m in re.finditer(r'id: "([^"]+)",\s*name: "[^"]*",\s*file: (PRIMARY_MODEL_FILE|"[^"]+")', block):
+    print(m.group(1), primary if m.group(2) == "PRIMARY_MODEL_FILE" else m.group(2).strip('"'))
+CATALOG_PY
+}
+find_weights() {
+  local dir
+  for dir in "$RUNTIME/models" "$DATA/models"; do
+    [[ -f $dir/$1 ]] && { echo "$dir/$1"; return 0; }
   done
+  return 1
+}
+CATALOG_LINES=$(catalog) || die "could not read the model catalog from $CATALOG_RS"
+[[ -n $CATALOG_LINES ]] || die "no models parsed from $CATALOG_RS"
+# gpu.env is tuned for the model SAIL loads: the saved default, else the primary.
+DEFAULT_ID=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["model"])' \
+  "$DATA/mind/default-model.json" 2>/dev/null || true)
+DEFAULT_FILE=$(awk -v id="$DEFAULT_ID" '$1 == id { print $2 }' <<<"$CATALOG_LINES")
+[[ -n $DEFAULT_FILE ]] || DEFAULT_FILE=$(head -1 <<<"$CATALOG_LINES" | awk '{ print $2 }')
+
+if [[ ${#MODELS[@]} -eq 0 ]]; then
+  while read -r _ file; do
+    if path=$(find_weights "$file"); then MODELS+=("$path"); fi
+  done <<<"$CATALOG_LINES"
 fi
-[[ ${#MODELS[@]} -gt 0 ]] || die "no models found in $RUNTIME/models; pass --model PATH"
+[[ ${#MODELS[@]} -gt 0 ]] || die "no catalog models found in $RUNTIME/models or $DATA/models; pass --model PATH"
+echo "models to benchmark: ${MODELS[*]##*/}"
+echo "gpu.env is tuned for the default model: $DEFAULT_FILE"
 
 # ---------------------------------------------------------------- 1. inventory
 say "1. GPU and Vulkan inventory"
@@ -72,7 +108,7 @@ fi
 echo "render node: $render (accessible)"
 
 if ! command -v vulkaninfo >/dev/null; then
-  die "vulkaninfo missing. Install: sudo apt install vulkan-tools mesa-vulkan-drivers libvulkan-dev glslc cmake build-essential"
+  die "vulkaninfo missing. Install: sudo apt install vulkan-tools mesa-vulkan-drivers libvulkan-dev glslc spirv-headers cmake build-essential"
 fi
 vk=$(vulkaninfo --summary 2>/dev/null || true)
 echo "$vk" | grep -E 'deviceName|driverName|driverInfo|apiVersion' || true
@@ -85,8 +121,11 @@ SERVER="$BUILD_DIR/build/bin/llama-server"
 BENCH="$BUILD_DIR/build/bin/llama-bench"
 if [[ $SKIP_BUILD == 0 ]]; then
   for tool in git cmake glslc c++; do
-    command -v "$tool" >/dev/null || die "$tool missing. Install: sudo apt install git cmake build-essential glslc libvulkan-dev"
+    command -v "$tool" >/dev/null || die "$tool missing. Install: sudo apt install git cmake build-essential glslc libvulkan-dev spirv-headers"
   done
+  if [[ -e $BUILD_DIR && ! -w $BUILD_DIR ]]; then
+    die "$BUILD_DIR is not writable by $(id -un) (left by a run with sudo?). Run: sudo chown -R $(id -un): $BUILD_DIR"
+  fi
   if [[ ! -d $BUILD_DIR/.git ]]; then
     run git clone --depth 1 --branch "$LLAMA_TAG" "$LLAMA_REPO" "$BUILD_DIR"
   else
@@ -112,7 +151,9 @@ echo "using $device (${vram_mib} MiB reported)"
 
 # ------------------------------------------------------------------ 4. bench
 say "4. Benchmarks (stop SAIL first; this takes several minutes per model)"
-if pgrep -f 'llama-server|sail-core' >/dev/null; then
+# Match process names (-x), not command lines: -f also matched compilers and shells whose
+# arguments merely mention llama-server, such as a llama.cpp build in progress.
+if pgrep -x 'llama-server|sail-core|sail-dialogue|saild' >/dev/null; then
   die "SAIL or llama-server is running; stop it (./run.sh --stop) so the measurement is fair"
 fi
 mkdir -p "$OUT_DIR"
@@ -157,9 +198,14 @@ done
 # --------------------------------------------------------------- 5. decide
 say "5. Recommendation"
 grep -v '^RESULT' "$best_report"
-# Use the coder model's result when present (Forge's model), else the first model.
-pick=$(grep '^RESULT' "$best_report" | grep -i coder | head -1)
-[[ -n $pick ]] || pick=$(grep '^RESULT' "$best_report" | head -1)
+# Tune for the default model SAIL loads. `|| true`: under pipefail a grep with no match
+# would otherwise end the script right here without a word.
+pick=$(grep "^RESULT ${DEFAULT_FILE%.gguf} " "$best_report" | head -1 || true)
+if [[ -z $pick ]]; then
+  pick=$(grep '^RESULT' "$best_report" | head -1 || true)
+  echo "The default model ($DEFAULT_FILE) was not benchmarked; using the first result instead."
+fi
+[[ -n $pick ]] || die "no benchmark results in $best_report"
 read -r _ model n gpu_pp gpu_tg cpu_pp cpu_tg <<<"$pick"
 wins=$(python3 -c "print(int($gpu_pp > $cpu_pp * 1.05 and $gpu_tg > $cpu_tg * 1.05))")
 if [[ $n == none || $wins != 1 ]]; then

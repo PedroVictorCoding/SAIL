@@ -1,0 +1,252 @@
+/* Course Factory inspector & workspace: reuses SAIL tokens and the courses.css card/pill style. */
+.factory-root {
+  color: var(--sail-text);
+  background: var(--sail-surface);
+  padding: 24px;
+  min-width: 0;
+  overflow: auto;
+  font: 15px/1.6 system-ui, sans-serif;
+}
+.factory-root *,
+.factory-root *::before,
+.factory-root *::after {
+  box-sizing: border-box;
+}
+.factory-root [hidden] {
+  display: none !important;
+}
+.factory-root fieldset {
+  min-width: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.factory-root h2,
+.factory-root h3,
+.factory-root h4,
+.factory-root p,
+.factory-root li {
+  overflow-wrap: anywhere;
+}
+.factory-root h2 {
+  font-size: 24px;
+  line-height: 1.3;
+  margin: 16px 0 12px;
+}
+.factory-root h3 {
+  font-size: 18px;
+  margin: 16px 0 10px;
+}
+.factory-root h4 {
+  font-size: 15px;
+  margin: 12px 0 8px;
+}
+.factory-root .factory-muted,
+.factory-root .factory-label {
+  color: var(--sail-text-muted);
+}
+.factory-root .factory-label {
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.factory-root button,
+.factory-root input,
+.factory-root textarea,
+.factory-root select,
+.factory-root summary {
+  font: inherit;
+  color: var(--sail-text);
+  border: 1px solid var(--sail-text-subtle);
+  background: var(--sail-surface-raised);
+  border-radius: var(--sail-radius-control);
+  min-height: 44px;
+  padding: 10px 14px;
+  box-shadow: none;
+}
+.factory-root button,
+.factory-root summary {
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.factory-root button:hover {
+  background: var(--control-hover, #232c37);
+}
+.factory-root button:active {
+  transform: translateY(1px);
+}
+.factory-root button:disabled {
+  cursor: default;
+  opacity: .65;
+}
+.factory-root :focus-visible {
+  outline: 3px solid var(--sail-focus-ring);
+  outline-offset: 3px;
+}
+.factory-root .factory-primary {
+  border-color: var(--sail-focus-ring);
+  font-weight: 600;
+}
+.factory-root .factory-navigation,
+.factory-root .factory-actions,
+.factory-root .factory-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: 12px 0 20px;
+}
+.factory-root .factory-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  background: var(--sail-surface-raised);
+  color: var(--sail-text-muted);
+}
+.factory-root .factory-card,
+.factory-root .factory-sheet {
+  padding: 20px;
+  margin: 16px 0;
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-card);
+  background: var(--sail-surface);
+}
+.factory-root .factory-sheet {
+  border-radius: var(--sail-radius-sheet);
+  background: var(--sail-surface-raised);
+}
+.factory-root .factory-form {
+  display: grid;
+  gap: 16px;
+  margin: 16px 0;
+  padding: 20px;
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-card);
+  background: var(--sail-surface);
+}
+.factory-root .factory-form label {
+  display: grid;
+  gap: 8px;
+}
+.factory-root input[type=text],
+.factory-root input[type=file],
+.factory-root textarea,
+.factory-root select {
+  width: 100%;
+  min-width: 0;
+}
+.factory-root pre,
+.factory-root code {
+  font: 14px/1.6 ui-monospace, monospace;
+}
+.factory-root pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--sail-base);
+  padding: 14px;
+  border-radius: var(--sail-radius-control);
+  color: var(--sail-text);
+  max-width: 100%;
+}
+.factory-root .factory-note,
+.factory-root .factory-warning,
+.factory-root .factory-publish-confirm {
+  margin: 14px 0;
+  padding: 14px 16px;
+  background: var(--sail-base);
+  border-left: 3px solid var(--sail-text-subtle);
+  border-radius: var(--sail-radius-control);
+}
+.factory-root .factory-warning,
+.factory-root .factory-publish-confirm {
+  border-left-color: var(--sail-focus-ring);
+}
+.factory-root .factory-error {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--sail-focus-ring);
+  border-radius: var(--sail-radius-control);
+  background: var(--sail-base);
+}
+.factory-root .factory-status:empty {
+  margin: 0;
+}
+.factory-root .factory-unit-list,
+.factory-root .factory-lesson-list,
+.factory-root .factory-receipt-list,
+.factory-root .factory-citation-list,
+.factory-root .factory-queue-list {
+  padding-left: 20px;
+  margin: 10px 0;
+}
+.factory-root .factory-lesson-list {
+  border-left: 1px solid var(--sail-text-subtle);
+}
+.factory-root .factory-lesson-list li,
+.factory-root .factory-receipt-list li,
+.factory-root .factory-citation-list li,
+.factory-root .factory-queue-list li {
+  padding: 8px 0;
+}
+@media (max-width: 600px) {
+  .factory-root {
+    padding: 16px;
+  }
+  .factory-root .factory-navigation,
+  .factory-root .factory-actions {
+    gap: 8px;
+  }
+  .factory-root .factory-navigation button {
+    flex: 1 1 40%;
+  }
+  .factory-root .factory-card,
+  .factory-root .factory-sheet,
+  .factory-root .factory-form {
+    padding: 16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .factory-root *,
+  .factory-root *::before,
+  .factory-root *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .factory-root .factory-card,
+  .factory-root .factory-sheet {
+    background: var(--sail-surface);
+  }
+}
+@media (forced-colors: active) {
+  .factory-root,
+  .factory-root button,
+  .factory-root input,
+  .factory-root select,
+  .factory-root textarea,
+  .factory-root pre,
+  .factory-root .factory-pill,
+  .factory-root .factory-card,
+  .factory-root .factory-sheet,
+  .factory-root .factory-form,
+  .factory-root .factory-note,
+  .factory-root .factory-warning,
+  .factory-root .factory-publish-confirm,
+  .factory-root .factory-error {
+    color: CanvasText;
+    background: Canvas;
+    border-color: CanvasText;
+    box-shadow: none;
+  }
+  .factory-root :focus-visible {
+    outline-color: Highlight;
+  }
+}

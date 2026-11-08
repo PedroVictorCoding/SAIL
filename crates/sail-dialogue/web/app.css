@@ -1284,9 +1284,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 
 .vscode-setting-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 20px;
+  gap: 12px 24px;
   padding: 16px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   transition: opacity 0.15s;
@@ -1297,8 +1298,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 }
 
 .vscode-setting-info {
-  flex: 1;
+  flex: 1 1 240px;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .vscode-setting-name {
@@ -1316,10 +1318,32 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
   line-height: 1.45;
 }
 
+.vscode-setting-desc + .vscode-setting-desc { margin-top: 8px; }
+
 .vscode-setting-control {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 8px;
+}
+
+.vscode-setting-control > * {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.vscode-setting-control select {
+  flex: 1 1 200px;
+}
+
+@media (max-width: 600px) {
+  .vscode-setting-item { flex-direction: column; }
+  .vscode-setting-info { flex-basis: auto; }
+  .vscode-setting-control { flex-basis: auto; }
 }
 
 .vscode-setting-control select,
@@ -4380,3 +4404,21 @@ html.sail-backdrop-on .app-shell::before { display:none }
   border-top: 1px solid var(--sail-glass-border);
 }
 .settings-runtime-section h4 { margin: 0 0 12px; color: var(--sail-text); }
+
+/* Settings review sections share the same wrapping rhythm as ordinary fields. */
+.settings-review-group {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--sail-glass-border);
+}
+.settings-section-heading, .settings-section-title, .settings-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.settings-section-heading { justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.settings-section-title { flex: 1 1 200px; }
+.settings-section-title h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.settings-review-group > [role="status"] { display: flex; flex-direction: column; gap: 6px; }

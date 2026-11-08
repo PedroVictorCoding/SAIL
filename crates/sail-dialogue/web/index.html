@@ -8,7 +8,9 @@
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/courses.css">
+<link rel="stylesheet" href="/learn-factory.css">
 <link rel="stylesheet" href="/ambient-backdrop.css">
+<link rel="stylesheet" href="/flow.css">
 </head>
 <body>
 <main class="app-shell" id="appShell" data-state="idle">
@@ -196,6 +198,22 @@
           </div>
         </article>
 
+        <section id="flowCard" class="workspace-card flow-workspace" aria-label="Flow workflow editor">
+          <div class="flow-toolbar"><h3>Workflow studio</h3><button class="tm-btn" id="flowNew" type="button">New workflow</button><button class="tm-btn" id="flowRefresh" type="button">Refresh</button></div>
+          <p>Connect text operations and conditions. Save a version, run it locally, and inspect each result. No model or external service is required.</p>
+          <p id="flowStatus" class="flow-status" role="status" aria-live="polite">Open Flow to load workflows.</p>
+          <div class="flow-layout">
+            <aside aria-label="Saved workflows"><h4>Saved workflows</h4><div id="flowSaved" class="flow-saved"></div></aside>
+            <div style="min-width:0">
+              <label>Workflow name<input id="flowName" maxlength="120" disabled></label><p id="flowDraftState">Draft</p>
+              <div class="flow-actions"><button class="tm-btn" id="flowAdd" type="button" disabled>Add node</button><button class="tm-btn" id="flowSave" type="button" disabled>Save version</button><button class="tm-btn" id="flowDelete" type="button" disabled>Delete workflow</button></div>
+              <div class="flow-stage" tabindex="0" role="region" aria-label="Workflow graph"><svg id="flowEdges" class="flow-edges" aria-hidden="true"></svg><div id="flowGraph" class="flow-graph"></div></div>
+              <div class="flow-edit"><div id="flowNodeSettings"></div><div><label>Run input<textarea id="flowInput" rows="5" disabled maxlength="4096" placeholder="Enter text for the manual trigger"></textarea></label><button class="tm-btn" id="flowRun" type="button" disabled>Run saved workflow</button></div></div>
+              <p><small>Available now: manual triggers, text transforms, conditional branches and saved results. Scheduled triggers, connectors, approval nodes and Skillsmith generation are not available yet.</small></p>
+            </div>
+          </div>
+          <h4>Executions</h4><div class="flow-runs" id="flowRuns"></div>
+        </section>
         <article class="workspace-card pulse-card" id="pulseCard" data-card="pulseCard">
           <header class="card-heading">
             <div class="card-title"><span class="card-icon" aria-hidden="true">◷</span><div><h3 id="pulseCardHeading">Pulse</h3><p id="pulseCardSub">Local reminders and timing</p></div></div>
@@ -269,9 +287,10 @@
         <header class="card-heading learn-card-tabs">
           <div class="card-title"><h2 class="sr-only">Arena</h2></div>
           <div class="card-heading-actions">
-            <div class="card-tabs" role="tablist" aria-label="Arena: switch between Learn and Courses">
+            <div class="card-tabs" role="tablist" aria-label="Arena: switch between Learn, Courses and the Course Factory">
               <button type="button" class="card-tab active" role="tab" aria-selected="true" data-tab-card="memoryCard" data-tab-panel="learnPanelMain" id="learnTab"><span>Arena Learn</span></button>
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="coursesPanelMain" id="coursesTab" tabindex="-1"><span>Arena Courses</span></button>
+              <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="learnFactoryPanel" id="factoryTab" tabindex="-1"><span>Course Factory</span></button>
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelMain" id="memoryTab"><span>Memory</span></button>
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelTranscript" id="transcriptTab" tabindex="-1"><span class="lt-tab-dot" id="transcriptTabDot" hidden aria-hidden="true"></span><span>Live Transcript</span></button>
             </div>
@@ -615,6 +634,7 @@
           </div>
         </div>
         <div class="card-tab-panel courses-root" id="coursesPanelMain" role="tabpanel" aria-labelledby="coursesTab" hidden></div>
+        <div class="card-tab-panel" id="learnFactoryPanel" role="tabpanel" aria-labelledby="factoryTab" hidden></div>
         <div class="card-tab-panel" id="memoryPanelMain" role="tabpanel" aria-labelledby="memoryTab" hidden>
           <header class="card-heading"><div class="card-title"><h2>Remembered knowledge</h2></div><div class="card-heading-actions"><button class="quiet-button" id="memoryRefresh" type="button">Refresh</button><button class="quiet-button" id="memoryExport" type="button">Export</button></div></header>
           <form id="memorySearch" class="memory-search"><label for="memoryQuery">Search memory</label><input id="memoryQuery" maxlength="1000" placeholder="Names, preferences, facts…"><button class="quiet-button" type="submit">Search</button></form>
@@ -1099,45 +1119,42 @@
           </div>
         </div>
 
-        <div style="margin-top:16px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <h4 style="margin:0; font-size:13px; font-weight:600;">Pending Approvals</h4>
+        <div class="settings-review-group">
+          <div class="settings-section-heading">
+            <div class="settings-section-title">
+              <h4>Pending Approvals</h4>
               <span class="card-live-badge" id="approvalsLiveBadge" title="Continuous approval synchronization"><i class="live-dot"></i>Live</span>
             </div>
-            <button class="quiet-button" id="refreshApprovalsBtn" type="button" style="padding:3px 10px; font-size:11px;" title="Ping approvals now">Ping</button>
+            <button class="quiet-button" id="refreshApprovalsBtn" type="button" title="Ping approvals now">Ping</button>
           </div>
           <div id="ownerApprovals" role="status" aria-live="polite"></div>
         </div>
 
-        <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <h4 style="margin:0; font-size:13px; font-weight:600;">Daily Safety Review & Findings</h4>
+        <div class="settings-review-group">
+          <div class="settings-section-heading">
+            <div class="settings-section-title">
+              <h4>Daily Safety Review & Findings</h4>
               <span class="card-live-badge" id="safetyReviewLiveBadge" title="Continuous safety monitoring"><i class="live-dot"></i>Live</span>
             </div>
-            <div style="display:flex; gap:6px;">
-              <button class="quiet-button" id="refreshSafetyReviewBtn" type="button" style="padding:3px 10px; font-size:11px;" title="Ping safety review now">Ping</button>
-              <button class="quiet-button" id="runSafetyReviewBtn" type="button" style="padding:3px 10px; font-size:11px; background:var(--accent); color:#fff; border-color:transparent;">Run review now</button>
+            <div class="settings-section-actions">
+              <button class="quiet-button" id="refreshSafetyReviewBtn" type="button" title="Ping safety review now">Ping</button>
+              <button class="quiet-button" id="runSafetyReviewBtn" type="button">Run review now</button>
             </div>
           </div>
-          <p class="sheet-note" id="safetyReviewSummaryText" style="margin-bottom:8px;">Flow reevaluates persisted approval rules daily for privilege drift and broad permissions.</p>
-          <div id="safetyReviewFindingsContainer" role="status" aria-live="polite" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <p class="sheet-note" id="safetyReviewSummaryText">Flow reevaluates persisted approval rules daily for privilege drift and broad permissions.</p>
+          <div id="safetyReviewFindingsContainer" role="status" aria-live="polite"></div>
         </div>
 
-        <div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <h4 style="margin:0; font-size:13px; font-weight:600;">Learned Approval Rules</h4>
+        <div class="settings-review-group">
+          <div class="settings-section-heading">
+            <div class="settings-section-title">
+              <h4>Learned Approval Rules</h4>
               <span class="card-live-badge" id="rulesLiveBadge" title="Auto-synced rule database"><i class="live-dot"></i>Live</span>
             </div>
-            <button class="quiet-button" id="refreshLearnedRulesBtn" type="button" style="padding:3px 10px; font-size:11px;" title="Ping rules now">Ping</button>
+            <button class="quiet-button" id="refreshLearnedRulesBtn" type="button" title="Ping rules now">Ping</button>
           </div>
-          </div>
-          <p class="sheet-note" style="margin-bottom:8px;">Actions with "Always allow" are remembered and auto-executed without prompting.</p>
-          <div id="guardianLearnedRules" role="status" aria-live="polite" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <p class="sheet-note">Actions with "Always allow" are remembered and auto-executed without prompting.</p>
+          <div id="guardianLearnedRules" role="status" aria-live="polite"></div>
         </div>
 
         <div class="vscode-setting-item settings-runtime-card" data-search-terms="guardian system security status">
@@ -1393,8 +1410,10 @@
 <script src="/learn.js" defer></script>
 <script src="/model-picker.js" defer></script>
 <script src="/courses.js" defer></script>
+<script src="/learn-factory.js" defer></script>
 <link rel="stylesheet" href="/toolsmap.css">
 <script src="/toolsmap.js" defer></script>
+<script src="/flow.js" defer></script>
 <script src="/ui.js" defer></script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js" defer></script>
