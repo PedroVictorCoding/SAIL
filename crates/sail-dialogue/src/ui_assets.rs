@@ -76,6 +76,8 @@ assets![
     ("/tracker.js", "web/tracker.js", JS),
     ("/tracker.css", "web/tracker.css", CSS),
     ("/toolsmap.js", "web/toolsmap.js", JS),
+    ("/flow.js", "web/flow.js", JS),
+    ("/flow.css", "web/flow.css", CSS),
     ("/toolsmap.css", "web/toolsmap.css", CSS),
     ("/card-modal.js", "web/card-modal.js", JS),
     ("/markdown.js", "web/markdown.js", JS),

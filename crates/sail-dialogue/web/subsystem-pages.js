@@ -74,14 +74,14 @@ const subsystemPages = [
     "name": "Flow",
     "icon": "flow",
     "subtitle": "Workflows and automation",
-    "description": "Coordinate workflows through triggers, conditions, and scheduled execution.",
-    "card": null,
+    "description": "Build and run local workflows with connected nodes, conditions and persisted execution results.",
+    "card": "flowCard",
     "panel": null,
     "settings": null,
     "details": [
-      "Workflow triggers",
-      "Automation nodes and conditions",
-      "Execution scheduling"
+      "Manual triggers and deterministic text operations",
+      "Editable nodes and conditional branches",
+      "Saved workflow versions and execution receipts"
     ]
   },
   {

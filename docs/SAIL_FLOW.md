@@ -1,6 +1,6 @@
 # SAIL FLOW — Product and Technical Specification
 
-**Status:** Proposed / evolving — verify implementation against code · **Domain:** Agency & Creation · **Roadmap issue:** [#8](https://github.com/PedroVictorCoding/SAIL/issues/8) · **Priority:** P2 · **Platforms:** Ubuntu server, Dioxus Web + Android
+**Status:** Partial — native manual text-DAG editor and durable runner; broader automation remains proposed · **Domain:** Agency & Creation · **Roadmap issue:** [#8](https://github.com/PedroVictorCoding/SAIL/issues/8) · **Priority:** P2 · **Platforms:** Ubuntu server, Dioxus Web + Android
 
 ## 1. Mission
 Run reproducible permissioned DAG workflows and reusable Skillsmith automation.
@@ -58,3 +58,93 @@ Build a three-step local DAG, execute it twice deterministically and resume safe
 - [Roadmap and subsystem taxonomy](https://github.com/PedroVictorCoding/SAIL/issues/15)
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
+
+
+## 10. Native workflow studio — first executable slice
+
+Issues [#8](https://github.com/PedroVictorCoding/SAIL/issues/8) and
+[#62](https://github.com/PedroVictorCoding/SAIL/issues/62) establish an n8n-style **SAIL-native**
+workflow layer. n8n itself is an optional adapter, not a required dependency. No n8n
+code or packages are included in this slice. #66 (Instinct), #80 (compute scheduling),
+#84 (Friction Detector) and #101 (Optimizer) remain follow-on integrations.
+
+### Acceptance contract and current implementation
+
+- User opens **Flow**, edits a graph, connects a node's input and true/false branch,
+  saves an immutable version, supplies text, runs that saved version and inspects actual
+  node receipts. Pulse's reminders stay under **Reminders**; Flow never redirects to Pulse.
+- Flow owns validation, topological execution and checkpoint persistence in
+  `crates/sail-flow/src/workflows.rs`. `sail-protocol::flow` owns version-1 request schemas.
+  All ports carry UTF-8 text; a Contains node additionally emits a boolean routing decision.
+  The browser uses the existing owner authority through `/api/flow`. No model is needed.
+- The graph supports one manual trigger, Trim, Uppercase, Prefix, Contains and terminal
+  Result nodes, fan-out and conditional branch skipping. It has no arbitrary code, tool,
+  filesystem, network, credential or inference node. Those effects require future typed
+  adapters and Guardian enforcement; an owner token does not grant arbitrary tool access.
+- Each run snapshots its workflow version, input, timestamps, per-node outputs and skip
+  decisions. A client-supplied UUID deduplicates retries; conflicting reuse returns 409.
+  Saving checks the expected revision and rejects stale updates. Terminal results are
+  `completed`, `failed` or `cancelled`; skipped branches never claim node execution.
+- Accepted runs execute on the server independently of the browser. Each node commits
+  an atomic fsynced checkpoint. On server restart, running executions become `paused`;
+  the owner can resume without repeating committed pure nodes or cancel. A crash before
+  a checkpoint can repeat a pure transform. This is not an external-effect exactly-once claim.
+- State lives at `SAIL_DATA/flow/workflows-v1.json` through the shared data-root resolver,
+  using private files and a bounded snapshot. There are at most 128 stored workflow
+  revisions and 64 executions, 32 nodes per graph, 4096 input bytes, 1024 configuration
+  bytes per text node and 8192 output bytes per node. Excess is rejected explicitly.
+  The owner can delete terminal execution receipts and delete workflows (all versions)
+  once active runs are cancelled. Execution snapshots remain until separately deleted.
+- The interface has a desktop connected-node graph, keyboard-operable node settings,
+  a stacked phone view, loading/unavailable/error feedback and server-derived results.
+  Text/code surfaces remain opaque and static under DESIGN.md.
+
+### API and errors
+
+All routes below require `Authorization: Bearer <owner token>`, have a 64KB request-body
+limit and return `Cache-Control: no-store`:
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /api/flow/workflows` | Latest saved workflows and bounded execution history |
+| `POST /api/flow/workflows` | `SaveWorkflow {expected_revision, workflow}` |
+| `POST /api/flow/runs` | `StartRun {id, workflow_id, revision, input}` |
+| `POST /api/flow/runs/:id/cancel` | Cancel between pure node checkpoints |
+| `POST /api/flow/runs/:id/resume` | Resume a restart-paused execution |
+| `POST /api/flow/runs/:id/delete` | Delete a terminal execution and receipts |
+| `POST /api/flow/workflows/:id/delete` | Delete all versions after cancelling active runs |
+
+Errors return `{error: string}`: 400 invalid graph/version/limits on individual inputs,
+401 unauthorized, 404 missing workflow/run, 409 stale revision or invalid lifecycle,
+429 store capacity, 503 unavailable storage/authority. Malformed JSON and oversized
+bodies use Axum's extractor errors. A storage failure stops execution; restart recovery
+requires explicit resume. One server process owns this store; multi-process writers
+and distributed execution are unsupported.
+
+### Verification and local demo
+
+```sh
+cargo test -p sail-flow --test workflows_test
+cargo test -p sail-dialogue flow_http::tests --lib
+# Run with a temporary SAIL_DATA directory and a chosen 32+ character
+# SAIL_FLOW_DEMO_TOKEN. The example listens only on loopback, port 18808.
+cargo run -p sail-dialogue --example flow_studio
+# Enter the same owner token in Guardian settings, then open /#flow.
+# With the demo running, exercise real API + UI:
+.venv-voice/bin/python scripts/ui/flow_browser_test.py /tmp/flow-shots
+```
+
+The example serves the real Flow API and compiled UI assets without loading models;
+other SAIL services are intentionally unavailable. The browser test takes the same token
+from `SAIL_FLOW_DEMO_TOKEN` and checks save/run/reload, branching, route separation,
+mobile layout and errors. Do not use the example as a production server.
+
+Not delivered by this slice: automatic schedules/webhooks, typed connector nodes,
+approval gates, retries/compensation for external effects, Canvas publication,
+Skillsmith synthesis, Instinct triggering, performance optimization or n8n
+import/export. The parent epics remain open. The future executor should reuse
+Continuity/Guardian contracts before admitting external effects; this bounded
+checkpoint runner does not replace their authority or general task persistence.
+
+Browser verification captures (isolated real Flow API; the other services are offline):
+[desktop](design/flow-studio/desktop.png), [phone](design/flow-studio/mobile.png).
