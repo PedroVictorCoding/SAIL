@@ -1111,6 +1111,7 @@ impl Engine {
                         generation: Generation {
                             max_tokens: sail_protocol::ResourceLimits::default().max_output_tokens,
                             temperature: 0.3,
+                            reasoning_budget: None,
                         },
                     };
                     let result = tokio::select! {

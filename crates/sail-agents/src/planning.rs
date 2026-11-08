@@ -481,6 +481,7 @@ impl Planner for MindPlanner {
             // Mind's output limit; larger requests are rejected outright.
             max_tokens: sail_protocol::ResourceLimits::default().max_output_tokens,
             temperature: 0.1,
+            reasoning_budget: None,
         };
         let priority = if request.interactive {
             WorkPriority::Interactive

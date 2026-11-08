@@ -7,6 +7,7 @@ pub mod hardware;
 pub mod local;
 pub mod persist;
 pub mod profile;
+pub use sail_common::request_body;
 pub mod residency;
 pub mod service;
 mod validation;

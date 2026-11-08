@@ -141,18 +141,54 @@ pub enum ToolChoice {
     Auto,
     None,
 }
+/// Largest thinking budget a request may ask for. On this host the model writes about
+/// 16 tokens/s, so 4096 tokens is roughly four minutes of thinking before the answer
+/// starts. Mind clamps anything larger.
+pub const MAX_REASONING_BUDGET: u32 = 4096;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Generation {
+    /// Tokens for the visible answer and tool calls. Thinking has its own budget below and
+    /// is not counted here; Mind adds the two when it talks to the model server.
     pub max_tokens: u32,
     pub temperature: f32,
+    /// Thinking before the answer, in tokens. `None` (the default) means no thinking, which
+    /// is right for live voice and anything someone is waiting on. `Some(n)` lets a model
+    /// with a thinking mode reason for up to `n` tokens (clamped to
+    /// [`MAX_REASONING_BUDGET`]). The reasoning text is never returned, streamed or shown.
+    /// Models without a thinking mode ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_budget: Option<u32>,
+}
+impl Generation {
+    /// A request that answers directly, with no thinking.
+    pub fn direct(max_tokens: u32, temperature: f32) -> Self {
+        Self {
+            max_tokens,
+            temperature,
+            reasoning_budget: None,
+        }
+    }
+    /// A request that may think for up to `budget` tokens first. Background work only: at
+    /// local speeds every 1000 tokens of thinking adds about a minute.
+    pub fn reasoned(max_tokens: u32, temperature: f32, budget: u32) -> Self {
+        Self {
+            max_tokens,
+            temperature,
+            reasoning_budget: Some(budget.min(MAX_REASONING_BUDGET)),
+        }
+    }
+    /// The thinking budget Mind actually uses: clamped, with `0` meaning off.
+    pub fn effective_reasoning_budget(&self) -> Option<u32> {
+        self.reasoning_budget
+            .filter(|n| *n > 0)
+            .map(|n| n.min(MAX_REASONING_BUDGET))
+    }
 }
 impl Default for Generation {
     fn default() -> Self {
-        Self {
-            max_tokens: 384,
-            temperature: 0.4,
-        }
+        Self::direct(384, 0.4)
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,7 +222,12 @@ impl InferenceRequest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
     pub input_tokens: Option<u32>,
+    /// Everything the model generated, thinking included.
     pub output_tokens: Option<u32>,
+    /// Of `output_tokens`, how many were thinking (counted from the stream). `None` when
+    /// the request did not think. The thinking text itself is never kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u32>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Timings {

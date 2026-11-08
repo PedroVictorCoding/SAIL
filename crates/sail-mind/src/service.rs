@@ -322,7 +322,7 @@ impl MindService {
                     .await?;
                     Ok(response)
                 };
-                tokio::select! {biased;_ = cancel.cancelled()=>Err(InferenceError::new(ErrorCode::Cancelled,"Inference cancelled")),result=tokio::time::timeout(Duration::from_millis(self.inner.limits.inference_timeout_ms),operation)=>result.unwrap_or_else(|_|Err(InferenceError::new(ErrorCode::DeadlineExceeded,"Inference deadline exceeded")))}
+                tokio::select! {biased;_ = cancel.cancelled()=>Err(InferenceError::new(ErrorCode::Cancelled,"Inference cancelled")),result=tokio::time::timeout(inference_deadline(&self.inner.limits,&request.generation),operation)=>result.unwrap_or_else(|_|Err(InferenceError::new(ErrorCode::DeadlineExceeded,"Inference deadline exceeded")))}
             }
         };
         if let Err(error) = &result {
@@ -362,5 +362,40 @@ impl MindService {
             backend.shutdown().await?;
         }
         Ok(())
+    }
+}
+
+/// Slowest thinking speed Mind plans for, in tokens per second. The host writes about 16;
+/// the margin covers a busy CPU.
+const MIN_REASONING_TOKENS_PER_SECOND: u64 = 8;
+
+/// How long one inference may run: the configured limit, plus time for the thinking budget
+/// when the request asks to think, so a background job that is allowed to reason is not cut
+/// off by a deadline sized for direct answers.
+fn inference_deadline(limits: &ResourceLimits, generation: &sail_protocol::Generation) -> Duration {
+    let thinking_ms = generation
+        .effective_reasoning_budget()
+        .map(|budget| u64::from(budget) * 1000 / MIN_REASONING_TOKENS_PER_SECOND)
+        .unwrap_or(0);
+    Duration::from_millis(limits.inference_timeout_ms.saturating_add(thinking_ms))
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[test]
+    fn thinking_requests_get_time_for_their_budget() {
+        let limits = ResourceLimits::default();
+        let direct = sail_protocol::Generation::direct(384, 0.4);
+        assert_eq!(
+            inference_deadline(&limits, &direct),
+            Duration::from_millis(limits.inference_timeout_ms)
+        );
+        let reasoned = sail_protocol::Generation::reasoned(384, 0.6, 2048);
+        assert_eq!(
+            inference_deadline(&limits, &reasoned),
+            Duration::from_millis(limits.inference_timeout_ms + 256_000)
+        );
     }
 }

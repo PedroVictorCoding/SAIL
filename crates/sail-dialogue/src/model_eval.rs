@@ -180,6 +180,7 @@ pub fn parse_completion(
         usage: Usage {
             input_tokens: usage["prompt_tokens"].as_u64().map(|n| n as u32),
             output_tokens: usage["completion_tokens"].as_u64().map(|n| n as u32),
+            reasoning_tokens: None,
         },
         timings: Default::default(),
     })

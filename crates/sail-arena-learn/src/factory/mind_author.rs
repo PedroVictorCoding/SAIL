@@ -73,6 +73,7 @@ impl MindAuthor {
             generation: Generation {
                 max_tokens: prompt.max_output_tokens,
                 temperature: AUTHOR_TEMPERATURE,
+                reasoning_budget: None,
             },
         }
     }

@@ -129,6 +129,7 @@ pub fn describe_request(
             max_tokens: 200,
             // The model card recommends greedy decoding for text output.
             temperature: 0.0,
+            reasoning_budget: None,
         },
         ..InferenceRequest::text("")
     }

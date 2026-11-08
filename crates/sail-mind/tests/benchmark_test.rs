@@ -65,6 +65,7 @@ impl InferenceBackend for MockBenchmarkBackend {
             usage: Usage {
                 input_tokens: Some(50),
                 output_tokens: Some(30),
+                reasoning_tokens: None,
             },
             timings: Timings {
                 queue_ms: 1,
