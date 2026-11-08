@@ -114,3 +114,31 @@ priorities and unseen review variants. M5 covers logic, physics, maths, simulati
 assessments. M6 is the UI (web and Android), benchmarks and adversarial tests. The first
 acceptance scenario is §18 of the brief: the Rust Book → an ownership lesson with two
 compiler-backed problems and a review variant, published, played, and reviewed.
+
+## 5. Status and use (2026-11-08)
+
+Built: M0–M3, the M2 validators, the M6 web UI, and the evidence-free part of M4 (lessons
+are prioritised by plan order, owner requests and pipeline stage, not yet by learner evidence).
+
+**Using it.** Open **Arena → Course Factory**:
+
+1. **Import** a book or notes (EPUB, Markdown, text, PDF). Rights default to `restricted`.
+   EPUB, Markdown, text and older PDFs are indexed at once. A modern (compressed) PDF is
+   read 20 pages per job by `pdftotext` inside the `sail-runner` sandbox. Without the runner
+   it waits as *needs review* (see `docs/SANDBOX_RUNTIME.md` for the poppler setup).
+2. **Create a course** over one or more indexed sources. The factory maps concepts in
+   bounded batches, then proposes a plan, in the background, while the machine is idle.
+3. **Review the plan.** Edit the concept map if you like (rename, merge, remove, reorder,
+   confirm or reject prerequisites), then **Approve**. Lessons start generating, the first
+   three first.
+4. Each lesson runs through the six checks (schema, grounding, copyright, subject, Rust
+   tests, quality). A lesson that passes them all is published to **Arena Courses**
+   automatically. One the checks can't fully verify waits in the inspector for you to
+   publish or reject. One that fails is rewritten, up to three drafts.
+
+Settings: on/off, idle-only, a daily model-time limit (default 120 min) and a global pause.
+Generation runs at background model priority, so a voice turn preempts it.
+
+**Not verified yet:** a real `sail-runner` round trip for PDFs and generated Rust tests (no
+runner is configured on the build host), and lesson quality with the local model. The
+acceptance test (`tests/factory_pipeline_test.rs`) uses a scripted model.
