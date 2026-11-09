@@ -113,9 +113,13 @@ model's authors recommend.
   is a score for what SAIL really sends.
 
 **Which work may think.** Each background job has one row in `request_body::Job`. Its
-built-in budget is set only after the model eval shows that thinking helps (see
-[Model eval](MODEL_EVAL.md)), and an environment variable overrides it, so the owner can
-trial a budget without a rebuild. The value is a number of tokens, or `off`/`0`.
+built-in budget is set only after the model eval shows that thinking helps, and an
+environment variable overrides it, so the owner can trial a budget without a rebuild. The
+value is a number of tokens, or `off`/`0`. **Measured 2026-11-09: no gain on this host, at
+4–5× the time, so every default is off** (see
+[Model eval → Results](MODEL_EVAL.md#results-thinking-on-this-host-2026-11-09)). Forge is the
+exception: it had been thinking without limit. It now thinks within 2048 tokens, which is
+strictly bounded compared with before.
 
 | Job | Caller | Override |
 |---|---|---|

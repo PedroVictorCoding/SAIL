@@ -105,3 +105,28 @@ model.
 Run both models with the same `--ctx-size`. Mind may launch with a smaller window when RAM is
 tight (it logs "scaled context window down"), and a smaller window changes speed and which
 requests fit.
+
+## Results: thinking on this host (2026-11-09)
+
+Qwen3.6-35B-A3B Q4_K_M, 16K context, RX 5500 Vulkan, each case run once. "Off" is round 6's
+code: the model-card sampling plus the voice grounding and selection fixes.
+
+| Budget | tools | judge | grounded | extract | Request p50 / p95 |
+|---|---|---|---|---|---|
+| before round 6 (2026-11-07) | 29/32 | 20/20 | 14/16 | n/a | 10.3 s / 27.1 s |
+| off | **32/32** | 20/20 | **16/16** | 11/12 | 10.3 s / 26.7 s |
+| 512 | not run | 19/20 | 15/16 | 12/12 | 39.5 s / 44.2 s |
+| 1024 | not run | 20/20 | 14/16 | 11/12 | 52.2 s / 72.2 s |
+
+How to read it:
+
+- **Thinking doesn't pay here.** It makes each request 4–5× slower and gains nothing a single
+  run can tell apart from noise.
+- The one extract gain (`x11`, "lab moved to Thursday", Lab vs ScheduleChange) is a labelling
+  call, and it flipped back at 1024.
+- With thinking on, grounded answers start writing `memory_search` calls as text when tools
+  are off (`g10`, `g16`).
+- So every `request_body::Job` default stays off. The `SAIL_THINK_*` overrides remain for
+  trials.
+- The gain in this round came from the voice fixes and sampling: tools +3 and grounded +2.
+- Re-measure after a model or hardware change.
