@@ -833,6 +833,9 @@ pub struct AuthorPrompt {
     /// JSON schema name the reply must match (`concepts`, `curriculum`, `lesson`).
     pub schema: &'static str,
     pub max_output_tokens: u32,
+    /// Thinking allowed before the reply, in tokens (`None`: answer directly). Set from
+    /// `sail_common::request_body::Job::budget`, never by the model.
+    pub reasoning_budget: Option<u32>,
 }
 
 /// The model as the factory sees it: background priority, cancellable, structured reply.

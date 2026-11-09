@@ -151,6 +151,7 @@ fn request(text: &str, prompt: &str, retry: Option<&str>, model: Option<&str>) -
         generation: Generation {
             max_tokens: 1_024,
             temperature: 0.0,
+            reasoning_budget: None,
         },
     }
 }

@@ -85,6 +85,7 @@ impl Model for Scripted {
                 usage: Usage {
                     input_tokens: Some(100),
                     output_tokens: Some(10),
+                    reasoning_tokens: None,
                 },
                 timings: Timings {
                     queue_ms: 0,

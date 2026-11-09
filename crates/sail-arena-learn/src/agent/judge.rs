@@ -96,6 +96,7 @@ fn request(
         generation: Generation {
             max_tokens: 512,
             temperature: 0.0,
+            reasoning_budget: sail_common::request_body::Job::Judge.budget(),
         },
     }
 }

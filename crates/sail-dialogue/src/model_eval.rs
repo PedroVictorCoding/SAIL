@@ -1,7 +1,7 @@
 //! Model eval: how well the model on a llama-server endpoint does SAIL's own work, so a
 //! model change is decided by measurement (docs/MODEL_EVAL.md).
 //!
-//! Three suites, each built from the production prompts and schemas rather than copies:
+//! Four suites, each built from the production prompts and schemas rather than copies:
 //! - **tools**: voice turns with the voice system prompt, the clock context and the tool
 //!   subset that `vlm::selected_tool_definitions` offers for that message. A case passes
 //!   when the first tool call is an accepted tool with valid JSON arguments that contain
@@ -13,15 +13,24 @@
 //! - **grounded**: questions answered from a voice memory block (same header and wrapper as
 //!   production) with tools off. Answerable cases need the remembered value; unanswerable
 //!   ones need an explicit "I don't know" and must not contain the trap value.
+//! - **extract**: Moodle-style announcements and file snippets (Portuguese and English) through
+//!   the real extraction prompt and validator. The validated items must contain the expected
+//!   kind, date and (when stated) time, and no trap date.
 //!
-//! The endpoint is called directly (OpenAI chat API, the same body Mind sends), not through
-//! Mind, so host admission and model lifecycle do not change the score. Grading is
-//! deterministic string and schema checks; grounded abstention is a phrase heuristic.
+//! The endpoint is called directly (OpenAI chat API, the same body Mind sends, built by
+//! `sail_common::request_body`), not through Mind, so host admission and model lifecycle do
+//! not change the score. The thinking budget is a run-wide setting so a score can be compared
+//! with the same suites direct and thinking. Grading is deterministic string and schema
+//! checks; grounded abstention is a phrase heuristic.
 use crate::{prompt, vlm};
+use chrono::{NaiveDate, Utc};
 use sail_arena_learn::agent::judge;
 use sail_arena_learn::core::judgment::Verdict;
 use sail_arena_learn::core::ports::Model;
 use sail_arena_learn::core::question::{Answer, QuestionKind, QuestionSpec};
+use sail_arena_learn::factory::mind_author::AUTHOR_TEMPERATURE;
+use sail_common::request_body::{ModelFamily, chat_body, family_for};
+use sail_moodle::{DocSource, ExtractionDoc, ExtractionResult, ItemKind};
 use sail_protocol::{
     Content, FunctionCall, Generation, InferenceRequest, InferenceResponse, Message, Role,
     ToolCall, ToolChoice, ToolDefinition, Usage,
@@ -41,7 +50,8 @@ pub const GATE_POINTS: f64 = 5.0;
 
 // ---------------------------------------------------------------- endpoint
 
-/// Per-request numbers that llama-server reports in `timings`, plus wall time.
+/// Per-request numbers that llama-server reports in `timings`, plus wall time and the cost
+/// of thinking. `completion_tokens` covers the whole completion, thinking included.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Timing {
     pub wall_ms: u64,
@@ -49,6 +59,33 @@ pub struct Timing {
     pub prompt_per_second: f64,
     pub generated_tokens: u64,
     pub generated_per_second: f64,
+    /// `usage.completion_tokens` for this request, thinking and answer together.
+    #[serde(default)]
+    pub completion_tokens: u64,
+    /// Characters in `reasoning_content`. llama-server's non-stream usage has no split, so
+    /// this is the exact size of the thinking text that was produced.
+    #[serde(default)]
+    pub reasoning_chars: u64,
+    /// Thinking tokens from `completion_tokens_details.reasoning_tokens` when the server
+    /// reports them, else `completion_tokens` minus a characters/4 estimate of the answer.
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub finish_reason: String,
+    /// The request hit the output limit without a visible answer.
+    #[serde(default)]
+    pub out_of_budget: bool,
+}
+
+/// What the eval learned about the endpoint's model family and how the cases were sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyInfo {
+    /// `qwen3`, `lfm` or `unknown` (`request_body::family_for`).
+    pub name: &'static str,
+    /// The family has a thinking mode SAIL can switch.
+    pub thinks: bool,
+    /// The weights file name used to pick the family.
+    pub model_file: String,
 }
 
 /// An OpenAI-compatible chat endpoint (llama-server). Implements Learn's `Model` port so
@@ -57,6 +94,12 @@ pub struct ChatEndpoint {
     client: reqwest::Client,
     base: String,
     timings: Mutex<Vec<Timing>>,
+    /// Resolved from the served weights; decides thinking and sampling in the shared body.
+    family: Mutex<ModelFamily>,
+    /// Name sent as the request's `model`, learned from `/v1/models`.
+    served: Mutex<String>,
+    /// Thinking budget forced on every case; `None` keeps thinking off.
+    reasoning_budget: Option<u32>,
 }
 
 impl ChatEndpoint {
@@ -69,6 +112,58 @@ impl ChatEndpoint {
                 .expect("reqwest client"),
             base: base.trim_end_matches('/').to_string(),
             timings: Mutex::default(),
+            family: Mutex::new(family_for("")),
+            served: Mutex::new("local".into()),
+            reasoning_budget: None,
+        }
+    }
+
+    /// Send `--reasoning` on every case, including the tool, judge and grounded suites.
+    /// Values are clamped to the protocol maximum; `0` and `None` turn thinking off.
+    pub fn with_reasoning(mut self, budget: Option<u32>) -> Self {
+        self.reasoning_budget = budget
+            .filter(|budget| *budget > 0)
+            .map(|budget| budget.min(sail_protocol::MAX_REASONING_BUDGET));
+        self
+    }
+
+    /// The model family and whether it thinks, for the report header.
+    pub fn family(&self) -> ModelFamily {
+        *self
+            .family
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Resolve the family from llama-server's `/props` `model_path` (file name), falling back
+    /// to `--model-file`, then the served model id. An unknown family means thinking off.
+    pub async fn resolve_family(&self, model_file: Option<&str>) -> FamilyInfo {
+        let mut from_props = None;
+        if let Ok(response) = self.client.get(format!("{}/props", self.base)).send().await
+            && response.status().is_success()
+            && let Ok(value) = response.json::<Value>().await
+            && let Some(path) = value["model_path"].as_str()
+        {
+            from_props = path.rsplit(['/', '\\']).next().map(str::to_string);
+        }
+        let served = self
+            .served
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let model_file = from_props
+            .or_else(|| model_file.map(str::to_string))
+            .or_else(|| (!served.is_empty() && served != "local").then_some(served))
+            .unwrap_or_else(|| "unknown".into());
+        let family = family_for(&model_file);
+        *self
+            .family
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = family;
+        FamilyInfo {
+            name: family.name,
+            thinks: family.thinks,
+            model_file,
         }
     }
 
@@ -83,31 +178,47 @@ impl ChatEndpoint {
             .json()
             .await
             .map_err(|e| e.to_string())?;
-        v["data"][0]["id"]
+        let id = v["data"][0]["id"]
             .as_str()
             .map(str::to_string)
-            .ok_or_else(|| format!("no model listed at {}/v1/models", self.base))
+            .ok_or_else(|| format!("no model listed at {}/v1/models", self.base))?;
+        *self
+            .served
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = id.clone();
+        Ok(id)
     }
 
     /// Timings recorded since the last call, oldest first.
     pub fn take_timings(&self) -> Vec<Timing> {
-        std::mem::take(&mut *self.timings.lock().unwrap())
+        std::mem::take(
+            &mut *self
+                .timings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
     }
 
-    pub async fn chat(&self, request: &InferenceRequest) -> Result<InferenceResponse, String> {
-        let mut body = json!({
-            "messages": request.messages,
-            "max_tokens": request.generation.max_tokens,
-            "temperature": request.generation.temperature,
-            "tool_choice": request.tool_choice,
-            "chat_template_kwargs": {"enable_thinking": false},
+    /// The body for `request`: the shared SAIL body, with the eval's thinking budget applied
+    /// to every suite. Kept separate from the HTTP call so it can be tested without a model.
+    fn body(&self, request: &InferenceRequest) -> Value {
+        let family = self.family();
+        let mut request = request.clone();
+        request.generation.reasoning_budget = self.reasoning_budget;
+        let served = request.model.clone().unwrap_or_else(|| {
+            self.served
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
         });
-        if let Some(model) = &request.model {
-            body["model"] = json!(model);
-        }
-        if !request.tools.is_empty() {
-            body["tools"] = json!(request.tools);
-        }
+        chat_body(&served, &family, &request, false)
+    }
+
+    /// The same chat-completions body Mind sends, built by
+    /// `sail_common::request_body::chat_body`, with the eval's thinking budget applied to
+    /// every suite.
+    pub async fn chat(&self, request: &InferenceRequest) -> Result<InferenceResponse, String> {
+        let body = self.body(request);
         let start = Instant::now();
         let response = self
             .client
@@ -123,13 +234,45 @@ impl ChatEndpoint {
         }
         let wall_ms = start.elapsed().as_millis() as u64;
         let t = &v["timings"];
-        self.timings.lock().unwrap().push(Timing {
-            wall_ms,
-            prompt_tokens: t["prompt_n"].as_u64().unwrap_or(0),
-            prompt_per_second: t["prompt_per_second"].as_f64().unwrap_or(0.0),
-            generated_tokens: t["predicted_n"].as_u64().unwrap_or(0),
-            generated_per_second: t["predicted_per_second"].as_f64().unwrap_or(0.0),
-        });
+        let choice = &v["choices"][0];
+        let message = &choice["message"];
+        let content = message["content"].as_str().unwrap_or_default();
+        let reasoning = message["reasoning_content"].as_str().unwrap_or_default();
+        let completion_tokens = v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+        // llama-server's non-stream usage has no answer/thinking split unless it reports
+        // `completion_tokens_details`; otherwise subtract a characters/4 answer estimate.
+        let answer_chars = content.chars().count()
+            + message["tool_calls"]
+                .as_array()
+                .map(|calls| calls.iter().map(|c| c.to_string().chars().count()).sum())
+                .unwrap_or(0);
+        let reasoning_tokens = v["usage"]["completion_tokens_details"]["reasoning_tokens"]
+            .as_u64()
+            .unwrap_or_else(|| completion_tokens.saturating_sub((answer_chars as u64).div_ceil(4)));
+        let finish_reason = choice["finish_reason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let out_of_budget = finish_reason == "length"
+            && content.trim().is_empty()
+            && message["tool_calls"]
+                .as_array()
+                .is_none_or(|calls| calls.is_empty());
+        self.timings
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(Timing {
+                wall_ms,
+                prompt_tokens: t["prompt_n"].as_u64().unwrap_or(0),
+                prompt_per_second: t["prompt_per_second"].as_f64().unwrap_or(0.0),
+                generated_tokens: t["predicted_n"].as_u64().unwrap_or(0),
+                generated_per_second: t["predicted_per_second"].as_f64().unwrap_or(0.0),
+                completion_tokens,
+                reasoning_chars: reasoning.chars().count() as u64,
+                reasoning_tokens,
+                finish_reason,
+                out_of_budget,
+            });
         parse_completion(request, &v)
     }
 }
@@ -180,6 +323,7 @@ pub fn parse_completion(
         usage: Usage {
             input_tokens: usage["prompt_tokens"].as_u64().map(|n| n as u32),
             output_tokens: usage["completion_tokens"].as_u64().map(|n| n as u32),
+            reasoning_tokens: None,
         },
         timings: Default::default(),
     })
@@ -607,6 +751,240 @@ pub fn grounded_cases() -> Vec<GroundedCase> {
     ]
 }
 
+/// One Moodle-style document for the extract suite. It is run through the production
+/// extraction prompt and validator, not a copy of either.
+#[derive(Debug, Clone)]
+pub struct ExtractCase {
+    pub id: &'static str,
+    /// Announcement or file text, in Portuguese or English.
+    pub text: &'static str,
+    pub expect_kind: ItemKind,
+    /// The primary date the answer must contain, `YYYY-MM-DD`.
+    pub expect_date: &'static str,
+    /// The time the answer must contain when the source states one, `HH:MM`.
+    pub expect_time: Option<&'static str>,
+    /// A verbatim quote that grounds `expect_date`; the tests use it in canned replies.
+    pub quote: &'static str,
+    /// Dates the answer must not contain: a postponed-from or posted date.
+    pub trap_dates: &'static [&'static str],
+}
+
+pub fn extract_cases() -> Vec<ExtractCase> {
+    vec![
+        ExtractCase {
+            id: "x01-postponed",
+            text: "Informação: o teste de Análise Real foi adiado de 12/11 para 19/11.",
+            expect_kind: ItemKind::Test,
+            expect_date: "2026-11-19",
+            expect_time: None,
+            quote: "o teste de Análise Real foi adiado de 12/11 para 19/11",
+            trap_dates: &["2026-11-12"],
+        },
+        ExtractCase {
+            id: "x02-lab-weekday",
+            text: "A aula de laboratório realiza-se na quarta-feira, 18/11, às 14:00, no laboratório 3.",
+            expect_kind: ItemKind::Lab,
+            expect_date: "2026-11-18",
+            expect_time: Some("14:00"),
+            quote: "na quarta-feira, 18/11, às 14:00",
+            trap_dates: &[],
+        },
+        ExtractCase {
+            id: "x03-sunday-deadline",
+            text: "A entrega do relatório final é até às 23h59 de domingo, 15/11.",
+            expect_kind: ItemKind::Deadline,
+            expect_date: "2026-11-15",
+            expect_time: Some("23:59"),
+            quote: "até às 23h59 de domingo, 15/11",
+            trap_dates: &[],
+        },
+        ExtractCase {
+            id: "x04-cancelled",
+            text: "A aula teórica de 20/11 está cancelada; será substituída por trabalho autónomo.",
+            expect_kind: ItemKind::ScheduleChange,
+            expect_date: "2026-11-20",
+            expect_time: None,
+            quote: "A aula teórica de 20/11 está cancelada",
+            trap_dates: &[],
+        },
+        ExtractCase {
+            id: "x05-exam-en",
+            text: "The final exam is on December 15, 2026, at 09:00 in Room B2.",
+            expect_kind: ItemKind::Exam,
+            expect_date: "2026-12-15",
+            expect_time: Some("09:00"),
+            quote: "December 15, 2026, at 09:00",
+            trap_dates: &[],
+        },
+        ExtractCase {
+            id: "x06-assignment-en",
+            text: "Posted on 2026-11-20. The group assignment is due on December 1, 2026 at 23:59.",
+            expect_kind: ItemKind::Deadline,
+            expect_date: "2026-12-01",
+            expect_time: Some("23:59"),
+            quote: "The group assignment is due on December 1, 2026 at 23:59",
+            trap_dates: &["2026-11-20"],
+        },
+        ExtractCase {
+            id: "x07-quiz-window",
+            text: "O quiz 2 estará disponível de 24/11 a 28/11, na plataforma Moodle.",
+            expect_kind: ItemKind::Quiz,
+            expect_date: "2026-11-24",
+            expect_time: None,
+            quote: "quiz 2 estará disponível de 24/11 a 28/11",
+            trap_dates: &[],
+        },
+        ExtractCase {
+            id: "x08-registration",
+            text: "Inscrições para o exame de recurso: até 30/11, no portal académico.",
+            expect_kind: ItemKind::Registration,
+            expect_date: "2026-11-30",
+            expect_time: None,
+            quote: "Inscrições para o exame de recurso: até 30/11",
+            trap_dates: &[],
+        },
+        ExtractCase {
+            id: "x09-presentation",
+            text: "A apresentação do projeto final é no dia 10/12, às 16h30, na sala 2.",
+            expect_kind: ItemKind::Presentation,
+            expect_date: "2026-12-10",
+            expect_time: Some("16:30"),
+            quote: "no dia 10/12, às 16h30",
+            trap_dates: &[],
+        },
+        ExtractCase {
+            id: "x10-exam-month-pt",
+            text: "O exame de recurso realiza-se a 5 de fevereiro de 2027, às 09:00, na sala A1.",
+            expect_kind: ItemKind::Exam,
+            expect_date: "2027-02-05",
+            expect_time: Some("09:00"),
+            quote: "5 de fevereiro de 2027, às 09:00",
+            trap_dates: &[],
+        },
+        ExtractCase {
+            id: "x11-file-moved-en",
+            text: "Course file excerpt: Lab session moved to Thursday, 2026-11-19 at 10:00. Room 4.",
+            expect_kind: ItemKind::ScheduleChange,
+            expect_date: "2026-11-19",
+            expect_time: Some("10:00"),
+            quote: "Lab session moved to Thursday, 2026-11-19 at 10:00",
+            trap_dates: &[],
+        },
+        ExtractCase {
+            id: "x12-homework-pt",
+            text: "Trabalho de casa: entregar até 22/11 às 18h00 no Moodle.",
+            expect_kind: ItemKind::Deadline,
+            expect_date: "2026-11-22",
+            expect_time: Some("18:00"),
+            quote: "entregar até 22/11 às 18h00",
+            trap_dates: &[],
+        },
+    ]
+}
+
+impl ExtractCase {
+    /// The production document shape for this snippet, observed at the eval's fixed clock.
+    /// The term lets dates without a year resolve to the right academic year.
+    pub fn doc(&self) -> ExtractionDoc {
+        let observed_at = NaiveDate::from_ymd_opt(2026, 11, 6)
+            .and_then(|date| date.and_hms_opt(10, 0, 0))
+            .map(|date| date.and_utc())
+            .unwrap_or_else(Utc::now);
+        let term = match (
+            NaiveDate::from_ymd_opt(2026, 9, 1),
+            NaiveDate::from_ymd_opt(2027, 7, 31),
+        ) {
+            (Some(start), Some(end)) => Some((start, end)),
+            _ => None,
+        };
+        ExtractionDoc {
+            id: format!("eval-{}", self.id),
+            course_id: 1,
+            course_name: "Model eval".into(),
+            source: DocSource::Announcement { discussion_id: 1 },
+            label: self.id.into(),
+            text: self.text.into(),
+            observed_at,
+            term,
+        }
+    }
+}
+
+/// The document and the real production extraction prompt for a case: the deterministic
+/// date finder supplies the hints, exactly as `sail-moodle`'s service does.
+pub fn extract_request(case: &ExtractCase) -> (ExtractionDoc, sail_moodle::ExtractPrompt) {
+    let doc = case.doc();
+    let hits = sail_moodle::extract::find_dates(&doc.text, doc.observed_at, doc.term);
+    let prompt = sail_moodle::extract::build_prompt(&doc, &hits);
+    (doc, prompt)
+}
+
+/// Grade the validated extraction, not the raw reply: the item must have the expected kind,
+/// date and (when stated) time, and no item may carry a trap date.
+pub fn grade_extract(case: &ExtractCase, result: &ExtractionResult) -> (bool, String) {
+    let Ok(want_date) = NaiveDate::parse_from_str(case.expect_date, "%Y-%m-%d") else {
+        return (
+            false,
+            format!("case has an invalid date {}", case.expect_date),
+        );
+    };
+    let traps: Vec<NaiveDate> = case
+        .trap_dates
+        .iter()
+        .filter_map(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+        .collect();
+    for item in &result.items {
+        if traps.contains(&item.when.date)
+            || item.when.end_date.is_some_and(|end| traps.contains(&end))
+        {
+            return (
+                false,
+                format!("returned trap date {} for {:?}", item.when.date, item.kind),
+            );
+        }
+    }
+    let hit = result.items.iter().find(|item| {
+        if item.kind != case.expect_kind || item.when.date != want_date {
+            return false;
+        }
+        match (case.expect_time, item.when.time) {
+            (None, _) => true,
+            (Some(want), Some(got)) => got.format("%H:%M").to_string() == want,
+            (Some(_), None) => false,
+        }
+    });
+    match hit {
+        Some(item) => (
+            true,
+            format!(
+                "{:?} {} \"{}\"",
+                item.kind,
+                item.when.date,
+                clip(&item.title, 60)
+            ),
+        ),
+        None => {
+            let got: Vec<String> = result
+                .items
+                .iter()
+                .map(|item| format!("{:?} {}", item.kind, item.when.date))
+                .collect();
+            let rejected = result
+                .rejected
+                .first()
+                .map(|claim| format!("; rejected: {}", claim.reason))
+                .unwrap_or_default();
+            (
+                false,
+                format!(
+                    "missing {:?} {}; got {got:?}{rejected}",
+                    case.expect_kind, case.expect_date
+                ),
+            )
+        }
+    }
+}
+
 // ---------------------------------------------------------------- grading
 
 /// Phrases that count as declining to answer. Heuristic: a model that abstains in other
@@ -773,6 +1151,21 @@ pub struct CaseResult {
     pub not_offered: bool,
     pub detail: String,
     pub timings: Vec<Timing>,
+    /// Whole completion, thinking included, summed over the case's requests.
+    #[serde(default)]
+    pub completion_tokens: u64,
+    /// Characters in `reasoning_content`, summed over the case's requests.
+    #[serde(default)]
+    pub reasoning_chars: u64,
+    /// Reported or estimated thinking tokens, summed over the case's requests.
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    /// `finish_reason` of the case's last request.
+    #[serde(default)]
+    pub finish_reason: String,
+    /// The last request ran out of output tokens with no answer.
+    #[serde(default)]
+    pub out_of_budget: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -783,11 +1176,33 @@ pub struct SuiteScore {
     pub percent: f64,
 }
 
+/// Thinking and time cost of one suite, so a reasoning budget can be judged on more than
+/// its score.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SuiteCost {
+    pub suite: String,
+    /// Median characters of `reasoning_content` per case.
+    pub median_reasoning_chars: u64,
+    /// Median wall time per case, in milliseconds.
+    pub median_wall_ms: u64,
+    /// Cases whose last request ended at the output limit.
+    pub length_cases: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerMemory {
     pub pid: u32,
     pub rss_mb: u64,
     pub peak_rss_mb: u64,
+}
+
+/// One case whose pass/fail changed between a candidate and its baseline.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Flip {
+    pub suite: String,
+    pub id: String,
+    /// True when the candidate passes and the baseline failed.
+    pub gained: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -797,7 +1212,20 @@ pub struct EvalReport {
     pub endpoint: String,
     pub started_at: String,
     pub repeat: usize,
+    /// Model family from the weights file name; a score only means something for the model
+    /// and thinking setting it was measured on.
+    #[serde(default)]
+    pub family: String,
+    /// The family has a thinking mode SAIL can switch.
+    #[serde(default)]
+    pub family_thinks: bool,
+    /// Thinking budget every case was sent with; `None` means thinking off.
+    #[serde(default)]
+    pub reasoning_budget: Option<u32>,
     pub scores: Vec<SuiteScore>,
+    /// Per-suite thinking and time cost (empty in reports written before this field).
+    #[serde(default)]
+    pub costs: Vec<SuiteCost>,
     pub median_prompt_per_second: f64,
     pub median_generated_per_second: f64,
     pub p50_wall_ms: u64,
@@ -827,6 +1255,41 @@ pub fn tool_case_request(case: &ToolCase) -> (String, String, Vec<ToolDefinition
     (system, user, tools)
 }
 
+/// Builds a case result and derives its thinking/time cost from the request timings. A case
+/// whose last request ran out of output tokens is a failure whatever the grader said.
+fn case_result(
+    suite: &str,
+    id: &str,
+    passed: bool,
+    detail: String,
+    timings: Vec<Timing>,
+    not_offered: bool,
+) -> CaseResult {
+    let out_of_budget = timings.last().is_some_and(|timing| timing.out_of_budget);
+    let passed = passed && !out_of_budget;
+    let detail = if out_of_budget {
+        format!("out of budget; {detail}")
+    } else {
+        detail
+    };
+    CaseResult {
+        suite: suite.into(),
+        id: id.into(),
+        passed,
+        not_offered,
+        detail,
+        completion_tokens: timings.iter().map(|timing| timing.completion_tokens).sum(),
+        reasoning_chars: timings.iter().map(|timing| timing.reasoning_chars).sum(),
+        reasoning_tokens: timings.iter().map(|timing| timing.reasoning_tokens).sum(),
+        finish_reason: timings
+            .last()
+            .map(|timing| timing.finish_reason.clone())
+            .unwrap_or_default(),
+        out_of_budget,
+        timings,
+    }
+}
+
 pub async fn run_tool_case(endpoint: &ChatEndpoint, case: &ToolCase) -> CaseResult {
     let (system, user, tools) = tool_case_request(case);
     let offered: Vec<String> = tools.iter().map(|t| t.function.name.clone()).collect();
@@ -844,14 +1307,14 @@ pub async fn run_tool_case(endpoint: &ChatEndpoint, case: &ToolCase) -> CaseResu
     } else {
         detail
     };
-    CaseResult {
-        suite: "tools".into(),
-        id: case.id.into(),
+    case_result(
+        "tools",
+        case.id,
         passed,
-        not_offered,
         detail,
-        timings: endpoint.take_timings(),
-    }
+        endpoint.take_timings(),
+        not_offered,
+    )
 }
 
 pub async fn run_judge_case(endpoint: &ChatEndpoint, case: &JudgeCase) -> CaseResult {
@@ -879,14 +1342,14 @@ pub async fn run_judge_case(endpoint: &ChatEndpoint, case: &JudgeCase) -> CaseRe
             ),
             Err(e) => (false, format!("judge failed: {e:?}")),
         };
-    CaseResult {
-        suite: "judge".into(),
-        id: case.id.into(),
+    case_result(
+        "judge",
+        case.id,
         passed,
-        not_offered: false,
         detail,
-        timings: endpoint.take_timings(),
-    }
+        endpoint.take_timings(),
+        false,
+    )
 }
 
 pub async fn run_grounded_case(endpoint: &ChatEndpoint, case: &GroundedCase) -> CaseResult {
@@ -899,14 +1362,51 @@ pub async fn run_grounded_case(endpoint: &ChatEndpoint, case: &GroundedCase) -> 
         Ok(r) => grade_grounded(case, r.message.content.text().unwrap_or_default()),
         Err(e) => (false, format!("request failed: {e}")),
     };
-    CaseResult {
-        suite: "grounded".into(),
-        id: case.id.into(),
+    case_result(
+        "grounded",
+        case.id,
         passed,
-        not_offered: false,
         detail,
-        timings: endpoint.take_timings(),
-    }
+        endpoint.take_timings(),
+        false,
+    )
+}
+
+/// Runs one Moodle-style document through the real extraction prompt and validator. The
+/// token room is the prompt's own (the same value `moodle_model.rs` sends), with the
+/// authoring temperature, so a score reflects the background extraction job.
+pub async fn run_extract_case(endpoint: &ChatEndpoint, case: &ExtractCase) -> CaseResult {
+    let (doc, prompt) = extract_request(case);
+    let request = InferenceRequest {
+        version: sail_protocol::VERSION,
+        request_id: uuid::Uuid::new_v4(),
+        model: None,
+        messages: vec![
+            Message::text(Role::System, prompt.system.clone()),
+            Message::text(Role::User, prompt.user.clone()),
+        ],
+        tools: Vec::new(),
+        tool_choice: ToolChoice::None,
+        generation: Generation::direct(prompt.max_output_tokens, AUTHOR_TEMPERATURE),
+    };
+    let (passed, detail) = match endpoint.chat(&request).await {
+        Ok(r) => {
+            let result = sail_moodle::extract::parse_reply(
+                r.message.content.text().unwrap_or_default(),
+                &doc,
+            );
+            grade_extract(case, &result)
+        }
+        Err(e) => (false, format!("request failed: {e}")),
+    };
+    case_result(
+        "extract",
+        case.id,
+        passed,
+        detail,
+        endpoint.take_timings(),
+        false,
+    )
 }
 
 pub fn score(cases: &[CaseResult]) -> Vec<SuiteScore> {
@@ -943,9 +1443,42 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[i]
 }
 
+/// Per-suite medians of the thinking size and wall time, plus how many cases ended at the
+/// output limit. Cases (not individual retry requests) are the unit, so one case cannot
+/// dominate a suite by retrying.
+pub fn suite_costs(cases: &[CaseResult], scores: &[SuiteScore]) -> Vec<SuiteCost> {
+    scores
+        .iter()
+        .map(|score| {
+            let of: Vec<&CaseResult> = cases
+                .iter()
+                .filter(|case| case.suite == score.suite)
+                .collect();
+            let mut reasoning: Vec<f64> =
+                of.iter().map(|case| case.reasoning_chars as f64).collect();
+            reasoning.sort_by(f64::total_cmp);
+            let mut wall: Vec<f64> = of
+                .iter()
+                .map(|case| case.timings.iter().map(|t| t.wall_ms).sum::<u64>() as f64)
+                .collect();
+            wall.sort_by(f64::total_cmp);
+            SuiteCost {
+                suite: score.suite.clone(),
+                median_reasoning_chars: percentile(&reasoning, 0.5) as u64,
+                median_wall_ms: percentile(&wall, 0.5) as u64,
+                length_cases: of
+                    .iter()
+                    .filter(|case| case.finish_reason == "length")
+                    .count(),
+            }
+        })
+        .collect()
+}
+
 /// Fills the aggregate fields from `cases`.
 pub fn summarize(report: &mut EvalReport) {
     report.scores = score(&report.cases);
+    report.costs = suite_costs(&report.cases, &report.scores);
     let all: Vec<&Timing> = report.cases.iter().flat_map(|c| &c.timings).collect();
     let sorted = |f: fn(&Timing) -> f64| {
         let mut v: Vec<f64> = all.iter().map(|t| f(t)).filter(|x| *x > 0.0).collect();
@@ -996,10 +1529,33 @@ pub fn server_memory() -> Vec<ServerMemory> {
 
 // ---------------------------------------------------------------- reporting
 
+/// `off` or `budget N tokens` for the report header and gate line.
+pub fn reasoning_label(budget: Option<u32>) -> String {
+    match budget {
+        Some(budget) if budget > 0 => format!("budget {budget} tokens"),
+        _ => "off".into(),
+    }
+}
+
 pub fn markdown(report: &EvalReport, baseline: Option<&EvalReport>) -> String {
+    let family = if report.family.is_empty() {
+        "unknown"
+    } else {
+        report.family.as_str()
+    };
     let mut md = format!(
-        "# Model eval: {}\n\nModel `{}` at {}, {}; each case run {} time(s).\n\n",
-        report.label, report.model, report.endpoint, report.started_at, report.repeat
+        "# Model eval: {}\n\nModel `{}` at {}, {}; family `{family}` ({}); reasoning {}; each case run {} time(s).\n\n",
+        report.label,
+        report.model,
+        report.endpoint,
+        report.started_at,
+        if report.family_thinks {
+            "can think"
+        } else {
+            "no thinking mode"
+        },
+        reasoning_label(report.reasoning_budget),
+        report.repeat
     );
     md.push_str("| Suite | Passed | Score |");
     if baseline.is_some() {
@@ -1046,15 +1602,47 @@ pub fn markdown(report: &EvalReport, baseline: Option<&EvalReport>) -> String {
         mem,
         peak
     ));
+    if !report.costs.is_empty() {
+        md.push_str(
+            "\n## Cost\n\n| Suite | Median reasoning | Median wall | `length` cases |\n|---|---|---|---|\n",
+        );
+        for cost in &report.costs {
+            md.push_str(&format!(
+                "| {} | {} chars | {} ms | {} |\n",
+                cost.suite, cost.median_reasoning_chars, cost.median_wall_ms, cost.length_cases
+            ));
+        }
+    }
     if let Some(b) = baseline {
         let (ok, reasons) = gate(report, b);
         md.push_str(&format!(
-            "\n## Gate against `{}` ({})\n\n**{}**: {}\n",
+            "\n## Gate against `{}` ({})\n\n**{}**: {}\n\nReasoning: candidate {}, baseline {}.\n",
             b.label,
             b.model,
             if ok { "Adoptable" } else { "Not adoptable" },
-            reasons.join("; ")
+            reasons.join("; "),
+            reasoning_label(report.reasoning_budget),
+            reasoning_label(b.reasoning_budget)
         ));
+        md.push_str(&format!("\n## Flips against `{}`\n\n", b.label));
+        let changes = flips(report, b);
+        if changes.is_empty() {
+            md.push_str("No case changed pass/fail.\n");
+        } else {
+            md.push_str("| Suite | Case | Change |\n|---|---|---|\n");
+            for change in changes {
+                md.push_str(&format!(
+                    "| {} | {} | {} |\n",
+                    change.suite,
+                    change.id,
+                    if change.gained {
+                        "fail → pass"
+                    } else {
+                        "pass → fail"
+                    }
+                ));
+            }
+        }
     }
     md.push_str("\n## Failures\n\n");
     let mut any = false;
@@ -1066,6 +1654,27 @@ pub fn markdown(report: &EvalReport, baseline: Option<&EvalReport>) -> String {
         md.push_str("None.\n");
     }
     md
+}
+
+/// Cases whose pass/fail changed against `baseline`, matched by suite and id. A repeated run
+/// keeps the first match, which is enough to read a two-point change by eye.
+pub fn flips(candidate: &EvalReport, baseline: &EvalReport) -> Vec<Flip> {
+    let mut out = Vec::new();
+    for case in &candidate.cases {
+        if let Some(before) = baseline
+            .cases
+            .iter()
+            .find(|before| before.suite == case.suite && before.id == case.id)
+            && before.passed != case.passed
+        {
+            out.push(Flip {
+                suite: case.suite.clone(),
+                id: case.id.clone(),
+                gained: case.passed,
+            });
+        }
+    }
+    out
 }
 
 /// The adoption rule: no suite more than [`GATE_POINTS`] below the baseline.
@@ -1126,6 +1735,8 @@ mod tests {
 
     use super::*;
 
+    use sail_protocol::ResourceLimits;
+
     fn reply(content: &str, call: Option<(&str, &str)>) -> Message {
         Message {
             role: Role::Assistant,
@@ -1175,6 +1786,9 @@ mod tests {
             );
         }
         for case in grounded_cases() {
+            assert!(ids.insert(case.id), "duplicate {}", case.id);
+        }
+        for case in extract_cases() {
             assert!(ids.insert(case.id), "duplicate {}", case.id);
         }
     }
@@ -1260,12 +1874,16 @@ mod tests {
             endpoint: "e".into(),
             started_at: "t".into(),
             repeat: 1,
+            family: "qwen3".into(),
+            family_thinks: true,
+            reasoning_budget: None,
             scores: vec![SuiteScore {
                 suite: "tools".into(),
                 passed: 0,
                 total: 0,
                 percent,
             }],
+            costs: Vec::new(),
             median_prompt_per_second: 0.0,
             median_generated_per_second: 0.0,
             p50_wall_ms: 0,
@@ -1283,5 +1901,290 @@ mod tests {
         assert!(reasons.iter().any(|r| r.contains("RSS -12000 MB")));
         let md = markdown(&report(84.0, 9_000), Some(&report(90.0, 21_000)));
         assert!(md.contains("Not adoptable") && md.contains("-6.0"));
+    }
+
+    #[test]
+    fn eval_bodies_match_mind_and_force_the_thinking_budget() {
+        let endpoint = ChatEndpoint::new("http://127.0.0.1:1");
+        *endpoint.family.lock().unwrap() = family_for("Qwen3.6-35B-A3B-Q4_K_M.gguf");
+        let req = request(vec![Message::text(Role::User, "hi")], Vec::new());
+
+        let direct = endpoint.body(&req);
+        assert_eq!(direct["chat_template_kwargs"]["enable_thinking"], false);
+        assert!(direct.get("reasoning_budget_tokens").is_none());
+        assert_eq!(direct["max_tokens"], 384);
+        assert_eq!(direct["stream"], false);
+
+        let thinking = endpoint.with_reasoning(Some(512)).body(&req);
+        assert_eq!(thinking["chat_template_kwargs"]["enable_thinking"], true);
+        assert_eq!(thinking["reasoning_budget_tokens"], 512);
+        assert_eq!(thinking["reasoning_format"], "deepseek");
+        // The answer keeps its own room; the thinking budget is added on top.
+        assert_eq!(thinking["max_tokens"], 384 + 512);
+    }
+
+    #[test]
+    fn extract_cases_are_grounded_and_use_the_production_prompt() {
+        let mut ids = std::collections::HashSet::new();
+        for case in extract_cases() {
+            assert!(ids.insert(case.id), "duplicate {}", case.id);
+            let (doc, prompt) = extract_request(&case);
+            assert_eq!(prompt.max_output_tokens, 2048, "{}", case.id);
+            let want = NaiveDate::parse_from_str(case.expect_date, "%Y-%m-%d").unwrap();
+            let hits = sail_moodle::extract::find_dates(case.quote, doc.observed_at, doc.term);
+            assert!(
+                hits.iter().any(|hit| hit.date == want),
+                "{}: quote does not ground {}",
+                case.id,
+                case.expect_date
+            );
+            let text_hits = sail_moodle::extract::find_dates(&doc.text, doc.observed_at, doc.term);
+            for trap in case.trap_dates {
+                let trap = NaiveDate::parse_from_str(trap, "%Y-%m-%d").unwrap();
+                assert!(
+                    text_hits.iter().any(|hit| hit.date == trap),
+                    "{}: trap {trap} is not in the source text",
+                    case.id
+                );
+            }
+        }
+        assert!(
+            extract_cases().iter().any(|case| !case.text.is_ascii()),
+            "Portuguese case"
+        );
+        assert!(
+            extract_cases().iter().any(|case| case.id.ends_with("-en")),
+            "English case"
+        );
+    }
+
+    #[test]
+    fn extract_prompt_fits_minds_output_limit() {
+        let limit = ResourceLimits::default().max_output_tokens;
+        for case in extract_cases() {
+            let (_, prompt) = extract_request(&case);
+            assert!(
+                prompt.max_output_tokens <= limit,
+                "{} asks for {} tokens, Mind allows {limit}",
+                case.id,
+                prompt.max_output_tokens
+            );
+        }
+    }
+
+    fn extract_reply(kind: &str, date: &str, quote: &str) -> String {
+        json!({
+            "items": [{
+                "kind": kind,
+                "title": "Extracted item",
+                "date": date,
+                "time": null,
+                "quote": quote,
+            }],
+            "assessment": [],
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn extract_grading_takes_the_postponed_date_and_rejects_the_old_one() {
+        let case = extract_cases()
+            .into_iter()
+            .find(|case| case.id == "x01-postponed")
+            .unwrap();
+        let doc = case.doc();
+        let good = sail_moodle::extract::parse_reply(
+            &extract_reply("test", "2026-11-19", case.quote),
+            &doc,
+        );
+        assert!(grade_extract(&case, &good).0, "{good:?}");
+
+        // The postponed-from date is grounded by the same sentence, so the validator keeps
+        // it; the eval must still reject it as the wrong answer.
+        let old = sail_moodle::extract::parse_reply(
+            &extract_reply("test", "2026-11-12", case.quote),
+            &doc,
+        );
+        assert!(
+            !old.items.is_empty(),
+            "the validator should keep a grounded date"
+        );
+        let (passed, detail) = grade_extract(&case, &old);
+        assert!(!passed, "{detail}");
+        assert!(detail.contains("trap"), "{detail}");
+
+        let wrong_kind = sail_moodle::extract::parse_reply(
+            &extract_reply("exam", "2026-11-19", case.quote),
+            &doc,
+        );
+        assert!(!grade_extract(&case, &wrong_kind).0);
+    }
+
+    #[test]
+    fn thinking_is_never_graded_as_the_answer() {
+        // The reasoning holds the right tool call; the visible content does not.
+        let body = json!({
+            "model": "m",
+            "choices": [{"finish_reason": "stop", "message": {
+                "role": "assistant",
+                "content": "I would set a reminder, but I am not doing it.",
+                "reasoning_content": "{\"tool\":\"pulse_create\",\"text\":\"bread\",\"due_at\":\"2026-11-06T10:20:00Z\"}"
+            }}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 9}
+        });
+        let req = request(vec![Message::text(Role::User, "remind me")], Vec::new());
+        let parsed = parse_completion(&req, &body).unwrap();
+        let case = tool_cases()
+            .into_iter()
+            .find(|case| case.id == "t06-remind")
+            .unwrap();
+        let offered = vec!["pulse_create".to_string()];
+        assert!(!grade_tool(&case, &offered, &parsed.message).0);
+
+        // The reasoning holds the remembered fact; the visible answer guesses.
+        let body = json!({
+            "choices": [{"finish_reason": "stop", "message": {
+                "content": "You live in Porto.",
+                "reasoning_content": "The verified fact says Lisbon."
+            }}],
+            "usage": {}
+        });
+        let parsed = parse_completion(&req, &body).unwrap();
+        let case = grounded_cases()
+            .into_iter()
+            .find(|case| case.id == "g01-home")
+            .unwrap();
+        assert!(!grade_grounded(&case, parsed.message.content.text().unwrap_or_default()).0);
+    }
+
+    fn timing(finish_reason: &str, out_of_budget: bool, reasoning_chars: u64) -> Timing {
+        Timing {
+            wall_ms: 100,
+            completion_tokens: 10,
+            reasoning_chars,
+            reasoning_tokens: 8,
+            finish_reason: finish_reason.into(),
+            out_of_budget,
+            ..Timing::default()
+        }
+    }
+
+    #[test]
+    fn out_of_budget_is_a_failure_and_costs_are_summarized_per_suite() {
+        let over = case_result(
+            "extract",
+            "x01",
+            true,
+            "would have passed".into(),
+            vec![timing("length", true, 400)],
+            false,
+        );
+        assert!(!over.passed);
+        assert!(over.out_of_budget);
+        assert!(over.detail.starts_with("out of budget"), "{}", over.detail);
+        let ok = case_result(
+            "extract",
+            "x02",
+            true,
+            "ok".into(),
+            vec![timing("stop", false, 0)],
+            false,
+        );
+        let middle = case_result(
+            "extract",
+            "x03",
+            true,
+            "ok".into(),
+            vec![timing("stop", false, 200)],
+            false,
+        );
+        let cases = vec![over, ok, middle];
+        let scores = score(&cases);
+        let costs = suite_costs(&cases, &scores);
+        assert_eq!(costs.len(), 1);
+        assert_eq!(costs[0].suite, "extract");
+        assert_eq!(costs[0].median_reasoning_chars, 200);
+        assert_eq!(costs[0].median_wall_ms, 100);
+        assert_eq!(costs[0].length_cases, 1);
+    }
+
+    fn eval_report(cases: Vec<CaseResult>) -> EvalReport {
+        EvalReport {
+            label: "r".into(),
+            model: "m".into(),
+            endpoint: "e".into(),
+            started_at: "t".into(),
+            repeat: 1,
+            family: "qwen3".into(),
+            family_thinks: true,
+            reasoning_budget: None,
+            scores: Vec::new(),
+            costs: Vec::new(),
+            median_prompt_per_second: 0.0,
+            median_generated_per_second: 0.0,
+            p50_wall_ms: 0,
+            p95_wall_ms: 0,
+            server_memory: Vec::new(),
+            cases,
+        }
+    }
+
+    #[test]
+    fn compare_lists_pass_to_fail_and_fail_to_pass_cases() {
+        let baseline = eval_report(vec![
+            case_result("tools", "t1", true, "ok".into(), Vec::new(), false),
+            case_result("tools", "t2", false, "bad".into(), Vec::new(), false),
+        ]);
+        let candidate = eval_report(vec![
+            case_result("tools", "t1", false, "bad".into(), Vec::new(), false),
+            case_result("tools", "t2", true, "ok".into(), Vec::new(), false),
+            case_result("tools", "t3", true, "new".into(), Vec::new(), false),
+        ]);
+        let changes = flips(&candidate, &baseline);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        assert!(
+            changes
+                .iter()
+                .any(|change| change.id == "t1" && !change.gained)
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|change| change.id == "t2" && change.gained)
+        );
+        let md = markdown(&candidate, Some(&baseline));
+        assert!(md.contains("pass → fail"), "{md}");
+        assert!(md.contains("fail → pass"), "{md}");
+    }
+
+    #[test]
+    fn report_shows_family_thinking_budget_and_cost() {
+        let report = EvalReport {
+            label: "think".into(),
+            model: "Qwen3.6".into(),
+            endpoint: "http://127.0.0.1:8081".into(),
+            started_at: "t".into(),
+            repeat: 1,
+            family: "qwen3".into(),
+            family_thinks: true,
+            reasoning_budget: Some(512),
+            scores: Vec::new(),
+            costs: vec![SuiteCost {
+                suite: "extract".into(),
+                median_reasoning_chars: 400,
+                median_wall_ms: 1_200,
+                length_cases: 1,
+            }],
+            median_prompt_per_second: 46.0,
+            median_generated_per_second: 16.0,
+            p50_wall_ms: 1_000,
+            p95_wall_ms: 2_000,
+            server_memory: Vec::new(),
+            cases: Vec::new(),
+        };
+        let md = markdown(&report, None);
+        assert!(md.contains("family `qwen3` (can think)"), "{md}");
+        assert!(md.contains("reasoning budget 512 tokens"), "{md}");
+        assert!(md.contains("| extract | 400 chars | 1200 ms | 1 |"), "{md}");
     }
 }

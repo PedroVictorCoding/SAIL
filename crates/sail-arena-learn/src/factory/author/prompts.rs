@@ -163,6 +163,7 @@ pub fn concept_extraction(course_id: &str, fragments: &[SourceFragment]) -> Auth
         user,
         schema: SCHEMA_CONCEPTS,
         max_output_tokens: CONCEPT_MAX_OUTPUT_TOKENS,
+        reasoning_budget: sail_common::request_body::Job::CourseAuthoring.budget(),
     }
 }
 
@@ -223,6 +224,7 @@ pub fn curriculum_planning(graph: &ConceptGraph) -> AuthorPrompt {
         user,
         schema: SCHEMA_CURRICULUM,
         max_output_tokens: CURRICULUM_MAX_OUTPUT_TOKENS,
+        reasoning_budget: sail_common::request_body::Job::CourseAuthoring.budget(),
     }
 }
 
@@ -233,6 +235,7 @@ pub fn lesson_authoring(ctx: &BuiltContext) -> AuthorPrompt {
         user: ctx.user.clone(),
         schema: SCHEMA_LESSON,
         max_output_tokens: LESSON_MAX_OUTPUT_TOKENS,
+        reasoning_budget: sail_common::request_body::Job::CourseAuthoring.budget(),
     }
 }
 
@@ -243,6 +246,7 @@ pub fn review_variant(ctx: &BuiltContext) -> AuthorPrompt {
         user: ctx.user.clone(),
         schema: SCHEMA_REVIEW,
         max_output_tokens: REVIEW_MAX_OUTPUT_TOKENS,
+        reasoning_budget: sail_common::request_body::Job::CourseAuthoring.budget(),
     }
 }
 
@@ -276,6 +280,21 @@ pub fn objective_query(objective: &ObjectiveSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mind rejects a request whose answer budget is over its output limit as invalid, so
+    /// an authoring prompt above it could never run (Mind's limit was 1024 until 2026-11-08).
+    #[test]
+    fn every_authoring_budget_fits_minds_output_limit() {
+        let limit = sail_protocol::ResourceLimits::default().max_output_tokens;
+        for budget in [
+            CONCEPT_MAX_OUTPUT_TOKENS,
+            CURRICULUM_MAX_OUTPUT_TOKENS,
+            LESSON_MAX_OUTPUT_TOKENS,
+            REVIEW_MAX_OUTPUT_TOKENS,
+        ] {
+            assert!(budget <= limit, "{budget} > Mind's limit {limit}");
+        }
+    }
     use crate::factory::contracts::{
         Concept, EdgeStatus, FragmentKind, PrerequisiteEdge, QualityStatus, SourceAnchor,
         SourceLocation, ValidatorKind,

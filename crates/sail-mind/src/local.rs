@@ -129,6 +129,11 @@ impl LocalGemmaBackend {
             persisted_checked: AtomicBool::new(false),
         })
     }
+    /// The loaded model's family, from its weights file name: decides thinking and sampling
+    /// (see [`crate::request_body`]).
+    fn family(&self) -> crate::request_body::ModelFamily {
+        crate::request_body::family_for(&self.config.model_path.to_string_lossy())
+    }
     fn snapshot(&self) -> ModelStatus {
         self.snapshot
             .lock()
@@ -559,10 +564,8 @@ impl LocalGemmaBackend {
                 }
             }
         }
-        let mut body = json!({"messages":text_messages,"add_generation_prompt":true,"tool_choice":request.tool_choice,"chat_template_kwargs":{"enable_thinking":false}});
-        if !request.tools.is_empty() {
-            body["tools"] = json!(request.tools);
-        }
+        let body =
+            crate::request_body::template_body(&self.family(), request, &json!(text_messages));
         let template = self
             .json(self.client.post(self.url("/apply-template")).json(&body))
             .await?;
@@ -580,10 +583,9 @@ impl LocalGemmaBackend {
             .as_array()
             .ok_or_else(|| protocol("/tokenize did not return tokens"))?
             .len();
-        if count
-            .saturating_add(images * 1280)
-            .saturating_add(request.generation.max_tokens as usize)
-            > caps.context_tokens
+        if count.saturating_add(images * 1280).saturating_add(
+            crate::request_body::total_output_tokens(&self.family(), &request.generation) as usize,
+        ) > caps.context_tokens
         {
             return Err(InferenceError::new(
                 ErrorCode::ResourceLimit,
@@ -600,10 +602,8 @@ impl LocalGemmaBackend {
         input_tokens: usize,
     ) -> Result<InferenceResponse> {
         let started = Instant::now();
-        let mut body = json!({"model":self.config.name,"messages":request.messages,"stream":true,"stream_options":{"include_usage":true},"max_tokens":request.generation.max_tokens,"temperature":request.generation.temperature,"tool_choice":request.tool_choice,"chat_template_kwargs":{"enable_thinking":false}});
-        if !request.tools.is_empty() {
-            body["tools"] = json!(request.tools);
-        }
+        let family = self.family();
+        let body = crate::request_body::chat_body(&self.config.name, &family, request, true);
         let response = self
             .client
             .post(self.endpoint.clone())
@@ -620,7 +620,10 @@ impl LocalGemmaBackend {
         let mut stream = response.bytes_stream();
         let mut buffer = Vec::new();
         let mut data = String::new();
-        let mut state = StreamState::default();
+        let mut state = StreamState {
+            output_limit: crate::request_body::total_output_tokens(&family, &request.generation),
+            ..StreamState::default()
+        };
         while let Some(bytes) = stream.next().await {
             buffer.extend_from_slice(&bytes.map_err(|e| unavailable(e.to_string()))?);
             if buffer.len() > 1_048_576 {
@@ -659,6 +662,12 @@ impl LocalGemmaBackend {
         }
         if !state.finished {
             return Err(protocol("Local model disconnected before a finish reason"));
+        }
+        if state.reason == "length" && state.content.trim().is_empty() && state.calls.is_empty() {
+            return Err(InferenceError::new(
+                ErrorCode::ResourceLimit,
+                "Model used its whole output budget without answering",
+            ));
         }
         if state.reason == "length" && !state.calls.is_empty() {
             return Err(protocol(
@@ -701,6 +710,7 @@ impl LocalGemmaBackend {
             usage: Usage {
                 input_tokens: Some(state.input_tokens.unwrap_or(input_tokens as u32)),
                 output_tokens: state.output_tokens,
+                reasoning_tokens: (state.reasoning_chunks > 0).then_some(state.reasoning_chunks),
             },
             timings: Timings {
                 queue_ms: 0,
@@ -720,6 +730,10 @@ struct StreamState {
     input_tokens: Option<u32>,
     output_tokens: Option<u32>,
     bytes: usize,
+    /// Answer plus thinking budget: the most the server may generate for this request.
+    output_limit: u32,
+    /// Streamed thinking chunks (llama-server sends one per token). The text is dropped.
+    reasoning_chunks: u32,
 }
 impl StreamState {
     async fn consume(
@@ -740,10 +754,7 @@ impl StreamState {
         if let Some(usage) = value.get("usage") {
             self.input_tokens = usage["prompt_tokens"].as_u64().map(|n| n as u32);
             self.output_tokens = usage["completion_tokens"].as_u64().map(|n| n as u32);
-            if self
-                .output_tokens
-                .is_some_and(|n| n > request.generation.max_tokens)
-            {
+            if self.output_tokens.is_some_and(|n| n > self.output_limit) {
                 return Err(InferenceError::new(
                     ErrorCode::ResourceLimit,
                     "Model exceeded output token budget",
@@ -756,6 +767,19 @@ impl StreamState {
         if let Some(reason) = choice["finish_reason"].as_str() {
             self.finished = true;
             self.reason = reason.into();
+        }
+        // Thinking is counted, never kept, streamed or returned.
+        if choice["delta"]["reasoning_content"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty())
+        {
+            self.reasoning_chunks = self.reasoning_chunks.saturating_add(1);
+            if self.reasoning_chunks > self.output_limit {
+                return Err(InferenceError::new(
+                    ErrorCode::ResourceLimit,
+                    "Model exceeded its thinking budget",
+                ));
+            }
         }
         if let Some(text) = choice["delta"]["content"]
             .as_str()
@@ -917,7 +941,9 @@ impl InferenceBackend for LocalGemmaBackend {
         let _start = tokio::time::timeout(SHUTDOWN_STARTUP_WAIT, self.startup.lock())
             .await
             .inspect_err(|_| {
-                tracing::warn!("A model start is still in progress; stopping without waiting for it")
+                tracing::warn!(
+                    "A model start is still in progress; stopping without waiting for it"
+                )
             })
             .ok();
         if let Some(mut child) = self.process.lock().await.take()

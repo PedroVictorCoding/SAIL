@@ -30,7 +30,17 @@ IMAGES=/srv/sail-runner/images
 ROOTFS="$IMAGES/approved-rootfs"
 MARKER_TEXT="SAIL isolated root image v1"
 DAEMON_USER="${SUDO_USER:-}"
-BINARY="${CARGO_TARGET_DIR:-/srv/sail/cargo-target}/release/sail-runner"
+# `cargo build` writes to ~/.cargo/config.toml's target-dir (the data disk), and run.sh
+# builds on the runtime SSD. Under sudo neither setting is visible, so take the first
+# built runner found.
+BINARY=""
+for dir in "${CARGO_TARGET_DIR:-}" /srv/sail-data/cargo-target /srv/sail/cargo-target; do
+  if [[ -n "$dir" && -x "$dir/release/sail-runner" ]]; then
+    BINARY="$dir/release/sail-runner"
+    break
+  fi
+done
+BINARY="${BINARY:-/srv/sail-data/cargo-target/release/sail-runner}"
 DRY_RUN=0
 
 usage() {

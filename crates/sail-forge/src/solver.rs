@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use ring::digest::{Context, SHA256};
+use sail_protocol::{Generation, InferenceRequest, Message, Role};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -19,6 +20,116 @@ fn model_timeout(value: Option<&str>) -> std::time::Duration {
         .filter(|seconds| (1..=3600).contains(seconds))
         .unwrap_or(DEFAULT_MODEL_TIMEOUT_SECS);
     std::time::Duration::from_secs(seconds)
+}
+
+/// Answer room and sampling Forge asks for. The answer keeps the full 2048 tokens; a thinking
+/// budget is added on top by `sail_common::request_body`, never taken out of the patch room.
+const FORGE_MAX_ANSWER_TOKENS: u32 = 2048;
+/// Forge's edits are structured and exact, so it samples near-greedily like before. Qwen
+/// still gets at least 0.6 while thinking, which the shared body builder enforces.
+const FORGE_TEMPERATURE: f32 = 0.1;
+/// Thinking budget used when `SAIL_FORGE_REASONING_BUDGET` is unset.
+const DEFAULT_FORGE_REASONING_BUDGET: u32 = 2048;
+/// Slowest generation speed Forge plans for, in tokens per second. The host writes about 16;
+/// the margin covers a busy CPU and keeps a thinking turn inside its total generation window.
+const MIN_GENERATION_TOKENS_PER_SECOND: u64 = 8;
+/// What Forge reports when the model spent its whole output budget thinking and produced no
+/// answer. It is a model failure, but a different one from an empty network reply.
+const THINKING_EXHAUSTED_DETAIL: &str =
+    "the model used its whole budget thinking and produced no answer";
+
+/// Parses `SAIL_FORGE_REASONING_BUDGET`: unset or unparseable means the default, `0` turns
+/// thinking off, and a larger value is clamped by [`Generation::reasoned`].
+fn forge_reasoning_budget(value: Option<&str>) -> Option<u32> {
+    match value {
+        Some(raw) => match raw.trim().parse::<u32>() {
+            Ok(0) => None,
+            Ok(budget) => Some(budget),
+            Err(_) => Some(DEFAULT_FORGE_REASONING_BUDGET),
+        },
+        None => Some(DEFAULT_FORGE_REASONING_BUDGET),
+    }
+}
+
+/// The generation Forge sends. Thinking is on with the configured budget by default, because
+/// Forge runs in the background and nobody waits on its first word.
+fn forge_generation(budget: Option<u32>) -> Generation {
+    match budget {
+        Some(budget) => Generation::reasoned(FORGE_MAX_ANSWER_TOKENS, FORGE_TEMPERATURE, budget),
+        None => Generation::direct(FORGE_MAX_ANSWER_TOKENS, FORGE_TEMPERATURE),
+    }
+}
+
+/// Weights file name that decides the model family for thinking and sampling. The
+/// orchestrator passes the resolved model path; `SAIL_MODEL_PATH` and `SAIL_FORGE_MODEL` cover
+/// Forge running on its own.
+fn family_model_name(configured_model_path: Option<&Path>, model_name: &str) -> String {
+    configured_model_path
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .or_else(|| std::env::var("SAIL_MODEL_PATH").ok())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| model_name.to_string())
+}
+
+/// Forge keeps its conversation as JSON so tool output and edits pass through unchanged. The
+/// shared request builder takes typed messages, so reduce each turn to its role and text.
+fn protocol_message(message: &serde_json::Value) -> Message {
+    let role = match message.get("role").and_then(|role| role.as_str()) {
+        Some("system") => Role::System,
+        Some("assistant") => Role::Assistant,
+        Some("tool") => Role::Tool,
+        _ => Role::User,
+    };
+    let content = message
+        .get("content")
+        .and_then(|content| content.as_str())
+        .unwrap_or_default();
+    Message::text(role, content)
+}
+
+/// Non-streaming reply text: only the visible content is an answer. Thinking is never a
+/// fallback, and a reply that thought without answering reports the thinking failure.
+fn non_stream_answer(msg_obj: Option<&serde_json::Value>) -> Result<String, &'static str> {
+    let content = msg_obj
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .unwrap_or_default();
+    if !content.trim().is_empty() {
+        return Ok(content.to_string());
+    }
+    let reasoned = msg_obj
+        .and_then(|message| message.get("reasoning_content"))
+        .and_then(|reasoning| reasoning.as_str())
+        .is_some_and(|reasoning| !reasoning.trim().is_empty());
+    Err(if reasoned {
+        THINKING_EXHAUSTED_DETAIL
+    } else {
+        "returned an empty reply"
+    })
+}
+
+/// The chat-completions body Forge sends, built by `sail_common::request_body` so its thinking
+/// switch and sampling are the same ones Mind and the model eval use. `family_model` is the
+/// weights file name, not the served name.
+fn forge_chat_body(
+    messages: &[serde_json::Value],
+    served_model: &str,
+    family_model: &str,
+    generation: &Generation,
+) -> serde_json::Value {
+    let request = InferenceRequest {
+        messages: messages.iter().map(protocol_message).collect(),
+        generation: generation.clone(),
+        ..InferenceRequest::text(String::new())
+    };
+    sail_common::request_body::chat_body(
+        served_model,
+        &sail_common::request_body::family_for(family_model),
+        &request,
+        true,
+    )
 }
 
 fn model_transport_error(
@@ -59,6 +170,9 @@ struct ModelStreamReply {
     pending: Vec<u8>,
     text: String,
     chunks: u32,
+    /// Streamed thinking chunks (llama-server sends one per token). The text is dropped: it
+    /// is never a patch and never shown, only counted for progress and diagnostics.
+    reasoning_chunks: u32,
     complete: bool,
 }
 impl ModelStreamReply {
@@ -78,9 +192,17 @@ impl ModelStreamReply {
                 continue;
             };
             let choice = &value["choices"][0];
+            // Thinking is counted and dropped. Only `content` may become an answer, edit or
+            // tool call; a reasoning-only turn is a model failure, not a patch.
+            if choice["delta"]["reasoning_content"]
+                .as_str()
+                .is_some_and(|piece| !piece.is_empty())
+            {
+                self.reasoning_chunks = self.reasoning_chunks.saturating_add(1);
+            }
             if let Some(piece) = choice["delta"]["content"]
                 .as_str()
-                .or_else(|| choice["delta"]["reasoning_content"].as_str())
+                .filter(|piece| !piece.is_empty())
             {
                 self.text.push_str(piece);
                 self.chunks += 1;
@@ -89,6 +211,15 @@ impl ModelStreamReply {
                 self.complete = true;
                 break;
             }
+        }
+    }
+    /// Why a finished stream produced no acceptable answer. A thinking turn that never reached
+    /// an answer gets its own message instead of looking like a truncated connection.
+    fn empty_reply_detail(&self) -> &'static str {
+        if self.complete && self.reasoning_chunks > 0 {
+            THINKING_EXHAUSTED_DETAIL
+        } else {
+            "stream ended before a complete response; partial output was discarded"
         }
     }
     fn into_complete_text(self) -> Option<String> {
@@ -1043,12 +1174,26 @@ fn compute_file_fingerprint(path: &Path) -> Option<String> {
 pub struct ModelTimeouts {
     /// TCP connect; a local server that is up accepts immediately.
     pub connect: Duration,
-    /// Longest silence while waiting for the slot or between streamed chunks.
+    /// Longest silence while waiting for the first token or between streamed chunks.
     pub idle: Duration,
     /// Retries of a turn after a busy/timeout/5xx/interrupted reply.
     pub busy_retries: u32,
     /// Base backoff between retries (doubles each attempt).
     pub backoff: Duration,
+}
+
+impl ModelTimeouts {
+    /// How long one response may generate in total: the idle window plus time for the answer
+    /// and the thinking budget at [`MIN_GENERATION_TOKENS_PER_SECOND`]. This is the cap that
+    /// stops a thinking turn from being cut off as if it had stalled, while the first token
+    /// and the gaps between chunks keep the smaller `idle` bound: thinking chunks count as
+    /// activity, so silence is still reported long before this total is reached.
+    pub fn generation_deadline(&self, reasoning_budget: Option<u32>) -> Duration {
+        let thinking_tokens = u64::from(reasoning_budget.unwrap_or(0));
+        let answer_tokens = u64::from(FORGE_MAX_ANSWER_TOKENS);
+        let seconds = (thinking_tokens + answer_tokens) / MIN_GENERATION_TOKENS_PER_SECOND;
+        self.idle + Duration::from_secs(seconds)
+    }
 }
 
 impl Default for ModelTimeouts {
@@ -1375,8 +1520,17 @@ impl LocalSolverController {
         F: FnMut() -> bool,
         P: FnMut(SolverProgress),
     {
+        // Thinking is chosen before the client is built so the silence window covers the
+        // budget; the env value is constant for the whole job.
+        let reasoning_budget = match std::env::var("SAIL_FORGE_REASONING_BUDGET") {
+            Ok(value) => forge_reasoning_budget(Some(&value)),
+            Err(_) => forge_reasoning_budget(None),
+        };
+        let generation = forge_generation(reasoning_budget);
+        let generation_limit = self.model_timeouts.generation_deadline(reasoning_budget);
         // No total timeout: a request may legitimately wait for the single model slot
-        // and then stream for minutes on CPU. Bound connection setup and silence instead.
+        // and then stream for minutes on CPU. Bound connection setup and silence instead;
+        // each response gets its own thinking-aware generation window below.
         let client = reqwest::Client::builder()
             .connect_timeout(self.model_timeouts.connect)
             .read_timeout(self.model_timeouts.idle)
@@ -1594,6 +1748,10 @@ Rules:
                     "Qwen3.6-35B-A3B".to_string()
                 }
             });
+            // The weights file name picks thinking and sampling; the served name above is
+            // only what llama-server hears in `model`.
+            let family_model =
+                family_model_name(self.configured_model_path.as_deref(), &model_name);
 
             let model_cancel = tokio_util::sync::CancellationToken::new();
             let model_lease = match self.resource_scheduler.try_admit(
@@ -1618,13 +1776,8 @@ Rules:
                 model_attempts += 1;
                 endpoint_failures.clear();
                 for ep in &probe_list {
-                    let req_body = serde_json::json!({
-                        "model": model_name,
-                        "messages": messages,
-                        "temperature": 0.1,
-                        "max_tokens": 2048,
-                        "stream": true,
-                    });
+                    let req_body =
+                        forge_chat_body(&messages, &model_name, &family_model, &generation);
 
                     let response = match wait_for_model(
                         client.post(ep).json(&req_body).send(),
@@ -1666,7 +1819,20 @@ Rules:
                                 let mut reply = ModelStreamReply::default();
                                 let mut last_emit = std::time::Instant::now();
                                 let mut stream_failed = false;
+                                let generation_deadline = Instant::now() + generation_limit;
                                 loop {
+                                    if Instant::now() >= generation_deadline {
+                                        endpoint_failures.push(EndpointFailure {
+                                            endpoint: ep.clone(),
+                                            detail: format!(
+                                                "generation did not finish within {}s; the model may be thinking or generating too slowly",
+                                                generation_limit.as_secs()
+                                            ),
+                                            transient: true,
+                                        });
+                                        stream_failed = true;
+                                        break;
+                                    }
                                     let chunk = match wait_for_model(
                                         stream.next(),
                                         &mut inference_cancelled,
@@ -1702,17 +1868,39 @@ Rules:
                                     if last_emit.elapsed() > std::time::Duration::from_millis(120)
                                         || reply.text.ends_with('\n')
                                     {
+                                        // While the model thinks there is no patch yet: show
+                                        // how much it has thought, never the thinking text.
+                                        let thinking =
+                                            reply.text.is_empty() && reply.reasoning_chunks > 0;
                                         on_progress(SolverProgress {
                                             turn: turns,
                                             max_turns: self.max_turns,
                                             iteration: iterations + 1,
                                             stage: "coding".into(),
-                                            message: format!(
-                                                "Turn {}/{}: Generating code patch ({} chunks)...",
-                                                turns, self.max_turns, reply.chunks
-                                            ),
-                                            live_output: Some(reply.text.clone()),
-                                            model_action: Some("Streaming model output".into()),
+                                            message: if thinking {
+                                                format!(
+                                                    "Turn {}/{}: thinking ({} tokens)...",
+                                                    turns, self.max_turns, reply.reasoning_chunks
+                                                )
+                                            } else {
+                                                format!(
+                                                    "Turn {}/{}: Generating code patch ({} chunks)...",
+                                                    turns, self.max_turns, reply.chunks
+                                                )
+                                            },
+                                            live_output: if thinking {
+                                                None
+                                            } else {
+                                                Some(reply.text.clone())
+                                            },
+                                            model_action: Some(if thinking {
+                                                format!(
+                                                    "thinking ({} tokens)",
+                                                    reply.reasoning_chunks
+                                                )
+                                            } else {
+                                                "Streaming model output".into()
+                                            }),
                                             diff: worktree.get_diff().ok(),
                                             target_file: None,
                                             activity: None,
@@ -1724,12 +1912,31 @@ Rules:
                                         break;
                                     }
                                 }
-                                if !stream_failed && let Some(text) = reply.into_complete_text() {
-                                    turn_response_text = Some(text);
-                                    break;
+                                let reasoning_chunks = reply.reasoning_chunks;
+                                if reasoning_chunks > 0 {
+                                    on_progress(activity_progress(
+                                        turns,
+                                        max_turns,
+                                        iterations,
+                                        ForgeActivityEntry::new(
+                                            turns,
+                                            "thinking",
+                                            format!("thinking ({reasoning_chunks} tokens)"),
+                                            String::new(),
+                                        ),
+                                    ));
                                 }
                                 if !stream_failed {
-                                    endpoint_failures.push(EndpointFailure { endpoint: ep.clone(), detail: "stream ended before a complete response; partial output was discarded".into(), transient: true });
+                                    let empty_detail = reply.empty_reply_detail();
+                                    if let Some(text) = reply.into_complete_text() {
+                                        turn_response_text = Some(text);
+                                        break;
+                                    }
+                                    endpoint_failures.push(EndpointFailure {
+                                        endpoint: ep.clone(),
+                                        detail: empty_detail.into(),
+                                        transient: true,
+                                    });
                                 }
                             } else if let Ok(json_val) = match wait_for_model(
                                 resp.json::<serde_json::Value>(),
@@ -1761,33 +1968,17 @@ Rules:
                                     .and_then(|c| c.get(0))
                                     .and_then(|c| c.get("message"));
 
-                                let content = msg_obj
-                                    .and_then(|m| m.get("content"))
-                                    .and_then(|c| c.as_str())
-                                    .unwrap_or_default();
-
-                                let reasoning = msg_obj
-                                    .and_then(|m| m.get("reasoning_content"))
-                                    .and_then(|r| r.as_str())
-                                    .unwrap_or_default();
-
-                                let text = if !content.trim().is_empty() {
-                                    content.to_string()
-                                } else if !reasoning.trim().is_empty() {
-                                    reasoning.to_string()
-                                } else {
-                                    String::new()
-                                };
-
-                                if !text.is_empty() {
-                                    turn_response_text = Some(text);
-                                    break;
+                                match non_stream_answer(msg_obj) {
+                                    Ok(text) => {
+                                        turn_response_text = Some(text);
+                                        break;
+                                    }
+                                    Err(detail) => endpoint_failures.push(EndpointFailure {
+                                        endpoint: ep.clone(),
+                                        detail: detail.into(),
+                                        transient: true,
+                                    }),
                                 }
-                                endpoint_failures.push(EndpointFailure {
-                                    endpoint: ep.clone(),
-                                    detail: "returned an empty reply".into(),
-                                    transient: true,
-                                });
                             } else {
                                 endpoint_failures.push(EndpointFailure {
                                     endpoint: ep.clone(),
@@ -2484,6 +2675,134 @@ mod model_transport_tests {
         let mut empty = ModelStreamReply::default();
         empty.push(b"data: [DONE]\n");
         assert!(empty.into_complete_text().is_none());
+    }
+
+    fn forge_test_messages() -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({"role": "system", "content": "solve the issue"}),
+            serde_json::json!({"role": "user", "content": "issue body"}),
+        ]
+    }
+
+    #[test]
+    fn reasoning_chunks_are_counted_but_never_become_the_patch() {
+        let mut reply = ModelStreamReply::default();
+        reply.push(
+            b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"I should edit file\"}}]}\n\n",
+        );
+        reply.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"--- a/file\\n\"}}]}\n\n");
+        reply.push(b"data: [DONE]\n\n");
+        assert_eq!(reply.reasoning_chunks, 1);
+        assert_eq!(reply.chunks, 1);
+        assert_eq!(reply.into_complete_text().as_deref(), Some("--- a/file\n"));
+    }
+
+    #[test]
+    fn reasoning_without_content_is_the_thinking_failure_not_a_patch() {
+        let mut reply = ModelStreamReply::default();
+        reply.push(
+            b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"},\"finish_reason\":\"length\"}]}\n\n",
+        );
+        assert_eq!(reply.empty_reply_detail(), THINKING_EXHAUSTED_DETAIL);
+        assert!(!reply.empty_reply_detail().contains("--- a/"));
+        assert!(reply.into_complete_text().is_none());
+    }
+
+    #[test]
+    fn non_stream_thinking_is_never_the_answer() {
+        let thinking_only =
+            serde_json::json!({"content": "", "reasoning_content": "the answer is 391"});
+        assert!(matches!(
+            non_stream_answer(Some(&thinking_only)),
+            Err(THINKING_EXHAUSTED_DETAIL)
+        ));
+        let answered =
+            serde_json::json!({"content": "{\"tool\":\"done\"}", "reasoning_content": "hmm"});
+        assert_eq!(
+            non_stream_answer(Some(&answered)).as_deref(),
+            Ok("{\"tool\":\"done\"}")
+        );
+    }
+
+    #[test]
+    fn forge_body_asks_for_thinking_within_its_budget() {
+        let messages = forge_test_messages();
+        let generation = forge_generation(forge_reasoning_budget(None));
+        let body = forge_chat_body(
+            &messages,
+            "Qwen3.6-35B-A3B",
+            "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+            &generation,
+        );
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
+        assert_eq!(body["reasoning_budget_tokens"], 2048);
+        assert_eq!(body["reasoning_format"], "deepseek");
+        // The answer keeps its full room; thinking is added on top.
+        assert_eq!(body["max_tokens"], 2048 + 2048);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["messages"], serde_json::json!(messages));
+    }
+
+    #[test]
+    fn forge_budget_zero_turns_thinking_off() {
+        let messages = forge_test_messages();
+        let generation = forge_generation(forge_reasoning_budget(Some("0")));
+        let body = forge_chat_body(
+            &messages,
+            "Qwen3.6-35B-A3B",
+            "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+            &generation,
+        );
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+        assert!(body.get("reasoning_budget_tokens").is_none());
+        assert_eq!(body["max_tokens"], 2048);
+    }
+
+    #[test]
+    fn forge_budget_is_clamped_and_invalid_values_use_the_default() {
+        assert_eq!(
+            forge_reasoning_budget(Some("not-a-number")),
+            Some(DEFAULT_FORGE_REASONING_BUDGET)
+        );
+        let generation = forge_generation(forge_reasoning_budget(Some("1000000")));
+        assert_eq!(
+            generation.reasoning_budget,
+            Some(sail_protocol::MAX_REASONING_BUDGET)
+        );
+        let body = forge_chat_body(
+            &forge_test_messages(),
+            "Qwen3.6-35B-A3B",
+            "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+            &generation,
+        );
+        assert_eq!(
+            body["reasoning_budget_tokens"],
+            sail_protocol::MAX_REASONING_BUDGET
+        );
+    }
+
+    #[test]
+    fn thinking_budget_extends_the_generation_window_not_the_stall_bound() {
+        let timeouts = ModelTimeouts {
+            connect: Duration::from_secs(1),
+            idle: Duration::from_secs(60),
+            busy_retries: 1,
+            backoff: Duration::from_secs(1),
+        };
+        // The first token and inter-chunk silence keep using `idle`; only the total
+        // generation window grows, by the answer plus the thinking budget at 8 tokens/s.
+        assert_eq!(
+            timeouts.generation_deadline(None),
+            Duration::from_secs(60 + 2048 / 8)
+        );
+        assert_eq!(
+            timeouts.generation_deadline(Some(800)),
+            Duration::from_secs(60 + (800 + 2048) / 8)
+        );
+        assert_eq!(
+            timeouts.generation_deadline(Some(4096)),
+            Duration::from_secs(60 + (4096 + 2048) / 8)
+        );
     }
 
     #[tokio::test]

@@ -72,6 +72,80 @@ judge, grounded answers) and Forge's eval before relying on it. On the CPU-only 
 (2026-11-07), LFM3-Omni-2B read prompts at ~119 tokens/s and wrote at ~24 tokens/s, against
 ~48 and ~9.5 for Qwen3.6, and returned well-formed tool calls.
 
+## Thinking and sampling
+
+*Decided 2026-11-08 (LLM task force round 6).*
+
+**What was wrong.** Mind sent `enable_thinking: false` on every request, so no SAIL work ever
+reasoned, not even background jobs where nobody is waiting. Forge called llama-server
+directly without that switch, and llama-server lets Qwen3 think **without limit** by
+default: a one-line arithmetic question used all 200 of its tokens thinking and returned an
+empty answer. Forge then read the thinking text (`reasoning_content`) as if it were the
+answer. Sampling was llama-server's default for everything except temperature, not what the
+model's authors recommend.
+
+**Decision.** Thinking is chosen per request, with a hard budget:
+
+- `Generation::reasoning_budget: Option<u32>` (`sail-protocol`). `None` means no thinking
+  and is the default, so existing callers are unchanged. `Some(n)` allows up to `n` tokens of
+  thinking, clamped to `MAX_REASONING_BUDGET` (4096).
+- `max_tokens` stays the **answer** budget. `sail_common::request_body` adds the thinking
+  budget to what it asks llama-server for (`max_tokens + n`), sets
+  `reasoning_budget_tokens: n` (llama.cpp forces the end-of-thinking tag at the budget) and
+  `reasoning_format: deepseek`, so reasoning arrives in `reasoning_content` and never in the
+  answer.
+- Mind counts streamed thinking chunks into `Usage::reasoning_tokens` and drops the text: it
+  is never returned, streamed to the UI, spoken or stored. The context-window check and the
+  output-token check include the thinking budget. The inference deadline grows by the budget
+  at 8 tokens/s.
+- **Live voice and anything interactive never think.** At about 16 tokens/s, each 1000
+  tokens of thinking is about a minute before the first word.
+- **Sampling follows the model card**, per family (`request_body::family_for`, from the
+  weights file name):
+  - Qwen3.x answering directly: top_p 0.8, top_k 20, min_p 0.
+  - Qwen3.x thinking: top_p 0.95, top_k 20, min_p 0, and temperature at least 0.6, because
+    greedy decoding makes the thinking loop.
+  - LFM: min_p 0.15, repeat penalty 1.05, and no thinking mode.
+  - Any other model: server defaults, with thinking off.
+
+  The caller still picks the temperature.
+- `sail_model_eval` builds its bodies with the same `request_body::chat_body`, so a score
+  is a score for what SAIL really sends.
+
+**Which work may think.** Each background job has one row in `request_body::Job`. Its
+built-in budget is set only after the model eval shows that thinking helps, and an
+environment variable overrides it, so the owner can trial a budget without a rebuild. The
+value is a number of tokens, or `off`/`0`. **Measured 2026-11-09: no gain on this host, at
+4–5× the time, so every default is off** (see
+[Model eval → Results](MODEL_EVAL.md#results-thinking-on-this-host-2026-11-09)). Forge is the
+exception: it had been thinking without limit. It now thinks within 2048 tokens, which is
+strictly bounded compared with before.
+
+| Job | Caller | Override |
+|---|---|---|
+| Learn free-recall judge | `arena-learn/agent/judge.rs` | `SAIL_THINK_JUDGE` |
+| Course Factory authoring | `factory/author/prompts.rs` → `MindAuthor` | `SAIL_THINK_COURSE_AUTHORING` |
+| Moodle extraction | `sail-dialogue/moodle_model.rs` → `MindAuthor` | `SAIL_THINK_MOODLE` |
+| Background plans (never interactive ones) | `sail-agents/planning.rs` | `SAIL_THINK_PLANNING` |
+| Memory consolidation | `sail-core` proposer | `SAIL_THINK_MEMORY` |
+| Forge | `sail-forge/solver.rs` (calls llama-server directly) | `SAIL_FORGE_REASONING_BUDGET` (default 2048) |
+
+Forge streams with the same body builder. Only `delta.content` can become a patch, and
+thinking shows in its activity as "thinking (N tokens)", never as text. A turn that thinks
+without answering is retried like any other empty reply.
+
+**Output limit.** Mind's `ResourceLimits::max_output_tokens` is 4096, the largest answer
+budget a caller asks for (Course Factory lessons). It was 1024 until 2026-11-08, so Mind
+rejected every Moodle extraction (2048) as an invalid request. Tests now check that the
+authoring and extraction budgets fit. The planner and Arena turns keep their own 1024.
+
+**Not in this round:**
+
+- Sending a hard background job to a stronger external model waits for the guarded external
+  provider work (draft PR #262). Moodle and memory data stay local whatever happens.
+- A larger KV cache precision (`SAIL_CACHE_TYPE_K=q8_0`) is already configurable. It is
+  measured with the eval before the default changes, because it costs VRAM on the RX 5500.
+
 ## Host admission and voice priority
 
 Mind shares Core's process-wide resource broker with Forge and speech workers. Owned

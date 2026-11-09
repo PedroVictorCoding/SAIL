@@ -478,9 +478,16 @@ impl Planner for MindPlanner {
             ),
         );
         inference.generation = Generation {
-            // Mind's output limit; larger requests are rejected outright.
-            max_tokens: sail_protocol::ResourceLimits::default().max_output_tokens,
+            // A plan is short; this was Mind's whole output limit before it grew for
+            // Course Factory, and plans have never needed more.
+            max_tokens: 1024,
             temperature: 0.1,
+            // Only background plans may think; someone is waiting on an interactive one.
+            reasoning_budget: if request.interactive {
+                None
+            } else {
+                sail_common::request_body::Job::Planning.budget()
+            },
         };
         let priority = if request.interactive {
             WorkPriority::Interactive
