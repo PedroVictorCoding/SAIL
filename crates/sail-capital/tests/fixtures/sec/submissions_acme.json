@@ -1,0 +1,26 @@
+{
+  "cik": "1234567",
+  "name": "Acme Widgets Inc.",
+  "tickers": ["ACME"],
+  "filings": {
+    "recent": {
+      "accessionNumber": [
+        "0001234567-24-000001",
+        "0001234567-24-000002",
+        "0001234567-24-000003"
+      ],
+      "filingDate": ["2024-11-01", "2024-08-02", "2024-05-03"],
+      "reportDate": ["2024-09-28", "", "2024-03-30"],
+      "acceptanceDateTime": [
+        "2024-11-01T06:01:36.000Z",
+        "",
+        "2024-05-03T16:05:00.000Z"
+      ],
+      "form": ["10-K", "8-K", "10-Q"],
+      "items": ["", "2.02, 9.01, 7.1, nope", ""],
+      "primaryDocument": ["acme-20240928.htm", "../evil.htm", "acme-10q.htm"],
+      "primaryDocDescription": ["10-K", "", "10-Q"]
+    },
+    "files": []
+  }
+}
