@@ -77,6 +77,62 @@ this slice depends on it.
 8. **Private.** Account numbers are masked to their last four digits. Reports and the
    ledger stay on the host, and nothing is sent to any external service.
 
+## Importing XTB reports
+
+1. In XTB's **web** platform, open History. Choose the date range and **Export** the
+   cash operations, closed positions and open positions. Reports exported from the mobile
+   app leave out open positions.
+2. Upload each file on the Capital page. `POST /api/capital/import/xtb` takes the raw
+   bytes plus an `X-File-Name` header (`.xlsx` or `.csv`), and accepts these optional
+   parameters:
+   - `?account=` sets the account label. Digits are masked to the last four.
+   - `?tz=` sets the time zone of the report's times. The default is `Europe/Lisbon`.
+   - `?currency=` sets the account currency, for files that don't state one. It is
+     never assumed.
+3. Re-uploading a file adds nothing. A longer export of the same history adds only the
+   rows that are new. If a row comes back with different content, it is listed under
+   `/conflicts` and is never applied silently.
+
+The importer finds columns by their header text, in English or Portuguese. It ignores
+column positions and sheet names. The export layout comes from public examples and has
+not yet been checked against a real export. Every row it can't read is reported as an
+issue.
+
+**Currencies.**
+- Cash amounts, purchase values and P/L are in the account currency.
+- Per-unit prices (`OPEN BUY 10 @ 150.00`, open price, market price) are in the
+  instrument's own trading currency. XTB doesn't state that currency, so these prices
+  are recorded as unknown rather than given the wrong label.
+- Cost basis is the cash actually paid, in the account currency.
+- The value at export is the broker's purchase value plus gross P/L.
+
+## API (`/api/capital`, owner token required)
+
+| Route | Returns |
+|---|---|
+| `GET /accounts` | Accounts, with currency, last import, last snapshot time and row count |
+| `GET /portfolio?account=&occurred_by=&known_by=` | The ledger projection: positions, CFD positions, cash per currency, dividends, realized results, flows, reconciliation and warnings |
+| `GET /positions?account=` | Positions and CFD positions, plus `snapshot_as_of` |
+| `GET /cashflows?account=&from=&to=` | Ledger rows in `[from, to)`, at most 5,000 |
+| `GET /dividends?account=&from=&to=` | Dividends, with withholding matched and net |
+| `GET /sync/status?account=` | Import batches, newest first, with per-sheet counts and issues |
+| `GET /conflicts?account=` | Keys that came back with different content |
+| `POST /import/xtb?account=&tz=&currency=` | The batch record for the upload |
+
+All amounts are decimal strings. Errors are `{"error": "..."}`, with these status codes:
+
+| Status | Meaning |
+|---|---|
+| 400 | The input is wrong |
+| 404 | No portfolio exists yet |
+| 422 | The report can't be read |
+| 401 / 503 | Authentication failed or isn't available |
+
+Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capital/`:
+- `capital.sqlite3`, the ledger;
+- `reports/<sha256>.<ext>`, the original uploads, kept as evidence and readable only by
+  the owner.
+
 ## Not in this slice
 
 - Market prices, FX conversion and EUR totals across currencies.
