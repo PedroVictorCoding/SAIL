@@ -18,6 +18,7 @@ members = [
     "crates/sail-pulse",
     "crates/sail-tracker",
     "crates/sail-moodle",
+    "crates/sail-capital",
     "crates/sail-forge",
     "crates/sail-core",
     "crates/sail-ui",
@@ -71,5 +72,6 @@ sail-continuity = { path = "crates/sail-continuity" }
 sail-pulse = { path = "crates/sail-pulse" }
 sail-tracker = { path = "crates/sail-tracker" }
 sail-moodle = { path = "crates/sail-moodle" }
+sail-capital = { path = "crates/sail-capital" }
 sail-forge = { path = "crates/sail-forge" }
 sail-ui = { path = "crates/sail-ui" }

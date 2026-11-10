@@ -1,0 +1,16 @@
+Account:;51234567;Currency:;EUR
+Name and surname:;Confidential Owner Name
+ID;Type;Time;Comment;Symbol;Amount
+101;Deposit;01.01.2025 09:00:00;;;5000.0
+102;Withdrawal;02.01.2025 10:00:00;;;-500.0
+103;Sub account transfer;03.01.2025 11:00:00;Transfer to EUR sub;;-100.0
+104;Stocks/ETF purchase;04.01.2025 14:30:00;OPEN BUY 10 @ 150.00;AAPL.US;-1500.0
+105;Stocks/ETF sale;05.01.2025 16:00:00;CLOSE BUY 5/10 @ 180.00;AAPL.US;900.0
+106;DIVIDENT;06.01.2025 12:00:00;Dividend payment;MSFT.US;25.5
+107;Withholding Tax;06.01.2025 12:00:00;WHT 15%;MSFT.US;-3.83
+108;Free-funds Interest;07.01.2025 00:00:00;Interest on uninvested cash;;4.2
+109;Free-funds Interest Tax;07.01.2025 00:00:00;Tax on interest;;-1.18
+110;SEC fee;08.01.2025 14:30:00;SEC fee on AAPL;AAPL.US;-0.05
+111;commission;08.01.2025 14:30:00;Broker fee;AAPL.US;-1.5
+112;swap;09.01.2025 23:00:00;Financing;US500;-0.75
+113;close trade;10.01.2025 15:45:00;CFD profit;US500;45.0

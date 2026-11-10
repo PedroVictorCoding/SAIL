@@ -17,6 +17,7 @@ pub mod live_context;
 pub mod memory_http;
 pub mod mind_models_http;
 pub mod model_eval;
+pub mod capital_http;
 pub mod moodle_http;
 pub mod moodle_model;
 mod moodle_tools;

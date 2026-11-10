@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>SAIL Capital</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/capital.css">
+</head>
+<body>
+<a class="cp-skip" href="#cpMain">Skip to portfolio</a>
+
+<header class="cp-bar">
+  <a class="cp-button cp-back" href="/" target="_top" aria-label="Back to SAIL home">← SAIL</a>
+  <div class="cp-heading">
+    <h1>Capital</h1>
+    <span class="cp-sub">portfolio & reconciliation</span>
+  </div>
+
+  <div class="cp-bar-meta">
+    <span class="cp-freshness" id="cpFreshness">XTB data as of — · imported —</span>
+    <select class="cp-select" id="cpAccountSelect" aria-label="Select Account" hidden></select>
+  </div>
+
+  <p class="cp-pill" id="cpState" role="status" data-state="idle">
+    <span class="cp-dot" aria-hidden="true"></span>
+    <span id="cpStateText">Ready</span>
+  </p>
+
+  <div class="cp-actions">
+    <button class="cp-button cp-primary" id="cpUploadBtn" type="button">Upload report</button>
+    <button class="cp-button" id="cpRefreshBtn" type="button" aria-label="Refresh portfolio">Refresh</button>
+  </div>
+  <input type="file" id="cpFileInput" accept=".xlsx,.csv" hidden>
+</header>
+
+<p class="cp-banner" id="cpBanner" role="alert" hidden></p>
+
+<main id="cpMain" tabindex="-1">
+  <!-- Reconciliation Card -->
+  <section class="cp-reconciliation" id="cpReconciliation" aria-labelledby="cpReconTitle" hidden>
+    <div class="cp-recon-header">
+      <h2 id="cpReconTitle">Reconciliation</h2>
+      <span class="cp-recon-badge" id="cpReconBadge">Unverified</span>
+    </div>
+    <p class="cp-recon-summary" id="cpReconSummary"></p>
+    <div class="cp-variances" id="cpVariances" hidden>
+      <h3>Variances</h3>
+      <ul class="cp-var-list" id="cpVariancesList"></ul>
+    </div>
+  </section>
+
+  <!-- Key Metrics / Tiles -->
+  <section class="cp-metrics" id="cpMetrics" aria-label="Portfolio summary">
+    <div class="cp-tile">
+      <span class="cp-tile-label">Cash Balance</span>
+      <div class="cp-tile-val" id="cpCashVal">—</div>
+      <span class="cp-tile-sub">Per stated currency</span>
+    </div>
+    <div class="cp-tile">
+      <span class="cp-tile-label">Owned Securities</span>
+      <div class="cp-tile-val" id="cpHoldingsVal">—</div>
+      <span class="cp-tile-sub" id="cpHoldingsSub">0 positions</span>
+    </div>
+    <div class="cp-tile">
+      <span class="cp-tile-label">Dividends (Net)</span>
+      <div class="cp-tile-val" id="cpDividendsVal">—</div>
+      <span class="cp-tile-sub" id="cpDividendsSub">After withholding</span>
+    </div>
+    <div class="cp-tile">
+      <span class="cp-tile-label">Fees & Financing</span>
+      <div class="cp-tile-val" id="cpFeesVal">—</div>
+      <span class="cp-tile-sub" id="cpFeesSub">Commissions & swaps</span>
+    </div>
+  </section>
+
+  <!-- Owned Positions -->
+  <section class="cp-panel" id="cpPositionsPanel" aria-labelledby="cpPositionsTitle">
+    <header class="cp-panel-head">
+      <h2 id="cpPositionsTitle">Owned Positions</h2>
+      <span class="cp-badge">Stocks & ETFs</span>
+    </header>
+    <div class="cp-table-wrap">
+      <table class="cp-table" id="cpPositionsTable">
+        <thead>
+          <tr>
+            <th scope="col">Instrument</th>
+            <th scope="col" class="num">Quantity</th>
+            <th scope="col" class="num">Cost Basis</th>
+            <th scope="col" class="num">Broker Market Value</th>
+            <th scope="col">Lots</th>
+          </tr>
+        </thead>
+        <tbody id="cpPositionsBody">
+          <tr><td colspan="5" class="cp-empty">No owned positions recorded.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- CFD Positions -->
+  <section class="cp-panel cp-cfd-panel" id="cpCfdPanel" aria-labelledby="cpCfdTitle">
+    <header class="cp-panel-head">
+      <div class="cp-title-group">
+        <h2 id="cpCfdTitle">CFD Positions</h2>
+        <span class="cp-sub-notice">Leveraged contracts · not owned shares</span>
+      </div>
+      <span class="cp-badge cp-badge-cfd">Derivatives</span>
+    </header>
+    <div class="cp-table-wrap">
+      <table class="cp-table" id="cpCfdTable">
+        <thead>
+          <tr>
+            <th scope="col">Contract</th>
+            <th scope="col" class="num">Volume (Lots)</th>
+            <th scope="col" class="num">Cost Basis</th>
+            <th scope="col" class="num">Broker Market Value</th>
+            <th scope="col">Lots</th>
+          </tr>
+        </thead>
+        <tbody id="cpCfdBody">
+          <tr><td colspan="5" class="cp-empty">No open CFD contracts.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Dividends & Income -->
+  <section class="cp-panel" id="cpDividendsPanel" aria-labelledby="cpDividendsTitle">
+    <header class="cp-panel-head">
+      <h2 id="cpDividendsTitle">Dividends & Income</h2>
+      <span class="cp-badge">Distributions</span>
+    </header>
+    <div class="cp-table-wrap">
+      <table class="cp-table" id="cpDividendsTable">
+        <thead>
+          <tr>
+            <th scope="col">Date</th>
+            <th scope="col">Security</th>
+            <th scope="col" class="num">Gross</th>
+            <th scope="col" class="num">Withholding</th>
+            <th scope="col" class="num">Net</th>
+          </tr>
+        </thead>
+        <tbody id="cpDividendsBody">
+          <tr><td colspan="5" class="cp-empty">No dividend events recorded.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Import Status & Issues -->
+  <section class="cp-panel" id="cpSyncPanel" aria-labelledby="cpSyncTitle">
+    <header class="cp-panel-head">
+      <h2 id="cpSyncTitle">Import Batches</h2>
+      <span class="cp-badge">History & Issues</span>
+    </header>
+    <div class="cp-sync-list" id="cpSyncList">
+      <p class="cp-empty">No imports recorded yet. Upload an official XTB export above.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="cp-foot">
+  <span>Private & local-first: statements remain on this host. SAIL never signs in to XTB.</span>
+  <span>Evidence, not truth. Reconciled against official broker exports.</span>
+</footer>
+
+<!-- Upload Options Dialog -->
+<dialog class="cp-dialog" id="cpUploadDialog" aria-labelledby="cpDialogTitle">
+  <form method="dialog" class="cp-dialog-form" id="cpUploadForm">
+    <header class="cp-dialog-head">
+      <h2 id="cpDialogTitle">Upload XTB Statement</h2>
+      <p>Select time zone and confirm statement file.</p>
+    </header>
+    <div class="cp-dialog-body">
+      <div class="cp-field">
+        <label for="cpTzSelect">Report Time Zone</label>
+        <select class="cp-select" id="cpTzSelect">
+          <option value="Europe/Lisbon" selected>Europe/Lisbon (WET/WEST)</option>
+          <option value="Europe/Madrid">Europe/Madrid (CET/CEST)</option>
+          <option value="Europe/London">Europe/London (GMT/BST)</option>
+          <option value="UTC">UTC</option>
+        </select>
+        <span class="cp-field-hint">Time zone configured in your XTB web platform session.</span>
+      </div>
+      <div class="cp-field">
+        <label for="cpCurrencySelect">Account currency</label>
+        <select class="cp-select" id="cpCurrencySelect">
+          <option value="EUR" selected>EUR</option>
+          <option value="USD">USD</option>
+          <option value="GBP">GBP</option>
+          <option value="PLN">PLN</option>
+        </select>
+        <span class="cp-field-hint">Used only when the export itself doesn't state the account currency.</span>
+      </div>
+      <div class="cp-file-preview" id="cpFilePreview">
+        <span class="cp-file-name" id="cpFileName">No file chosen</span>
+        <span class="cp-file-size" id="cpFileSize"></span>
+      </div>
+    </div>
+    <footer class="cp-dialog-actions">
+      <button class="cp-button" id="cpDialogCancel" type="button">Cancel</button>
+      <button class="cp-button cp-primary" id="cpDialogSubmit" type="button">Import Now</button>
+    </footer>
+  </form>
+</dialog>
+
+<script src="/capital.js" type="module"></script>
+</body>
+</html>
