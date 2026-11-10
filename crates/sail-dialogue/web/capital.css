@@ -614,6 +614,201 @@ main {
   gap: 10px;
 }
 
+/* Panel actions container */
+.cp-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* SEC Filings & Evidence section (Round 8) */
+.cp-sec-note {
+  padding: 14px 20px;
+  background: rgba(222, 238, 255, 0.03);
+  border-bottom: 1px solid var(--sail-glass-border);
+  color: var(--sail-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cp-sec-note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--sail-surface-raised);
+  color: var(--sail-text);
+  border: 1px solid var(--sail-glass-border);
+}
+
+.cp-filings-list {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cp-filing-card {
+  background: var(--sail-surface-raised);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color var(--sail-transition-fast), background var(--sail-transition-fast);
+}
+
+.cp-filing-card:hover {
+  border-color: rgba(222, 238, 255, 0.22);
+}
+
+.cp-filing-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cp-filing-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cp-badge-proposal {
+  background: rgba(92, 205, 164, 0.15);
+  color: #5ccda4;
+  border: 1px solid rgba(92, 205, 164, 0.35);
+  font-weight: 600;
+  border-radius: 10px;
+  padding: 3px 8px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.cp-badge-watch {
+  background: rgba(133, 146, 166, 0.15);
+  color: var(--sail-text);
+  border: 1px solid var(--sail-glass-border);
+  font-weight: 500;
+  border-radius: 10px;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.cp-filing-form {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--sail-text);
+}
+
+.cp-filing-issuer {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sail-text);
+}
+
+.cp-filing-reason {
+  font-size: 13px;
+  color: var(--sail-text-muted);
+}
+
+.cp-filing-exposure {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--sail-text-subtle);
+  background: rgba(0, 0, 0, 0.2);
+  padding: 6px 12px;
+  border-radius: 8px;
+  width: fit-content;
+}
+
+.cp-filing-exposure strong {
+  color: var(--sail-text);
+  font-weight: 600;
+}
+
+.cp-filing-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(222, 238, 255, 0.06);
+}
+
+.cp-filing-time {
+  font-size: 12px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-filing-link {
+  color: #7bb4eb;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cp-filing-link:hover {
+  text-decoration: underline;
+  color: #a4cefa;
+}
+
+.cp-filing-link:focus-visible {
+  outline: 2px solid var(--sail-focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Unmatched / Non-US Holdings Section */
+.cp-unmatched-wrap {
+  padding: 16px 20px;
+  border-top: 1px solid var(--sail-glass-border);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.cp-unmatched-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sail-text-muted);
+  margin-bottom: 10px;
+}
+
+.cp-unmatched-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cp-unmatched-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.cp-unmatched-symbol {
+  font-weight: 600;
+  color: var(--sail-text);
+  min-width: 80px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.cp-unmatched-reason {
+  color: var(--sail-text-muted);
+}
+
 /* Footer */
 .cp-foot {
   padding: 18px 24px;

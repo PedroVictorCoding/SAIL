@@ -528,6 +528,8 @@ function setupUploadDialog() {
       // Refresh first, then report the result so the refresh doesn't hide it.
       await loadAccounts();
       await loadPortfolio();
+      await loadFilings();
+      await loadSecStatus();
       await loadSyncStatus();
       showBanner(
         batch.already_imported
@@ -542,6 +544,129 @@ function setupUploadDialog() {
       fileInput.value = "";
     }
   });
+}
+
+async function loadSecStatus() {
+  try {
+    const status = await fetchJson("/api/capital/sec/status");
+    const notConfiguredNote = document.getElementById("cpSecNotConfiguredNote");
+    if (notConfiguredNote) {
+      notConfiguredNote.hidden = Boolean(status.configured);
+    }
+    const metaSpan = document.getElementById("cpSecStatusMeta");
+    if (metaSpan) {
+      if (!status.configured) {
+        metaSpan.textContent = "SEC access not configured";
+      } else if (status.last_refresh_at) {
+        metaSpan.textContent = `Last check ${formatDate(status.last_refresh_at)} · ${status.new_evidence || 0} new filings`;
+      } else {
+        metaSpan.textContent = "Ready to check SEC EDGAR";
+      }
+    }
+    const badge = document.getElementById("cpSecBadge");
+    if (badge) {
+      badge.textContent = status.configured ? "EDGAR Active" : "Unconfigured";
+    }
+  } catch (err) {
+    console.error("Failed to load SEC status:", err);
+  }
+}
+
+async function loadFilings() {
+  const list = document.getElementById("cpFilingsList");
+  const unmatchedWrap = document.getElementById("cpUnmatchedWrap");
+  const unmatchedList = document.getElementById("cpUnmatchedList");
+  if (!list) return;
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const data = await fetchJson(`/api/capital/filings${query}`);
+    const items = data.items || [];
+    const matches = data.matches || [];
+
+    if (items.length === 0) {
+      list.innerHTML = `<p class="cp-empty">No filings recorded for owned holdings.</p>`;
+    } else {
+      list.innerHTML = "";
+      for (const item of items) {
+        const card = document.createElement("div");
+        card.className = "cp-filing-card";
+
+        const isProposal = item.action === "research_proposal";
+        const badgeClass = isProposal ? "cp-badge-proposal" : "cp-badge-watch";
+        const badgeLabel = isProposal ? "Research Proposal" : "Watch";
+
+        // Find match for symbol/ticker
+        const match = matches.find(m => m.instrument_key === (item.exposure && item.exposure.instrument_key));
+        const symbol = match ? match.symbol : (item.exposure && item.exposure.instrument_key) || "";
+        const ticker = (match && match.match && match.match.ticker)
+          ? match.match.ticker
+          : symbol.replace(/\.US$/i, "");
+
+        // Exposure info
+        const exposure = item.exposure || {};
+        const exposureParts = [];
+        if (exposure.quantity) {
+          exposureParts.push(`<span>Holding: <strong>${escapeHtml(exposure.quantity)}</strong> units</span>`);
+        }
+        if (exposure.broker_market_value) {
+          exposureParts.push(`<span>Value: <strong>${formatMoney(exposure.broker_market_value)}</strong></span>`);
+        }
+        if (exposure.share_of_owned_value !== null && exposure.share_of_owned_value !== undefined) {
+          const pct = (parseFloat(exposure.share_of_owned_value) * 100).toFixed(2);
+          exposureParts.push(`<span>Share: <strong>${pct}%</strong> of owned value</span>`);
+        }
+
+        // Link validation: must start with https://www.sec.gov/
+        const url = (item.filing && item.filing.url && item.filing.url.startsWith("https://www.sec.gov/"))
+          ? item.filing.url
+          : null;
+        const linkHtml = url
+          ? `<a class="cp-filing-link" href="${escapeHtml(url)}" rel="noopener noreferrer" target="_blank">View on sec.gov ↗</a>`
+          : "";
+
+        card.innerHTML = `
+          <div class="cp-filing-top">
+            <div class="cp-filing-title-group">
+              <span class="${badgeClass}">${escapeHtml(badgeLabel)}</span>
+              <span class="cp-filing-form">${escapeHtml((item.filing && item.filing.form) || "")}</span>
+              <span class="cp-filing-issuer">${escapeHtml(item.issuer_name || "")} (${escapeHtml(ticker)})</span>
+            </div>
+            ${linkHtml}
+          </div>
+          <div class="cp-filing-reason">${escapeHtml(item.reason || "")}</div>
+          ${exposureParts.length > 0 ? `<div class="cp-filing-exposure">${exposureParts.join("")}</div>` : ""}
+          <div class="cp-filing-bottom">
+            <span class="cp-filing-time">Published ${formatDate(item.published_at)} · first seen by SAIL ${formatDate(item.first_observed_at)}</span>
+          </div>
+        `;
+        list.appendChild(card);
+      }
+    }
+
+    // Unmatched / non-US holdings
+    const uncovered = matches.filter(m => m.match && m.match.status !== "matched");
+    if (unmatchedWrap && unmatchedList) {
+      if (uncovered.length > 0) {
+        unmatchedWrap.hidden = false;
+        unmatchedList.innerHTML = uncovered.map(m => {
+          const reason = m.match.status === "not_us_listed"
+            ? "Non-US listing (no .US suffix); SEC does not apply"
+            : (m.match.reason || "Unresolved");
+          return `
+            <li class="cp-unmatched-item">
+              <span class="cp-unmatched-symbol">${escapeHtml(m.symbol)}</span>
+              <span class="cp-unmatched-reason">${escapeHtml(reason)}</span>
+            </li>
+          `;
+        }).join("");
+      } else {
+        unmatchedWrap.hidden = true;
+      }
+    }
+  } catch (err) {
+    list.innerHTML = `<p class="cp-empty">Filings unavailable: ${escapeHtml(err.message)}</p>`;
+  }
 }
 
 function escapeHtml(str) {
@@ -562,7 +687,29 @@ document.addEventListener("DOMContentLoaded", () => {
     refreshBtn.addEventListener("click", () => {
       showBanner("");
       loadPortfolio();
+      loadFilings();
+      loadSecStatus();
       loadSyncStatus();
+    });
+  }
+
+  const secRefreshBtn = document.getElementById("cpSecRefreshBtn");
+  if (secRefreshBtn) {
+    secRefreshBtn.addEventListener("click", async () => {
+      secRefreshBtn.disabled = true;
+      secRefreshBtn.textContent = "Checking SEC...";
+      try {
+        const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+        const res = await fetchJson(`/api/capital/sec/refresh${query}`, { method: "POST" });
+        await loadFilings();
+        await loadSecStatus();
+        showBanner(`SEC check complete: ${res.issuers_checked || 0} issuers checked, ${res.new_evidence || 0} new filings stored.`);
+      } catch (err) {
+        showBanner(`SEC refresh failed: ${err.message}`, true);
+      } finally {
+        secRefreshBtn.disabled = false;
+        secRefreshBtn.textContent = "Check SEC now";
+      }
     });
   }
 
@@ -571,12 +718,16 @@ document.addEventListener("DOMContentLoaded", () => {
     accountSelect.addEventListener("change", (e) => {
       currentAccount = e.target.value;
       loadPortfolio();
+      loadFilings();
+      loadSecStatus();
       loadSyncStatus();
     });
   }
 
   loadAccounts().then(() => {
     loadPortfolio();
+    loadFilings();
+    loadSecStatus();
     loadSyncStatus();
   });
 });
