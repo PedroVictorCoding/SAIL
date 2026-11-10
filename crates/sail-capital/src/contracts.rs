@@ -744,7 +744,7 @@ pub fn isin_is_valid(isin: &str) -> bool {
             }
         })
         .sum();
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// Cap untrusted cell text at [`MAX_CELL_CHARS`], drop control characters, and trim.
