@@ -165,6 +165,19 @@ Install both tools on the host for the account that runs Forge: `cargo install -
 - A test enforces that every case fails unmodified and passes with its reference solution. The older `BenchmarkHarness` only grades reference patches; 6 of its 8 fixtures pass unmodified, so it does not measure the model.
 - If the model server is unreachable, the run stops and reports the case as `n/a`. It never reports a score in that case.
 
+**Thinking (2026-11-09).** The model eval and Forge's eval were run on the RX 5500 host with
+Qwen3.6-35B-A3B, max 15 iterations:
+
+| `SAIL_FORGE_REASONING_BUDGET` | Solved | False success | Edit failures | Total time |
+|---|---|---|---|---|
+| `0` (off, the default) | 8/8 | 0 | 0 | 233 s |
+| `2048` | 8/8 | 0 | 0 | 1015 s |
+
+Thinking added only time. One case needed a second turn, and none got better. Forge
+therefore answers directly by default. A set budget is bounded: only `content` can become a
+patch, and a turn that thinks without answering is retried. Re-measure on harder cases or
+after a model change.
+
 ## 9. Next steps
 1. Audit the relevant implementation and the linked roadmap issue; update this spec with confirmed module/file paths and contracts.
 2. Build the MVP vertical slice with real tool/model/provider integrations.

@@ -117,9 +117,10 @@ built-in budget is set only after the model eval shows that thinking helps, and 
 environment variable overrides it, so the owner can trial a budget without a rebuild. The
 value is a number of tokens, or `off`/`0`. **Measured 2026-11-09: no gain on this host, at
 4–5× the time, so every default is off** (see
-[Model eval → Results](MODEL_EVAL.md#results-thinking-on-this-host-2026-11-09)). Forge is the
-exception: it had been thinking without limit. It now thinks within 2048 tokens, which is
-strictly bounded compared with before.
+[Model eval → Results](MODEL_EVAL.md#results-thinking-on-this-host-2026-11-09)). Forge, which had been
+thinking without limit, is off by default too: `sail_forge_eval` solved 8/8 either way and
+took 4.4× longer with 2048 tokens of thinking (see
+[SAIL Forge → Measurement](SAIL_FORGE.md)).
 
 | Job | Caller | Override |
 |---|---|---|
@@ -128,7 +129,7 @@ strictly bounded compared with before.
 | Moodle extraction | `sail-dialogue/moodle_model.rs` → `MindAuthor` | `SAIL_THINK_MOODLE` |
 | Background plans (never interactive ones) | `sail-agents/planning.rs` | `SAIL_THINK_PLANNING` |
 | Memory consolidation | `sail-core` proposer | `SAIL_THINK_MEMORY` |
-| Forge | `sail-forge/solver.rs` (calls llama-server directly) | `SAIL_FORGE_REASONING_BUDGET` (default 2048) |
+| Forge | `sail-forge/solver.rs` (calls llama-server directly) | `SAIL_FORGE_REASONING_BUDGET` (default off) |
 
 Forge streams with the same body builder. Only `delta.content` can become a patch, and
 thinking shows in its activity as "thinking (N tokens)", never as text. A turn that thinks

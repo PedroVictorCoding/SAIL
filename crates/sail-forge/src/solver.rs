@@ -28,8 +28,11 @@ const FORGE_MAX_ANSWER_TOKENS: u32 = 2048;
 /// Forge's edits are structured and exact, so it samples near-greedily like before. Qwen
 /// still gets at least 0.6 while thinking, which the shared body builder enforces.
 const FORGE_TEMPERATURE: f32 = 0.1;
-/// Thinking budget used when `SAIL_FORGE_REASONING_BUDGET` is unset.
-const DEFAULT_FORGE_REASONING_BUDGET: u32 = 2048;
+/// Thinking budget used when `SAIL_FORGE_REASONING_BUDGET` is unset: off. Measured
+/// 2026-11-09 with `sail_forge_eval`, thinking within 2048 tokens solved the same 8/8 cases
+/// as no thinking, but took 1015 s in total against 233 s (`docs/SAIL_FORGE.md`). Set the
+/// variable to a token count to trial it again.
+const DEFAULT_FORGE_REASONING_BUDGET: Option<u32> = None;
 /// Slowest generation speed Forge plans for, in tokens per second. The host writes about 16;
 /// the margin covers a busy CPU and keeps a thinking turn inside its total generation window.
 const MIN_GENERATION_TOKENS_PER_SECOND: u64 = 8;
@@ -38,21 +41,21 @@ const MIN_GENERATION_TOKENS_PER_SECOND: u64 = 8;
 const THINKING_EXHAUSTED_DETAIL: &str =
     "the model used its whole budget thinking and produced no answer";
 
-/// Parses `SAIL_FORGE_REASONING_BUDGET`: unset or unparseable means the default, `0` turns
-/// thinking off, and a larger value is clamped by [`Generation::reasoned`].
+/// Parses `SAIL_FORGE_REASONING_BUDGET`: unset or unparseable means the default (off), `0`
+/// turns thinking off, and a larger value is clamped by [`Generation::reasoned`].
 fn forge_reasoning_budget(value: Option<&str>) -> Option<u32> {
     match value {
         Some(raw) => match raw.trim().parse::<u32>() {
             Ok(0) => None,
             Ok(budget) => Some(budget),
-            Err(_) => Some(DEFAULT_FORGE_REASONING_BUDGET),
+            Err(_) => DEFAULT_FORGE_REASONING_BUDGET,
         },
-        None => Some(DEFAULT_FORGE_REASONING_BUDGET),
+        None => DEFAULT_FORGE_REASONING_BUDGET,
     }
 }
 
-/// The generation Forge sends. Thinking is on with the configured budget by default, because
-/// Forge runs in the background and nobody waits on its first word.
+/// The generation Forge sends: direct by default, or thinking within the configured budget
+/// when `SAIL_FORGE_REASONING_BUDGET` asks for it.
 fn forge_generation(budget: Option<u32>) -> Generation {
     match budget {
         Some(budget) => Generation::reasoned(FORGE_MAX_ANSWER_TOKENS, FORGE_TEMPERATURE, budget),
@@ -2727,7 +2730,7 @@ mod model_transport_tests {
     #[test]
     fn forge_body_asks_for_thinking_within_its_budget() {
         let messages = forge_test_messages();
-        let generation = forge_generation(forge_reasoning_budget(None));
+        let generation = forge_generation(forge_reasoning_budget(Some("2048")));
         let body = forge_chat_body(
             &messages,
             "Qwen3.6-35B-A3B",
@@ -2741,6 +2744,19 @@ mod model_transport_tests {
         assert_eq!(body["max_tokens"], 2048 + 2048);
         assert_eq!(body["stream"], true);
         assert_eq!(body["messages"], serde_json::json!(messages));
+    }
+
+    #[test]
+    fn forge_answers_directly_by_default() {
+        assert_eq!(forge_reasoning_budget(None), None);
+        let body = forge_chat_body(
+            &forge_test_messages(),
+            "Qwen3.6-35B-A3B",
+            "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+            &forge_generation(forge_reasoning_budget(None)),
+        );
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+        assert_eq!(body["max_tokens"], 2048);
     }
 
     #[test]
@@ -2762,7 +2778,7 @@ mod model_transport_tests {
     fn forge_budget_is_clamped_and_invalid_values_use_the_default() {
         assert_eq!(
             forge_reasoning_budget(Some("not-a-number")),
-            Some(DEFAULT_FORGE_REASONING_BUDGET)
+            DEFAULT_FORGE_REASONING_BUDGET
         );
         let generation = forge_generation(forge_reasoning_budget(Some("1000000")));
         assert_eq!(
