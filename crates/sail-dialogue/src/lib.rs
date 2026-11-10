@@ -1,6 +1,7 @@
 pub mod approval_http;
 pub mod briefing;
 pub mod briefing_http;
+pub mod capital_http;
 pub mod connection_controller;
 pub mod control;
 pub mod conversation_controller;
@@ -17,7 +18,6 @@ pub mod live_context;
 pub mod memory_http;
 pub mod mind_models_http;
 pub mod model_eval;
-pub mod capital_http;
 pub mod moodle_http;
 pub mod moodle_model;
 mod moodle_tools;
