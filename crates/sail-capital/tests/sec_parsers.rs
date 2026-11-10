@@ -124,7 +124,7 @@ fn submissions_happy_path_reads_every_field() {
     assert_eq!(annual.description.as_deref(), Some("10-K"));
     assert_eq!(
         annual.url,
-        "https://www.sec.gov/Archives/edgar/data/0001234567/000123456724000001/acme-20240928.htm"
+        "https://www.sec.gov/Archives/edgar/data/1234567/000123456724000001/acme-20240928.htm"
     );
 
     let current = &filings.filings[1];
@@ -143,7 +143,7 @@ fn submissions_happy_path_reads_every_field() {
     assert_eq!(current.description, None);
     assert_eq!(
         current.url,
-        "https://www.sec.gov/Archives/edgar/data/0001234567/000123456724000002/"
+        "https://www.sec.gov/Archives/edgar/data/1234567/000123456724000002/"
     );
 
     let quarterly = &filings.filings[2];
@@ -213,7 +213,7 @@ fn a_hostile_primary_document_falls_back_to_the_index_url() {
         assert_eq!(filings.filings[0].primary_document, None, "{hostile:?}");
         assert_eq!(
             filings.filings[0].url,
-            "https://www.sec.gov/Archives/edgar/data/0001234567/000123456724000001/"
+            "https://www.sec.gov/Archives/edgar/data/1234567/000123456724000001/"
         );
     }
 }

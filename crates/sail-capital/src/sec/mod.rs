@@ -443,8 +443,7 @@ fn filing_url(cik: Cik, accession: &str, primary_document: Option<&str>) -> Stri
     let accession_digits = accession.replace('-', "");
     let base = format!(
         "https://www.sec.gov/Archives/edgar/data/{}/{}",
-        cik.padded(),
-        accession_digits
+        cik.0, accession_digits
     );
     match primary_document {
         Some(document) => format!("{base}/{document}"),
