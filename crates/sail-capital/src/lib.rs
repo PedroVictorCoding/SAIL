@@ -8,6 +8,7 @@
 pub mod contracts;
 pub mod import;
 pub mod ledger;
+pub mod service;
 pub mod store;
 
 pub use contracts::*;

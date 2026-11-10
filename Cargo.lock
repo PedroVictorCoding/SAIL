@@ -2928,6 +2928,7 @@ dependencies = [
  "sail-arena-learn",
  "sail-bridge",
  "sail-canvas",
+ "sail-capital",
  "sail-common",
  "sail-continuity",
  "sail-flow",

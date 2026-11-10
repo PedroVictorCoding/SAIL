@@ -276,6 +276,21 @@ fn moodle_routes(
     }
 }
 
+/// SAIL Capital's owner API: the private, read-only portfolio ledger. It is disabled
+/// (and the failure logged) if its store can't be opened.
+fn capital_routes(
+    authority: Option<sail_guardian::authority::ApprovalAuthority>,
+) -> Option<Router> {
+    let dir = sail_capital::service::default_dir();
+    match sail_capital::service::CapitalService::open(&dir) {
+        Ok(service) => Some(crate::capital_http::router(Arc::new(service), authority)),
+        Err(error) => {
+            warn!(%error, "Capital store unavailable; Capital disabled");
+            None
+        }
+    }
+}
+
 /// SAIL Tracker's owner API. The tracker is unavailable (and logged) if its store cannot be
 /// opened; the rest of Dialogue still starts. Its refresh loop only fetches while a board
 /// is open or was used recently.
@@ -345,6 +360,7 @@ pub async fn run_dialogue_server_with_plans(
     );
     let tracker_routes = tracker_routes(authority());
     let moodle_routes = moodle_routes(&inference, authority());
+    let capital_routes = capital_routes(authority());
     let reader_routes = crate::reader_http::routes(authority(), services.clone());
     let music_routes = crate::music_http::routes(authority());
     let system_routes = crate::system_http::router(authority());
@@ -419,6 +435,9 @@ pub async fn run_dialogue_server_with_plans(
     }
     if let Some(routes) = moodle_routes {
         app = app.nest_service("/api/moodle", routes);
+    }
+    if let Some(routes) = capital_routes {
+        app = app.nest_service("/api/capital", routes);
     }
     if let Some(routes) = reader_routes {
         app = app.nest_service("/api/reader", routes);
