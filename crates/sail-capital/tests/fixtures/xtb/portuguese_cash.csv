@@ -1,0 +1,16 @@
+Conta:;98765432;Moeda:;EUR
+Nome e apelido:;Confidencial Nome
+ID;Tipo;Data;Comentário;Símbolo;Valor
+201;Depósito;01.02.2025 08:30:00;;;2000.0
+202;Levantamento;02.02.2025 09:00:00;;;-200.0
+203;Compra de ações/ETF;03.02.2025 11:15:00;ABERTURA COMPRA 2 @ 200.00;VWCE.DE;-400.0
+204;Venda de ações/ETF;04.02.2025 15:00:00;FECHO COMPRA 1 @ 220.00;VWCE.DE;220.0
+205;Dividendo;05.02.2025 12:00:00;;VWCE.DE;15.0
+206;Imposto retido na fonte;05.02.2025 12:00:00;;VWCE.DE;-2.25
+207;Juros de fundos livres;06.02.2025 00:00:00;;;3.1
+208;Imposto sobre juros de fundos livres;06.02.2025 00:00:00;;;-0.87
+209;Comissão;07.02.2025 10:00:00;;VWCE.DE;-2.0
+210;Taxa SEC;07.02.2025 10:00:00;;VWCE.DE;-0.02
+211;Swap;08.02.2025 23:00:00;;OIL;-0.5
+212;Fecho de negociação;09.02.2025 16:30:00;;OIL;30.0
+213;Transferência entre subcontas;10.02.2025 14:00:00;;;50.0
