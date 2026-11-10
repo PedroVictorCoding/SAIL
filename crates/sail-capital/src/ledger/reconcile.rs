@@ -72,8 +72,8 @@ pub(super) fn reconcile(
             };
             variances.push(Variance {
                 subject: format!("quantity {key}"),
-                ledger: Some(ledger_value.to_string()),
-                broker: Some(broker_value.to_string()),
+                ledger: ledger.map(|q| q.to_string()),
+                broker: broker.map(|q| q.to_string()),
                 note: note.to_string(),
             });
         }
