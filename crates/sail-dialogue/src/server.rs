@@ -283,7 +283,11 @@ fn capital_routes(
 ) -> Option<Router> {
     let dir = sail_capital::service::default_dir();
     match sail_capital::service::CapitalService::open(&dir) {
-        Ok(service) => Some(crate::capital_http::router(Arc::new(service), authority)),
+        Ok(service) => {
+            let service = Arc::new(service);
+            service.start();
+            Some(crate::capital_http::router(service, authority))
+        }
         Err(error) => {
             warn!(%error, "Capital store unavailable; Capital disabled");
             None

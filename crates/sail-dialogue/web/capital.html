@@ -151,6 +151,36 @@
     </div>
   </section>
 
+  <!-- SEC Filings & Evidence (Round 8) -->
+  <section class="cp-panel" id="cpFilingsPanel" aria-labelledby="cpFilingsTitle">
+    <header class="cp-panel-head">
+      <div class="cp-title-group">
+        <h2 id="cpFilingsTitle">SEC Filings & Evidence</h2>
+        <span class="cp-sub-notice" id="cpSecStatusMeta">Point-in-time public disclosures</span>
+      </div>
+      <div class="cp-panel-actions">
+        <button class="cp-button" id="cpSecRefreshBtn" type="button" aria-label="Check SEC now">Check SEC now</button>
+        <span class="cp-badge" id="cpSecBadge">EDGAR</span>
+      </div>
+    </header>
+
+    <!-- Not Configured Notice (Calm note, not an error) -->
+    <div class="cp-sec-note" id="cpSecNotConfiguredNote" hidden>
+      <p>SEC access isn't configured: set <code>SAIL_SEC_USER_AGENT</code> to <code>"&lt;name&gt; &lt;contact email&gt;"</code> to enable automatic filing checks.</p>
+    </div>
+
+    <!-- Filings Watch Items List -->
+    <div class="cp-filings-list" id="cpFilingsList">
+      <p class="cp-empty">No filings recorded for owned holdings.</p>
+    </div>
+
+    <!-- Holdings Not Covered by SEC -->
+    <div class="cp-unmatched-wrap" id="cpUnmatchedWrap" hidden>
+      <h3 class="cp-unmatched-title">Holdings Not Covered by SEC</h3>
+      <ul class="cp-unmatched-list" id="cpUnmatchedList"></ul>
+    </div>
+  </section>
+
   <!-- Import Status & Issues -->
   <section class="cp-panel" id="cpSyncPanel" aria-labelledby="cpSyncTitle">
     <header class="cp-panel-head">

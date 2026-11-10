@@ -2833,10 +2833,13 @@ dependencies = [
 name = "sail-capital"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "axum",
  "calamine",
  "chrono",
  "chrono-tz",
  "csv",
+ "reqwest",
  "rusqlite",
  "rust_decimal",
  "sail-common",
@@ -2845,6 +2848,7 @@ dependencies = [
  "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
 ]
 

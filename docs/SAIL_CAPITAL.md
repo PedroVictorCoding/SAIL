@@ -14,8 +14,9 @@ Round 7 (2026-11-10) builds the **portfolio foundation**:
 - reconcile the projection against the broker's own figures;
 - serve the result read-only at `/api/capital`.
 
-Research adapters (SEC, House/Senate, FRED/ECB, Polymarket), the risk engine and any
-forecasting model come in later rounds, and only once this data foundation is trustworthy.
+Round 8 adds the first research source, **SEC EDGAR filings** for the US companies the
+owner holds (see below). House/Senate, FRED/ECB and Polymarket adapters, the risk engine and
+any forecasting model come in later rounds.
 
 ## ADR-0001: one crate, ledger first
 
@@ -107,6 +108,37 @@ issue.
 - Cost basis is the cash actually paid, in the account currency.
 - The value at export is the broker's purchase value plus gross P/L.
 
+## SEC filings (round 8)
+
+SAIL reads SEC EDGAR's public JSON: the ticker map (`company_tickers.json`) and, for each
+held US issuer, its recent filings (`data.sec.gov/submissions/CIK##########.json`). Only
+"give me this company's filings" leaves the host; holdings, quantities and values never do.
+
+**Setup.** SEC requires every request to name who is asking. Set
+`SAIL_SEC_USER_AGENT="<name> <contact email>"`. Without it SAIL makes no SEC requests at
+all, and `/sec/status` says so. `SAIL_SEC_REFRESH_HOURS` sets the background refresh
+interval (default 12; the first run is a minute after start).
+
+**Limits.** At most 2 requests per second, 16 MB per response, 200 issuers per refresh and
+200 filings per issuer. A 429 or 403 stops the whole run and is reported; SAIL doesn't
+retry until the next scheduled refresh.
+
+**Linking holdings to issuers.** Only `.US` symbols are looked up. The ticker must match
+exactly one issuer in the map SAIL had at the time; otherwise the match is `unresolved`,
+never guessed. The map is refetched at most once a day, and every version is kept.
+
+**Evidence and time.** Each filing is stored append-only with four times: the period it
+covers (`period_end`), when SEC published it (`published_at`, EDGAR's acceptance time, or
+23:59:59 New York on the filing date when only the date is known), when SAIL first saw it
+(`first_observed_at`) and when SAIL stored this version (`ingested_at`). If SEC later changes
+a filing, the new version is added and keeps the original `first_observed_at`. A question
+asked `AsOf { occurred_by, known_by }` sees a filing only if it was published by
+`occurred_by` and observed by `known_by`.
+
+**Watch items.** A fixed rule (no model) turns each visible filing on a held issuer into a
+**watch** item or a **research proposal**, with the reason quoting only the form type and
+8-K item numbers. There is no buy or sell output.
+
 ## API (`/api/capital`, owner token required)
 
 | Route | Returns |
@@ -119,6 +151,9 @@ issue.
 | `GET /sync/status?account=` | Import batches, newest first, with per-sheet counts and issues |
 | `GET /conflicts?account=` | Keys that came back with different content |
 | `POST /import/xtb?account=&tz=&currency=` | The batch record for the upload |
+| `GET /filings?account=&occurred_by=&known_by=` | Watch items and research proposals for held issuers, plus how each position matched |
+| `GET /sec/status` | Whether SEC access is configured, the last refresh and its counts or error |
+| `POST /sec/refresh?account=` | Runs a refresh now and returns the new status |
 
 All amounts are decimal strings. Errors are `{"error": "..."}`, with these status codes:
 
@@ -139,6 +174,6 @@ Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capit
 - Market prices, FX conversion and EUR totals across currencies.
 - Tax computation. Withholding is recorded and matched to dividends, but the slice does
   not estimate Portuguese tax due.
-- Research, forecasts and proposals.
+- Research beyond SEC filings, forecasts, and dossiers built from research proposals.
 - The XTB browser companion (CAP-27), which depends on reviewing XTB's terms first.
 - Multi-user or public use.
