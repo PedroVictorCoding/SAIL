@@ -557,6 +557,8 @@ async function loadSecStatus() {
     if (metaSpan) {
       if (!status.configured) {
         metaSpan.textContent = "SEC access not configured";
+      } else if (status.last_refresh_at && status.last_error) {
+        metaSpan.textContent = `Last check ${formatDate(status.last_refresh_at)} failed: ${status.last_error}`;
       } else if (status.last_refresh_at) {
         metaSpan.textContent = `Last check ${formatDate(status.last_refresh_at)} · ${status.new_evidence || 0} new filings`;
       } else {
@@ -577,6 +579,13 @@ async function loadFilings() {
   const unmatchedWrap = document.getElementById("cpUnmatchedWrap");
   const unmatchedList = document.getElementById("cpUnmatchedList");
   if (!list) return;
+
+  if (accountList.length === 0) {
+    // Nothing imported yet: an empty state, not an error.
+    list.innerHTML = `<p class="cp-empty">Import an XTB report to see filings for your holdings.</p>`;
+    if (unmatchedWrap) unmatchedWrap.hidden = true;
+    return;
+  }
 
   try {
     const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
@@ -703,7 +712,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const res = await fetchJson(`/api/capital/sec/refresh${query}`, { method: "POST" });
         await loadFilings();
         await loadSecStatus();
-        showBanner(`SEC check complete: ${res.issuers_checked || 0} issuers checked, ${res.new_evidence || 0} new filings stored.`);
+        if (res.last_error) {
+          showBanner(`SEC check stopped: ${res.last_error}`, true);
+        } else {
+          showBanner(`SEC check complete: ${res.issuers_checked || 0} issuers checked, ${res.new_evidence || 0} new filings stored.`);
+        }
       } catch (err) {
         showBanner(`SEC refresh failed: ${err.message}`, true);
       } finally {
