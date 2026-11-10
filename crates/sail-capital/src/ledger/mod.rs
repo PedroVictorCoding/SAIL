@@ -1,4 +1,4 @@
-//! Deterministic projections of the private ledger (Antigravity's slice, round 7).
+//! Deterministic projections of the private ledger (Kilo's slice, round 7).
 //!
 //! [`project`] replays the [`LedgerRecord`]s an [`AsOf`] can see into positions, cash,
 //! dividends, fees and realized results, then reconciles them against the latest
@@ -18,6 +18,14 @@ use crate::contracts::*;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+mod dividends;
+mod fifo;
+mod reconcile;
+
+#[cfg(test)]
+mod tests;
 
 /// One open lot after FIFO matching.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,31 +175,235 @@ pub struct Projection {
 
 /// Replay `records` and reconcile against `snapshots`, both filtered by `as_of`.
 ///
-/// M0 stub: returns an empty, unverified projection with a warning. Antigravity replaces
-/// the body; the signature is the contract.
+/// Entries are ordered by event time (a date-only row before a timed row on the same
+/// instant), then by natural key, so the result never depends on the input order. Every
+/// total is per currency; nothing is converted. The projection reads no clock and keeps no
+/// state, so the same records and bounds always give the same answer.
 pub fn project(
     account: &AccountId,
     records: &[LedgerRecord],
     snapshots: &[StoredSnapshot],
     as_of: AsOf,
 ) -> Projection {
-    let _ = (records, snapshots);
+    let visible = visible_records(account, records, &as_of);
+    let visible_snapshot = visible_snapshot(account, snapshots, &as_of);
+
+    let mut warnings: Vec<String> = Vec::new();
+    let mut internal_variances: Vec<Variance> = Vec::new();
+    let (books, realized) = fifo::build_positions(&visible, &mut warnings, &mut internal_variances);
+
+    let market_values = match visible_snapshot {
+        Some(snapshot) => market_values_by_key(snapshot),
+        None => BTreeMap::new(),
+    };
+    let mut positions: Vec<Position> = Vec::new();
+    let mut cfd_positions: Vec<Position> = Vec::new();
+    for book in books.into_values() {
+        let Some(position) = book.into_position(&market_values) else {
+            continue;
+        };
+        if position.instrument.kind == InstrumentKind::Cfd {
+            cfd_positions.push(position);
+        } else {
+            positions.push(position);
+        }
+    }
+
+    let dividends = dividends::build_dividends(&visible, &mut warnings);
+    let cash = cash_totals(&visible);
+    let flows = flow_totals(&visible);
+    let (reconciliation, snapshot_as_of) = reconcile::reconcile(
+        &positions,
+        &cfd_positions,
+        &cash,
+        visible_snapshot,
+        internal_variances,
+    );
+
     Projection {
         account: account.clone(),
         as_of,
-        positions: Vec::new(),
-        cfd_positions: Vec::new(),
-        cash: Vec::new(),
-        dividends: Vec::new(),
-        realized: Vec::new(),
-        flows: Vec::new(),
-        snapshot_as_of: None,
-        reconciliation: Reconciliation {
-            status: ReconciliationStatus::Unverified,
-            variances: Vec::new(),
-            compared: 0,
+        positions,
+        cfd_positions,
+        cash,
+        dividends,
+        realized,
+        flows,
+        snapshot_as_of,
+        reconciliation,
+        warnings,
+        records_used: u32::try_from(visible.len()).unwrap_or(u32::MAX),
+    }
+}
+
+/// Records this account may see at `as_of`, in the canonical order. Both bounds apply: the
+/// row must have happened by `occurred_by` and have been stored by `known_by`.
+fn visible_records<'a>(
+    account: &AccountId,
+    records: &'a [LedgerRecord],
+    as_of: &AsOf,
+) -> Vec<&'a LedgerRecord> {
+    let mut visible: Vec<&LedgerRecord> = records
+        .iter()
+        .filter(|record| &record.account == account)
+        .filter(|record| record.entry.occurred.at <= as_of.occurred_by)
+        .filter(|record| record.ingested_at <= as_of.known_by)
+        .collect();
+    visible.sort_by(|left, right| {
+        left.entry
+            .occurred
+            .at
+            .cmp(&right.entry.occurred.at)
+            .then_with(|| {
+                precision_rank(left.entry.occurred.precision)
+                    .cmp(&precision_rank(right.entry.occurred.precision))
+            })
+            .then_with(|| left.entry.natural_key.cmp(&right.entry.natural_key))
+            .then_with(|| left.id.cmp(&right.id))
+            .then_with(|| left.batch_id.cmp(&right.batch_id))
+    });
+    visible
+}
+
+/// A date-only row comes before a timed row at the same instant: it says less, so it must
+/// not be treated as if it had happened later in the day.
+fn precision_rank(precision: TimePrecision) -> u8 {
+    match precision {
+        TimePrecision::DateOnly => 0,
+        TimePrecision::Exact => 1,
+    }
+}
+
+/// The latest snapshot this account knew by `known_by`, provided the snapshot's own `as_of`
+/// isn't after `occurred_by`. A later import must not make an earlier answer look newer.
+fn visible_snapshot<'a>(
+    account: &AccountId,
+    snapshots: &'a [StoredSnapshot],
+    as_of: &AsOf,
+) -> Option<&'a StoredSnapshot> {
+    snapshots
+        .iter()
+        .filter(|snapshot| &snapshot.account == account)
+        .filter(|snapshot| snapshot.ingested_at <= as_of.known_by)
+        .filter(|snapshot| {
+            snapshot
+                .snapshot
+                .as_of
+                .is_none_or(|at| at <= as_of.occurred_by)
+        })
+        .max_by(|left, right| {
+            left.ingested_at
+                .cmp(&right.ingested_at)
+                .then_with(|| left.batch_id.cmp(&right.batch_id))
+        })
+}
+
+/// Sum the broker's market value per instrument key. A key is only labelled when every
+/// position on it states a value in one currency; a partial sum would misstate the account.
+fn market_values_by_key(snapshot: &StoredSnapshot) -> BTreeMap<String, Money> {
+    let mut values: BTreeMap<String, Vec<Option<Money>>> = BTreeMap::new();
+    for position in &snapshot.snapshot.open_positions {
+        values
+            .entry(position.instrument.key())
+            .or_default()
+            .push(position.market_value.clone());
+    }
+    values
+        .into_iter()
+        .filter_map(|(key, items)| {
+            let mut total: Option<Money> = None;
+            for item in items {
+                let value = item?;
+                match &mut total {
+                    None => total = Some(value),
+                    Some(sum) if sum.currency == value.currency => sum.amount += value.amount,
+                    Some(_) => return None,
+                }
+            }
+            total.map(|money| (key, money))
+        })
+        .collect()
+}
+
+/// Cash per currency: the signed sum of every visible `cash_effect`, including rows the
+/// importer couldn't classify. This is the broker's cash as reported, never an FX total.
+fn cash_totals(records: &[&LedgerRecord]) -> Vec<Money> {
+    let mut totals: BTreeMap<Currency, Decimal> = BTreeMap::new();
+    for record in records {
+        if let Some(cash) = &record.entry.cash_effect {
+            *totals.entry(cash.currency.clone()).or_default() += cash.amount;
+        }
+    }
+    totals
+        .into_iter()
+        .map(|(currency, amount)| Money::new(amount, currency))
+        .collect()
+}
+
+/// Signed cash totals per flow label and currency. The label says what the row was, so the
+/// owner can see, for example, commissions apart from the trades they belong to.
+fn flow_totals(records: &[&LedgerRecord]) -> Vec<FlowTotal> {
+    let mut totals: BTreeMap<(String, Currency), (Decimal, u32)> = BTreeMap::new();
+    for record in records {
+        let Some(cash) = &record.entry.cash_effect else {
+            continue;
+        };
+        let entry = totals
+            .entry((flow_label(&record.entry.kind), cash.currency.clone()))
+            .or_default();
+        entry.0 += cash.amount;
+        entry.1 = entry.1.saturating_add(1);
+    }
+    totals
+        .into_iter()
+        .map(|((label, currency), (amount, count))| FlowTotal {
+            label,
+            total: Money::new(amount, currency),
+            count,
+        })
+        .collect()
+}
+
+/// Stable label for one row in the flow totals.
+fn flow_label(kind: &EntryKind) -> String {
+    match kind {
+        EntryKind::Deposit => "deposit".to_string(),
+        EntryKind::Withdrawal => "withdrawal".to_string(),
+        EntryKind::Transfer => "transfer".to_string(),
+        EntryKind::Trade { side, .. } => match side {
+            Side::Buy => "trade:buy".to_string(),
+            Side::Sell => "trade:sell".to_string(),
         },
-        warnings: vec!["ledger projection not implemented yet (M0 stub)".to_string()],
-        records_used: 0,
+        EntryKind::Dividend { .. } => "dividend".to_string(),
+        EntryKind::Tax {
+            kind: TaxKind::Withholding,
+            ..
+        } => "withholding".to_string(),
+        EntryKind::Tax { kind, .. } => format!("tax:{}", tax_kind_label(*kind)),
+        EntryKind::Interest => "interest".to_string(),
+        EntryKind::Fee { kind, .. } => format!("fee:{}", fee_kind_label(*kind)),
+        EntryKind::DerivativeResult { .. } => "derivative_result".to_string(),
+        EntryKind::Unsupported { .. } => "unsupported".to_string(),
+    }
+}
+
+/// Lowercase name of a tax kind, matching its serde name.
+fn tax_kind_label(kind: TaxKind) -> &'static str {
+    match kind {
+        TaxKind::Withholding => "withholding",
+        TaxKind::OnInterest => "on_interest",
+        TaxKind::Other => "other",
+    }
+}
+
+/// Lowercase name of a fee kind, matching its serde name.
+fn fee_kind_label(kind: FeeKind) -> &'static str {
+    match kind {
+        FeeKind::Commission => "commission",
+        FeeKind::Regulatory => "regulatory",
+        FeeKind::Swap => "swap",
+        FeeKind::FxConversion => "fx_conversion",
+        FeeKind::Custody => "custody",
+        FeeKind::Other => "other",
     }
 }
