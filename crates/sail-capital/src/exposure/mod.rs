@@ -9,13 +9,13 @@ use std::collections::HashMap;
 
 use rust_decimal::{Decimal, RoundingStrategy};
 
+use crate::AsOf;
 use crate::contracts::{Currency, Instrument, InstrumentKind};
 use crate::evidence::{
     Cik, EvidenceRecord, Exposure, Filing, IssuerMatch, ResearchAction, TickerEntry, TickerIndex,
     WatchItem,
 };
 use crate::ledger::{Position, Projection};
-use crate::AsOf;
 
 /// Canonical SEC 8-K item numbers and their descriptive titles.
 const SEC_8K_ITEMS: &[(&str, &str)] = &[
@@ -164,7 +164,9 @@ pub fn match_issuer(instrument: &Instrument, index: &TickerIndex) -> IssuerMatch
 /// - `10-Q`: `ResearchProposal`, `"Quarterly report (10-Q)"`
 /// - `8-K` with material items: `ResearchProposal`, e.g. `"Current report: 2.02 results of operations"`
 /// - `8-K` otherwise and `6-K`: `Watch`, e.g. `"Current report (8-K: 7.01, 9.01)"` or `"Current report (6-K)"`
-/// - `4`, `SC 13D`, `SC 13G`, `13D`, `13G`: `Watch`, e.g. `"Insider transaction report (Form 4)"`
+/// - `4`: `Watch`, `"Insider transaction report (Form 4)"`
+/// - `SC 13D`/`SC 13G` (and `SCHEDULE 13D`/`13G`, their names since 2024): `Watch`,
+///   e.g. `"Beneficial ownership report (SC 13D)"`
 /// - `DEF 14A`, `S-1`, `S-3`, `424B*`: `Watch`, `"Proxy statement / registration"`
 /// - Any amendment `…/A`: uses base form's action, but never higher than `Watch` for `8-K`.
 ///   Appends `" (amended)"` to the reason.
@@ -237,12 +239,18 @@ pub fn classify(filing: &Filing) -> Option<(ResearchAction, String)> {
             format!("Current report (6-K: {items_str})")
         };
         (ResearchAction::Watch, reason)
-    } else if base == "4" || base == "SC 13D" || base == "SC 13G" || base == "13D" || base == "13G"
-    {
-        let name = if base == "4" { "Form 4" } else { base };
+    } else if base == "4" {
         (
             ResearchAction::Watch,
-            format!("Insider transaction report ({name})"),
+            "Insider transaction report (Form 4)".to_string(),
+        )
+    } else if matches!(
+        base,
+        "SC 13D" | "SC 13G" | "13D" | "13G" | "SCHEDULE 13D" | "SCHEDULE 13G"
+    ) {
+        (
+            ResearchAction::Watch,
+            format!("Beneficial ownership report ({base})"),
         )
     } else if base == "DEF 14A" || base == "S-1" || base == "S-3" || base.starts_with("424B") {
         (

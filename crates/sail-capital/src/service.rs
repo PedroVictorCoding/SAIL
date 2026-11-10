@@ -365,22 +365,19 @@ impl CapitalService {
         now: DateTime<Utc>,
         status: &mut SecStatus,
     ) -> Result<(), String> {
-        // 1. The ticker map, reused while it is fresh.
+        // 1. The ticker map, reused while it is fresh. A fetched map is used as fetched: its
+        // `fetched_at` is stamped during the request, after `now`.
         let stored = self.store.ticker_index(now).map_err(|e| e.to_string())?;
-        let fresh = stored
-            .as_ref()
-            .is_some_and(|i| now - i.fetched_at < Duration::hours(TICKER_MAP_MAX_AGE_HOURS));
-        if !fresh {
-            let index = self.edgar.ticker_index().await.map_err(|e| e.to_string())?;
-            self.store
-                .record_ticker_index(&index)
-                .map_err(|e| e.to_string())?;
-        }
-        let index = self
-            .store
-            .ticker_index(now)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "SEC's ticker map is unavailable".to_string())?;
+        let index = match stored {
+            Some(i) if now - i.fetched_at < Duration::hours(TICKER_MAP_MAX_AGE_HOURS) => i,
+            _ => {
+                let index = self.edgar.ticker_index().await.map_err(|e| e.to_string())?;
+                self.store
+                    .record_ticker_index(&index)
+                    .map_err(|e| e.to_string())?;
+                index
+            }
+        };
         status.map_fetched_at = Some(index.fetched_at);
 
         // 2. The issuers held now.
@@ -419,7 +416,7 @@ impl CapitalService {
                 Ok(filings) => {
                     let EvidenceOutcome { seen, added, .. } = self
                         .store
-                        .record_filings(&filings, now)
+                        .record_filings(&filings, Utc::now())
                         .map_err(|e| e.to_string())?;
                     status.filings_seen += seen;
                     status.new_evidence += added;

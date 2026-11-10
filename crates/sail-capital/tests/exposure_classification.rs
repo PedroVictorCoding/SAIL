@@ -77,11 +77,18 @@ fn classifies_insider_and_large_holder_reports() {
     assert_eq!(act4, ResearchAction::Watch);
     assert_eq!(reason4, "Insider transaction report (Form 4)");
 
-    for form in ["SC 13D", "SC 13G", "13D", "13G"] {
+    for form in [
+        "SC 13D",
+        "SC 13G",
+        "13D",
+        "13G",
+        "SCHEDULE 13D",
+        "SCHEDULE 13G",
+    ] {
         let f = make_filing(form, vec![]);
         let (act, reason) = classify(&f).expect("classified");
         assert_eq!(act, ResearchAction::Watch);
-        assert_eq!(reason, format!("Insider transaction report ({form})"));
+        assert_eq!(reason, format!("Beneficial ownership report ({form})"));
     }
 }
 
