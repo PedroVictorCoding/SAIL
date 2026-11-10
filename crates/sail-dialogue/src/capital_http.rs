@@ -42,6 +42,9 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/sync/status", get(sync_status))
         .route("/conflicts", get(conflicts))
         .route("/import/xtb", post(import_xtb))
+        .route("/filings", get(filings))
+        .route("/sec/status", get(sec_status))
+        .route("/sec/refresh", post(sec_refresh))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
         .with_state(Arc::new(CapitalState { service, authority }))
 }
@@ -289,5 +292,47 @@ async fn import_xtb(
         already = status.already_imported,
         "Capital report imported"
     );
+    Ok(no_store(to_json(&status)?))
+}
+
+async fn filings(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<PortfolioQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let now = Utc::now();
+    let as_of = AsOf {
+        occurred_by: q.occurred_by.unwrap_or(now).min(now),
+        known_by: q.known_by.unwrap_or(now).min(now),
+    };
+    let view = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.filings(&account, as_of)
+    })
+    .await?;
+    Ok(no_store(to_json(&view)?))
+}
+
+async fn sec_status(State(s): State<Arc<CapitalState>>, h: HeaderMap) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    Ok(no_store(to_json(&s.service.sec_status())?))
+}
+
+/// Runs one SEC refresh now. Only SEC is contacted, and only with CIKs of held issuers.
+async fn sec_refresh(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let account = match q.account.as_deref().filter(|a| !a.is_empty()) {
+        Some(id) => {
+            let id = id.to_string();
+            Some(blocking(&s, move |svc| svc.resolve_account(Some(&id))).await?)
+        }
+        None => None,
+    };
+    let status = s.service.refresh_sec(account.as_ref()).await;
     Ok(no_store(to_json(&status)?))
 }
