@@ -4,6 +4,7 @@
 let currentAccount = null;
 let currentTz = "Europe/Lisbon";
 let selectedFile = null;
+let accountList = [];
 
 function setState(state, text) {
   const pill = document.getElementById("cpState");
@@ -28,11 +29,46 @@ function showBanner(message, isError = false) {
   }
 }
 
+// Amounts arrive as exact decimal strings. They are shown exactly (with thousands
+// grouping) and summed exactly with BigInt, never through floats.
+function groupDecimal(text) {
+  const str = String(text);
+  const negative = str.startsWith("-");
+  const [whole, frac] = (negative ? str.slice(1) : str).split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${negative ? "-" : ""}${grouped}${frac !== undefined ? "." + frac : ""}`;
+}
+
 function formatMoney(money) {
   if (!money || money.amount === undefined || money.amount === null) return "—";
-  const num = parseFloat(money.amount);
-  const formatted = isNaN(num) ? money.amount : num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-  return `${formatted} ${money.currency || ""}`.trim();
+  return `${groupDecimal(money.amount)} ${money.currency || ""}`.trim();
+}
+
+function sumDecimals(amounts) {
+  let scale = 0;
+  for (const a of amounts) {
+    const frac = String(a).split(".")[1] || "";
+    scale = Math.max(scale, frac.length);
+  }
+  let total = 0n;
+  for (const a of amounts) {
+    const str = String(a);
+    const negative = str.startsWith("-");
+    const [whole, frac = ""] = (negative ? str.slice(1) : str).split(".");
+    const units = BigInt((whole || "0") + frac.padEnd(scale, "0"));
+    total += negative ? -units : units;
+  }
+  const negative = total < 0n;
+  const digits = (negative ? -total : total).toString().padStart(scale + 1, "0");
+  const whole = digits.slice(0, digits.length - scale);
+  const frac = scale ? "." + digits.slice(digits.length - scale) : "";
+  return `${negative ? "-" : ""}${whole}${frac}`;
+}
+
+function formatSum(moneys) {
+  if (moneys.length === 0) return null;
+  if (!moneys.every(m => m.currency === moneys[0].currency)) return null;
+  return formatMoney({ amount: sumDecimals(moneys.map(m => m.amount)), currency: moneys[0].currency });
 }
 
 function formatDate(isoStr) {
@@ -47,22 +83,54 @@ function formatDate(isoStr) {
   }
 }
 
-async function fetchJson(url, options = {}) {
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    let errText = res.statusText;
+// Every /api/capital route needs the owner token, obtained the same way the School and
+// Tracker pages do it.
+let ownerTokenValue = null;
+
+async function ownerToken(force) {
+  if (!force && ownerTokenValue) return ownerTokenValue;
+  if (!force) {
     try {
-      const errObj = await res.json();
-      if (errObj && errObj.error) errText = errObj.error;
-    } catch {}
-    throw new Error(errText);
+      const stored = localStorage.getItem("sail_owner_token");
+      if (stored && stored.trim().length >= 32) return (ownerTokenValue = stored.trim());
+    } catch (_) {}
   }
-  return res.json();
+  const r = await fetch("/api/guardian/token", { cache: "no-store" });
+  if (!r.ok) throw new Error("Owner token unavailable. Open SAIL settings and enter the owner token.");
+  const data = await r.json();
+  ownerTokenValue = data.token;
+  try {
+    localStorage.setItem("sail_owner_token", ownerTokenValue);
+  } catch (_) {}
+  return ownerTokenValue;
+}
+
+async function fetchJson(url, options = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await ownerToken(attempt > 0);
+    const res = await fetch(url, {
+      ...options,
+      cache: "no-store",
+      headers: { ...(options.headers || {}), Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 401 && attempt === 0) {
+      ownerTokenValue = null;
+      try {
+        localStorage.removeItem("sail_owner_token");
+      } catch (_) {}
+      continue;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+  throw new Error("Owner authentication failed.");
 }
 
 async function loadAccounts() {
   try {
     const accounts = await fetchJson("/api/capital/accounts");
+    accountList = accounts || [];
     const select = document.getElementById("cpAccountSelect");
     if (!select) return;
 
@@ -97,7 +165,13 @@ async function loadAccounts() {
 
 async function loadPortfolio() {
   setState("loading", "Loading…");
-  showBanner("");
+
+  if (accountList.length === 0) {
+    // Nothing imported yet: an empty state, not an error.
+    renderEmptyPortfolio();
+    setState("idle", "No data yet");
+    return;
+  }
 
   try {
     const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
@@ -134,9 +208,10 @@ function renderPortfolio(p) {
   // Freshness bar
   const freshness = document.getElementById("cpFreshness");
   if (freshness) {
-    const snapAsOf = p.snapshot_as_of ? formatDate(p.snapshot_as_of) : "unknown";
-    const knownBy = p.as_of && p.as_of.known_by ? formatDate(p.as_of.known_by) : "recent";
-    freshness.textContent = `XTB data as of ${snapAsOf} · imported ${knownBy}`;
+    const snapAsOf = p.snapshot_as_of ? formatDate(p.snapshot_as_of) : "not stated";
+    const acct = accountList.find(a => a.account === p.account);
+    const imported = acct && acct.last_import_at ? formatDate(acct.last_import_at) : "—";
+    freshness.textContent = `XTB data as of: ${snapAsOf} · imported ${imported}`;
   }
 
   // Reconciliation
@@ -185,7 +260,7 @@ function renderPortfolio(p) {
   const cashVal = document.getElementById("cpCashVal");
   if (cashVal) {
     if (!p.cash || p.cash.length === 0) {
-      cashVal.textContent = "0.00";
+      cashVal.textContent = "—";
     } else {
       cashVal.textContent = p.cash.map(formatMoney).join(" · ");
     }
@@ -199,9 +274,9 @@ function renderPortfolio(p) {
     holdingsSub.textContent = `${posCount} security position${posCount === 1 ? "" : "s"}`;
     // Sum market values if all have same currency
     const mvs = (p.positions || []).map(pos => pos.broker_market_value).filter(Boolean);
-    if (mvs.length > 0 && mvs.every(m => m.currency === mvs[0].currency)) {
-      const sum = mvs.reduce((acc, m) => acc + (parseFloat(m.amount) || 0), 0);
-      holdingsVal.textContent = `${sum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${mvs[0].currency}`;
+    const allValued = mvs.length === posCount;
+    if (allValued && formatSum(mvs)) {
+      holdingsVal.textContent = formatSum(mvs);
     } else if (mvs.length > 0) {
       holdingsVal.textContent = `${mvs.length} valued`;
     } else {
@@ -214,13 +289,12 @@ function renderPortfolio(p) {
   if (divVal) {
     const divs = p.dividends || [];
     const nets = divs.map(d => d.net).filter(Boolean);
-    if (nets.length > 0 && nets.every(m => m.currency === nets[0].currency)) {
-      const sum = nets.reduce((acc, m) => acc + (parseFloat(m.amount) || 0), 0);
-      divVal.textContent = `${sum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${nets[0].currency}`;
-    } else if (nets.length > 0) {
-      divVal.textContent = `${nets.length} payouts`;
+    if (nets.length === divs.length && formatSum(nets)) {
+      divVal.textContent = formatSum(nets);
+    } else if (divs.length > 0) {
+      divVal.textContent = `${divs.length} payouts`;
     } else {
-      divVal.textContent = "0.00";
+      divVal.textContent = "—";
     }
   }
 
@@ -229,13 +303,13 @@ function renderPortfolio(p) {
   if (feesVal) {
     const flows = p.flows || [];
     const feeFlows = flows.filter(f => f.label.startsWith("fee:"));
-    if (feeFlows.length > 0 && feeFlows.every(f => f.total.currency === feeFlows[0].total.currency)) {
-      const sum = feeFlows.reduce((acc, f) => acc + (parseFloat(f.total.amount) || 0), 0);
-      feesVal.textContent = `${sum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${feeFlows[0].total.currency}`;
+    const feeSum = formatSum(feeFlows.map(f => f.total));
+    if (feeSum) {
+      feesVal.textContent = feeSum;
     } else if (feeFlows.length > 0) {
       feesVal.textContent = `${feeFlows.length} fee types`;
     } else {
-      feesVal.textContent = "0.00";
+      feesVal.textContent = "—";
     }
   }
 
@@ -254,7 +328,7 @@ function renderPositionsTable(tbodyId, positions, isCfd) {
   if (!tbody) return;
 
   if (positions.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="cp-empty">${isCfd ? "No open CFD contracts." : "No owned positions recorded."}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="cp-empty">${isCfd ? "No CFD positions derived from the ledger. Anything the broker lists appears under Reconciliation." : "No owned positions derived from the ledger. Anything the broker lists appears under Reconciliation."}</td></tr>`;
     return;
   }
 
@@ -288,7 +362,7 @@ function renderPositionsTable(tbodyId, positions, isCfd) {
       lotTr.id = `${tbodyId}-lots-${i}`;
       lotTr.hidden = true;
       const lotsHtml = pos.lots.map(l =>
-        `<li>${formatDate(l.opened ? l.opened.at : null)} · <strong>${l.quantity}</strong> units @ ${l.unit_cost ? formatMoney(l.unit_cost) : "unspecified"}</li>`
+        `<li>${formatDate(l.opened ? l.opened.at : null)} · <strong>${escapeHtml(l.quantity)}</strong> units @ ${l.unit_cost ? formatMoney(l.unit_cost) : "not stated"}</li>`
       ).join("");
       lotTr.innerHTML = `
         <td colspan="5" class="cp-lots-detail">
@@ -326,11 +400,11 @@ function renderDividendsTable(dividends) {
     const tr = document.createElement("tr");
     const inst = d.instrument ? d.instrument.symbol : "—";
     tr.innerHTML = `
-      <td>${formatDate(d.paid ? d.paid.at : null)}</td>
+      <td class="cp-nowrap">${formatDate(d.paid ? d.paid.at : null)}</td>
       <td><strong>${escapeHtml(inst)}</strong></td>
       <td class="num">${formatMoney(d.gross)}</td>
       <td class="num" style="color:#f3b05a">${d.withheld ? formatMoney(d.withheld) : "—"}</td>
-      <td class="num" style="color:#5ccda4"><strong>${d.net ? formatMoney(d.net) : formatMoney(d.gross)}</strong></td>
+      <td class="num" style="color:#5ccda4"><strong>${d.net ? formatMoney(d.net) : "not stated"}</strong></td>
     `;
     tbody.appendChild(tr);
   }
@@ -428,6 +502,8 @@ function setupUploadDialog() {
   submitBtn.addEventListener("click", async () => {
     if (!selectedFile) return;
     const tz = tzSelect.value || currentTz;
+    const currencySelect = document.getElementById("cpCurrencySelect");
+    const currency = currencySelect ? currencySelect.value : "";
 
     dialog.close();
     setState("loading", "Uploading…");
@@ -435,34 +511,29 @@ function setupUploadDialog() {
 
     try {
       const buffer = await selectedFile.arrayBuffer();
-      const accountParam = currentAccount ? `account=${encodeURIComponent(currentAccount)}&` : "";
-      const url = `/api/capital/import/xtb?${accountParam}tz=${encodeURIComponent(tz)}`;
-
-      const res = await fetch(url, {
+      // The account the file names wins on the server; the selected account only covers
+      // exports that don't name one (e.g. a bare positions sheet).
+      const accountParam = currentAccount ? `&account=${encodeURIComponent(currentAccount)}` : "";
+      const url = `/api/capital/import/xtb?tz=${encodeURIComponent(tz)}&currency=${encodeURIComponent(currency)}${accountParam}`;
+      const batch = await fetchJson(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/octet-stream",
-          "X-File-Name": selectedFile.name,
+          "X-File-Name": selectedFile.name.replace(/[^\x20-\x7e]/g, "_"),
         },
         body: buffer,
       });
+      currentAccount = batch.account;
 
-      if (!res.ok) {
-        let errMsg = res.statusText;
-        try {
-          const json = await res.json();
-          if (json && json.error) errMsg = json.error;
-        } catch {}
-        throw new Error(errMsg);
-      }
-
-      const batch = await res.json();
-      showBanner(`Report imported successfully: ${batch.added || 0} rows added, ${batch.duplicates || 0} duplicates.`);
-
-      // Refresh everything
+      // Refresh first, then report the result so the refresh doesn't hide it.
       await loadAccounts();
       await loadPortfolio();
       await loadSyncStatus();
+      showBanner(
+        batch.already_imported
+          ? "This exact file was already imported; nothing changed."
+          : `Imported: ${batch.added || 0} new rows, ${batch.duplicates || 0} already known, ${batch.conflicts || 0} conflicts.`
+      );
     } catch (err) {
       setState("error", "Error");
       showBanner(`Import failed: ${err.message}`, true);
@@ -489,6 +560,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const refreshBtn = document.getElementById("cpRefreshBtn");
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => {
+      showBanner("");
       loadPortfolio();
       loadSyncStatus();
     });

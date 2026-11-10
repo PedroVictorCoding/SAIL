@@ -144,3 +144,63 @@ fn bad_uploads_are_refused_with_owner_safe_errors() {
     );
     assert!(svc.resolve_account(None).is_err(), "nothing was imported");
 }
+
+#[test]
+fn a_file_without_an_account_joins_the_selected_one_and_a_named_file_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let svc = CapitalService::open(dir.path()).unwrap();
+    let first = svc
+        .import_xtb(None, "cash.csv", CASH, None, None, t(10))
+        .unwrap();
+    // A closed-positions export with no preamble, uploaded while that account is selected.
+    let closed = include_bytes!("fixtures/xtb/closed_positions.csv");
+    let s = svc
+        .import_xtb(
+            Some(first.account.as_str()),
+            "closed.csv",
+            closed,
+            None,
+            Some("EUR"),
+            t(11),
+        )
+        .unwrap();
+    assert_eq!(s.account, first.account);
+    // The closed-positions export says nothing about current holdings, so the earlier
+    // open-positions snapshot stays the one reconciled against.
+    svc.import_xtb(None, "open.csv", OPEN, None, None, t(10))
+        .unwrap();
+    let svc_closed_last = svc
+        .import_xtb(
+            Some(first.account.as_str()),
+            "closed-again.csv",
+            &[closed.as_slice(), b"\n"].concat(),
+            None,
+            Some("EUR"),
+            t(13),
+        )
+        .unwrap();
+    assert_eq!(svc_closed_last.account, first.account);
+    let p = svc
+        .portfolio(
+            &first.account,
+            AsOf {
+                occurred_by: t(20),
+                known_by: t(20),
+            },
+        )
+        .unwrap();
+    assert!(p.positions[0].broker_market_value.is_some());
+    assert!(
+        p.reconciliation
+            .variances
+            .iter()
+            .any(|v| v.subject == "quantity sym:US500#cfd"),
+        "still reconciled against the open-positions snapshot"
+    );
+    // A file naming its own account is never re-booked by the selection.
+    let other = svc
+        .import_xtb(Some("xtb:…9999"), "cash2.csv", OPEN, None, None, t(12))
+        .unwrap();
+    assert_eq!(other.account, first.account);
+    assert_eq!(svc.accounts().unwrap().len(), 1);
+}

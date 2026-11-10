@@ -400,6 +400,13 @@ main {
   overflow-x: auto;
 }
 
+/* Narrow screens scroll a table sideways instead of wrapping figures and dates. */
+.cp-table td.num,
+.cp-table th,
+.cp-table td.cp-nowrap {
+  white-space: nowrap;
+}
+
 .cp-table {
   width: 100%;
   border-collapse: collapse;

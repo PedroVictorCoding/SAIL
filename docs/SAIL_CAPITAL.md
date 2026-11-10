@@ -85,7 +85,8 @@ this slice depends on it.
 2. Upload each file on the Capital page. `POST /api/capital/import/xtb` takes the raw
    bytes plus an `X-File-Name` header (`.xlsx` or `.csv`), and accepts these optional
    parameters:
-   - `?account=` sets the account label. Digits are masked to the last four.
+   - `?account=` sets the account for files that don't name one. The account a file
+     names always wins. Digits are masked to the last four.
    - `?tz=` sets the time zone of the report's times. The default is `Europe/Lisbon`.
    - `?currency=` sets the account currency, for files that don't state one. It is
      never assumed.

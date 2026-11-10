@@ -53,7 +53,7 @@ impl CapitalService {
 
     /// Imports one XTB report.
     ///
-    /// - `account_label` overrides the account named in the file.
+    /// - `account_label` names the account for files that don't name one themselves.
     /// - `tz` is an IANA zone name for the report's local times (default Europe/Lisbon).
     /// - `currency` is the account currency to use when the file doesn't state one. The
     ///   owner confirms it; it is never assumed.
@@ -87,11 +87,27 @@ impl CapitalService {
             })?);
         }
         let report = crate::import::parse(Broker::Xtb, bytes, file_name, &options)?;
-        let label = account_label
+        // The account the file names always wins, so a report can't be booked to the
+        // wrong account by a stale selection. `account_label` (the page's selected
+        // account) only fills in for files that don't name one.
+        let label = report
+            .account_label
+            .as_deref()
             .filter(|l| !l.trim().is_empty())
-            .or(report.account_label.as_deref())
+            .or(account_label.filter(|l| !l.trim().is_empty()))
             .unwrap_or("default");
-        let account = AccountId::new(Broker::Xtb, label);
+        // A stored account id passed back as-is ("xtb:…4567") names that account; anything
+        // else is a label that gets masked.
+        let account = match self
+            .store
+            .accounts()?
+            .into_iter()
+            .map(|a| a.account)
+            .find(|a| a.as_str() == label)
+        {
+            Some(existing) => existing,
+            None => AccountId::new(Broker::Xtb, label),
+        };
         Ok(self
             .store
             .record_import(&account, file_name, bytes, &report, now)?)

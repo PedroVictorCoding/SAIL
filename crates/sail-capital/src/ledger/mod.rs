@@ -274,8 +274,9 @@ fn precision_rank(precision: TimePrecision) -> u8 {
     }
 }
 
-/// The latest snapshot this account knew by `known_by`, provided the snapshot's own `as_of`
-/// isn't after `occurred_by`. A later import must not make an earlier answer look newer.
+/// The latest snapshot this account knew by `known_by` that describes current holdings
+/// (open positions or a balance), provided the snapshot's own `as_of` isn't after
+/// `occurred_by`. A later import must not make an earlier answer look newer.
 fn visible_snapshot<'a>(
     account: &AccountId,
     snapshots: &'a [StoredSnapshot],
@@ -285,6 +286,14 @@ fn visible_snapshot<'a>(
         .iter()
         .filter(|snapshot| &snapshot.account == account)
         .filter(|snapshot| snapshot.ingested_at <= as_of.known_by)
+        // XTB exports cash, closed and open positions as separate reports. A snapshot with
+        // neither open positions nor a balance (e.g. a closed-positions export) says
+        // nothing about current holdings, so it must not stand in for "holds nothing".
+        .filter(|snapshot| {
+            !snapshot.snapshot.open_positions.is_empty()
+                || snapshot.snapshot.balance.is_some()
+                || snapshot.snapshot.equity.is_some()
+        })
         .filter(|snapshot| {
             snapshot
                 .snapshot

@@ -234,7 +234,7 @@ function initializeSubsystemPages() {
     if (id === 'spaces') return; // Spaces overlays the current workspace.
     const found = subsystemPages.find(entry => entry.id === id);
     const item = found?.id === 'factory' ? null : found;
-    const route = item?.id || (id === 'tracker' || id === 'moodle' || id === 'entertainment' ? id : 'home');
+    const route = item?.id || (id === 'tracker' || id === 'moodle' || id === 'capital' || id === 'entertainment' ? id : 'home');
     if (!found && route === 'home' && id !== 'home') history.replaceState(null, '', '#home');
     closeSheet();
     // Move original nodes so socket updates, form state, and listeners stay live.
@@ -244,7 +244,7 @@ function initializeSubsystemPages() {
     page.hidden = !item;
     if (page) page.dataset.page = route;
     if (workspace) workspace.setAttribute('aria-label', `${item?.name || (route === 'entertainment' ? 'Entertainment' : 'Home')} workspace`);
-    document.title = `SAIL — ${item?.name || {tracker: 'Tracker', moodle: 'School', entertainment: 'Entertainment'}[route] || 'Workspace'}`;
+    document.title = `SAIL — ${item?.name || {tracker: 'Tracker', moodle: 'School', capital: 'Capital', entertainment: 'Entertainment'}[route] || 'Workspace'}`;
     document.querySelectorAll('[data-page]').forEach(link => {
       const page = link.dataset.page === 'factory' ? 'home' : link.dataset.page;
       const selected = page === route; link.classList.toggle('selected', selected);

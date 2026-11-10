@@ -65,6 +65,7 @@
   const FRAMES = {
     tracker: {src: '/tracker', title: 'Tracker', id: 'tmTracker'},
     moodle: {src: '/moodle', title: 'School', id: 'tmMoodle'},
+    capital: {src: '/capital', title: 'Capital', id: 'tmCapital'},
   };
   const COLUMN_TABS = ['chat', 'context'];
   const INFO_TABS = ['overview', 'tasks', 'logs', 'config'];
@@ -104,6 +105,7 @@
     const stroke = {fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round'};
     if (name === 'forge') { s.append(svg('path', {d: 'M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16', ...stroke})); return s; }
     if (name === 'away') { s.append(svg('path', {d: 'M3 12a9 9 0 1 0 2.6-6.4L3 8M3 3v5h5M12 7v5l3 2', ...stroke})); return s; }
+    if (name === 'capital') { s.append(svg('path', {d: 'M3 20h18M5 16l4-5 4 3 6-8M15 6h4v4', ...stroke})); return s; }
     if (name === 'school') { s.append(svg('path', {d: 'M2 9l10-5 10 5-10 5-10-5zM6 11v5c0 1.4 2.7 3 6 3s6-1.6 6-3v-5M22 9v6', ...stroke})); return s; }
     if (name === 'tasks') { s.append(svg('path', {d: 'M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01', ...stroke})); return s; }
     s.removeAttribute('viewBox');
@@ -214,7 +216,8 @@
         navItem('pulse', 'Reminders', 'pulse'),
         navItem('terminal', 'Terminal', 'terminal'),
         navItem('tracker', 'Tracker', 'sense'),
-        navItem('moodle', 'School', 'school')),
+        navItem('moodle', 'School', 'school'),
+        navItem('capital', 'Capital', 'capital')),
       el('section', {class: 'tm-np', id: 'tmNowPlaying', 'aria-label': 'Now playing', hidden: true}),
       el('div', {class: 'tm-sidecard'},
         el('p', {class: 'tm-sidecard-title'}, el('span', {class: 'tm-status', id: 'tmCoreDot'}), el('span', {id: 'tmCoreState', text: 'Connecting…'})),
