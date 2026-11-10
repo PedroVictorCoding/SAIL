@@ -51,14 +51,19 @@ impl CapitalService {
         })
     }
 
-    /// Imports one XTB report. `account_label` overrides the account named in the file;
-    /// `tz` is an IANA zone name for the report's local times (default Europe/Lisbon).
+    /// Imports one XTB report.
+    ///
+    /// - `account_label` overrides the account named in the file.
+    /// - `tz` is an IANA zone name for the report's local times (default Europe/Lisbon).
+    /// - `currency` is the account currency to use when the file doesn't state one. The
+    ///   owner confirms it; it is never assumed.
     pub fn import_xtb(
         &self,
         account_label: Option<&str>,
         file_name: &str,
         bytes: &[u8],
         tz: Option<&str>,
+        currency: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<BatchStatus, ServiceError> {
         if bytes.is_empty() {
@@ -75,6 +80,11 @@ impl CapitalService {
             options.report_tz = tz
                 .parse()
                 .map_err(|_| ServiceError::BadRequest(format!("Unknown time zone {tz:?}.")))?;
+        }
+        if let Some(code) = currency.filter(|c| !c.is_empty()) {
+            options.default_currency = Some(Currency::parse(code).ok_or_else(|| {
+                ServiceError::BadRequest(format!("Unknown currency code {code:?}."))
+            })?);
         }
         let report = crate::import::parse(Broker::Xtb, bytes, file_name, &options)?;
         let label = account_label

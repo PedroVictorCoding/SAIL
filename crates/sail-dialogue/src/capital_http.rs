@@ -142,6 +142,7 @@ struct RangeQuery {
 struct ImportQuery {
     account: Option<String>,
     tz: Option<String>,
+    currency: Option<String>,
 }
 
 async fn accounts(State(s): State<Arc<CapitalState>>, h: HeaderMap) -> Result<Response, Failure> {
@@ -275,6 +276,7 @@ async fn import_xtb(
             &file_name,
             &body,
             q.tz.as_deref(),
+            q.currency.as_deref(),
             Utc::now(),
         )
     })

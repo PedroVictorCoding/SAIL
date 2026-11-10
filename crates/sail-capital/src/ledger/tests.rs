@@ -159,7 +159,7 @@ fn date_only_row_sorts_before_a_timed_row_on_the_same_instant() {
 }
 
 #[test]
-fn unit_cost_falls_back_to_cash_only_when_currencies_match() {
+fn unit_cost_falls_back_to_the_cash_paid_in_its_own_currency() {
     let matching = trade(
         "buy-match",
         5,
@@ -185,8 +185,13 @@ fn unit_cost_falls_back_to_cash_only_when_currencies_match() {
         },
         Some(money("-200", usd())),
     );
+    // A EUR-listed share bought from a USD cash balance: the cost is what was paid, in
+    // the currency it was paid in, never relabelled as EUR.
     let projection = project(&account(), &[mismatched], &[], bounds());
-    assert_eq!(projection.positions[0].lots[0].unit_cost, None);
+    assert_eq!(
+        projection.positions[0].lots[0].unit_cost,
+        Some(money("100", usd()))
+    );
 }
 
 #[test]

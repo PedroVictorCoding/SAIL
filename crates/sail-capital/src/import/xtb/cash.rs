@@ -129,6 +129,9 @@ pub fn parse_trade_comment(
     };
     idx += 1;
 
+    // The comment's price is in the instrument's trading currency, which the cash row
+    // doesn't state (its amount is in account currency), so callers pass `None` and the
+    // price is dropped rather than mislabelled. The quantity is still exact.
     let price_val = crate::contracts::parse_decimal_text(price_str);
     let price = match (price_val, currency) {
         (Some(pv), Some(curr)) => Some(Money::new(pv, curr)),
@@ -331,7 +334,7 @@ pub fn parse_cash_row(
             symbol: raw_symbol.clone(),
             isin,
             name: instrument_name,
-            currency: Some(currency.clone()),
+            currency: None,
             kind: inst_kind,
         })
     } else {
@@ -357,12 +360,12 @@ pub fn parse_cash_row(
                 symbol: "UNKNOWN".to_string(),
                 isin: None,
                 name: None,
-                currency: Some(currency.clone()),
+                currency: None,
                 kind: InstrumentKind::Stock,
             });
             let (quantity, price, pos_ref) = comment
                 .as_deref()
-                .map(|c| parse_trade_comment(c, Some(currency.clone())))
+                .map(|c| parse_trade_comment(c, None))
                 .unwrap_or((None, None, None));
             EntryKind::Trade {
                 instrument: inst,
@@ -378,12 +381,12 @@ pub fn parse_cash_row(
                 symbol: "UNKNOWN".to_string(),
                 isin: None,
                 name: None,
-                currency: Some(currency.clone()),
+                currency: None,
                 kind: InstrumentKind::Stock,
             });
             let (quantity, price, pos_ref) = comment
                 .as_deref()
-                .map(|c| parse_trade_comment(c, Some(currency.clone())))
+                .map(|c| parse_trade_comment(c, None))
                 .unwrap_or((None, None, None));
             EntryKind::Trade {
                 instrument: inst,
@@ -424,7 +427,7 @@ pub fn parse_cash_row(
                 symbol: raw_symbol.clone(),
                 isin: None,
                 name: None,
-                currency: Some(currency.clone()),
+                currency: None,
                 kind: InstrumentKind::Cfd,
             });
             EntryKind::DerivativeResult {

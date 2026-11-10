@@ -1,6 +1,7 @@
 //! Comprehensive integration test suite for the XTB importer.
 use chrono::{Datelike, TimeZone};
 use rust_decimal::Decimal;
+use sail_capital::Currency;
 use sail_capital::contracts::{
     AccountId, Broker, EntryKind, FeeKind, ImportError, ImportOptions, InstrumentKind,
     MAX_CELL_CHARS, MAX_REPORT_BYTES, Severity, Side, TaxKind,
@@ -70,7 +71,9 @@ fn test_english_cash_xlsx_and_csv() {
                 assert_eq!(instrument.kind, InstrumentKind::Stock);
                 assert_eq!(*side, Side::Buy);
                 assert_eq!(*quantity, Some(d("10")));
-                assert_eq!(price.as_ref().unwrap().amount, d("150.00"));
+                // The comment price is in USD but the row only states EUR cash, so it
+                // is dropped rather than mislabelled; the quantity is still exact.
+                assert_eq!(*price, None);
                 assert!(position_ref.is_some());
             }
             other => panic!("expected Trade Buy, got {other:?}"),
@@ -88,7 +91,7 @@ fn test_english_cash_xlsx_and_csv() {
                 assert_eq!(instrument.symbol, "AAPL.US");
                 assert_eq!(*side, Side::Sell);
                 assert_eq!(*quantity, Some(d("5")));
-                assert_eq!(price.as_ref().unwrap().amount, d("180.00"));
+                assert_eq!(*price, None);
             }
             other => panic!("expected Trade Sell, got {other:?}"),
         }
@@ -231,7 +234,7 @@ fn test_portuguese_cash_xlsx_and_csv() {
             } => {
                 assert_eq!(*side, Side::Buy);
                 assert_eq!(*quantity, Some(d("2")));
-                assert_eq!(price.as_ref().unwrap().amount, d("200.00"));
+                assert_eq!(*price, None);
                 assert_eq!(instrument.symbol, "VWCE.DE");
             }
             other => panic!("expected Buy, got {other:?}"),
@@ -247,7 +250,7 @@ fn test_portuguese_cash_xlsx_and_csv() {
             } => {
                 assert_eq!(*side, Side::Sell);
                 assert_eq!(*quantity, Some(d("1")));
-                assert_eq!(price.as_ref().unwrap().amount, d("220.00"));
+                assert_eq!(*price, None);
                 assert_eq!(instrument.symbol, "VWCE.DE");
             }
             other => panic!("expected Sell, got {other:?}"),
@@ -317,8 +320,12 @@ fn test_open_positions_with_total_row() {
         assert_eq!(p1.instrument.symbol, "AAPL.US");
         assert_eq!(p1.instrument.kind, InstrumentKind::Stock);
         assert_eq!(p1.quantity, d("10.0"));
-        assert_eq!(p1.open_price.as_ref().unwrap().amount, d("150.00"));
-        assert_eq!(p1.market_price.as_ref().unwrap().amount, d("180.00"));
+        // Per-unit prices need the instrument's currency, which this export doesn't
+        // state; the value at export is purchase value + gross P/L in account currency.
+        assert_eq!(p1.open_price, None);
+        assert_eq!(p1.market_price, None);
+        assert_eq!(p1.market_value.as_ref().unwrap().amount, d("1800.0"));
+        assert_eq!(p1.instrument.currency, None);
 
         let p2 = &report.snapshot.open_positions[1];
         assert_eq!(p2.instrument.symbol, "US500");
@@ -351,7 +358,23 @@ fn test_open_positions_with_total_row() {
 fn test_closed_positions() {
     let xlsx_bytes = include_bytes!("fixtures/xtb/closed_positions.xlsx");
     let csv_bytes = include_bytes!("fixtures/xtb/closed_positions.csv");
-    let options = ImportOptions::default();
+
+    // This export states no currency anywhere: without the owner saying which, every row
+    // is rejected rather than assumed to be EUR.
+    let unstated = parse(csv_bytes, "closed_positions.csv", &ImportOptions::default())
+        .expect("the file itself is readable");
+    assert!(unstated.snapshot.closed_positions.is_empty());
+    assert!(
+        unstated
+            .issues
+            .iter()
+            .any(|issue| issue.code == "missing_currency")
+    );
+
+    let options = ImportOptions {
+        default_currency: Currency::parse("EUR"),
+        ..ImportOptions::default()
+    };
 
     for (bytes, name) in [
         (xlsx_bytes.as_slice(), "closed_positions.xlsx"),
@@ -364,8 +387,8 @@ fn test_closed_positions() {
         let cp1 = &report.snapshot.closed_positions[0];
         assert_eq!(cp1.instrument.symbol, "NVDA.US");
         assert_eq!(cp1.quantity, d("5.0"));
-        assert_eq!(cp1.open_price.as_ref().unwrap().amount, d("100.00"));
-        assert_eq!(cp1.close_price.as_ref().unwrap().amount, d("120.00"));
+        assert_eq!(cp1.open_price, None);
+        assert_eq!(cp1.close_price, None);
         assert_eq!(cp1.realized.as_ref().unwrap().amount, d("100.00"));
 
         let cp2 = &report.snapshot.closed_positions[1];

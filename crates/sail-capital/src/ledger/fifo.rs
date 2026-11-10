@@ -104,15 +104,17 @@ pub(super) fn build_positions(
 
         match side {
             Side::Buy => {
-                let unit_cost = match price {
-                    Some(stated) => Some(stated.clone()),
-                    None => match &record.entry.cash_effect {
-                        Some(cash) if instrument.currency.as_ref() == Some(&cash.currency) => Some(
-                            Money::new(cash.amount.abs() / traded, cash.currency.clone()),
-                        ),
-                        _ => None,
-                    },
-                };
+                let unit_cost =
+                    match price {
+                        Some(stated) => Some(stated.clone()),
+                        // No stated price: the cash the row moved is what was actually paid,
+                        // in the account's currency (a EUR account buying a USD share is
+                        // debited in EUR). That is the cost basis the owner's tax return uses,
+                        // so it is labelled with the cash currency, not the instrument's.
+                        None => record.entry.cash_effect.as_ref().map(|cash| {
+                            Money::new(cash.amount.abs() / traded, cash.currency.clone())
+                        }),
+                    };
                 let book = books.entry(key).or_insert_with(|| LotBook {
                     instrument: instrument.clone(),
                     lots: VecDeque::new(),

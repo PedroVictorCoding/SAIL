@@ -75,6 +75,16 @@ pub fn detect_open_positions_summary_row(
     }
 }
 
+/// Helper to parse an optional per-unit price column. `None` without a stated currency.
+fn parse_price_col(
+    row: &RawRow,
+    headers: &HeaderMap,
+    col: CanonicalColumn,
+    currency: Option<&Currency>,
+) -> Option<Money> {
+    parse_money_col(row, headers, col, currency?)
+}
+
 /// Helper to parse an optional money column.
 fn parse_money_col(
     row: &RawRow,
@@ -112,7 +122,19 @@ pub fn parse_open_position_row(
         .and_then(|c| Currency::parse(c.as_str()))
         .or(account_currency)
         .or(default_currency)
-        .unwrap_or_else(Currency::eur);
+        .ok_or_else(|| ImportIssue {
+            severity: Severity::Error,
+            code: "missing_currency".to_string(),
+            message: "no account currency is stated for this position row".to_string(),
+            source: Some(row_ref.clone()),
+        })?;
+    // Per-unit prices are in the instrument's trading currency, which is not the account
+    // currency in general (a EUR account holding AAPL.US sees USD prices). They are kept
+    // only when the row itself names a currency.
+    let price_currency = headers
+        .col(CanonicalColumn::Currency)
+        .and_then(|c| row.get(c))
+        .and_then(|c| Currency::parse(c.as_str()));
 
     // 2. Volume (quantity)
     let volume_col = headers
@@ -198,7 +220,7 @@ pub fn parse_open_position_row(
         symbol: raw_symbol,
         isin,
         name: instrument_name,
-        currency: Some(currency.clone()),
+        currency: price_currency.clone(),
         kind,
     };
 
@@ -211,10 +233,30 @@ pub fn parse_open_position_row(
         .filter(|s| !s.is_empty());
 
     // 5. Open price & market price
-    let open_price = parse_money_col(row, headers, CanonicalColumn::OpenPrice, &currency);
-    let market_price = parse_money_col(row, headers, CanonicalColumn::MarketPrice, &currency);
-    let market_value = parse_money_col(row, headers, CanonicalColumn::PurchaseValue, &currency);
+    let open_price = parse_price_col(
+        row,
+        headers,
+        CanonicalColumn::OpenPrice,
+        price_currency.as_ref(),
+    );
+    let market_price = parse_price_col(
+        row,
+        headers,
+        CanonicalColumn::MarketPrice,
+        price_currency.as_ref(),
+    );
+    let purchase_value = parse_money_col(row, headers, CanonicalColumn::PurchaseValue, &currency);
     let unrealized = parse_money_col(row, headers, CanonicalColumn::GrossPl, &currency);
+    // "Purchase value" is what was paid, not what the position is worth. For owned
+    // securities the broker's own figures give the value at export: purchase value plus
+    // gross P/L, both in account currency. CFD "purchase value" is a notional, so no
+    // market value is derived for them.
+    let market_value = match (&purchase_value, &unrealized) {
+        (Some(paid), Some(pl)) if kind != InstrumentKind::Cfd && paid.currency == pl.currency => {
+            Some(Money::new(paid.amount + pl.amount, paid.currency.clone()))
+        }
+        _ => None,
+    };
 
     // 6. Open time
     let opened = headers
@@ -264,7 +306,19 @@ pub fn parse_closed_position_row(
         .and_then(|c| Currency::parse(c.as_str()))
         .or(account_currency)
         .or(default_currency)
-        .unwrap_or_else(Currency::eur);
+        .ok_or_else(|| ImportIssue {
+            severity: Severity::Error,
+            code: "missing_currency".to_string(),
+            message: "no account currency is stated for this position row".to_string(),
+            source: Some(row_ref.clone()),
+        })?;
+    // Per-unit prices are in the instrument's trading currency, which is not the account
+    // currency in general (a EUR account holding AAPL.US sees USD prices). They are kept
+    // only when the row itself names a currency.
+    let price_currency = headers
+        .col(CanonicalColumn::Currency)
+        .and_then(|c| row.get(c))
+        .and_then(|c| Currency::parse(c.as_str()));
 
     // 2. Volume (quantity)
     let volume_col = headers
@@ -341,7 +395,7 @@ pub fn parse_closed_position_row(
         symbol: raw_symbol,
         isin,
         name: instrument_name,
-        currency: Some(currency.clone()),
+        currency: price_currency.clone(),
         kind,
     };
 
@@ -354,8 +408,18 @@ pub fn parse_closed_position_row(
         .filter(|s| !s.is_empty());
 
     // 5. Open price & close price
-    let open_price = parse_money_col(row, headers, CanonicalColumn::OpenPrice, &currency);
-    let close_price = parse_money_col(row, headers, CanonicalColumn::ClosePrice, &currency);
+    let open_price = parse_price_col(
+        row,
+        headers,
+        CanonicalColumn::OpenPrice,
+        price_currency.as_ref(),
+    );
+    let close_price = parse_price_col(
+        row,
+        headers,
+        CanonicalColumn::ClosePrice,
+        price_currency.as_ref(),
+    );
     let realized = parse_money_col(row, headers, CanonicalColumn::GrossPl, &currency);
 
     // 6. Open time & close time
