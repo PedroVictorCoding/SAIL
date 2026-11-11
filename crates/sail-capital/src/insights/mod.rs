@@ -103,10 +103,28 @@ pub struct Income {
     pub trailing_yield: Option<Decimal>,
 }
 
+/// The account in the broker's own terms, so the figures can be checked against XTB.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountView {
+    /// Free funds plus owned positions' broker value (XTB's account value, without CFDs).
+    pub account_value: Money,
+    /// Ledger cash (XTB's free funds, before any margin in use).
+    pub free_funds: Money,
+    /// What the open owned positions cost: the sum of their cost bases. Units received
+    /// free count at their stated cost (zero by default).
+    pub invested: Option<Money>,
+    /// `owned value - invested`: profit or loss on the open positions.
+    pub open_result: Option<Money>,
+}
+
 /// Money in, money out and what it is worth now, in one currency.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TotalReturn {
-    /// Deposits minus withdrawals. Transfers between the owner's own sub-accounts are
+    /// Every deposit, added up.
+    pub deposits: Money,
+    /// Every withdrawal, added up (negative or zero).
+    pub withdrawals: Money,
+    /// Deposits plus withdrawals. Transfers between the owner's own sub-accounts are
     /// excluded.
     pub net_deposits: Money,
     /// Ledger cash plus owned positions' broker value.
@@ -132,6 +150,8 @@ pub struct Freshness {
 /// Everything the Insights section shows.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Insights {
+    /// The account in the broker's terms, when cash and values share one currency.
+    pub account: Option<AccountView>,
     /// The currency of the value figures, when every owned position's value is in one.
     pub currency: Option<Currency>,
     /// Total owned value.
@@ -565,7 +585,17 @@ pub fn insights(projection: &Projection, records: &[LedgerRecord], now: DateTime
                     None
                 };
 
+                let flow_sum = |label: &str| {
+                    projection
+                        .flows
+                        .iter()
+                        .filter(|f| f.label == label && f.total.currency == target_curr)
+                        .map(|f| f.total.amount)
+                        .sum::<Decimal>()
+                };
                 Some(TotalReturn {
+                    deposits: Money::new(flow_sum("deposit"), target_curr.clone()),
+                    withdrawals: Money::new(flow_sum("withdrawal"), target_curr.clone()),
                     net_deposits: Money::new(net_dep_amount, target_curr.clone()),
                     current_value: Money::new(curr_val_amount, target_curr.clone()),
                     gain: Money::new(gain_amount, target_curr),
@@ -577,7 +607,10 @@ pub fn insights(projection: &Projection, records: &[LedgerRecord], now: DateTime
         }
     };
 
+    let account = account_view(projection, owned_value.as_ref(), &unvalued, &mut warnings);
+
     Insights {
+        account,
         currency,
         owned_value,
         allocation,
@@ -589,4 +622,61 @@ pub fn insights(projection: &Projection, records: &[LedgerRecord], now: DateTime
         unvalued,
         warnings,
     }
+}
+
+/// The account in XTB's terms: account value = free funds + owned value; invested = the
+/// open positions' cost; open result = owned value - invested. `None` unless the cash is in
+/// one currency and the owned value, if any, is in the same one.
+fn account_view(
+    projection: &Projection,
+    owned_value: Option<&Money>,
+    unvalued: &[String],
+    warnings: &mut Vec<String>,
+) -> Option<AccountView> {
+    let cash: Vec<&Money> = projection.cash.iter().collect();
+    let free_funds = match cash.as_slice() {
+        [only] => (*only).clone(),
+        [] => Money::new(Decimal::ZERO, owned_value?.currency.clone()),
+        _ => {
+            warnings.push(
+                "Cash is held in more than one currency; the account view isn't shown".to_string(),
+            );
+            return None;
+        }
+    };
+    let currency = free_funds.currency.clone();
+    let owned = match owned_value {
+        Some(v) if v.currency == currency => v.amount,
+        Some(_) => {
+            warnings.push(
+                "Cash and positions use different currencies; the account view isn't shown"
+                    .to_string(),
+            );
+            return None;
+        }
+        None if projection.positions.is_empty() => Decimal::ZERO,
+        None => return None,
+    };
+    let mut invested = Some(Decimal::ZERO);
+    for position in &projection.positions {
+        if unvalued.contains(&position.instrument.symbol) {
+            continue;
+        }
+        invested = match (invested, &position.cost_basis) {
+            (Some(sum), Some(cost)) if cost.currency == currency => Some(sum + cost.amount),
+            _ => None,
+        };
+    }
+    if invested.is_none() {
+        warnings.push(
+            "Some open positions have no cost basis in the account currency; invested isn't shown"
+                .to_string(),
+        );
+    }
+    Some(AccountView {
+        account_value: Money::new(free_funds.amount + owned, currency.clone()),
+        free_funds,
+        invested: invested.map(|i| Money::new(i, currency.clone())),
+        open_result: invested.map(|i| Money::new(owned - i, currency.clone())),
+    })
 }

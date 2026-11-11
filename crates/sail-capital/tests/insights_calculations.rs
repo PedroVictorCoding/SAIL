@@ -381,3 +381,53 @@ fn interest_and_freshness_calculations() {
     assert_eq!(ins.freshness.snapshot_age_hours, Some(80));
     assert!(ins.freshness.stale, "80h > 72h should be stale");
 }
+
+/// The account view uses the broker's own terms, so it can be checked against XTB: account
+/// value = free funds + positions, invested = the open positions' cost, open result =
+/// positions - invested. The return since the first deposit is separate.
+#[test]
+fn account_view_matches_the_brokers_terms() {
+    let now = Utc.with_ymd_and_hms(2025, 6, 1, 12, 0, 0).unwrap();
+    let mut a = make_position(
+        "AAPL.US",
+        InstrumentKind::Stock,
+        Some(Money::new(d("900.00"), eur())),
+    );
+    a.cost_basis = Some(Money::new(d("1000.00"), eur()));
+    let mut b = make_position(
+        "TTE.FR",
+        InstrumentKind::Stock,
+        Some(Money::new(d("300.00"), eur())),
+    );
+    b.cost_basis = Some(Money::new(d("250.00"), eur()));
+    let flows = vec![
+        FlowTotal {
+            label: "deposit".into(),
+            total: Money::new(d("2000.00"), eur()),
+            count: 2,
+        },
+        FlowTotal {
+            label: "withdrawal".into(),
+            total: Money::new(d("-500.00"), eur()),
+            count: 1,
+        },
+    ];
+    let cash = vec![Money::new(d("400.00"), eur())];
+    let ins = insights(
+        &make_projection(vec![a, b], cash, vec![], flows, None),
+        &[],
+        now,
+    );
+
+    let account = ins.account.expect("account view");
+    assert_eq!(account.free_funds.amount, d("400.00"));
+    assert_eq!(account.account_value.amount, d("1600.00"));
+    assert_eq!(account.invested.unwrap().amount, d("1250.00"));
+    assert_eq!(account.open_result.unwrap().amount, d("-50.00"));
+
+    let tr = ins.total_return.expect("return");
+    assert_eq!(tr.deposits.amount, d("2000.00"));
+    assert_eq!(tr.withdrawals.amount, d("-500.00"));
+    assert_eq!(tr.net_deposits.amount, d("1500.00"));
+    assert_eq!(tr.gain.amount, d("100.00"));
+}
