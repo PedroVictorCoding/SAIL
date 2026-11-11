@@ -16,7 +16,7 @@ Round 7 (2026-11-10) builds the **portfolio foundation**:
 
 Round 8 adds the first research source, **SEC EDGAR filings** for the US companies the
 owner holds (see below). Round 9 adds splits, received shares and portfolio insights.
-Round 11 adds the **Today view, risk limits and suggestions**. Round 10 added **daily prices and baseline forecasts** with an honest out-of-sample score
+Round 12 adds **model signals (YOLO, Chronos) and a blended per-holding outlook with replay**. Round 11 added the **Today view, risk limits and suggestions**. Round 10 added **daily prices and baseline forecasts** with an honest out-of-sample score
 (see below). House/Senate, FRED/ECB and Polymarket adapters, the risk engine and any neural
 or `.sea` model come in later rounds.
 
@@ -334,6 +334,88 @@ orders.
 sessions, so there are no ideas. The draft limits flagged the idle free funds and one
 position above 10%.
 
+## Model signals and the blended outlook (round 12)
+
+**Model signals.** Python helpers in `scripts/signals/` add three views. Each one goes
+through the same out-of-sample IC check as the price signals before it gets any weight:
+
+| Name | Model (pinned revision) | What it gives | Licence | Scored from |
+|---|---|---|---|---|
+| `yolo` | `foduucom/stockmarket-pattern-detection-yolov8` | Head-and-shoulders, M/W and triangle patterns ending in the last quarter of a rendered 120-session candlestick chart | not stated; Ultralytics is AGPL-3.0, so personal use only | 2025-04-15 |
+| `yolo_trend` | `foduucom/stockmarket-future-prediction` | Up/Down regions at the right edge of the same chart | not stated; personal use only | 2023-11-01 |
+| `chronos` | `amazon/chronos-bolt-small` | Median 60-session return | Apache-2.0 | 2024-12-01 |
+
+The "scored from" dates come after each model's weights were published. A pretrained
+model may have seen earlier prices, and scoring it on them would flatter it.
+
+Both YOLO weight files are pickles from one author. Before loading one, the helper reads
+every import inside the pickle and refuses the file if any import falls outside an
+allowlist (`ultralytics`, `torch`, `numpy`, `collections` and a few builtins). Ultralytics
+analytics and Hugging Face telemetry are turned off.
+
+**Blended outlook** (`outlook/`). Each holding gets a fan at 1, 3, 6 and 12 months (21, 63,
+126 and 252 sessions), built from five components:
+- `gbm`: geometric Brownian motion, the stockspy cone, in closed form;
+- `ewma`: zero drift with EWMA volatility (the "no change" reference);
+- `historical`: past windows of the same length;
+- `chronos`: Chronos-Bolt quantile paths, up to 64 sessions;
+- `gbdt`: gradient-boosted quantile regression on price features, refit monthly on rows
+  whose outcome was already known.
+
+They are pooled linearly, with weights that minimize CRPS over the 156 weekly origins
+before each origin. A component that forecast badly loses its weight. Validated signals
+can shift the fan at 1 and 3 months. If nothing passed, there is no shift.
+
+A model path older than 10 days is ignored, so a model that stopped running drops out
+instead of going stale.
+
+**Weight shrinkage.** Weekly origins overlap, so 156 of them hold only about
+`156·5/h` independent outcomes. On real holdings, fitted weights swung to a single
+component (100% GBDT one quarter, 100% Chronos the next). Fitted weights are therefore
+trusted in proportion `λ = n_eff / (n_eff + 20)`, and the rest goes to equal weights.
+
+**Replay.** The page can trim the last 1, 3, 6 or 12 months. SAIL then rebuilds the whole
+outlook at that cutoff, including prices, model paths, weights and signal validation,
+from data up to the cutoff only. It draws what actually happened over the fan and says
+the percentile where the price ended.
+
+**Track record.** Replays at the end of every month over the last three years, pooled
+over the holdings:
+- the share inside the 68% and 90% bands (aim 68% and 90%);
+- the average percentile (aim 50);
+- skill against `ewma` alone;
+- how often the median got the direction right.
+
+**First run on the owner's holdings (2026-11-11).** All five models ran on all
+holdings in about 45 minutes. No model signal passed:
+
+| Signal | t-statistic at 20 sessions |
+|---|---|
+| YOLO patterns | 0.67 |
+| YOLO trend | 0.47 |
+| Chronos | 0.60 |
+
+So the fans have no direction tilt. With shrinkage, the blend's monthly replays over
+three years:
+
+| Horizon | Inside 68% band | Inside 90% band | Skill vs no change |
+|---|---|---|---|
+| 1 month | 68% | 89% | −1% |
+| 3 months | 70% | 90% | +0.3% |
+| 6 months | 72% | 92% | +0.3% |
+| 1 year | 68% | 88% | +0.1% |
+
+The ranges are honest, but no model sees direction better than "no change".
+
+**Setup.** Run `scripts/signals/setup.sh` once. It installs CPU-only PyTorch, Chronos,
+Ultralytics, mplfinance and scikit-learn into `/srv/sail-data/venvs/signals` (about
+1.8 GB). Then set `SAIL_MODEL_SIGNALS=chronos,yolo,yolo_trend,gbdt` and press **Run
+models** in Data. The first run downloads the weights and scores years of weekly charts,
+which can take an hour. Later runs only add new weeks.
+
+`SAIL_SIGNALS_PYTHON`, `SAIL_SIGNALS_SCRIPTS` and `SAIL_SIGNALS_CACHE` override the
+defaults. Helpers receive instrument keys and prices only, never amounts or names.
+
 ## API (`/api/capital`, owner token required)
 
 | Route | Returns |
@@ -364,6 +446,10 @@ position above 10%.
 | `GET /policy?account=` | The policy in force (the built-in draft until one is saved) and every version |
 | `POST /policy?account=` | Body `{"limits": {...}, "confirm": bool}`. Stores a new version, or returns 400 with the reason |
 | `GET /signals?account=` | Signal skill per horizon, the combined IC and the latest combined scores |
+| `GET /signals/models` | Each model signal and outlook model: what it is, its licence, whether it is on, the last run and what is stored |
+| `POST /signals/refresh?account=` | Starts the model helpers in the background |
+| `GET /outlook?account=&symbol=&horizon=&cutoff=` | The blended fan for one holding (a replay when `cutoff` is given), with the closes before it and every session date |
+| `GET /outlook/track-record?account=&horizon=` | Coverage, average percentile, skill and direction over monthly replays |
 
 All amounts are decimal strings. Errors are `{"error": "..."}`, with these status codes:
 

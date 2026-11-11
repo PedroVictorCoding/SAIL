@@ -7,6 +7,11 @@ let selectedFile = null;
 let accountList = [];
 let currentHorizon = 20;
 let currentModel = "no_change";
+let currentOutlookSymbol = "";
+let currentOutlookHorizon = 21;
+let currentOutlookTrim = 0;
+let currentOutlookSessions = [];
+let modelsPollingTimer = null;
 
 function setState(state, text) {
   const pill = document.getElementById("cpState");
@@ -268,6 +273,7 @@ function renderEmptyPortfolio() {
   document.getElementById("cpPositionsBody").innerHTML = `<tr><td colspan="5" class="cp-empty">No portfolio data yet. Upload an XTB export to begin.</td></tr>`;
   document.getElementById("cpCfdBody").innerHTML = `<tr><td colspan="5" class="cp-empty">No open CFD contracts.</td></tr>`;
   document.getElementById("cpDividendsBody").innerHTML = `<tr><td colspan="5" class="cp-empty">No dividend events recorded.</td></tr>`;
+  updateOutlookHoldings([]);
 }
 
 function renderPortfolio(p) {
@@ -413,6 +419,10 @@ function renderPortfolio(p) {
 
   // Dividends Table
   renderDividendsTable(p.dividends || []);
+
+  // Update Outlook holding picker (Round 12)
+  const heldSymbols = Array.from(new Set((p.positions || []).map(pos => (pos.instrument && pos.instrument.symbol) || pos.symbol).filter(Boolean))).sort();
+  updateOutlookHoldings(heldSymbols);
 }
 
 function renderPositionsTable(tbodyId, positions, isCfd) {
@@ -1415,7 +1425,11 @@ async function loadPriceStatus() {
 }
 
 function setupPriceControls() {
-  const horizonBtns = document.querySelectorAll(".cp-horizon-btn");
+  // Only the baseline-forecast pills: the outlook's horizon and replay pills share the
+  // button class and have their own handlers.
+  const horizonBtns = document.querySelectorAll(
+    '.cp-horizon-pills[aria-label="Forecast horizon"] .cp-horizon-btn'
+  );
   horizonBtns.forEach(btn => {
     btn.addEventListener("click", () => {
       horizonBtns.forEach(b => {
@@ -2416,6 +2430,714 @@ function setupDataTabControls() {
   }
 }
 
+/* -----------------------------------------------------------------------------
+ * Round 12: Blended Outlook with Replay & Predictive Models
+ * ----------------------------------------------------------------------------- */
+
+const COMPONENT_LABELS = {
+  gbm: "Geometric Brownian Motion (GBM)",
+  ewma: "EWMA Volatility (No-Change)",
+  historical: "Historical Simulation",
+  chronos: "Chronos-Bolt (Pretrained Model)",
+  gbdt: "Gradient Boosted Trees (GBDT)",
+};
+
+function ordinalSuffix(n) {
+  const rounded = Math.round(n);
+  const j = rounded % 10;
+  const k = rounded % 100;
+  if (j === 1 && k !== 11) return `${rounded}st`;
+  if (j === 2 && k !== 12) return `${rounded}nd`;
+  if (j === 3 && k !== 13) return `${rounded}rd`;
+  return `${rounded}th`;
+}
+
+function getStatusReason(status) {
+  if (!status || status === "Ok" || status === "ok") return null;
+  if (typeof status === "string") return status;
+  if (status.insufficient_evidence) return status.insufficient_evidence.reason || "Insufficient evidence";
+  if (status.InsufficientEvidence) return status.InsufficientEvidence.reason || "Insufficient evidence";
+  if (status.status === "insufficient_evidence") return status.reason || "Insufficient evidence";
+  if (status.reason) return status.reason;
+  return "Insufficient evidence";
+}
+
+function updateOutlookHoldings(symbols) {
+  const select = document.getElementById("cpOutlookSymbolSelect");
+  if (!select) return;
+
+  const prevValue = select.value || currentOutlookSymbol;
+  select.innerHTML = "";
+
+  if (symbols.length === 0) {
+    select.innerHTML = `<option value="" disabled selected>No holdings</option>`;
+    currentOutlookSymbol = "";
+    loadOutlook();
+    return;
+  }
+
+  for (const s of symbols) {
+    const opt = document.createElement("option");
+    opt.value = s;
+    opt.textContent = s;
+    select.appendChild(opt);
+  }
+
+  if (symbols.includes(prevValue)) {
+    select.value = prevValue;
+    currentOutlookSymbol = prevValue;
+  } else {
+    select.value = symbols[0];
+    currentOutlookSymbol = symbols[0];
+  }
+
+  loadOutlook();
+}
+
+async function loadOutlook() {
+  const wrap = document.getElementById("cpOutlookChartWrap");
+  const replayBox = document.getElementById("cpOutlookReplaySummary");
+  const metaGrid = document.getElementById("cpOutlookMetaGrid");
+  if (!wrap) return;
+
+  if (!currentOutlookSymbol) {
+    wrap.innerHTML = `<p class="cp-empty">Select a holding to see its blended outlook.</p>`;
+    if (replayBox) replayBox.hidden = true;
+    if (metaGrid) metaGrid.hidden = true;
+    return;
+  }
+
+  try {
+    let cutoff = null;
+    if (currentOutlookTrim > 0 && currentOutlookSessions.length > 0) {
+      const idx = currentOutlookSessions.length - 1 - currentOutlookTrim;
+      cutoff = currentOutlookSessions[Math.max(0, idx)];
+    }
+
+    let url = `/api/capital/outlook?account=${encodeURIComponent(currentAccount || "")}&symbol=${encodeURIComponent(currentOutlookSymbol)}&horizon=${currentOutlookHorizon}`;
+    if (cutoff) {
+      url += `&cutoff=${encodeURIComponent(cutoff)}`;
+    }
+
+    const res = await fetchJson(url);
+    if (res.sessions && Array.isArray(res.sessions)) {
+      currentOutlookSessions = res.sessions;
+    }
+
+    const outlook = res.outlook;
+    if (!outlook) {
+      wrap.innerHTML = `<p class="cp-empty">No outlook data returned.</p>`;
+      if (replayBox) replayBox.hidden = true;
+      if (metaGrid) metaGrid.hidden = true;
+      return;
+    }
+
+    // Check status
+    const reason = getStatusReason(outlook.status);
+    if (reason && (!outlook.fan || outlook.fan.length === 0)) {
+      wrap.innerHTML = `
+        <div class="cp-forecast-insufficient">
+          <span class="cp-badge-insufficient">insufficient evidence</span>
+          <span class="cp-forecast-reason">${escapeHtml(reason)}</span>
+        </div>
+      `;
+      if (replayBox) replayBox.hidden = true;
+      if (metaGrid) metaGrid.hidden = true;
+      return;
+    }
+
+    // Render SVG fan chart
+    renderOutlookChart(res);
+
+    // Replay summary sentence
+    if (replayBox) {
+      if (currentOutlookTrim > 0 || (outlook.actual && outlook.actual.length > 0)) {
+        replayBox.hidden = false;
+        let sentence = "";
+        if (outlook.actual_percentile !== null && outlook.actual_percentile !== undefined) {
+          let p = Number(outlook.actual_percentile);
+          if (p <= 1.0 && p >= 0.0) p *= 100;
+          const ord = ordinalSuffix(p);
+          let band = "outside the 90% band";
+          if (p >= 16 && p <= 84) {
+            band = "inside the 68% band";
+          } else if (p >= 5 && p <= 95) {
+            band = "inside the 90% band";
+          }
+          sentence = `The actual close ended at the ${ord} percentile, ${band}.`;
+        } else if (outlook.actual && outlook.actual.length > 0) {
+          const lastClose = outlook.actual[outlook.actual.length - 1][1];
+          sentence = `Replay in progress: ${outlook.actual.length} of ${outlook.horizon} sessions recorded (${groupDecimal(Number(lastClose).toFixed(2))} vs ${groupDecimal(Number(outlook.origin_close).toFixed(2))} origin).`;
+        } else {
+          sentence = `Replay selected from ${cutoff || "cutoff"} (awaiting actual closes).`;
+        }
+        replayBox.innerHTML = `<p class="cp-replay-text">${escapeHtml(sentence)}</p>`;
+      } else {
+        replayBox.hidden = true;
+      }
+    }
+
+    // Component weights and tilt
+    if (metaGrid) metaGrid.hidden = false;
+    renderComponentWeights(outlook.weights || []);
+    renderTilt(outlook.tilt, outlook.tilt_signals);
+
+  } catch (err) {
+    wrap.innerHTML = `<p class="cp-empty">Outlook unavailable: ${escapeHtml(err.message)}</p>`;
+    if (replayBox) replayBox.hidden = true;
+    if (metaGrid) metaGrid.hidden = true;
+  }
+}
+
+function renderOutlookChart(res) {
+  const wrap = document.getElementById("cpOutlookChartWrap");
+  if (!wrap) return;
+
+  const outlook = res.outlook || {};
+  const history = res.history || [];
+  const fan = outlook.fan || [];
+  const actual = outlook.actual || [];
+
+  const originClose = Number(outlook.origin_close) || 0;
+  const originDate = outlook.origin ? formatDay(outlook.origin) : "Origin";
+
+  // Gather all price values to compute Y bounds
+  const prices = [originClose];
+  for (const h of history) {
+    const c = Array.isArray(h) ? h[1] : (h.close ?? h[1]);
+    if (c !== null && c !== undefined && !isNaN(c)) prices.push(Number(c));
+  }
+  for (const fp of fan) {
+    if (fp.prices && Array.isArray(fp.prices)) {
+      for (const p of fp.prices) {
+        if (!isNaN(p)) prices.push(Number(p));
+      }
+    }
+    if (fp.mean !== null && fp.mean !== undefined && !isNaN(fp.mean)) {
+      prices.push(Number(fp.mean));
+    }
+  }
+  for (const a of actual) {
+    const c = Array.isArray(a) ? a[1] : (a.close ?? a[1]);
+    if (c !== null && c !== undefined && !isNaN(c)) prices.push(Number(c));
+  }
+
+  let minPrice = Math.min(...prices);
+  let maxPrice = Math.max(...prices);
+  if (minPrice === maxPrice) {
+    minPrice *= 0.95;
+    maxPrice *= 1.05;
+  }
+  const span = maxPrice - minPrice;
+  const pMin = minPrice - span * 0.08;
+  const pMax = maxPrice + span * 0.08;
+
+  // ViewBox coordinates
+  const W = 820;
+  const H = 360;
+  const ml = 65;
+  const mr = 135;
+  const mt = 40;
+  const mb = 36;
+  const pw = W - ml - mr;
+  const ph = H - mt - mb;
+  const yTop = mt;
+  const yBottom = mt + ph;
+
+  function yPrice(p) {
+    return yBottom - ((p - pMin) / (pMax - pMin)) * ph;
+  }
+
+  const nHist = Math.max(1, history.length);
+  const nFan = Math.max(1, outlook.horizon || 21);
+  const histRatio = Math.min(0.45, Math.max(0.3, nHist / (nHist + nFan)));
+  const xLeft = ml;
+  const xOrigin = ml + pw * histRatio;
+  const xRight = ml + pw;
+
+  function xHist(i) {
+    if (nHist <= 1) return xOrigin;
+    return xLeft + (i / (nHist - 1)) * (xOrigin - xLeft);
+  }
+
+  function xFan(step) {
+    return xOrigin + (step / nFan) * (xRight - xOrigin);
+  }
+
+  const yOrigin = yPrice(originClose);
+  const originPct = Math.max(0, Math.min(100, ((yOrigin - yTop) / ph) * 100));
+
+  // History path
+  let histPath = "";
+  if (history.length > 0) {
+    histPath = history.map((h, i) => {
+      const c = Number(Array.isArray(h) ? h[1] : (h.close ?? h[1]));
+      const x = xHist(i);
+      const y = yPrice(c);
+      return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    }).join(" ");
+    histPath += ` L ${xOrigin.toFixed(1)} ${yOrigin.toFixed(1)}`;
+  }
+
+  // Fan steps starting at origin
+  const fanSteps = [
+    { step: 0, prices: [originClose, originClose, originClose, originClose, originClose], mean: originClose },
+    ...fan
+  ];
+
+  // 90% band
+  const top90 = fanSteps.map(f => `${xFan(f.step).toFixed(1)} ${yPrice(f.prices[4]).toFixed(1)}`);
+  const bot90 = [...fanSteps].reverse().map(f => `${xFan(f.step).toFixed(1)} ${yPrice(f.prices[0]).toFixed(1)}`);
+  const band90Path = `M ${top90.join(" L ")} L ${bot90.join(" L ")} Z`;
+
+  // 68% band
+  const top68 = fanSteps.map(f => `${xFan(f.step).toFixed(1)} ${yPrice(f.prices[3]).toFixed(1)}`);
+  const bot68 = [...fanSteps].reverse().map(f => `${xFan(f.step).toFixed(1)} ${yPrice(f.prices[1]).toFixed(1)}`);
+  const band68Path = `M ${top68.join(" L ")} L ${bot68.join(" L ")} Z`;
+
+  // Median and Mean paths
+  const medPath = "M " + fanSteps.map(f => `${xFan(f.step).toFixed(1)} ${yPrice(f.prices[2]).toFixed(1)}`).join(" L ");
+  const meanPath = "M " + fanSteps.map(f => `${xFan(f.step).toFixed(1)} ${yPrice(f.mean).toFixed(1)}`).join(" L ");
+
+  // Actual replay path
+  let actualPath = "";
+  let lastActualPoint = null;
+  if (actual.length > 0) {
+    const pts = [`${xOrigin.toFixed(1)} ${yOrigin.toFixed(1)}`];
+    actual.forEach((a, j) => {
+      const c = Number(Array.isArray(a) ? a[1] : (a.close ?? a[1]));
+      const step = j + 1;
+      const x = xFan(step);
+      const y = yPrice(c);
+      pts.push(`${x.toFixed(1)} ${y.toFixed(1)}`);
+      if (j === actual.length - 1) {
+        lastActualPoint = { x, y, c };
+      }
+    });
+    actualPath = "M " + pts.join(" L ");
+  }
+
+  // Grid lines
+  const gridSteps = 4;
+  const gridLines = [];
+  for (let g = 0; g <= gridSteps; g++) {
+    const pVal = pMin + (g / gridSteps) * (pMax - pMin);
+    const yG = yPrice(pVal);
+    gridLines.push(`
+      <line x1="${xLeft}" y1="${yG.toFixed(1)}" x2="${xRight}" y2="${yG.toFixed(1)}" stroke="rgba(255,255,255,0.06)" stroke-width="1" />
+      <text x="${(xLeft - 8).toFixed(1)}" y="${(yG + 3).toFixed(1)}" text-anchor="end" class="cp-chart-axis-text">${groupDecimal(pVal.toFixed(2))}</text>
+    `);
+  }
+
+  // End labels at horizon
+  let endLabelsHtml = "";
+  const lastFan = fan[fan.length - 1];
+  let p95End = 0, p50End = 0, p5End = 0;
+  if (lastFan) {
+    p95End = lastFan.prices[4];
+    p50End = lastFan.prices[2];
+    p5End = lastFan.prices[0];
+
+    const pct95 = ((p95End - originClose) / originClose) * 100;
+    const pct50 = ((p50End - originClose) / originClose) * 100;
+    const pct5 = ((p5End - originClose) / originClose) * 100;
+
+    let y95 = yPrice(p95End);
+    let y50 = yPrice(p50End);
+    let y5 = yPrice(p5End);
+
+    if (y50 - y95 < 15) y95 = y50 - 15;
+    if (y5 - y50 < 15) y5 = y50 + 15;
+
+    const sign95 = pct95 >= 0 ? "+" : "";
+    const sign50 = pct50 >= 0 ? "+" : "";
+    const sign5 = pct5 >= 0 ? "+" : "";
+
+    endLabelsHtml = `
+      <g class="cp-end-labels">
+        <text x="${(xRight + 8).toFixed(1)}" y="${y95.toFixed(1)}" class="cp-chart-label cp-label-high">95%: ${groupDecimal(p95End.toFixed(2))} (${sign95}${pct95.toFixed(1)}%)</text>
+        <text x="${(xRight + 8).toFixed(1)}" y="${y50.toFixed(1)}" class="cp-chart-label cp-label-med">50%: ${groupDecimal(p50End.toFixed(2))} (${sign50}${pct50.toFixed(1)}%)</text>
+        <text x="${(xRight + 8).toFixed(1)}" y="${y5.toFixed(1)}" class="cp-chart-label cp-label-low">5%: ${groupDecimal(p5End.toFixed(2))} (${sign5}${pct5.toFixed(1)}%)</text>
+      </g>
+    `;
+  }
+
+  // Accessible summary text
+  const sym = escapeHtml(outlook.symbol || currentOutlookSymbol);
+  const horizonLabelMap = { 21: "1 month", 63: "3 months", 126: "6 months", 252: "1 year" };
+  const hLabel = horizonLabelMap[outlook.horizon] || `${outlook.horizon} sessions`;
+  const accessibleSummary = `Blended outlook fan chart for ${sym} across ${hLabel}. Origin price ${groupDecimal(originClose.toFixed(2))} on ${originDate}. Median expectation at horizon is ${groupDecimal(p50End.toFixed(2))}. 68% range is ${groupDecimal((lastFan ? lastFan.prices[1] : 0).toFixed(2))} to ${groupDecimal((lastFan ? lastFan.prices[3] : 0).toFixed(2))}; 90% range is ${groupDecimal(p5End.toFixed(2))} to ${groupDecimal(p95End.toFixed(2))}.`;
+
+  const svgHtml = `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" style="height:auto;display:block" role="img" aria-labelledby="cpFanTitle cpFanDesc" xmlns="http://www.w3.org/2000/svg">
+      <title id="cpFanTitle">Blended Outlook Fan Chart for ${sym}</title>
+      <desc id="cpFanDesc">${escapeHtml(accessibleSummary)}</desc>
+
+      <defs>
+        <!-- 90% fan gradient: green above origin price, red below -->
+        <linearGradient id="cpFanGrad90" x1="0" y1="${yTop.toFixed(1)}" x2="0" y2="${yBottom.toFixed(1)}" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#5ccda4" stop-opacity="0.22" />
+          <stop offset="${originPct.toFixed(1)}%" stop-color="#5ccda4" stop-opacity="0.14" />
+          <stop offset="${originPct.toFixed(1)}%" stop-color="#e17055" stop-opacity="0.14" />
+          <stop offset="100%" stop-color="#e17055" stop-opacity="0.22" />
+        </linearGradient>
+
+        <!-- 68% fan gradient: green above origin price, red below -->
+        <linearGradient id="cpFanGrad68" x1="0" y1="${yTop.toFixed(1)}" x2="0" y2="${yBottom.toFixed(1)}" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#5ccda4" stop-opacity="0.45" />
+          <stop offset="${originPct.toFixed(1)}%" stop-color="#5ccda4" stop-opacity="0.28" />
+          <stop offset="${originPct.toFixed(1)}%" stop-color="#e17055" stop-opacity="0.28" />
+          <stop offset="100%" stop-color="#e17055" stop-opacity="0.45" />
+        </linearGradient>
+      </defs>
+
+      <!-- Background grid -->
+      <g class="cp-chart-grid">
+        ${gridLines.join("")}
+      </g>
+
+      <!-- Horizontal Origin Price Line -->
+      <line x1="${xLeft}" y1="${yOrigin.toFixed(1)}" x2="${xRight}" y2="${yOrigin.toFixed(1)}" stroke="rgba(255, 255, 255, 0.18)" stroke-dasharray="3 3" stroke-width="1" />
+      <text x="${(xOrigin + 6).toFixed(1)}" y="${(yOrigin - 6).toFixed(1)}" class="cp-chart-axis-text" fill="var(--sail-text-subtle)">Origin: ${groupDecimal(originClose.toFixed(2))}</text>
+
+      <!-- Fan Bands -->
+      ${fan.length > 0 ? `
+        <path d="${band90Path}" fill="url(#cpFanGrad90)" />
+        <path d="${band68Path}" fill="url(#cpFanGrad68)" />
+        <path d="${medPath}" fill="none" stroke="#ffd69f" stroke-width="2" stroke-dasharray="5 4" />
+        <path d="${meanPath}" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="2 3" />
+      ` : ""}
+
+      <!-- History Line -->
+      ${histPath ? `<path d="${histPath}" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linejoin="round" />` : ""}
+
+      <!-- Vertical Origin Dashed Line -->
+      <line x1="${xOrigin.toFixed(1)}" y1="${yTop.toFixed(1)}" x2="${xOrigin.toFixed(1)}" y2="${yBottom.toFixed(1)}" stroke="rgba(255, 255, 255, 0.4)" stroke-width="1.5" stroke-dasharray="4 4" />
+      <circle cx="${xOrigin.toFixed(1)}" cy="${yOrigin.toFixed(1)}" r="3.5" fill="#7dd3fc" />
+
+      <!-- Actual Replay Line -->
+      ${actualPath ? `
+        <path d="${actualPath}" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linejoin="round" />
+        ${lastActualPoint ? `<circle cx="${lastActualPoint.x.toFixed(1)}" cy="${lastActualPoint.y.toFixed(1)}" r="4.5" fill="#ffffff" stroke="#0ea5e9" stroke-width="2" />` : ""}
+      ` : ""}
+
+      <!-- End labels -->
+      ${endLabelsHtml}
+
+      <!-- Bottom X Axis Labels -->
+      <text x="${xLeft.toFixed(1)}" y="${(H - 12).toFixed(1)}" text-anchor="start" class="cp-chart-axis-text">${history.length > 0 ? formatDay(history[0][0]) : ""}</text>
+      <text x="${xOrigin.toFixed(1)}" y="${(H - 12).toFixed(1)}" text-anchor="middle" class="cp-chart-axis-text">Origin (${originDate})</text>
+      <text x="${xRight.toFixed(1)}" y="${(H - 12).toFixed(1)}" text-anchor="end" class="cp-chart-axis-text">+${outlook.horizon}d</text>
+
+      <!-- Legend -->
+      <g class="cp-chart-legend" transform="translate(${xLeft}, 16)">
+        <line x1="0" y1="0" x2="16" y2="0" stroke="#7dd3fc" stroke-width="2" />
+        <text x="22" y="3" class="cp-chart-axis-text">Past Closes</text>
+
+        <line x1="90" y1="0" x2="106" y2="0" stroke="#ffd69f" stroke-width="2" stroke-dasharray="4 3" />
+        <text x="112" y="3" class="cp-chart-axis-text">Median (50%)</text>
+
+        <line x1="190" y1="0" x2="206" y2="0" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="2 3" />
+        <text x="212" y="3" class="cp-chart-axis-text">Mean</text>
+
+        <rect x="256" y="-5" width="12" height="10" fill="#5ccda4" opacity="0.35" />
+        <text x="274" y="3" class="cp-chart-axis-text">68% / 90% Fan</text>
+
+        ${actual.length > 0 ? `
+          <line x1="365" y1="0" x2="381" y2="0" stroke="#ffffff" stroke-width="2.5" />
+          <circle cx="373" cy="0" r="3" fill="#ffffff" />
+          <text x="388" y="3" class="cp-chart-axis-text">Actual Replay</text>
+        ` : ""}
+      </g>
+    </svg>
+    <div class="cp-chart-accessible-summary">${escapeHtml(accessibleSummary)}</div>
+  `;
+
+  wrap.innerHTML = svgHtml;
+}
+
+function renderComponentWeights(weights) {
+  const list = document.getElementById("cpOutlookWeightsList");
+  if (!list) return;
+
+  if (!weights || weights.length === 0) {
+    list.innerHTML = `<p class="cp-empty">No component weights available.</p>`;
+    return;
+  }
+
+  list.innerHTML = weights.map(item => {
+    const compId = Array.isArray(item) ? item[0] : (item.component || item[0]);
+    const w = Number(Array.isArray(item) ? item[1] : (item.weight ?? item[1])) || 0;
+    const pct = Math.max(0, Math.min(100, w * 100));
+    const isZero = pct < 0.1;
+    const label = COMPONENT_LABELS[compId] || compId;
+
+    return `
+      <div class="cp-weight-row ${isZero ? "cp-weight-dimmed" : ""}">
+        <span class="cp-weight-name">${escapeHtml(label)}</span>
+        <div class="cp-weight-bar-wrap">
+          <div class="cp-weight-bar-fill" style="width: ${pct.toFixed(1)}%;"></div>
+        </div>
+        <span class="cp-weight-pct">${pct.toFixed(1)}%</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderTilt(tilt, tiltSignals) {
+  const note = document.getElementById("cpOutlookTiltNote");
+  if (!note) return;
+
+  const absTilt = Math.abs(tilt || 0);
+  if (absTilt > 1e-4) {
+    const pct = (tilt * 100).toFixed(1);
+    const sign = tilt > 0 ? "+" : "";
+    const sigStr = (tiltSignals && tiltSignals.length > 0) ? ` (${tiltSignals.map(escapeHtml).join(", ")})` : "";
+    note.innerHTML = `<span class="cp-tilt-line">Direction tilt: <strong>${sign}${pct}%</strong>${sigStr}</span>`;
+  } else {
+    note.innerHTML = `<span class="cp-tilt-none">No direction tilt: no signal passed validation</span>`;
+  }
+}
+
+async function loadTrackRecord() {
+  const grid = document.getElementById("cpTrackRecordGrid");
+  const label = document.getElementById("cpTrackRecordHorizonLabel");
+  const horizonMap = { 21: "1M", 63: "3M", 126: "6M", 252: "1Y" };
+  if (label) {
+    label.textContent = horizonMap[currentOutlookHorizon] || `${currentOutlookHorizon}d`;
+  }
+  if (!grid) return;
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}&` : "?";
+    const tr = await fetchJson(`/api/capital/outlook/track-record${query}horizon=${currentOutlookHorizon}`);
+    renderTrackRecord(tr, currentOutlookHorizon);
+  } catch (err) {
+    grid.innerHTML = `<p class="cp-empty">Track record unavailable: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderTrackRecord(tr, horizon) {
+  const grid = document.getElementById("cpTrackRecordGrid");
+  const label = document.getElementById("cpTrackRecordHorizonLabel");
+  const horizonMap = { 21: "1M", 63: "3M", 126: "6M", 252: "1Y" };
+  if (label) {
+    label.textContent = horizonMap[horizon] || `${horizon}d`;
+  }
+  if (!grid) return;
+
+  if (!tr || tr.replays === 0) {
+    grid.innerHTML = `<p class="cp-empty">No track record available yet for this horizon.</p>`;
+    return;
+  }
+
+  const in68 = `${((tr.inside_68 || 0) * 100).toFixed(1)}%`;
+  const in90 = `${((tr.inside_90 || 0) * 100).toFixed(1)}%`;
+  const meanP = `${(tr.mean_percentile || 0).toFixed(1)}`;
+  const skill = `${((tr.skill_vs_no_change || 0) * 100).toFixed(1)}%`;
+  const dir = `${((tr.direction_hit_rate || 0) * 100).toFixed(1)}%`;
+
+  grid.innerHTML = `
+    <div class="cp-track-card">
+      <span class="cp-track-val">${in68}</span>
+      <span class="cp-track-label">inside 68% band</span>
+      <span class="cp-track-aim">aim 68%</span>
+    </div>
+    <div class="cp-track-card">
+      <span class="cp-track-val">${in90}</span>
+      <span class="cp-track-label">inside 90% band</span>
+      <span class="cp-track-aim">aim 90%</span>
+    </div>
+    <div class="cp-track-card">
+      <span class="cp-track-val">${meanP}</span>
+      <span class="cp-track-label">average percentile</span>
+      <span class="cp-track-aim">aim 50</span>
+    </div>
+    <div class="cp-track-card">
+      <span class="cp-track-val">${skill}</span>
+      <span class="cp-track-label">skill vs no change</span>
+      <span class="cp-track-aim">vs EWMA</span>
+    </div>
+    <div class="cp-track-card">
+      <span class="cp-track-val">${dir}</span>
+      <span class="cp-track-label">direction right</span>
+      <span class="cp-track-aim">${tr.replays} replays</span>
+    </div>
+  `;
+}
+
+function setupOutlookControls() {
+  const symbolSelect = document.getElementById("cpOutlookSymbolSelect");
+  if (symbolSelect) {
+    symbolSelect.addEventListener("change", (e) => {
+      currentOutlookSymbol = e.target.value;
+      loadOutlook();
+    });
+  }
+
+  const horizonBtns = document.querySelectorAll(".cp-outlook-horizon-pills .cp-horizon-btn");
+  horizonBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      horizonBtns.forEach((b) => {
+        b.classList.remove("cp-active");
+        b.setAttribute("aria-checked", "false");
+      });
+      btn.classList.add("cp-active");
+      btn.setAttribute("aria-checked", "true");
+      currentOutlookHorizon = parseInt(btn.dataset.horizon, 10) || 21;
+      loadOutlook();
+      loadTrackRecord();
+    });
+  });
+
+  const replayBtns = document.querySelectorAll(".cp-outlook-replay-pills .cp-horizon-btn");
+  replayBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      replayBtns.forEach((b) => {
+        b.classList.remove("cp-active");
+        b.setAttribute("aria-checked", "false");
+      });
+      btn.classList.add("cp-active");
+      btn.setAttribute("aria-checked", "true");
+      currentOutlookTrim = parseInt(btn.dataset.trim, 10) || 0;
+      loadOutlook();
+    });
+  });
+}
+
+function renderModelsStatus(data) {
+  const tbody = document.getElementById("cpModelsBody");
+  const runBtn = document.getElementById("cpRunModelsBtn");
+  if (!tbody) return;
+
+  if (runBtn) {
+    if (data && data.running) {
+      runBtn.disabled = true;
+      runBtn.textContent = "Running models…";
+    } else {
+      runBtn.disabled = false;
+      runBtn.textContent = "Run models";
+    }
+  }
+
+  // Signal models store values; outlook models (round 12) store quantile paths. Show
+  // both in one table, with the outlook rows labelled.
+  const outlookRows = ((data && data.outlook) || []).map(m => ({
+    spec: { ...(m.spec || {}), name: `${(m.spec && m.spec.name) || "model"} · outlook` },
+    enabled: m.enabled,
+    last_run: m.last_run,
+    stored: m.stored
+      ? { values: m.stored[2], instruments: m.stored[1], latest: null, paths: true }
+      : null,
+  }));
+  const models = ((data && data.models) || []).concat(outlookRows);
+  if (models.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">No models configured.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = models.map(m => {
+    const spec = m.spec || {};
+    const name = escapeHtml(spec.name || "Unknown");
+    const model = escapeHtml(spec.model || "");
+    const summary = escapeHtml(spec.summary || "");
+    const license = escapeHtml(spec.license || "not stated");
+    const enabledBadge = m.enabled
+      ? `<span class="cp-badge cp-badge-enabled">Enabled</span>`
+      : `<span class="cp-badge cp-badge-off">Disabled</span>`;
+
+    let storedStr = "None";
+    if (m.stored && m.stored.values > 0) {
+      const lat = m.stored.latest ? `, latest ${escapeHtml(m.stored.latest)}` : "";
+      const unit = m.stored.paths ? "paths" : "values";
+      storedStr = `${m.stored.values} ${unit} (${m.stored.instruments} instruments${lat})`;
+    }
+
+    let runStr = "Never run";
+    if (m.last_run) {
+      const at = formatDate(m.last_run.at);
+      const added = m.last_run.added ?? 0;
+      const skipped = m.last_run.skipped ?? 0;
+      const err = m.last_run.error ? `<br><span class="cp-loss">Error: ${escapeHtml(m.last_run.error)}</span>` : "";
+      runStr = `${at}: +${added} added, ${skipped} skipped${err}`;
+    }
+
+    return `
+      <tr>
+        <td><strong>${name}</strong><br><small class="cp-text-muted">${model}</small></td>
+        <td>${summary}</td>
+        <td><small class="cp-text-muted">${license}</small></td>
+        <td>${enabledBadge}</td>
+        <td class="num">${storedStr}</td>
+        <td>${runStr}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function startModelsPolling() {
+  if (modelsPollingTimer) return;
+  modelsPollingTimer = setInterval(async () => {
+    try {
+      const data = await fetchJson("/api/capital/signals/models");
+      renderModelsStatus(data);
+      if (!data.running) {
+        stopModelsPolling();
+        showBanner("Model runs finished.");
+        loadOutlook();
+      }
+    } catch (_) {
+      stopModelsPolling();
+    }
+  }, 5000);
+}
+
+function stopModelsPolling() {
+  if (modelsPollingTimer) {
+    clearInterval(modelsPollingTimer);
+    modelsPollingTimer = null;
+  }
+}
+
+async function loadModelsStatus() {
+  try {
+    const data = await fetchJson("/api/capital/signals/models");
+    renderModelsStatus(data);
+    if (data && data.running) {
+      startModelsPolling();
+    }
+    return data;
+  } catch (err) {
+    const tbody = document.getElementById("cpModelsBody");
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">Models status unavailable: ${escapeHtml(err.message)}</td></tr>`;
+    }
+    return null;
+  }
+}
+
+function setupModelsControls() {
+  const runBtn = document.getElementById("cpRunModelsBtn");
+  if (!runBtn) return;
+  runBtn.addEventListener("click", async () => {
+    runBtn.disabled = true;
+    runBtn.textContent = "Starting models…";
+    try {
+      const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+      const status = await fetchJson(`/api/capital/signals/refresh${query}`, { method: "POST" });
+      showBanner("Model run started in background. Polling for progress…");
+      renderModelsStatus(status);
+      if (status && status.running) {
+        startModelsPolling();
+      }
+    } catch (err) {
+      showBanner(`Model run failed: ${err.message}`, true);
+      runBtn.disabled = false;
+      runBtn.textContent = "Run models";
+    }
+  });
+}
+
 async function loadAll() {
   await loadPortfolio();
   await loadToday();
@@ -2429,6 +3151,9 @@ async function loadAll() {
   await loadPriceStatus();
   await loadForecasts();
   await loadEvaluation();
+  await loadOutlook();
+  await loadTrackRecord();
+  await loadModelsStatus();
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -2440,6 +3165,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setupPriceFileDialog();
   setupPolicyControls();
   setupDataTabControls();
+  setupOutlookControls();
+  setupModelsControls();
 
   const refreshBtn = document.getElementById("cpRefreshBtn");
   if (refreshBtn) {

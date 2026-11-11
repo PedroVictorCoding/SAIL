@@ -175,6 +175,20 @@ pub struct PriceSeries {
     pub payload_sha256: String,
 }
 
+/// Open, high and low of one session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ohl {
+    /// Open.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub open: Decimal,
+    /// High.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub high: Decimal,
+    /// Low.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub low: Decimal,
+}
+
 /// The EPIC's `MarketObservation`: one stored close.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarketObservation {
@@ -187,6 +201,10 @@ pub struct MarketObservation {
     /// The close.
     #[serde(with = "rust_decimal::serde::str")]
     pub close: Decimal,
+    /// Open, high and low of the session, when the source gave them (round 12; rows
+    /// stored earlier have none). Chart-pattern models need them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ohl: Option<Ohl>,
     /// Trading currency, when known.
     pub currency: Option<Currency>,
     /// Always `"close"` this round.
