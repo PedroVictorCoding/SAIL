@@ -1346,8 +1346,17 @@ impl CapitalService {
                 account_value,
                 horizon_sessions: IDEA_HORIZON,
             };
-            let plan =
-                crate::optimize::plan(&problem, &policy.limits, crate::optimize::Mode::Policy);
+            // Trimming a position to a limit needs no prices, so nothing is locked for the
+            // policy plan; ideas need prices and keep holdings without them locked.
+            let mut policy_problem = problem.clone();
+            for asset in &mut policy_problem.assets {
+                asset.locked = false;
+            }
+            let plan = crate::optimize::plan(
+                &policy_problem,
+                &policy.limits,
+                crate::optimize::Mode::Policy,
+            );
             policy_plan = Some(plan);
             if policy.is_confirmed() && combined_ic > 0.0 {
                 idea_plan = Some(crate::optimize::plan(

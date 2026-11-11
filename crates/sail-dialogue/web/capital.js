@@ -80,6 +80,46 @@ function formatSum(moneys) {
   return formatMoney({ amount: sumDecimals(moneys.map(m => m.amount)), currency: moneys[0].currency });
 }
 
+let hasTodayAccount = false;
+
+function updateAccountHeaderTiles(account) {
+  const accountVal = document.getElementById("cpAccountVal");
+  const investedVal = document.getElementById("cpInvestedVal");
+  const freeFundsVal = document.getElementById("cpFreeFundsVal");
+  const openResultVal = document.getElementById("cpOpenResultVal");
+
+  if (!account) {
+    if (accountVal) accountVal.textContent = "—";
+    if (investedVal) investedVal.textContent = "—";
+    if (freeFundsVal) freeFundsVal.textContent = "—";
+    if (openResultVal) {
+      openResultVal.textContent = "—";
+      openResultVal.className = "cp-tile-val";
+    }
+    return;
+  }
+
+  if (accountVal) accountVal.textContent = formatMoney(account.account_value);
+  if (investedVal) investedVal.textContent = account.invested ? formatMoney(account.invested) : "—";
+  if (freeFundsVal) freeFundsVal.textContent = formatMoney(account.free_funds);
+  if (openResultVal) {
+    if (account.open_result) {
+      openResultVal.textContent = formatMoney(account.open_result);
+      const isNeg = String(account.open_result.amount).startsWith("-");
+      openResultVal.className = `cp-tile-val ${isNeg ? "negative" : "positive"}`;
+    } else {
+      openResultVal.textContent = "—";
+      openResultVal.className = "cp-tile-val";
+    }
+  }
+
+  // Legacy metric hook updates
+  const cashHook = document.getElementById("cpCashVal");
+  if (cashHook) cashHook.textContent = formatMoney(account.free_funds);
+  const holdingsHook = document.getElementById("cpHoldingsVal");
+  if (holdingsHook && account.invested) holdingsHook.textContent = formatMoney(account.invested);
+}
+
 function formatDate(isoStr) {
   if (!isoStr) return "—";
   try {
@@ -583,15 +623,7 @@ function setupUploadDialog() {
 
       // Refresh first, then report the result so the refresh doesn't hide it.
       await loadAccounts();
-      await loadPortfolio();
-      await loadInsights();
-      await loadGrants();
-      await loadFilings();
-      await loadSecStatus();
-      await loadSyncStatus();
-      await loadPriceStatus();
-      await loadForecasts();
-      await loadEvaluation();
+      await loadAll();
       showBanner(
         batch.already_imported
           ? "This exact file was already imported; nothing changed."
@@ -770,8 +802,9 @@ function writeCollapsed(set) {
 
 function setupCollapsibles() {
   const collapsed = readCollapsed();
-  const sections = document.querySelectorAll("#cpMain > section[id]");
+  const sections = document.querySelectorAll("#cpMain section[id]");
   for (const section of sections) {
+    if (section.classList.contains("cp-metrics") || section.classList.contains("cp-suggestions-section")) continue;
     const head = section.querySelector(":scope > .cp-panel-head, :scope > .cp-recon-header");
     const title = head && head.querySelector("h2");
     if (!title) continue;
@@ -1072,6 +1105,9 @@ async function loadInsights() {
   try {
     const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
     const ins = await fetchJson(`/api/capital/insights${query}`);
+    if (!hasTodayAccount && ins.account) {
+      updateAccountHeaderTiles(ins.account);
+    }
     renderInsights(ins);
   } catch (err) {
     // 404 means no portfolio yet — show empty state, not an error
@@ -1111,40 +1147,10 @@ function renderInsights(ins) {
     if (freshnessSpan) freshnessSpan.textContent = "No broker snapshot";
   }
 
-  // 2. Account (in XTB's own terms) and return since the first deposit
+  // 2. Return since the first deposit
   const signClass = (money) =>
     money && String(money.amount).startsWith("-") ? "negative" : "positive";
   let returnHtml = "";
-  if (ins.account) {
-    const acc = ins.account;
-    returnHtml += `
-      <div class="cp-insights-block">
-        <h3 class="cp-insights-subtitle">Account</h3>
-        <div class="cp-insights-stats">
-          <div class="cp-stat-card">
-            <span class="cp-stat-label">Account value</span>
-            <span class="cp-stat-val">${formatMoney(acc.account_value)}</span>
-            <span class="cp-stat-hint">Free funds + positions</span>
-          </div>
-          <div class="cp-stat-card">
-            <span class="cp-stat-label">Invested</span>
-            <span class="cp-stat-val">${acc.invested ? formatMoney(acc.invested) : "—"}</span>
-            <span class="cp-stat-hint">What the open positions cost</span>
-          </div>
-          <div class="cp-stat-card">
-            <span class="cp-stat-label">Free funds</span>
-            <span class="cp-stat-val">${formatMoney(acc.free_funds)}</span>
-            <span class="cp-stat-hint">Cash in the account</span>
-          </div>
-          <div class="cp-stat-card">
-            <span class="cp-stat-label">Open profit / loss</span>
-            <span class="cp-stat-val ${signClass(acc.open_result)}">${acc.open_result ? formatMoney(acc.open_result) : "—"}</span>
-            <span class="cp-stat-hint">Positions − invested</span>
-          </div>
-        </div>
-      </div>
-    `;
-  }
   if (ins.total_return) {
     const tr = ins.total_return;
     const ratio = tr.gain_ratio !== null && tr.gain_ratio !== undefined
@@ -1354,22 +1360,27 @@ async function loadPriceStatus() {
     if (optInNote) {
       optInNote.hidden = Boolean(status.configured);
     }
+    const dataOptInNote = document.getElementById("cpDataPriceOptInNote");
+    if (dataOptInNote) {
+      dataOptInNote.hidden = Boolean(status.configured);
+    }
 
     const statusLine = document.getElementById("cpPriceStatusLine");
-    if (statusLine) {
-      if (!status.configured) {
-        statusLine.textContent = "Prices not configured · 0 instruments priced";
-      } else {
-        const sourceName = status.source || "provider";
-        const instCount = status.instruments || 0;
-        const obsCount = status.observations || 0;
-        let line = `Source: ${sourceName} · ${instCount} instruments priced (${obsCount} bars) · Last refresh: ${formatDate(status.last_refresh_at)}`;
-        if (status.last_error) {
-          line += ` · Last error: ${status.last_error}`;
-        }
-        statusLine.textContent = line;
+    const dataStatusLine = document.getElementById("cpDataPriceStatusLine");
+    let statusText = "";
+    if (!status.configured) {
+      statusText = "Prices not configured · 0 instruments priced";
+    } else {
+      const sourceName = status.source || "provider";
+      const instCount = status.instruments || 0;
+      const obsCount = status.observations || 0;
+      statusText = `Source: ${sourceName} · ${instCount} instruments priced (${obsCount} bars) · Last refresh: ${formatDate(status.last_refresh_at)}`;
+      if (status.last_error) {
+        statusText += ` · Last error: ${status.last_error}`;
       }
     }
+    if (statusLine) statusLine.textContent = statusText;
+    if (dataStatusLine) dataStatusLine.textContent = statusText;
 
     const badge = document.getElementById("cpPriceBadge");
     if (badge) {
@@ -1377,13 +1388,25 @@ async function loadPriceStatus() {
     }
 
     const unmappedNote = document.getElementById("cpPriceUnmappedNote");
-    if (unmappedNote) {
-      if (status.unmapped && status.unmapped.length > 0) {
+    const dataUnmappedNote = document.getElementById("cpDataPriceUnmappedNote");
+    if (status.unmapped && status.unmapped.length > 0) {
+      const unmappedHtml = `<p>Unmapped instruments (CFD or unrecognised suffix): <strong>${status.unmapped.map(escapeHtml).join(", ")}</strong>. Track prices by uploading a price file.</p>`;
+      if (unmappedNote) {
         unmappedNote.hidden = false;
-        unmappedNote.innerHTML = `<p>Unmapped instruments (CFD or unrecognised suffix): <strong>${status.unmapped.map(escapeHtml).join(", ")}</strong>. Track prices by uploading a price file.</p>`;
-      } else {
+        unmappedNote.innerHTML = unmappedHtml;
+      }
+      if (dataUnmappedNote) {
+        dataUnmappedNote.hidden = false;
+        dataUnmappedNote.innerHTML = unmappedHtml;
+      }
+    } else {
+      if (unmappedNote) {
         unmappedNote.hidden = true;
         unmappedNote.innerHTML = "";
+      }
+      if (dataUnmappedNote) {
+        dataUnmappedNote.hidden = true;
+        dataUnmappedNote.innerHTML = "";
       }
     }
   } catch (err) {
@@ -1854,26 +1877,575 @@ function renderEvaluation(report) {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Tabs Setup (Round 11)
+// -----------------------------------------------------------------------------
+const TABS = ["today", "holdings", "income", "forecasts", "research", "data"];
+const TAB_STORAGE_KEY = "sail_capital_active_tab";
+
+function getActiveTab() {
+  const hash = window.location.hash.replace(/^#/, "").toLowerCase();
+  if (TABS.includes(hash)) return hash;
+  try {
+    const saved = localStorage.getItem(TAB_STORAGE_KEY);
+    if (TABS.includes(saved)) return saved;
+  } catch (_) {}
+  return "today";
+}
+
+function switchTab(tabId, updateUrl = true) {
+  if (!TABS.includes(tabId)) tabId = "today";
+  for (const t of TABS) {
+    const btn = document.getElementById(`cpTab-${t}`);
+    const pane = document.getElementById(`cpPanel-${t}`);
+    const isActive = t === tabId;
+    if (btn) {
+      btn.setAttribute("aria-selected", String(isActive));
+      btn.tabIndex = isActive ? 0 : -1;
+      btn.classList.toggle("cp-tab-active", isActive);
+    }
+    if (pane) {
+      pane.hidden = !isActive;
+      pane.classList.toggle("cp-pane-active", isActive);
+    }
+  }
+  try {
+    localStorage.setItem(TAB_STORAGE_KEY, tabId);
+  } catch (_) {}
+  if (updateUrl && window.location.hash !== `#${tabId}`) {
+    history.replaceState(null, "", `#${tabId}`);
+  }
+}
+
+function setupTabs() {
+  const tabButtons = TABS.map(t => document.getElementById(`cpTab-${t}`)).filter(Boolean);
+
+  tabButtons.forEach((btn, idx) => {
+    btn.addEventListener("click", () => {
+      const tabId = btn.id.replace("cpTab-", "");
+      switchTab(tabId, true);
+    });
+
+    btn.addEventListener("keydown", (e) => {
+      let targetIdx = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        targetIdx = (idx + 1) % tabButtons.length;
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        targetIdx = (idx - 1 + tabButtons.length) % tabButtons.length;
+      } else if (e.key === "Home") {
+        targetIdx = 0;
+      } else if (e.key === "End") {
+        targetIdx = tabButtons.length - 1;
+      }
+      if (targetIdx !== null) {
+        e.preventDefault();
+        const targetBtn = tabButtons[targetIdx];
+        const tabId = targetBtn.id.replace("cpTab-", "");
+        switchTab(tabId, true);
+        targetBtn.focus();
+      }
+    });
+  });
+
+  window.addEventListener("hashchange", () => {
+    const hash = window.location.hash.replace(/^#/, "").toLowerCase();
+    if (TABS.includes(hash)) {
+      switchTab(hash, false);
+    }
+  });
+
+  const initial = getActiveTab();
+  switchTab(initial, false);
+
+  const reviewLimitsLink = document.getElementById("cpReviewLimitsLink");
+  if (reviewLimitsLink) {
+    reviewLimitsLink.addEventListener("click", () => {
+      switchTab("data", true);
+      const limitsSection = document.getElementById("cpLimitsSection");
+      if (limitsSection) {
+        limitsSection.scrollIntoView({ behavior: "smooth" });
+      }
+    });
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Today View (Round 11)
+// -----------------------------------------------------------------------------
+async function loadToday() {
+  const stanceBanner = document.getElementById("cpStanceBanner");
+  const stanceSentence = document.getElementById("cpStanceSentence");
+  const draftNotice = document.getElementById("cpPolicyDraftNotice");
+  const suggestionsList = document.getElementById("cpSuggestionsList");
+  const hiddenCount = document.getElementById("cpSuggestionsHidden");
+
+  if (!suggestionsList) return;
+
+  if (accountList.length === 0) {
+    if (stanceSentence) stanceSentence.textContent = "No accounts recorded yet.";
+    if (stanceBanner) stanceBanner.setAttribute("data-stance", "hold");
+    if (draftNotice) draftNotice.hidden = true;
+    suggestionsList.innerHTML = `<p class="cp-empty">Import an official XTB report above to see suggestions.</p>`;
+    if (hiddenCount) hiddenCount.hidden = true;
+    return;
+  }
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const today = await fetchJson(`/api/capital/today${query}`);
+
+    // 1. Account header tiles
+    if (today.account) {
+      hasTodayAccount = true;
+      updateAccountHeaderTiles(today.account);
+    } else {
+      hasTodayAccount = false;
+    }
+
+    // 2. Stance banner
+    if (today.stance) {
+      if (stanceSentence) stanceSentence.textContent = today.stance.sentence || "";
+      if (stanceBanner) stanceBanner.setAttribute("data-stance", today.stance.label || "hold");
+    }
+
+    // 3. Policy draft notice
+    if (draftNotice) {
+      draftNotice.hidden = !(today.policy && today.policy.status === "draft");
+    }
+
+    // 4. Suggestions list
+    renderSuggestions(today.suggestions || [], today.account);
+
+    // 5. Hidden count
+    if (hiddenCount) {
+      const count = today.hidden || 0;
+      hiddenCount.textContent = `${count} hidden`;
+      hiddenCount.hidden = false;
+    }
+  } catch (err) {
+    hasTodayAccount = false;
+    // 404 indicates no XTB report imported yet
+    if (String(err.message).includes("404") || String(err.message).toLowerCase().includes("not found")) {
+      if (stanceSentence) stanceSentence.textContent = "No statements imported yet.";
+      if (stanceBanner) stanceBanner.setAttribute("data-stance", "hold");
+      if (draftNotice) draftNotice.hidden = true;
+      suggestionsList.innerHTML = `<p class="cp-empty">Upload an official XTB export above to see suggestions.</p>`;
+      if (hiddenCount) hiddenCount.hidden = true;
+    } else {
+      if (stanceSentence) stanceSentence.textContent = "Today suggestions unavailable.";
+      suggestionsList.innerHTML = `<p class="cp-empty" style="color:var(--sail-text-subtle)">Could not load suggestions: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+}
+
+function renderSuggestions(suggestions, account) {
+  const container = document.getElementById("cpSuggestionsList");
+  if (!container) return;
+
+  if (suggestions.length === 0) {
+    container.innerHTML = `<p class="cp-empty">No active suggestions right now.</p>`;
+    return;
+  }
+
+  const accountCurrency = (account && account.account_value && account.account_value.currency) || "EUR";
+
+  container.innerHTML = suggestions.map((s) => {
+    const kindLabel = s.kind.charAt(0).toUpperCase() + s.kind.slice(1);
+    const severity = (s.severity || "low").toLowerCase();
+    const kind = (s.kind || "attention").toLowerCase();
+
+    // Sized changes table
+    let changesHtml = "";
+    if (s.changes && s.changes.length > 0) {
+      const rows = s.changes.map(c => {
+        const fromPct = typeof c.from_pct === "number" ? c.from_pct.toFixed(1) : "—";
+        const toPct = typeof c.to_pct === "number" ? c.to_pct.toFixed(1) : "—";
+        const isPos = typeof c.amount === "number" && c.amount >= 0;
+        const sign = isPos ? "+" : "-";
+        const absAmt = typeof c.amount === "number" ? Math.abs(c.amount).toFixed(2) : "0.00";
+        const formattedAmt = `${sign}${groupDecimal(absAmt)} ${accountCurrency}`;
+        return `
+          <tr>
+            <td><strong>${escapeHtml(c.symbol)}</strong></td>
+            <td class="num">${fromPct}%</td>
+            <td class="num">${toPct}%</td>
+            <td class="num ${isPos ? "positive" : "negative"}">${escapeHtml(formattedAmt)}</td>
+          </tr>
+        `;
+      }).join("");
+
+      changesHtml = `
+        <div class="cp-changes-table-wrap">
+          <table class="cp-changes-table">
+            <thead>
+              <tr>
+                <th scope="col">Symbol</th>
+                <th scope="col" class="num">From</th>
+                <th scope="col" class="num">To</th>
+                <th scope="col" class="num">Amount</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    // Evidence chips
+    let evidenceHtml = "";
+    if (s.evidence && s.evidence.length > 0) {
+      evidenceHtml = `
+        <div class="cp-evidence-chips">
+          ${s.evidence.map(e => `<span class="cp-evidence-chip">${escapeHtml(e)}</span>`).join("")}
+        </div>
+      `;
+    }
+
+    // Confidence
+    let confidenceHtml = "";
+    if (s.confidence) {
+      confidenceHtml = `
+        <span class="cp-confidence-tag">Confidence: <strong>${escapeHtml(s.confidence)}</strong></span>
+      `;
+    }
+
+    // If nothing
+    let ifNothingHtml = "";
+    if (s.if_nothing) {
+      ifNothingHtml = `
+        <div class="cp-suggestion-if-nothing">
+          <strong>If you do nothing:</strong> ${escapeHtml(s.if_nothing)}
+        </div>
+      `;
+    }
+
+    const targetTab = (s.tab || "today").toLowerCase();
+    const tabName = targetTab.charAt(0).toUpperCase() + targetTab.slice(1);
+
+    return `
+      <article class="cp-suggestion-card cp-card-collapsed" data-id="${escapeHtml(s.id)}">
+        <header class="cp-suggestion-head" role="button" tabindex="0" aria-expanded="false" aria-label="Toggle suggestion: ${escapeHtml(s.title)}">
+          <span class="cp-severity-dot ${severity}" title="Severity: ${severity}"></span>
+          <span class="cp-kind-chip ${kind}">${escapeHtml(kindLabel)}</span>
+          <span class="cp-suggestion-title">${escapeHtml(s.title)}</span>
+          <svg class="cp-suggestion-chevron" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </header>
+        <div class="cp-suggestion-body">
+          <p class="cp-suggestion-why">${escapeHtml(s.why)}</p>
+          ${ifNothingHtml}
+          ${changesHtml}
+          <div class="cp-suggestion-meta-row">
+            ${confidenceHtml}
+            ${evidenceHtml}
+          </div>
+          <div class="cp-suggestion-actions">
+            <button type="button" class="cp-button cp-btn-sm cp-action-dismiss" data-id="${escapeHtml(s.id)}">Dismiss</button>
+            <button type="button" class="cp-button cp-btn-sm cp-action-done" data-id="${escapeHtml(s.id)}">Mark done</button>
+            <button type="button" class="cp-button cp-btn-sm cp-action-open" data-tab="${escapeHtml(targetTab)}">Open ${escapeHtml(tabName)}</button>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  // Attach toggle listeners
+  container.querySelectorAll(".cp-suggestion-card").forEach(card => {
+    const head = card.querySelector(".cp-suggestion-head");
+    head.addEventListener("click", () => {
+      const isCollapsed = card.classList.toggle("cp-card-collapsed");
+      head.setAttribute("aria-expanded", String(!isCollapsed));
+    });
+    head.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        const isCollapsed = card.classList.toggle("cp-card-collapsed");
+        head.setAttribute("aria-expanded", String(!isCollapsed));
+      }
+    });
+  });
+
+  // Attach button actions
+  container.querySelectorAll(".cp-action-dismiss").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      handleSuggestionAction(btn.getAttribute("data-id"), "dismissed");
+    });
+  });
+
+  container.querySelectorAll(".cp-action-done").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      handleSuggestionAction(btn.getAttribute("data-id"), "done");
+    });
+  });
+
+  container.querySelectorAll(".cp-action-open").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const tab = btn.getAttribute("data-tab");
+      switchTab(tab, true);
+    });
+  });
+}
+
+async function handleSuggestionAction(id, action) {
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    await fetchJson(`/api/capital/suggestions/${encodeURIComponent(id)}/action${query}`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    await loadToday();
+  } catch (err) {
+    showBanner(`Action failed: ${err.message}`, true);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Signal Skill View (Round 11)
+// -----------------------------------------------------------------------------
+function formatSignalName(sig) {
+  switch (sig) {
+    case "momentum12_1":
+    case "momentum_12_1": return "12-1 Momentum";
+    case "short_term_reversal": return "Short-term reversal";
+    case "low_volatility": return "Low volatility";
+    case "trend": return "Trend (200d)";
+    case "chart_pattern": return "Chart patterns";
+    case "foundation_forecast": return "Foundation forecast";
+    case "filing_sentiment": return "Filing sentiment";
+    case "insider_buying": return "Insider buying";
+    case "chart_trend": return "Chart trend (YOLO)";
+    default: return sig ? sig.replace(/_/g, " ") : "—";
+  }
+}
+
+async function loadSignals() {
+  const tbody = document.getElementById("cpSignalsBody");
+  const notesWrap = document.getElementById("cpSignalsNotes");
+  if (!tbody) return;
+
+  if (accountList.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">Import a report to see signal skill.</td></tr>`;
+    if (notesWrap) notesWrap.hidden = true;
+    return;
+  }
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const report = await fetchJson(`/api/capital/signals${query}`);
+
+    if (!report.skill || report.skill.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">No signal report yet.</td></tr>`;
+      if (notesWrap) notesWrap.hidden = true;
+      return;
+    }
+
+    tbody.innerHTML = report.skill.map(s => {
+      const isDimmed = s.weight === 0 || s.ic_used === 0;
+      const icStr = s.ic_mean >= 0 ? `+${s.ic_mean.toFixed(3)}` : s.ic_mean.toFixed(3);
+      const tStr = s.t_stat >= 0 ? `+${s.t_stat.toFixed(2)}` : s.t_stat.toFixed(2);
+      const icUsedStr = s.ic_used >= 0 ? `+${s.ic_used.toFixed(3)}` : s.ic_used.toFixed(3);
+      const weightStr = `${(s.weight * 100).toFixed(1)}%`;
+
+      return `
+        <tr class="${isDimmed ? "cp-signal-dimmed" : ""}">
+          <td><strong>${escapeHtml(formatSignalName(s.signal))}</strong></td>
+          <td>${s.horizon_sessions} sessions</td>
+          <td class="num">${icStr}</td>
+          <td class="num">${tStr}</td>
+          <td class="num">${icUsedStr}</td>
+          <td class="num">${weightStr}</td>
+        </tr>
+      `;
+    }).join("");
+
+    if (notesWrap) {
+      if (report.notes && report.notes.length > 0) {
+        notesWrap.hidden = false;
+        notesWrap.innerHTML = report.notes.map(n => `<div class="cp-scorecard-note">${escapeHtml(n)}</div>`).join("");
+      } else {
+        notesWrap.hidden = true;
+        notesWrap.innerHTML = "";
+      }
+    }
+  } catch (_) {
+    tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">No signal report yet.</td></tr>`;
+    if (notesWrap) notesWrap.hidden = true;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Risk Limits Policy Editor (Round 11)
+// -----------------------------------------------------------------------------
+async function loadPolicy() {
+  const badge = document.getElementById("cpPolicyBadge");
+  const historyList = document.getElementById("cpPolicyHistoryList");
+  if (!badge) return;
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const res = await fetchJson(`/api/capital/policy${query}`);
+    const current = res.current;
+
+    if (current && current.limits) {
+      const l = current.limits;
+      const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.value = val !== undefined && val !== null ? String(val) : "";
+      };
+      setVal("cpLimitMaxPos", l.max_position_pct);
+      setVal("cpLimitCashMin", l.cash_min_pct);
+      setVal("cpLimitCashMax", l.cash_max_pct);
+      setVal("cpLimitHighVolThresh", l.high_vol_threshold_pct);
+      setVal("cpLimitMaxHighVol", l.max_high_vol_pct);
+      setVal("cpLimitMaxTurnover", l.max_turnover_pct);
+      setVal("cpLimitMinTrade", l.min_trade);
+      setVal("cpLimitTradeCost", l.trade_cost_bps);
+      setVal("cpLimitFxCost", l.fx_cost_bps);
+      setVal("cpLimitRiskAversion", l.risk_aversion);
+
+      const isConfirmed = current.status === "confirmed";
+      badge.textContent = isConfirmed ? "Confirmed" : "Draft";
+      badge.className = isConfirmed ? "cp-badge cp-badge-confirmed" : "cp-badge cp-badge-draft";
+    }
+
+    if (historyList) {
+      const history = res.history || [];
+      if (history.length === 0) {
+        historyList.innerHTML = `<li class="cp-empty">Built-in draft (version 0). No revisions saved yet.</li>`;
+      } else {
+        historyList.innerHTML = history.slice().reverse().map(p => {
+          const isConfirmed = p.status === "confirmed";
+          const dateStr = p.saved_at ? formatDate(p.saved_at) : "Built-in draft";
+          return `
+            <li class="cp-history-item">
+              <div class="cp-history-item-left">
+                <span class="cp-history-version">v${p.version}</span>
+                <span class="cp-badge ${isConfirmed ? "cp-badge-confirmed" : "cp-badge-draft"}">${isConfirmed ? "Confirmed" : "Draft"}</span>
+              </div>
+              <span class="cp-history-time">${escapeHtml(dateStr)}</span>
+            </li>
+          `;
+        }).join("");
+      }
+    }
+  } catch (err) {
+    // Before the first import there is no account, so no policy to show yet.
+    if (!currentAccount && /No portfolio/.test(String(err && err.message))) return;
+    console.error("Failed to load risk policy:", err);
+  }
+}
+
+async function savePolicy(confirm) {
+  const errorBox = document.getElementById("cpPolicyError");
+  if (errorBox) {
+    errorBox.hidden = true;
+    errorBox.textContent = "";
+  }
+
+  const limits = {
+    max_position_pct: (document.getElementById("cpLimitMaxPos")?.value || "").trim(),
+    cash_min_pct: (document.getElementById("cpLimitCashMin")?.value || "").trim(),
+    cash_max_pct: (document.getElementById("cpLimitCashMax")?.value || "").trim(),
+    high_vol_threshold_pct: (document.getElementById("cpLimitHighVolThresh")?.value || "").trim(),
+    max_high_vol_pct: (document.getElementById("cpLimitMaxHighVol")?.value || "").trim(),
+    max_turnover_pct: (document.getElementById("cpLimitMaxTurnover")?.value || "").trim(),
+    min_trade: (document.getElementById("cpLimitMinTrade")?.value || "").trim(),
+    trade_cost_bps: (document.getElementById("cpLimitTradeCost")?.value || "").trim(),
+    fx_cost_bps: (document.getElementById("cpLimitFxCost")?.value || "").trim(),
+    risk_aversion: (document.getElementById("cpLimitRiskAversion")?.value || "").trim(),
+  };
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const res = await fetchJson(`/api/capital/policy${query}`, {
+      method: "POST",
+      body: JSON.stringify({ limits, confirm }),
+    });
+
+    showBanner(`Limits saved as version ${res.version} (${res.status}).`);
+    await loadPolicy();
+    await loadToday();
+  } catch (err) {
+    if (errorBox) {
+      errorBox.hidden = false;
+      errorBox.textContent = err.message || "Failed to save limits.";
+    } else {
+      showBanner(err.message, true);
+    }
+  }
+}
+
+function setupPolicyControls() {
+  const draftBtn = document.getElementById("cpSaveDraftPolicyBtn");
+  if (draftBtn) {
+    draftBtn.addEventListener("click", () => savePolicy(false));
+  }
+  const confirmBtn = document.getElementById("cpConfirmPolicyBtn");
+  if (confirmBtn) {
+    confirmBtn.addEventListener("click", () => savePolicy(true));
+  }
+}
+
+function setupDataTabControls() {
+  const dataUploadBtn = document.getElementById("cpDataUploadBtn");
+  if (dataUploadBtn) {
+    dataUploadBtn.addEventListener("click", () => {
+      const fileInput = document.getElementById("cpFileInput");
+      if (fileInput) fileInput.click();
+    });
+  }
+
+  const dataRefreshBtn = document.getElementById("cpDataPriceRefreshBtn");
+  if (dataRefreshBtn) {
+    dataRefreshBtn.addEventListener("click", () => {
+      const mainPriceRefresh = document.getElementById("cpPriceRefreshBtn");
+      if (mainPriceRefresh) mainPriceRefresh.click();
+    });
+  }
+
+  const dataPriceUploadBtn = document.getElementById("cpDataPriceUploadBtn");
+  if (dataPriceUploadBtn) {
+    dataPriceUploadBtn.addEventListener("click", () => {
+      const mainPriceUpload = document.getElementById("cpPriceUploadBtn");
+      if (mainPriceUpload) mainPriceUpload.click();
+    });
+  }
+}
+
+async function loadAll() {
+  await loadPortfolio();
+  await loadToday();
+  await loadPolicy();
+  await loadSignals();
+  await loadInsights();
+  await loadGrants();
+  await loadFilings();
+  await loadSecStatus();
+  await loadSyncStatus();
+  await loadPriceStatus();
+  await loadForecasts();
+  await loadEvaluation();
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  setupTabs();
   setupCollapsibles();
   setupUploadDialog();
   setupGrantDialog();
   setupPriceControls();
   setupPriceFileDialog();
+  setupPolicyControls();
+  setupDataTabControls();
 
   const refreshBtn = document.getElementById("cpRefreshBtn");
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => {
       showBanner("");
-      loadPortfolio();
-      loadInsights();
-      loadGrants();
-      loadFilings();
-      loadSecStatus();
-      loadSyncStatus();
-      loadPriceStatus();
-      loadForecasts();
-      loadEvaluation();
+      loadAll();
     });
   }
 
@@ -1905,27 +2477,11 @@ document.addEventListener("DOMContentLoaded", () => {
   if (accountSelect) {
     accountSelect.addEventListener("change", (e) => {
       currentAccount = e.target.value;
-      loadPortfolio();
-      loadInsights();
-      loadGrants();
-      loadFilings();
-      loadSecStatus();
-      loadSyncStatus();
-      loadPriceStatus();
-      loadForecasts();
-      loadEvaluation();
+      loadAll();
     });
   }
 
   loadAccounts().then(() => {
-    loadPortfolio();
-    loadInsights();
-    loadGrants();
-    loadFilings();
-    loadSecStatus();
-    loadSyncStatus();
-    loadPriceStatus();
-    loadForecasts();
-    loadEvaluation();
+    loadAll();
   });
 });

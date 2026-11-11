@@ -401,11 +401,7 @@ fn policy_suggestions(
         (false, Some(plan)) => {
             let n = breaches.len();
             let mut why: Vec<String> = breaches.iter().map(|b| breach_title(b, false)).collect();
-            why.push(format!(
-                "These {} change{} are the smallest that bring the account within your limits.",
-                plan.changes.len(),
-                plural(plan.changes.len())
-            ));
+            why.push(plan.note.clone());
             if !plan.feasible {
                 why.push(format!(
                     "They can't fix everything within your turnover limit: {} remain.",
