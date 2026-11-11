@@ -21,9 +21,16 @@
 //!   calibration check;
 //! - expected and median terminal prices are kept apart (`P0·exp(μ+σ²/2)` vs `P0·exp(μ)`);
 //! - nothing here proposes a trade.
+mod model;
+mod stats;
+
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+
+use self::stats::{empirical_crps, gaussian_crps, gaussian_nll, mean, pinball_loss, spearman};
 
 /// Schema version of [`ForecastDistribution`].
 pub const SCHEMA_VERSION: &str = "capital-forecast/1";
@@ -156,13 +163,72 @@ pub fn forecast(
     horizon: u32,
     calibration: CalibrationState,
 ) -> ForecastDistribution {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = calibration;
     let (as_of_session, reference_close) = series
         .closes
         .last()
         .cloned()
         .unwrap_or((NaiveDate::MIN, Decimal::ZERO));
+    let prepared = match model::PreparedSeries::new(series.closes) {
+        Ok(prepared) => prepared,
+        Err(reason) => {
+            return insufficient_evidence(
+                series,
+                model,
+                horizon,
+                as_of_session,
+                reference_close,
+                calibration,
+                reason,
+            );
+        }
+    };
+    let origin = prepared.closes.len() - 1;
+    match model::model_forecast(&prepared, origin, model, horizon, calibration.verified) {
+        Ok(numbers) => ForecastDistribution {
+            schema_version: SCHEMA_VERSION.to_string(),
+            instrument_key: series.instrument_key.to_string(),
+            symbol: series.symbol.to_string(),
+            model,
+            as_of_session,
+            horizon_sessions: horizon,
+            reference_close,
+            status: ForecastStatus::Ok,
+            expected_log_return: Some(numbers.expected_log_return),
+            median_log_return: Some(numbers.median_log_return),
+            sigma_log_return: Some(numbers.sigma_log_return),
+            variance_log_return: Some(numbers.sigma_log_return * numbers.sigma_log_return),
+            quantiles: QUANTILE_LEVELS
+                .iter()
+                .zip(numbers.quantiles)
+                .map(|(p, log_return)| Quantile { p: *p, log_return })
+                .collect(),
+            probability_positive: numbers.probability_positive,
+            expected_terminal_price: numbers.expected_terminal_price,
+            median_terminal_price: Some(numbers.median_terminal_price),
+            observations_used: numbers.observations_used,
+            calibration,
+        },
+        Err(reason) => insufficient_evidence(
+            series,
+            model,
+            horizon,
+            as_of_session,
+            reference_close,
+            calibration,
+            reason,
+        ),
+    }
+}
+
+fn insufficient_evidence(
+    series: &CloseSeries<'_>,
+    model: ModelId,
+    horizon: u32,
+    as_of_session: NaiveDate,
+    reference_close: Decimal,
+    calibration: CalibrationState,
+    reason: String,
+) -> ForecastDistribution {
     ForecastDistribution {
         schema_version: SCHEMA_VERSION.to_string(),
         instrument_key: series.instrument_key.to_string(),
@@ -171,9 +237,7 @@ pub fn forecast(
         as_of_session,
         horizon_sessions: horizon,
         reference_close,
-        status: ForecastStatus::InsufficientEvidence {
-            reason: "not implemented".into(),
-        },
+        status: ForecastStatus::InsufficientEvidence { reason },
         expected_log_return: None,
         median_log_return: None,
         sigma_log_return: None,
@@ -183,10 +247,7 @@ pub fn forecast(
         expected_terminal_price: None,
         median_terminal_price: None,
         observations_used: 0,
-        calibration: CalibrationState {
-            verified: false,
-            cohort: None,
-        },
+        calibration,
     }
 }
 
@@ -301,15 +362,284 @@ pub fn calibration_verified(score: &ModelScore) -> bool {
 /// series). Origins of one instrument are `step_sessions` apart, so h-session outcomes
 /// overlap when `h > step`; the scores are means and the notes say so.
 pub fn evaluate(series: &[CloseSeries<'_>], config: &EvalConfig) -> EvalReport {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = series;
+    let longest_horizon = config.horizons.iter().copied().max().unwrap_or(0) as usize;
+    let required_sessions = config
+        .min_train
+        .saturating_add(longest_horizon)
+        .saturating_add(1);
+
+    let mut prepared: Vec<(String, model::PreparedSeries)> = Vec::new();
+    let mut skipped: Vec<(String, String)> = Vec::new();
+    for instrument in series {
+        match model::PreparedSeries::new(instrument.closes) {
+            Ok(cut) if cut.closes.len() >= required_sessions => {
+                prepared.push((instrument.symbol.to_string(), cut));
+            }
+            Ok(cut) => skipped.push((
+                instrument.symbol.to_string(),
+                format!(
+                    "needs at least {required_sessions} sessions ({} training returns and a {longest_horizon}-session outcome); has {}",
+                    config.min_train,
+                    cut.closes.len()
+                ),
+            )),
+            Err(reason) => skipped.push((instrument.symbol.to_string(), reason)),
+        }
+    }
+
+    let instruments: Vec<String> = prepared.iter().map(|(symbol, _)| symbol.clone()).collect();
+    let step = config.step_sessions.max(1);
+    let mut origin_range: Option<(NaiveDate, NaiveDate)> = None;
+    let mut scores: Vec<ModelScore> = Vec::new();
+    let mut rank_ic: Vec<RankIc> = Vec::new();
+
+    for &horizon in &config.horizons {
+        let horizon_sessions = horizon as usize;
+        if horizon_sessions == 0 {
+            continue;
+        }
+        let mut observations: Vec<Vec<Observation>> =
+            (0..ModelId::ALL.len()).map(|_| Vec::new()).collect();
+
+        for (instrument_index, (_, cut)) in prepared.iter().enumerate() {
+            let mut origin = config.min_train;
+            while origin + horizon_sessions < cut.closes.len() {
+                for (model_index, model) in ModelId::ALL.iter().enumerate() {
+                    let Ok(numbers) = model::model_forecast(cut, origin, *model, horizon, false)
+                    else {
+                        continue;
+                    };
+                    let outcome =
+                        cut.log_closes[origin + horizon_sessions] - cut.log_closes[origin];
+                    let crps = match numbers.samples.as_deref() {
+                        Some(samples) => empirical_crps(samples, outcome),
+                        None => gaussian_crps(
+                            numbers.expected_log_return,
+                            numbers.sigma_log_return,
+                            outcome,
+                        ),
+                    };
+                    let pinball = QUANTILE_LEVELS
+                        .iter()
+                        .zip(numbers.quantiles.iter())
+                        .map(|(p, quantile)| pinball_loss(*p, *quantile, outcome))
+                        .sum::<f64>()
+                        / QUANTILE_LEVELS.len() as f64;
+                    let nll = (*model != ModelId::EmpiricalHorizon).then(|| {
+                        gaussian_nll(
+                            numbers.expected_log_return,
+                            numbers.sigma_log_return,
+                            outcome,
+                        )
+                    });
+                    let date = cut.closes[origin].0;
+                    origin_range = Some(match origin_range {
+                        None => (date, date),
+                        Some((first, last)) => (first.min(date), last.max(date)),
+                    });
+                    observations[model_index].push(Observation {
+                        key: (instrument_index, origin),
+                        date,
+                        forecast_mean: numbers.expected_log_return,
+                        outcome,
+                        quantiles: numbers.quantiles,
+                        crps,
+                        pinball,
+                        nll,
+                    });
+                }
+                origin += step;
+            }
+        }
+
+        let base_crps: BTreeMap<(usize, usize), f64> = observations
+            .first()
+            .map(|rows| rows.iter().map(|row| (row.key, row.crps)).collect())
+            .unwrap_or_default();
+
+        for (model_index, model) in ModelId::ALL.iter().enumerate() {
+            let rows = &observations[model_index];
+            if rows.is_empty() {
+                continue;
+            }
+            let count = rows.len() as f64;
+            let crps = rows.iter().map(|row| row.crps).sum::<f64>() / count;
+            let pinball = rows.iter().map(|row| row.pinball).sum::<f64>() / count;
+            let nll_values: Vec<f64> = rows.iter().filter_map(|row| row.nll).collect();
+            let nll = (!nll_values.is_empty()).then(|| mean(&nll_values));
+            let coverage: Vec<CoveragePoint> = QUANTILE_LEVELS
+                .iter()
+                .enumerate()
+                .map(|(level, p)| {
+                    let observed = rows
+                        .iter()
+                        .filter(|row| row.outcome <= row.quantiles[level])
+                        .count() as f64
+                        / count;
+                    CoveragePoint { p: *p, observed }
+                })
+                .collect();
+            let interval_90 = rows
+                .iter()
+                .filter(|row| row.outcome >= row.quantiles[0] && row.outcome <= row.quantiles[4])
+                .count() as f64
+                / count;
+            let mut hits = 0usize;
+            let mut non_zero = 0usize;
+            for row in rows {
+                if row.outcome == 0.0 {
+                    continue;
+                }
+                non_zero += 1;
+                if row.quantiles[2].signum() == row.outcome.signum() {
+                    hits += 1;
+                }
+            }
+            let direction_hit_rate = if non_zero == 0 {
+                0.0
+            } else {
+                hits as f64 / non_zero as f64
+            };
+            let crps_skill = if *model == ModelId::NoChange {
+                0.0
+            } else {
+                let mut model_sum = 0.0;
+                let mut base_sum = 0.0;
+                let mut paired = 0usize;
+                for row in rows {
+                    if let Some(base) = base_crps.get(&row.key) {
+                        model_sum += row.crps;
+                        base_sum += *base;
+                        paired += 1;
+                    }
+                }
+                if paired > 0 && base_sum > 0.0 {
+                    1.0 - model_sum / base_sum
+                } else {
+                    0.0
+                }
+            };
+            let mut score = ModelScore {
+                model: *model,
+                horizon_sessions: horizon,
+                forecasts: rows.len() as u32,
+                crps,
+                pinball,
+                nll,
+                crps_skill,
+                coverage,
+                interval_90,
+                direction_hit_rate,
+                calibrated: false,
+            };
+            score.calibrated = calibration_verified(&score);
+            scores.push(score);
+
+            if prepared.len() >= 5 {
+                let mut by_date: BTreeMap<NaiveDate, Vec<(f64, f64)>> = BTreeMap::new();
+                for row in rows {
+                    by_date
+                        .entry(row.date)
+                        .or_default()
+                        .push((row.forecast_mean, row.outcome));
+                }
+                let mut sum = 0.0;
+                let mut origins = 0u32;
+                for pairs in by_date.values() {
+                    if pairs.len() < 5 {
+                        continue;
+                    }
+                    if let Some(rho) = spearman(pairs) {
+                        sum += rho;
+                        origins += 1;
+                    }
+                }
+                if origins > 0 {
+                    rank_ic.push(RankIc {
+                        model: *model,
+                        horizon_sessions: horizon,
+                        mean: sum / origins as f64,
+                        origins,
+                    });
+                }
+            }
+        }
+    }
+
     EvalReport {
         config: config.clone(),
-        instruments: Vec::new(),
-        skipped: Vec::new(),
-        origins: None,
-        scores: Vec::new(),
-        rank_ic: Vec::new(),
-        notes: Vec::new(),
+        instruments,
+        skipped,
+        origins: origin_range,
+        scores,
+        rank_ic,
+        notes: evaluation_notes(config, step, longest_horizon, &prepared, origin_range),
     }
+}
+
+/// One scored forecast, kept only long enough to aggregate into a [`ModelScore`].
+struct Observation {
+    /// `(instrument index, origin index)`, used to pair a model with `NoChange`.
+    key: (usize, usize),
+    /// The origin's session date.
+    date: NaiveDate,
+    /// Forecast mean log return.
+    forecast_mean: f64,
+    /// Realized log return over the horizon.
+    outcome: f64,
+    /// Forecast quantiles at [`QUANTILE_LEVELS`].
+    quantiles: [f64; 5],
+    /// Gaussian CRPS or the empirical sample form.
+    crps: f64,
+    /// Mean pinball loss over the five levels.
+    pinball: f64,
+    /// Gaussian NLL, absent for the empirical model.
+    nll: Option<f64>,
+}
+
+fn evaluation_notes(
+    config: &EvalConfig,
+    step: usize,
+    longest_horizon: usize,
+    prepared: &[(String, model::PreparedSeries)],
+    origins: Option<(NaiveDate, NaiveDate)>,
+) -> Vec<String> {
+    let mut notes = vec![
+        format!(
+            "Each forecast uses only closes before its origin; the first {} daily returns of a series are history, not scored.",
+            config.min_train
+        ),
+        "Scores measure log-return forecasts before spreads, fees, taxes and FX; they are not portfolio returns and they are not recommendations.".into(),
+        "Only currently held instruments with stored prices are scored, so the sample is survivorship-biased and not a market-wide test.".into(),
+    ];
+    for &horizon in &config.horizons {
+        if horizon as usize > step {
+            notes.push(format!(
+                "{horizon}-session outcomes overlap because origins are {step} sessions apart; the scores average overlapping windows rather than independent trials."
+            ));
+        }
+    }
+    let total_sessions: usize = prepared.iter().map(|(_, cut)| cut.closes.len()).sum();
+    let scored_sessions: usize = prepared
+        .iter()
+        .map(|(_, cut)| cut.closes.len().saturating_sub(config.min_train))
+        .sum();
+    if total_sessions > 0 {
+        notes.push(format!(
+            "The first {} daily returns of every series are training history; about {:.0}% of the stored sessions follow an origin and are scored out of sample.",
+            config.min_train,
+            100.0 * scored_sessions as f64 / total_sessions as f64
+        ));
+    }
+    if let Some((first, last)) = origins {
+        notes.push(format!("Out-of-sample origins span {first}..{last}."));
+    } else if longest_horizon > 0 {
+        notes.push("No origin had a complete outcome, so there is nothing to score.".into());
+    }
+    if prepared.len() < 5 {
+        notes.push(
+            "Rank IC needs at least five instruments at a shared origin; it is omitted.".into(),
+        );
+    }
+    notes
 }
