@@ -95,6 +95,12 @@ pub struct CapitalService {
     prices_configured: bool,
     price_status: std::sync::Mutex<PriceStatus>,
     price_refreshing: tokio::sync::Mutex<()>,
+    /// Model signals the owner turned on (`SAIL_MODEL_SIGNALS`).
+    model_specs: Vec<crate::models::ModelSpec>,
+    /// One model refresh at a time.
+    model_refreshing: tokio::sync::Mutex<()>,
+    /// The last model refresh, per model name.
+    model_runs: std::sync::Mutex<std::collections::BTreeMap<String, ModelRun>>,
     evaluation_cache: std::sync::Mutex<Option<(String, crate::forecast::EvalReport)>>,
     /// The signal report, cached like the evaluation.
     signals_cache: std::sync::Mutex<Option<(String, crate::signals::SignalReport)>>,
@@ -118,6 +124,7 @@ impl CapitalService {
         let (prices, prices_configured) = crate::market::source_from_env();
         service.prices = prices;
         service.prices_configured = prices_configured;
+        service.model_specs = crate::models::enabled_from_env();
         service.price_status = std::sync::Mutex::new(PriceStatus {
             configured: prices_configured,
             ..PriceStatus::default()
@@ -159,6 +166,9 @@ impl CapitalService {
             prices_configured: false,
             price_status: std::sync::Mutex::new(PriceStatus::default()),
             price_refreshing: tokio::sync::Mutex::new(()),
+            model_specs: Vec::new(),
+            model_refreshing: tokio::sync::Mutex::new(()),
+            model_runs: std::sync::Mutex::new(Default::default()),
             evaluation_cache: std::sync::Mutex::new(None),
             signals_cache: std::sync::Mutex::new(None),
         })
@@ -1167,10 +1177,17 @@ impl CapitalService {
         let held = self.held_instruments(account)?;
         let mut held_keys: Vec<&str> = held.iter().map(|(key, _)| key.as_str()).collect();
         held_keys.sort_unstable();
+        let model_version: u64 = self
+            .store
+            .signal_value_coverage()?
+            .iter()
+            .map(|c| u64::from(c.values))
+            .sum();
         let version = format!(
-            "{}|{}|{}",
+            "{}|{}|{}|{}",
             account.as_str(),
             self.store.price_version()?,
+            model_version,
             held_keys.join("|")
         );
         if let Ok(cache) = self.signals_cache.lock()
@@ -1193,9 +1210,10 @@ impl CapitalService {
             let s = series.iter().find(|s| s.instrument_key == key)?;
             ewma_sigma(s, horizon)
         };
+        let external = self.external_scores(&held_keys)?;
         let report = crate::signals::evaluate_and_combine(
             &series,
-            &[],
+            &external,
             &sigma,
             &crate::signals::SignalEvalConfig::default(),
         );
@@ -1381,4 +1399,217 @@ fn ewma_sigma(series: &crate::forecast::CloseSeries<'_>, horizon: u32) -> Option
         },
     );
     f.sigma_log_return
+}
+
+/// The last run of one model signal.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelRun {
+    /// When it finished.
+    pub at: DateTime<Utc>,
+    /// Model version the helper reported.
+    pub model_version: Option<String>,
+    /// Values asked for.
+    pub requested: u32,
+    /// New values stored.
+    pub added: u32,
+    /// Origins the helper couldn't score.
+    pub skipped: u32,
+    /// Why it failed, if it did.
+    pub error: Option<String>,
+    /// The helper's notes.
+    pub notes: Vec<String>,
+}
+
+/// `GET /signals/models`: what each model signal is and what is stored.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelsStatus {
+    /// A refresh is running now.
+    pub running: bool,
+    /// Every known model, whether on or off.
+    pub models: Vec<ModelStatus>,
+}
+
+/// One model's status.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelStatus {
+    /// What it is.
+    pub spec: crate::models::ModelSpec,
+    /// Turned on in `SAIL_MODEL_SIGNALS`.
+    pub enabled: bool,
+    /// The last run, if any since SAIL started.
+    pub last_run: Option<ModelRun>,
+    /// What is stored.
+    pub stored: Option<crate::store::SignalValueCoverage>,
+}
+
+impl CapitalService {
+    /// Turns on model signals (the service reads `SAIL_MODEL_SIGNALS` in `open`).
+    pub fn with_models(mut self, specs: Vec<crate::models::ModelSpec>) -> Self {
+        self.model_specs = specs;
+        self
+    }
+
+    fn signal_name(signal: crate::signals::SignalId) -> String {
+        serde_json::to_value(signal)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    /// Stored values of the enabled models for `held` instruments, from each model's
+    /// `evaluate_from` on.
+    fn external_scores(
+        &self,
+        held: &[&str],
+    ) -> Result<Vec<crate::signals::ExternalScores>, ServiceError> {
+        let mut out = Vec::new();
+        for spec in &self.model_specs {
+            let (_, values) = self.store.signal_values(&Self::signal_name(spec.signal))?;
+            let values: Vec<_> = values
+                .into_iter()
+                .filter(|(key, session, _)| {
+                    *session >= spec.evaluate_from && held.contains(&key.as_str())
+                })
+                .collect();
+            if !values.is_empty() {
+                out.push(crate::signals::ExternalScores {
+                    signal: spec.signal,
+                    values,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// What each model signal is, whether it is on, and what is stored.
+    pub fn models_status(&self) -> Result<ModelsStatus, ServiceError> {
+        let coverage = self.store.signal_value_coverage()?;
+        let runs = self
+            .model_runs
+            .lock()
+            .map(|r| r.clone())
+            .unwrap_or_default();
+        let models = crate::models::specs()
+            .into_iter()
+            .map(|spec| {
+                let name = Self::signal_name(spec.signal);
+                ModelStatus {
+                    enabled: self.model_specs.iter().any(|s| s.name == spec.name),
+                    last_run: runs.get(&spec.name).cloned(),
+                    stored: coverage.iter().rfind(|c| c.signal == name).cloned(),
+                    spec,
+                }
+            })
+            .collect();
+        Ok(ModelsStatus {
+            running: self.model_refreshing.try_lock().is_err(),
+            models,
+        })
+    }
+
+    /// Runs every enabled model helper over the held instruments, for the origins not
+    /// stored yet, and stores the values. Slow the first time (it downloads weights and
+    /// scores years of weekly origins); later runs only add new weeks.
+    pub async fn refresh_model_signals(
+        &self,
+        account: &AccountId,
+    ) -> Result<ModelsStatus, ServiceError> {
+        let _running = self.model_refreshing.lock().await;
+        let python = std::env::var("SAIL_SIGNALS_PYTHON")
+            .unwrap_or_else(|_| crate::models::DEFAULT_PYTHON.to_string());
+        let scripts = std::env::var("SAIL_SIGNALS_SCRIPTS")
+            .unwrap_or_else(|_| crate::models::DEFAULT_SCRIPTS.to_string());
+        let cache = std::env::var("SAIL_SIGNALS_CACHE")
+            .unwrap_or_else(|_| crate::models::DEFAULT_CACHE.to_string());
+        let held = self.held_instruments(account)?;
+        let now = Utc::now();
+        for spec in self.model_specs.clone() {
+            let signal = Self::signal_name(spec.signal);
+            let (_, stored) = self.store.signal_values(&signal)?;
+            let done: std::collections::BTreeSet<(String, chrono::NaiveDate)> =
+                stored.into_iter().map(|(k, d, _)| (k, d)).collect();
+            let mut items = Vec::new();
+            let mut requested = 0u32;
+            for (key, _) in &held {
+                let observations = self.store.prices(key, now)?;
+                if spec.needs_ohl && observations.iter().all(|o| o.ohl.is_none()) {
+                    continue;
+                }
+                let sessions: Vec<chrono::NaiveDate> =
+                    observations.iter().map(|o| o.session).collect();
+                let origins: Vec<chrono::NaiveDate> =
+                    crate::models::origins(&sessions, spec.evaluate_from)
+                        .into_iter()
+                        .filter(|d| !done.contains(&(key.clone(), *d)))
+                        .collect();
+                if origins.is_empty() {
+                    continue;
+                }
+                requested += origins.len() as u32;
+                use rust_decimal::prelude::ToPrimitive;
+                let bars = observations
+                    .iter()
+                    .filter_map(|o| {
+                        let close = o.close.to_f64()?;
+                        let (open, high, low) = match &o.ohl {
+                            Some(ohl) => (ohl.open.to_f64(), ohl.high.to_f64(), ohl.low.to_f64()),
+                            None => (None, None, None),
+                        };
+                        Some((o.session, open, high, low, close))
+                    })
+                    .collect();
+                items.push(crate::models::HelperItem {
+                    key: key.clone(),
+                    origins,
+                    bars,
+                });
+            }
+            let run = if items.is_empty() {
+                ModelRun {
+                    at: Utc::now(),
+                    model_version: None,
+                    requested: 0,
+                    added: 0,
+                    skipped: 0,
+                    error: None,
+                    notes: vec!["Nothing new to compute.".into()],
+                }
+            } else {
+                match crate::models::run_helper(&spec, &python, &scripts, Some(&cache), &items)
+                    .await
+                {
+                    Ok(output) => {
+                        let added = self.store.record_signal_values(
+                            &signal,
+                            &output.model_version,
+                            &output.values,
+                            Utc::now(),
+                        )?;
+                        ModelRun {
+                            at: Utc::now(),
+                            model_version: Some(output.model_version),
+                            requested,
+                            added,
+                            skipped: output.skipped,
+                            error: None,
+                            notes: output.notes,
+                        }
+                    }
+                    Err(e) => ModelRun {
+                        at: Utc::now(),
+                        model_version: None,
+                        requested,
+                        added: 0,
+                        skipped: 0,
+                        error: Some(e.to_string()),
+                        notes: Vec::new(),
+                    },
+                }
+            };
+            if let Ok(mut runs) = self.model_runs.lock() {
+                runs.insert(spec.name.clone(), run);
+            }
+        }
+        self.models_status()
+    }
 }

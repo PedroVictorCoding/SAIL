@@ -58,6 +58,8 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/suggestions/:id/action", post(suggestion_action))
         .route("/policy", get(policy).post(save_policy))
         .route("/signals", get(signals))
+        .route("/signals/models", get(signal_models))
+        .route("/signals/refresh", post(signal_refresh))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
         .with_state(Arc::new(CapitalState { service, authority }))
 }
@@ -648,4 +650,34 @@ async fn signals(
     })
     .await?;
     Ok(no_store(to_json(&report)?))
+}
+
+async fn signal_models(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let status = blocking(&s, move |svc| svc.models_status()).await?;
+    Ok(no_store(to_json(&status)?))
+}
+
+async fn signal_refresh(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let id = q.account.clone();
+    let account = blocking(&s, move |svc| svc.resolve_account(id.as_deref())).await?;
+    // A first run can take many minutes; it runs in the background and the page polls
+    // `/signals/models`.
+    let service = s.service.clone();
+    tokio::spawn(async move {
+        if let Err(e) = service.refresh_model_signals(&account).await {
+            tracing::warn!(error = %e, "model signal refresh failed");
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let status = blocking(&s, move |svc| svc.models_status()).await?;
+    Ok(no_store(to_json(&status)?))
 }

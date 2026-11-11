@@ -862,6 +862,7 @@ mod tests {
             symbol: "X".into(),
             session,
             close: Decimal::from_str("100").unwrap(),
+            ohl: None,
             currency: None,
             price_kind: "close".into(),
             adjustment: Adjustment::Unknown,
@@ -1198,6 +1199,12 @@ impl CapitalStore {
                 symbol: series.symbol.clone(),
                 session: bar.session,
                 close: bar.close,
+                ohl: match (bar.open, bar.high, bar.low) {
+                    (Some(open), Some(high), Some(low)) => {
+                        Some(crate::market::Ohl { open, high, low })
+                    }
+                    _ => None,
+                },
                 currency: series.currency.clone(),
                 price_kind: "close".to_string(),
                 adjustment: series.adjustment,
@@ -1353,6 +1360,19 @@ CREATE TRIGGER IF NOT EXISTS policy_versions_no_update BEFORE UPDATE ON policy_v
 BEGIN SELECT RAISE(ABORT, 'policy versions are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS policy_versions_no_delete BEFORE DELETE ON policy_versions
 BEGIN SELECT RAISE(ABORT, 'policy versions are append-only'); END;
+CREATE TABLE IF NOT EXISTS signal_values (
+    signal TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    instrument_key TEXT NOT NULL,
+    session TEXT NOT NULL,
+    value REAL NOT NULL,
+    computed_at TEXT NOT NULL,
+    PRIMARY KEY (signal, model_version, instrument_key, session)
+);
+CREATE TRIGGER IF NOT EXISTS signal_values_no_update BEFORE UPDATE ON signal_values
+BEGIN SELECT RAISE(ABORT, 'signal values are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS signal_values_no_delete BEFORE DELETE ON signal_values
+BEGIN SELECT RAISE(ABORT, 'signal values are append-only'); END;
 CREATE TABLE IF NOT EXISTS suggestion_actions (
     rowid_ INTEGER PRIMARY KEY AUTOINCREMENT,
     account TEXT NOT NULL,
@@ -1454,5 +1474,121 @@ impl CapitalStore {
             out.insert(row?);
         }
         Ok(out)
+    }
+}
+
+/// One stored model value: `(instrument key, session, value)`.
+pub type SignalValue = (String, chrono::NaiveDate, f64);
+
+/// Model signal values stored for one signal.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SignalValueCoverage {
+    /// Signal, as its snake_case name.
+    pub signal: String,
+    /// Model version.
+    pub model_version: String,
+    /// Instruments with values.
+    pub instruments: u32,
+    /// Values stored.
+    pub values: u32,
+    /// Latest session with a value.
+    pub latest: Option<chrono::NaiveDate>,
+}
+
+impl CapitalStore {
+    /// Stores model signal values; values already stored for the same signal, model
+    /// version, instrument and session are kept as they were. Returns how many were new.
+    pub fn record_signal_values(
+        &self,
+        signal: &str,
+        model_version: &str,
+        values: &[(String, chrono::NaiveDate, f64)],
+        now: DateTime<Utc>,
+    ) -> Result<u32, StoreError> {
+        let mut conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let tx = conn.transaction()?;
+        let mut added = 0u32;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR IGNORE INTO signal_values
+                 (signal, model_version, instrument_key, session, value, computed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for (key, session, value) in values {
+                if !value.is_finite() {
+                    continue;
+                }
+                added += stmt.execute(params![
+                    signal,
+                    model_version,
+                    key,
+                    session.format("%Y-%m-%d").to_string(),
+                    value,
+                    now.to_rfc3339()
+                ])? as u32;
+            }
+        }
+        tx.commit()?;
+        Ok(added)
+    }
+
+    /// Values of `signal` from its most recently computed model version, as
+    /// `(instrument key, session, value)`, oldest first.
+    pub fn signal_values(
+        &self,
+        signal: &str,
+    ) -> Result<(Option<String>, Vec<SignalValue>), StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let version: Option<String> = conn
+            .query_row(
+                "SELECT model_version FROM signal_values WHERE signal = ?1
+                 ORDER BY computed_at DESC LIMIT 1",
+                params![signal],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(version) = version else {
+            return Ok((None, Vec::new()));
+        };
+        let mut stmt = conn.prepare(
+            "SELECT instrument_key, session, value FROM signal_values
+             WHERE signal = ?1 AND model_version = ?2 ORDER BY session, instrument_key",
+        )?;
+        let rows = stmt.query_map(params![signal, version], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, f64>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (key, session, value) = row?;
+            let session = chrono::NaiveDate::parse_from_str(&session, "%Y-%m-%d")
+                .map_err(|_| StoreError::Decode(format!("bad session {session}")))?;
+            out.push((key, session, value));
+        }
+        Ok((Some(version), out))
+    }
+
+    /// What is stored per model signal.
+    pub fn signal_value_coverage(&self) -> Result<Vec<SignalValueCoverage>, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let mut stmt = conn.prepare(
+            "SELECT signal, model_version, COUNT(DISTINCT instrument_key), COUNT(*), MAX(session)
+             FROM signal_values GROUP BY signal, model_version ORDER BY signal, model_version",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(SignalValueCoverage {
+                signal: r.get(0)?,
+                model_version: r.get(1)?,
+                instruments: r.get(2)?,
+                values: r.get(3)?,
+                latest: r
+                    .get::<_, Option<String>>(4)?
+                    .and_then(|s| chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 }
