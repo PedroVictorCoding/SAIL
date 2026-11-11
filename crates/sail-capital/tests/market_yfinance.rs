@@ -10,8 +10,8 @@ use std::io::Write;
 fn xtb_symbols_map_to_yahoo() {
     assert_eq!(yahoo_symbol("AAPL.US").as_deref(), Some("AAPL"));
     assert_eq!(yahoo_symbol("BRK.B.US").as_deref(), Some("BRK-B"));
-    assert_eq!(yahoo_symbol("GALP.PT").as_deref(), Some("GALP.LS"));
-    assert_eq!(yahoo_symbol("shell.nl").as_deref(), Some("SHELL.AS"));
+    assert_eq!(yahoo_symbol("EDP.PT").as_deref(), Some("EDP.LS"));
+    assert_eq!(yahoo_symbol("asml.nl").as_deref(), Some("ASML.AS"));
     assert_eq!(yahoo_symbol("SAP.DE").as_deref(), Some("SAP.DE"));
     assert_eq!(yahoo_symbol("VUSA.UK").as_deref(), Some("VUSA.L"));
     assert_eq!(yahoo_symbol("MC.FR").as_deref(), Some("MC.PA"));
@@ -95,9 +95,9 @@ json.dump({"symbol": sys.argv[1], "currency": "EUR", "adjustment": "split_adjust
            "bars": [["2026-11-10", None, None, None, "12.5", None]]}, sys.stdout)"#,
     );
     let source = YahooSource::with_command("python3", script);
-    let series = source.daily("GALP.PT").await.unwrap();
-    assert_eq!(series.source_symbol, "GALP.LS");
-    assert_eq!(series.symbol, "GALP.PT");
+    let series = source.daily("EDP.PT").await.unwrap();
+    assert_eq!(series.source_symbol, "EDP.LS");
+    assert_eq!(series.symbol, "EDP.PT");
     assert_eq!(series.bars.len(), 1);
 }
 

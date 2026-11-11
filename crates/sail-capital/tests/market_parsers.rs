@@ -26,7 +26,7 @@ fn test_stooq_symbol_mapping() {
     assert_eq!(stooq_symbol("VOD.UK"), Some("vod.uk".to_string()));
     assert_eq!(stooq_symbol("AIR.FR"), Some("air.fr".to_string()));
     assert_eq!(stooq_symbol("ASML.NL"), Some("asml.nl".to_string()));
-    assert_eq!(stooq_symbol("GALP.PT"), Some("galp.pt".to_string()));
+    assert_eq!(stooq_symbol("EDP.PT"), Some("edp.pt".to_string()));
     assert_eq!(stooq_symbol("IBE.ES"), Some("ibe.es".to_string()));
     assert_eq!(stooq_symbol("ENI.IT"), Some("eni.it".to_string()));
     assert_eq!(stooq_symbol("PKN.PL"), Some("pkn.pl".to_string()));
@@ -124,15 +124,15 @@ fn test_stooq_csv_skips_bad_and_non_positive_close() {
 fn test_price_file_semicolon_and_portuguese() {
     let series = parse_price_file(
         FILE_SEMICOLON_PT,
-        "GALP.PT",
+        "EDP.PT",
         Some(Currency::eur()),
         Adjustment::SplitAdjusted,
     )
     .expect("valid series");
 
     assert_eq!(series.source_id, "owner-file");
-    assert_eq!(series.symbol, "GALP.PT");
-    assert_eq!(series.source_symbol, "GALP.PT");
+    assert_eq!(series.symbol, "EDP.PT");
+    assert_eq!(series.source_symbol, "EDP.PT");
     assert_eq!(series.currency, Some(Currency::eur()));
     assert_eq!(series.adjustment, Adjustment::SplitAdjusted);
     assert_eq!(series.bars.len(), 3);
@@ -199,7 +199,7 @@ fn comma_price_files_read_three_decimals_as_a_fraction() {
     let csv = b"Date,Open,High,Low,Close,Adj Close,Volume\n2026-11-10,54.123,54.5,53.125,54.250,54.250,1200\n2026-11-11,54.3,54.9,54.1,54.875,54.875,900\n";
     let series = sail_capital::market::parse_price_file(
         csv,
-        "MBG.DE",
+        "SAP.DE",
         None,
         sail_capital::market::Adjustment::SplitAdjusted,
     )
