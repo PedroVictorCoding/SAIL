@@ -43,6 +43,7 @@ pub mod tts;
 pub mod turn_coordinator;
 pub mod ui_assets;
 pub mod vad;
+mod vision_archive;
 pub mod visual_snapshot;
 pub mod vlm;
 pub mod web_assets;

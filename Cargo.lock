@@ -2925,6 +2925,7 @@ dependencies = [
  "image",
  "libc",
  "reqwest",
+ "rusqlite",
  "rustfft",
  "rustls",
  "sail-agents",
