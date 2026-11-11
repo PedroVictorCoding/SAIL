@@ -1387,3 +1387,30 @@ main {
     order: 3;
   }
 }
+
+/* Account view hints and the since-first-deposit line */
+.cp-stat-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--sail-text-muted);
+}
+
+.cp-insights-line {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--sail-text-muted);
+}
+
+.cp-insights-line strong {
+  color: var(--sail-text);
+}
+
+.cp-insights-line strong.positive {
+  color: #5ccda4;
+}
+
+.cp-insights-line strong.negative {
+  color: #e17055;
+}
