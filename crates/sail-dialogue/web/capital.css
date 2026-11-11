@@ -2337,3 +2337,218 @@ main {
   color: var(--sail-text-subtle);
 }
 
+/* -----------------------------------------------------------------------------
+ * Round 12: Blended Outlook & Fan Chart
+ * ----------------------------------------------------------------------------- */
+.cp-outlook-panel {
+  position: relative;
+}
+
+.cp-outlook-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.cp-outlook-chart-wrap {
+  position: relative;
+  width: 100%;
+  min-height: 280px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-card, 16px);
+  padding: 12px;
+  overflow: hidden;
+}
+
+.cp-outlook-chart-wrap svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 440px;
+}
+
+.cp-chart-axis-text {
+  font-size: 11px;
+  fill: var(--sail-text-subtle);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.cp-chart-label {
+  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-weight: 600;
+  dominant-baseline: central;
+}
+
+.cp-label-high {
+  fill: #5ccda4;
+}
+
+.cp-label-med {
+  fill: #ffd69f;
+}
+
+.cp-label-low {
+  fill: #e17055;
+}
+
+.cp-chart-accessible-summary {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--sail-text-subtle);
+  line-height: 1.5;
+}
+
+.cp-outlook-replay-summary {
+  margin-top: 14px;
+  padding: 12px 16px;
+  background: rgba(255, 214, 159, 0.08);
+  border: 1px solid rgba(255, 214, 159, 0.25);
+  border-radius: var(--sail-radius-control, 8px);
+  font-size: 13px;
+  color: #ffd69f;
+  font-weight: 500;
+}
+
+.cp-outlook-meta-grid {
+  margin-top: 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 768px) {
+  .cp-outlook-meta-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cp-outlook-subheading {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sail-text-subtle);
+  margin-bottom: 12px;
+}
+
+.cp-outlook-weights-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cp-weight-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.cp-weight-name {
+  width: 140px;
+  flex-shrink: 0;
+  font-weight: 500;
+  color: var(--sail-text);
+}
+
+.cp-weight-pct {
+  width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--sail-text-muted);
+}
+
+.cp-weight-dimmed {
+  opacity: 0.4;
+}
+
+.cp-weight-bar-wrap {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.cp-weight-bar-fill {
+  height: 100%;
+  background: #7dd3fc;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.cp-outlook-tilt-note {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
+.cp-tilt-line strong {
+  color: #7dd3fc;
+}
+
+.cp-tilt-none {
+  color: var(--sail-text-subtle);
+  font-style: italic;
+}
+
+.cp-track-record-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.cp-track-card {
+  background: var(--sail-surface-raised);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control, 8px);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cp-track-val {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--sail-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-track-label {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-track-aim {
+  font-size: 10px;
+  color: var(--sail-text-muted);
+}
+
+/* -----------------------------------------------------------------------------
+ * Round 12: Predictive Models Panel (Data Tab)
+ * ----------------------------------------------------------------------------- */
+.cp-models-note {
+  font-size: 12px;
+  color: var(--sail-text-muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+.cp-badge-enabled {
+  background: rgba(92, 205, 164, 0.15);
+  color: #5ccda4;
+  border: 1px solid rgba(92, 205, 164, 0.3);
+}
+
+.cp-badge-off {
+  background: rgba(133, 146, 166, 0.15);
+  color: #8592a6;
+  border: 1px solid rgba(133, 146, 166, 0.3);
+}
+
+
