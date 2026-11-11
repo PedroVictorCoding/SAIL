@@ -48,6 +48,12 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/insights", get(insights))
         .route("/grants", get(grants).post(record_grant))
         .route("/grants/:id/retract", post(retract_grant))
+        .route("/prices/status", get(price_status))
+        .route("/prices/refresh", post(price_refresh))
+        .route("/prices/import", post(price_import))
+        .route("/prices", get(prices))
+        .route("/forecasts", get(forecasts))
+        .route("/forecasts/evaluation", get(forecast_evaluation))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
         .with_state(Arc::new(CapitalState { service, authority }))
 }
@@ -392,6 +398,136 @@ async fn sec_status(State(s): State<Arc<CapitalState>>, h: HeaderMap) -> Result<
 }
 
 /// Runs one SEC refresh now. Only SEC is contacted, and only with CIKs of held issuers.
+async fn price_status(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let status = blocking(&s, |svc| svc.price_status()).await?;
+    Ok(no_store(to_json(&status)?))
+}
+
+async fn price_refresh(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let account = match q.account.as_deref().filter(|a| !a.is_empty()) {
+        Some(id) => {
+            let id = id.to_string();
+            Some(blocking(&s, move |svc| svc.resolve_account(Some(&id))).await?)
+        }
+        None => None,
+    };
+    let status = s
+        .service
+        .refresh_prices(account.as_ref())
+        .await
+        .map_err(failure)?;
+    Ok(no_store(to_json(&status)?))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct PriceImportQuery {
+    account: Option<String>,
+    symbol: String,
+    currency: Option<String>,
+    adjustment: Option<String>,
+}
+
+async fn price_import(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<PriceImportQuery>,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let adjustment = match q.adjustment.as_deref().unwrap_or("unknown") {
+        "unadjusted" => sail_capital::market::Adjustment::Unadjusted,
+        "split_adjusted" => sail_capital::market::Adjustment::SplitAdjusted,
+        "total_return" => sail_capital::market::Adjustment::TotalReturn,
+        "unknown" => sail_capital::market::Adjustment::Unknown,
+        _ => {
+            return Err(failure(ServiceError::BadRequest(
+                "adjustment must be unadjusted, split_adjusted, total_return or unknown.".into(),
+            )));
+        }
+    };
+    let result = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref()).ok();
+        svc.import_price_file(
+            account.as_ref(),
+            &q.symbol,
+            &body,
+            q.currency.as_deref(),
+            adjustment,
+            Utc::now(),
+        )
+    })
+    .await?;
+    Ok(no_store(to_json(&result)?))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct PricesQuery {
+    symbol: String,
+    from: Option<chrono::NaiveDate>,
+    to: Option<chrono::NaiveDate>,
+}
+
+async fn prices(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<PricesQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let rows = blocking(&s, move |svc| svc.prices(&q.symbol, q.from, q.to)).await?;
+    Ok(no_store(to_json(&rows)?))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ForecastQuery {
+    account: Option<String>,
+    horizon: Option<u32>,
+    model: Option<sail_capital::forecast::ModelId>,
+}
+
+async fn forecasts(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<ForecastQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let view = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.forecasts(
+            &account,
+            q.horizon.unwrap_or(20),
+            q.model.unwrap_or(sail_capital::forecast::ModelId::NoChange),
+        )
+    })
+    .await?;
+    Ok(no_store(to_json(&view)?))
+}
+
+async fn forecast_evaluation(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let report = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.evaluation(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&report)?))
+}
+
 async fn sec_refresh(
     State(s): State<Arc<CapitalState>>,
     h: HeaderMap,
