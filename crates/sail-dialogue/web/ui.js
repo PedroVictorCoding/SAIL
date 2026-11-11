@@ -545,7 +545,7 @@ const AdaptiveFeedEngine = {
       renderArtifact({ artifact_type: 'image', content: data });
     }
     if (typeof sendAction === 'function') {
-      const sent = sendAction('text', { text: 'Analyze this camera frame.', vision });
+      const sent = sendAction('text', { text: 'Analyze this camera frame.', vision, vision_source: 'camera' });
       if (sent && typeof appendConversationImage === 'function') {
         appendConversationImage('You', data, 'Camera snapshot');
       }
@@ -669,7 +669,7 @@ const AdaptiveFeedEngine = {
       renderArtifact({ artifact_type: 'image', content: data });
     }
     if (typeof sendAction === 'function') {
-      const sent = sendAction('text', { text: 'Analyze this desktop screen.', vision });
+      const sent = sendAction('text', { text: 'Analyze this desktop screen.', vision, vision_source: 'screen' });
       if (sent && typeof appendConversationImage === 'function') {
         appendConversationImage('You', data, 'Screen snapshot');
       }

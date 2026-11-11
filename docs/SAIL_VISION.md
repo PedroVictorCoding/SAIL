@@ -36,6 +36,32 @@ Use the existing SAIL design: compact dark UI, contextual cards, ambient Orb, pr
 - Target the primary host (i5-10400, 32 GB RAM, RX 5500) with measured CPU/RAM/VRAM/disk budgets; protect real-time voice responsiveness and bound expensive work.
 - Support explicit cancellation, resource exhaustion errors, versioned schema evolution, event provenance and least-privilege access. Do not hardcode secrets or bypass approval on retry.
 
+## 6.1 Local image archive and recall (implemented slice)
+
+Camera frames, screen captures and uploaded images are archived under the SAIL data root so
+a later turn can still refer to them:
+
+- `<data>/vision/archive.sqlite3` indexes the metadata.
+- `<data>/vision/images/<id>.jpg|png` holds the bytes; `<id>.json` is a sidecar with the
+  same metadata and labels.
+- Each record stores `id`, `taken_at`, `conversation_id` (voice session), `source`
+  (`camera`/`screen`/`upload`), `origin` (`snapshot`/`attached`), format, dimensions,
+  caption (the user's text or the model's question), an optional local description and
+  searchable labels. Labels are `source:`, `origin:`, `date:` plus lowercase words from the
+  caption and description.
+- The model calls `vision_photos` with `mode=recent` (default: this conversation, last 24
+  hours), `mode=search` (labels/caption/description; `scope=all` for older conversations) or
+  `mode=get` (one image by id). A vision-capable model receives the image itself; a
+  text-only model receives the stored description, generated on demand by the local
+  describer and persisted.
+- Archiving is best effort: a storage failure is logged and a tool reports it, but it never
+  blocks a turn. Files are written atomically with owner-only permissions and nothing in
+  this path uses the network.
+
+This slice lives in `crates/sail-dialogue/src/vision_archive.rs`; it should move to a
+dedicated Vision crate when one exists. It has no automatic retention yet: the owner can
+remove `<data>/vision` to clear it, and the directory is recreated on the next capture.
+
 ## 7. MVP vertical slice
 Analyze a selected local image using real LFM3, expose model/time/source, recover from missing projector and never invent a result.
 
