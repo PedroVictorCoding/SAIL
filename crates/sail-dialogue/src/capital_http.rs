@@ -60,6 +60,8 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/signals", get(signals))
         .route("/signals/models", get(signal_models))
         .route("/signals/refresh", post(signal_refresh))
+        .route("/outlook", get(outlook))
+        .route("/outlook/track-record", get(track_record))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
         .with_state(Arc::new(CapitalState { service, authority }))
 }
@@ -680,4 +682,46 @@ async fn signal_refresh(
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let status = blocking(&s, move |svc| svc.models_status()).await?;
     Ok(no_store(to_json(&status)?))
+}
+
+#[derive(Deserialize)]
+struct OutlookQuery {
+    account: Option<String>,
+    symbol: String,
+    horizon: Option<u32>,
+    cutoff: Option<chrono::NaiveDate>,
+}
+
+async fn outlook(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<OutlookQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let view = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.outlook(&account, &q.symbol, q.horizon.unwrap_or(63), q.cutoff)
+    })
+    .await?;
+    Ok(no_store(to_json(&view)?))
+}
+
+#[derive(Deserialize)]
+struct TrackQuery {
+    account: Option<String>,
+    horizon: Option<u32>,
+}
+
+async fn track_record(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<TrackQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let record = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.track_record(&account, q.horizon.unwrap_or(63))
+    })
+    .await?;
+    Ok(no_store(to_json(&record)?))
 }

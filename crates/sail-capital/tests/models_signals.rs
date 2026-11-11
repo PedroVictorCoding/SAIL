@@ -3,7 +3,11 @@ use async_trait::async_trait;
 use chrono::{Duration, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sail_capital::market::*;
-use sail_capital::models::{self, HelperItem, ModelError, origins, parse_output, specs};
+use sail_capital::models::{
+    self, HelperItem, ModelError, PathOutput, group_paths, origins, outlook_origins, outlook_specs,
+    parse_output, parse_path_output, specs,
+};
+use sail_capital::outlook::ComponentId;
 use sail_capital::service::CapitalService;
 use sail_capital::signals::SignalId;
 use std::sync::Arc;
@@ -143,11 +147,8 @@ async fn a_refresh_stores_new_values_once_and_feeds_the_signal_report() {
     let dir = tempfile::tempdir().unwrap();
     let scripts = tempfile::tempdir().unwrap();
     fake_helpers(scripts.path());
-    // SAFETY: only this test in this binary reads these variables.
+    // SAFETY: only this test in this binary reads this variable.
     unsafe {
-        std::env::set_var("SAIL_SIGNALS_PYTHON", "python3");
-        std::env::set_var("SAIL_SIGNALS_SCRIPTS", scripts.path());
-        std::env::set_var("SAIL_SIGNALS_CACHE", dir.path().join("cache"));
         std::env::set_var("SAIL_TEST_SECRET", "x");
     }
     let mut chronos = specs().into_iter().find(|s| s.name == "chronos").unwrap();
@@ -156,7 +157,12 @@ async fn a_refresh_stores_new_values_once_and_feeds_the_signal_report() {
     let svc = CapitalService::open(dir.path())
         .unwrap()
         .with_prices(Arc::new(LongPrices), true)
-        .with_models(vec![chronos.clone(), yolo]);
+        .with_models(vec![chronos.clone(), yolo])
+        .with_helper_paths(
+            "python3",
+            scripts.path().to_str().unwrap(),
+            dir.path().join("cache").to_str().unwrap(),
+        );
     let batch = svc
         .import_xtb(None, "export.xlsx", FILE, None, None, Utc::now())
         .unwrap();
@@ -217,4 +223,125 @@ async fn a_missing_interpreter_is_a_plain_error() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("scripts/signals/setup.sh"));
+}
+
+#[test]
+fn path_rows_group_into_sorted_non_crossing_paths() {
+    let out = parse_path_output(
+        "gbdt",
+        br#"{"model_version":"v","paths":[
+            ["sym:A","2025-03-03",21,10,[0.0,-0.1,0.02,0.05,0.1]],
+            ["sym:A","2025-03-03",21,5,[-0.05,-0.02,0.0,0.02,0.05]],
+            ["sym:A","2025-03-03",21,30,[-0.05,-0.02,0.0,0.02,0.05]],
+            ["sym:A","2025-03-03",63,63,[-0.2,-0.1,0.0,0.1,0.2]]],"skipped":1}"#,
+    )
+    .unwrap();
+    // The step past the horizon is dropped.
+    assert_eq!(out.paths.len(), 3);
+    let paths = group_paths(ComponentId::Gbdt, &out);
+    assert_eq!(paths.len(), 2);
+    let p21 = paths.iter().find(|p| p.horizon == 21).unwrap();
+    assert_eq!(p21.path.steps, vec![5, 10]);
+    // Quantiles that crossed are sorted.
+    assert_eq!(p21.path.values[1], [-0.1, 0.0, 0.02, 0.05, 0.1]);
+    assert!(matches!(
+        parse_path_output(
+            "chronos",
+            br#"{"error":"Chronos-Bolt answers horizons up to 64 sessions only"}"#
+        ),
+        Err(ModelError::Failed(..))
+    ));
+    let _ = PathOutput {
+        model_version: String::new(),
+        paths: vec![],
+        skipped: 0,
+        notes: vec![],
+    };
+}
+
+#[test]
+fn outlook_origins_stay_within_six_years_and_after_the_model_date() {
+    let s = sessions(3000);
+    let all = outlook_origins(&s, NaiveDate::MIN);
+    let latest = *s.last().unwrap();
+    assert_eq!(all.last(), Some(&latest));
+    assert!(all.first().unwrap() >= &(latest - Duration::days(models::OUTLOOK_HISTORY_DAYS)));
+    let chronos = outlook_specs()
+        .into_iter()
+        .find(|s| s.name == "chronos")
+        .unwrap();
+    assert_eq!(chronos.horizons, vec![21, 63]);
+    assert!(
+        outlook_origins(&s, chronos.evaluate_from)
+            .iter()
+            .all(|d| *d >= chronos.evaluate_from)
+    );
+}
+
+#[tokio::test]
+async fn outlook_paths_are_stored_once_and_served() {
+    let dir = tempfile::tempdir().unwrap();
+    let scripts = tempfile::tempdir().unwrap();
+    // A fake gbdt helper: one horizon-only row per origin and horizon.
+    std::fs::write(
+        scripts.path().join("gbdt_outlook.py"),
+        r#"import json, sys
+req = json.load(sys.stdin)
+rows = []
+for item in req["items"]:
+    for origin in item["origins"]:
+        for h in req["horizons"]:
+            assert str(h) in req["steps"]
+            rows.append([item["key"], origin, h, h, [-0.1, -0.05, 0.0, 0.05, 0.1]])
+json.dump({"model_version": "fake-gbdt@1", "paths": rows}, sys.stdout)
+"#,
+    )
+    .unwrap();
+    let gbdt = outlook_specs()
+        .into_iter()
+        .find(|s| s.name == "gbdt")
+        .unwrap();
+    let svc = CapitalService::open(dir.path())
+        .unwrap()
+        .with_prices(Arc::new(LongPrices), true)
+        .with_outlook_models(vec![gbdt])
+        .with_helper_paths(
+            "python3",
+            scripts.path().to_str().unwrap(),
+            dir.path().join("cache").to_str().unwrap(),
+        );
+    let account = svc
+        .import_xtb(None, "export.xlsx", FILE, None, None, Utc::now())
+        .unwrap()
+        .account;
+    svc.refresh_prices(Some(&account)).await.unwrap();
+    let status = svc.refresh_model_signals(&account).await.unwrap();
+    let g = status
+        .outlook
+        .iter()
+        .find(|m| m.spec.name == "gbdt")
+        .unwrap();
+    let run = g.last_run.as_ref().unwrap();
+    assert_eq!(run.error, None, "{run:?}");
+    assert!(run.added > 0);
+    let (version, instruments, stored) = g.stored.clone().unwrap();
+    assert_eq!(version, "fake-gbdt@1");
+    assert!(instruments >= 1);
+    assert_eq!(stored, run.added);
+    let again = svc.refresh_model_signals(&account).await.unwrap();
+    let g2 = again
+        .outlook
+        .iter()
+        .find(|m| m.spec.name == "gbdt")
+        .unwrap();
+    assert_eq!(g2.last_run.as_ref().unwrap().requested, 0);
+
+    // The route-level checks: a horizon outside the list and a symbol not held.
+    assert!(svc.outlook(&account, "AAPL.US", 30, None).is_err());
+    assert!(svc.outlook(&account, "NOPE.US", 63, None).is_err());
+    let view = svc.outlook(&account, "aapl.us", 63, None).unwrap();
+    assert_eq!(view.outlook.horizon, 63);
+    assert!(view.history.len() >= 63);
+    assert_eq!(view.sessions.len(), 400);
+    assert!(svc.track_record(&account, 21).is_ok());
 }
