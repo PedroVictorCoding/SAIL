@@ -177,3 +177,23 @@ pub fn parse_price_file(
     let _ = (bytes, symbol, currency, adjustment);
     Err(PriceSourceError::Malformed("not implemented".into()))
 }
+
+/// A source that never fetches: what SAIL uses until the owner opts in.
+pub struct DisabledSource;
+
+#[async_trait::async_trait]
+impl PriceSource for DisabledSource {
+    fn source_id(&self) -> &str {
+        "none"
+    }
+
+    async fn daily(&self, _symbol: &str) -> Result<PriceSeries, PriceSourceError> {
+        Err(PriceSourceError::NotConfigured)
+    }
+}
+
+/// The source the owner chose with `SAIL_PRICES_SOURCE`, and whether fetching is on.
+/// Until the Stooq client lands this is always the disabled source.
+pub fn source_from_env() -> (std::sync::Arc<dyn PriceSource>, bool) {
+    (std::sync::Arc::new(DisabledSource), false)
+}
