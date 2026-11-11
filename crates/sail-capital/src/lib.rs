@@ -8,9 +8,11 @@
 pub mod contracts;
 pub mod evidence;
 pub mod exposure;
+pub mod forecast;
 pub mod import;
 pub mod insights;
 pub mod ledger;
+pub mod market;
 pub mod sec;
 pub mod service;
 pub mod store;
