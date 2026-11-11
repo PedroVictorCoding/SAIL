@@ -390,6 +390,7 @@ pub fn evaluate(series: &[CloseSeries<'_>], config: &EvalConfig) -> EvalReport {
     let instruments: Vec<String> = prepared.iter().map(|(symbol, _)| symbol.clone()).collect();
     let step = config.step_sessions.max(1);
     let mut origin_range: Option<(NaiveDate, NaiveDate)> = None;
+    let mut sparse_origins = 0usize;
     let mut scores: Vec<ModelScore> = Vec::new();
     let mut rank_ic: Vec<RankIc> = Vec::new();
 
@@ -404,6 +405,15 @@ pub fn evaluate(series: &[CloseSeries<'_>], config: &EvalConfig) -> EvalReport {
         for (instrument_index, (_, cut)) in prepared.iter().enumerate() {
             let mut origin = config.min_train;
             while origin + horizon_sessions < cut.closes.len() {
+                let outcome_days =
+                    (cut.closes[origin + horizon_sessions].0 - cut.closes[origin].0).num_days();
+                if outcome_days > model::max_outcome_days(horizon_sessions)
+                    || model::sparse_reason(cut, origin).is_some()
+                {
+                    sparse_origins += 1;
+                    origin += step;
+                    continue;
+                }
                 for (model_index, model) in ModelId::ALL.iter().enumerate() {
                     let Ok(numbers) = model::model_forecast(cut, origin, *model, horizon, false)
                     else {
@@ -573,7 +583,16 @@ pub fn evaluate(series: &[CloseSeries<'_>], config: &EvalConfig) -> EvalReport {
         origins: origin_range,
         scores,
         rank_ic,
-        notes: evaluation_notes(config, step, longest_horizon, &prepared, origin_range),
+        notes: {
+            let mut notes =
+                evaluation_notes(config, step, longest_horizon, &prepared, origin_range);
+            if sparse_origins > 0 {
+                notes.push(format!(
+                    "{sparse_origins} forecast origins were not scored because the price source is missing trading days around them."
+                ));
+            }
+            notes
+        },
     }
 }
 

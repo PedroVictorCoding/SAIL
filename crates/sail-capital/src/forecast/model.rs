@@ -23,6 +23,30 @@ const EMPIRICAL_LOOKBACK_SESSIONS: usize = 756;
 /// Fewest non-overlapping h-session returns the empirical model accepts.
 const MIN_EMPIRICAL_SAMPLES: usize = 20;
 
+/// Most calendar days the last [`VOL_WINDOW`] daily returns may span. A year of sessions
+/// with holidays spans about 365 days; a longer span means the source is missing trading
+/// days, so a "daily" return there covers weeks and the ranges would be mislabelled.
+pub(crate) const MAX_WINDOW_DAYS: i64 = 400;
+
+/// Most calendar days an h-session outcome may span: about 1.45 days a session plus a week
+/// of slack for holidays.
+pub(crate) fn max_outcome_days(horizon: usize) -> i64 {
+    (horizon as f64 * 1.45).ceil() as i64 + 7
+}
+
+/// Why the prices before `origin` are too sparse to forecast from, if they are.
+pub(crate) fn sparse_reason(series: &PreparedSeries, origin: usize) -> Option<String> {
+    if origin < VOL_WINDOW || origin >= series.closes.len() {
+        return None;
+    }
+    let days = (series.closes[origin].0 - series.closes[origin - VOL_WINDOW].0).num_days();
+    (days > MAX_WINDOW_DAYS).then(|| {
+        format!(
+            "the price source is missing many trading days: the last {VOL_WINDOW} prices span {days} days instead of about a year"
+        )
+    })
+}
+
 /// One series, converted once and enriched with the running sums the models reuse.
 ///
 /// `log_closes[i]` is `ln(close_i)`; `returns[k]` is `log_closes[k+1] - log_closes[k]`.
@@ -137,6 +161,9 @@ pub(crate) fn model_forecast(
 ) -> Result<ModelForecast, String> {
     if horizon == 0 {
         return Err("the horizon must be at least one session".into());
+    }
+    if let Some(reason) = sparse_reason(series, origin) {
+        return Err(reason);
     }
     match model {
         ModelId::EmpiricalHorizon => empirical_forecast(series, origin, horizon, verified),

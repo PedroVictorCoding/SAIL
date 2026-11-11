@@ -3,7 +3,7 @@
 //! the time SAIL first had it, never a prediction.
 //!
 //! The adapters (Antigravity's slice) are:
-//! - an opt-in daily-bar client. Fetching sends the held symbols to the provider, so it
+//! - opt-in daily-bar clients (`yahoo`, through the yfinance helper; `stooq`). Fetching sends the held symbols to the provider, so it
 //!   is off unless the owner sets `SAIL_PRICES_SOURCE`.
 //! - a parser for price files the owner downloads and uploads.
 //!
@@ -115,7 +115,7 @@ pub struct MarketObservation {
 pub enum PriceSourceError {
     /// The owner hasn't opted in (`SAIL_PRICES_SOURCE` unset).
     #[error(
-        "Price fetching is off. It sends held symbols to the provider; set SAIL_PRICES_SOURCE=stooq to allow it, or upload price files instead"
+        "Price fetching is off. It sends held symbols to the provider; set SAIL_PRICES_SOURCE=yfinance to allow it, or upload price files instead"
     )]
     NotConfigured,
     /// The source has no such symbol, or SAIL can't map the broker symbol to it.
@@ -144,6 +144,19 @@ pub enum PriceSourceError {
     Network(String),
 }
 
+/// A number from a machine-written source (a dot decimal, optional exponent), never a
+/// locale guess: `54.123` is fifty-four, not fifty-four thousand.
+pub(crate) fn machine_decimal(text: &str) -> Option<Decimal> {
+    let text = text.trim();
+    if text.is_empty() || text.len() > 40 {
+        return None;
+    }
+    use std::str::FromStr;
+    Decimal::from_str(text)
+        .ok()
+        .or_else(|| Decimal::from_scientific(text).ok())
+}
+
 /// A daily price source. The real one lives in `crate::market::stooq`; tests use fakes.
 #[async_trait::async_trait]
 pub trait PriceSource: Send + Sync {
@@ -155,9 +168,11 @@ pub trait PriceSource: Send + Sync {
 
 pub mod file;
 pub mod stooq;
+pub mod yahoo;
 
 pub use file::parse_price_file;
 pub use stooq::{StooqClient, parse_stooq_csv, stooq_symbol};
+pub use yahoo::{YahooSource, parse_yfinance_json, yahoo_symbol};
 
 /// A source that never fetches: what SAIL uses until the owner opts in.
 pub struct DisabledSource;
@@ -173,13 +188,17 @@ impl PriceSource for DisabledSource {
     }
 }
 
-/// The source the owner chose with `SAIL_PRICES_SOURCE`, and whether fetching is on.
-/// Returns StooqClient when `SAIL_PRICES_SOURCE=stooq`, and DisabledSource otherwise.
+/// The source the owner chose with `SAIL_PRICES_SOURCE`, and whether fetching is on:
+/// `yfinance` runs the yfinance helper, `stooq` the Stooq client (which Stooq's browser
+/// check now blocks), anything else leaves fetching off.
 pub fn source_from_env() -> (std::sync::Arc<dyn PriceSource>, bool) {
-    let client = stooq::StooqClient::from_env();
-    if client.is_configured() {
-        (std::sync::Arc::new(client), true)
-    } else {
-        (std::sync::Arc::new(DisabledSource), false)
+    let chosen = std::env::var("SAIL_PRICES_SOURCE")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    match chosen.as_str() {
+        "yfinance" | "yahoo" => (std::sync::Arc::new(yahoo::YahooSource::from_env()), true),
+        "stooq" => (std::sync::Arc::new(stooq::StooqClient::from_env()), true),
+        _ => (std::sync::Arc::new(DisabledSource), false),
     }
 }

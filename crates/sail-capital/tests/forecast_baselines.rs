@@ -452,3 +452,51 @@ fn short_instruments_are_skipped_with_a_reason() {
             .any(|note| note.contains("before spreads, fees, taxes and FX"))
     );
 }
+
+#[test]
+fn sparse_prices_are_insufficient_evidence_and_not_scored() {
+    use chrono::Duration;
+    use sail_capital::forecast::{
+        CalibrationState, CloseSeries, EvalConfig, ForecastStatus, ModelId, evaluate, forecast,
+    };
+    // 400 closes a week apart: "daily" returns that really cover weeks.
+    let start = chrono::NaiveDate::from_ymd_opt(2015, 1, 5).unwrap();
+    let closes: Vec<(chrono::NaiveDate, rust_decimal::Decimal)> = (0..400)
+        .map(|i| {
+            let price = 100.0 * (1.0 + 0.01 * ((i % 7) as f64 - 3.0));
+            (
+                start + Duration::days(7 * i as i64),
+                rust_decimal::Decimal::from_f64_retain(price)
+                    .unwrap()
+                    .round_dp(4),
+            )
+        })
+        .collect();
+    let series = CloseSeries {
+        instrument_key: "sym:GAPS.DE",
+        symbol: "GAPS.DE",
+        closes: &closes,
+    };
+    let unverified = CalibrationState {
+        verified: false,
+        cohort: None,
+    };
+    for model in ModelId::ALL {
+        let f = forecast(&series, model, 20, unverified.clone());
+        match &f.status {
+            ForecastStatus::InsufficientEvidence { reason } => {
+                assert!(reason.contains("missing many trading days"), "{reason}")
+            }
+            other => panic!("{model:?} forecast from sparse prices: {other:?}"),
+        }
+        assert!(f.sigma_log_return.is_none());
+    }
+    let report = evaluate(&[series], &EvalConfig::default());
+    assert!(report.scores.iter().all(|s| s.forecasts == 0) || report.scores.is_empty());
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("missing trading days"))
+    );
+}

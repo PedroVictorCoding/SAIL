@@ -65,6 +65,22 @@ fn detect_columns(headers: &csv::StringRecord) -> Option<Columns> {
     })
 }
 
+/// A number in an owner file. In a comma-separated file an unquoted field can't hold a
+/// comma, so a lone `.` is the decimal point (`54.123` is fifty-four, as Yahoo and Stooq
+/// downloads write it). Anything else goes through the report parser, which refuses
+/// ambiguous text rather than guessing.
+fn file_number(text: &str, delimiter: u8) -> Option<Decimal> {
+    let t = text.trim();
+    if delimiter == b','
+        && !t.contains(',')
+        && t.matches('.').count() <= 1
+        && let Some(value) = super::machine_decimal(t)
+    {
+        return Some(value);
+    }
+    crate::contracts::parse_decimal_text(t)
+}
+
 /// Reads an owner-uploaded price file: CSV with a header row naming at least a date and
 /// a close column (English or Portuguese), comma or semicolon separated. `currency` and
 /// `adjustment` are what the owner declares for the file.
@@ -144,7 +160,7 @@ pub fn parse_price_file(
             skipped += 1;
             continue;
         };
-        let Some(close) = crate::contracts::parse_decimal_text(close_str) else {
+        let Some(close) = file_number(close_str, delimiter) else {
             skipped += 1;
             continue;
         };
@@ -156,19 +172,19 @@ pub fn parse_price_file(
         let open = cols
             .open
             .and_then(|i| record.get(i))
-            .and_then(crate::contracts::parse_decimal_text);
+            .and_then(|t| file_number(t, delimiter));
         let high = cols
             .high
             .and_then(|i| record.get(i))
-            .and_then(crate::contracts::parse_decimal_text);
+            .and_then(|t| file_number(t, delimiter));
         let low = cols
             .low
             .and_then(|i| record.get(i))
-            .and_then(crate::contracts::parse_decimal_text);
+            .and_then(|t| file_number(t, delimiter));
         let volume = cols
             .volume
             .and_then(|i| record.get(i))
-            .and_then(crate::contracts::parse_decimal_text);
+            .and_then(|t| file_number(t, delimiter));
 
         let bar = PriceBar {
             session,

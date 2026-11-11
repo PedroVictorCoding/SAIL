@@ -154,7 +154,7 @@ pub fn parse_stooq_csv(
             skipped += 1;
             continue;
         };
-        let Some(close) = crate::contracts::parse_decimal_text(close_str) else {
+        let Some(close) = super::machine_decimal(close_str) else {
             skipped += 1;
             continue;
         };
@@ -165,16 +165,16 @@ pub fn parse_stooq_csv(
 
         let open = open_col
             .and_then(|i| record.get(i))
-            .and_then(crate::contracts::parse_decimal_text);
+            .and_then(super::machine_decimal);
         let high = high_col
             .and_then(|i| record.get(i))
-            .and_then(crate::contracts::parse_decimal_text);
+            .and_then(super::machine_decimal);
         let low = low_col
             .and_then(|i| record.get(i))
-            .and_then(crate::contracts::parse_decimal_text);
+            .and_then(super::machine_decimal);
         let volume = volume_col
             .and_then(|i| record.get(i))
-            .and_then(crate::contracts::parse_decimal_text);
+            .and_then(super::machine_decimal);
 
         let bar = PriceBar {
             session,

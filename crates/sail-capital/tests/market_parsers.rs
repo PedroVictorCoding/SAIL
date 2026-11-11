@@ -193,3 +193,22 @@ fn stooq_bot_check_page_is_blocked_not_malformed() {
     let err = sail_capital::market::parse_stooq_csv(page, "AAPL.US", "aapl.us").unwrap_err();
     assert_eq!(err, sail_capital::market::PriceSourceError::Blocked);
 }
+
+#[test]
+fn comma_price_files_read_three_decimals_as_a_fraction() {
+    let csv = b"Date,Open,High,Low,Close,Adj Close,Volume\n2026-11-10,54.123,54.5,53.125,54.250,54.250,1200\n2026-11-11,54.3,54.9,54.1,54.875,54.875,900\n";
+    let series = sail_capital::market::parse_price_file(
+        csv,
+        "MBG.DE",
+        None,
+        sail_capital::market::Adjustment::SplitAdjusted,
+    )
+    .unwrap();
+    assert_eq!(series.bars.len(), 2);
+    assert_eq!(series.bars[0].close.to_string(), "54.250");
+    assert_eq!(
+        series.bars[0].open.map(|d| d.to_string()).as_deref(),
+        Some("54.123")
+    );
+    assert_eq!(series.bars[1].close.to_string(), "54.875");
+}
