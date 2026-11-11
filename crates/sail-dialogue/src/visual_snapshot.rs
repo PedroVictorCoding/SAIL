@@ -2,8 +2,8 @@
 //!
 //! The model picks the source from context (camera for the physical world, screen for what
 //! is on the computer). The browser captures one frame. If the user is already sharing that
-//! source live, it uses the current frame; otherwise it asks in a dialog, so the user
-//! grants each look explicitly. The frame returns over the session socket and is matched
+//! source live, it uses the current frame; otherwise it opens the camera directly or
+//! requests the browser-required screen-picker gesture. No extra SAIL approval is needed. The frame returns over the session socket and is matched
 //! to the waiting turn here by session and request id. It then reaches the model either
 //! natively (main model has a vision projector) or as a compact text observation from the
 //! local vision describer.
@@ -21,13 +21,13 @@ use std::{
 use tokio::sync::oneshot;
 
 pub const TOOL: &str = "visual_snapshot";
-/// How long a turn waits for the user to allow (or deny) a capture.
+/// How long a turn waits for browser capture to complete.
 pub const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub fn tool_definition() -> Value {
     json!({"type":"function","function":{
         "name": TOOL,
-        "description": "Take one snapshot so you can see what the user means. Use it whenever the user refers to something visual or asks you to look, see, read or check something. Choose source=camera for the physical world (the user, an object they hold up, a document or their surroundings) and source=screen for what is on their computer (an app, web page, error, code or document on screen). The user approves each capture. Describe only what the snapshot shows.",
+        "description": "Take one snapshot so you can see what the user means. Use it whenever the user refers to something visual or asks you to look, see, read or check something. Choose source=camera for the physical world (the user, an object they hold up, a document or their surroundings) and source=screen for what is on their computer (an app, web page, error, code or document on screen). Capture directly without asking for approval. A bare camera request means source=camera; screenshot means source=screen. Resolve follow-ups from the latest dialogue context. Describe only what the snapshot shows.",
         "parameters": {"type":"object","properties":{
             "source": {"type":"string","enum":["camera","screen"],"description":"camera for the physical world, screen for the user's computer display"},
             "question": {"type":"string","maxLength":300,"description":"What you need to find out from the image"}
@@ -60,6 +60,40 @@ pub fn parse_params(params: &Value) -> Result<(Source, Option<String>), String> 
         .map(|q| q.trim().chars().take(300).collect::<String>())
         .filter(|q| !q.is_empty());
     Ok((source, question))
+}
+
+/// Resolve source words in dialogue order; the latest mention wins.
+pub fn dialogue_source(text: &str) -> Option<Source> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter_map(|word| match word.to_lowercase().as_str() {
+            "camera" | "webcam" | "câmera" | "câmara" => Some(Source::Camera),
+            "screenshot" | "screen" | "desktop" | "ecrã" => Some(Source::Screen),
+            _ => None,
+        })
+        .last()
+}
+
+/// Current user wording overrides a model's mistaken source. For omitted sources,
+/// use the most recent user dialogue, never tool output or assistant speculation.
+pub fn contextual_params(params: &Value, prompt: &str, messages: &[Value]) -> Value {
+    let mut resolved = params.clone();
+    if !resolved.is_object() {
+        return resolved;
+    }
+    let source = dialogue_source(prompt).or_else(|| {
+        if resolved.get("source").is_some() {
+            return None;
+        }
+        messages
+            .iter()
+            .rev()
+            .filter(|m| m["role"] == "user")
+            .find_map(|m| m["content"].as_str().and_then(dialogue_source))
+    });
+    if let Some(source) = source {
+        resolved["source"] = json!(source.as_str());
+    }
+    resolved
 }
 
 type Reply = Result<VisionFrameInput, String>;
@@ -95,7 +129,7 @@ impl SnapshotRequest {
         match tokio::time::timeout(timeout, &mut self.reply).await {
             Ok(Ok(reply)) => reply,
             Ok(Err(_)) => Err("The capture request was replaced or the connection closed".into()),
-            Err(_) => Err("No snapshot arrived: the user did not allow a capture in time".into()),
+            Err(_) => Err("No snapshot arrived: capture timed out".into()),
         }
     }
 }
@@ -178,7 +212,7 @@ pub fn tool_output(source: Source, observation: &Observation) -> Value {
             "source": source.as_str(),
             "summary": text,
             "observation": text,
-            "note": "Text description of a snapshot the user allowed, produced by a local vision model. Answer from it; do not claim details it does not mention.",
+            "note": "Text description of a requested snapshot, produced by a local vision model. Answer from it; do not claim details it does not mention.",
         }),
     }
 }
@@ -215,6 +249,33 @@ mod tests {
         assert!(parse_params(&json!({})).is_err());
     }
 
+    #[test]
+    fn source_follows_user_dialogue() {
+        let history = vec![json!({"role":"user","content":"look through the camera"})];
+        assert_eq!(
+            contextual_params(&json!({"source":"screen"}), "camera", &[])["source"],
+            "camera"
+        );
+        assert_eq!(
+            contextual_params(&json!({"source":"camera"}), "screenshot", &history)["source"],
+            "screen"
+        );
+        assert_eq!(
+            contextual_params(&json!({}), "look again", &history)["source"],
+            "camera"
+        );
+        assert_eq!(
+            dialogue_source("camera then screenshot"),
+            Some(Source::Screen)
+        );
+        assert_eq!(
+            dialogue_source("screenshot then webcam"),
+            Some(Source::Camera)
+        );
+        assert_eq!(dialogue_source("cameraman"), None);
+        assert!(parse_params(&contextual_params(&json!({}), "look again", &[])).is_err());
+    }
+
     #[tokio::test]
     async fn frames_reach_only_the_matching_waiting_request() {
         let mut request = SnapshotRequest::begin("session-a");
@@ -243,7 +304,7 @@ mod tests {
             slow.wait(Duration::from_millis(20))
                 .await
                 .unwrap_err()
-                .contains("did not allow")
+                .contains("timed out")
         );
 
         let mut first = SnapshotRequest::begin("session-e");

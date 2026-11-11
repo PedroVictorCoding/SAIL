@@ -34,20 +34,31 @@ eval(source.slice(start,end)+`
  check(chatImages.length===2 && chatImages[1].caption==='Camera snapshot','live camera snapshot also shown in the conversation');
  window.AdaptiveFeedEngine.cameraActive=false;
 
- // Permission denied: the dialog stays open to retry; nothing is sent yet.
+ // Browser denial is reported immediately, without another approval or retry.
  deny=true; requestVisualCapture({request_id:9,source:'screen'});
  await captureRequestedVisual('screen');
- check(sent.length===2 && errors.length===1 && node('captureDialog').open,'denial keeps the dialog');
+ check(sent.length===3 && sent[2].error && errors.length===1 && !node('captureDialog').open,'denial returned to waiting turn');
  check(chatImages.length===2,'denied capture shows nothing in the conversation');
  // Cancel tells the waiting turn the user declined.
+ requestVisualCapture({request_id:11,source:'screen'});
  declineVisualCapture();
- check(!node('captureDialog').open && sent[2].request_id===9 && /declined/.test(sent[2].error),'decline reported');
+ check(!node('captureDialog').open && sent[3].request_id===11 && /declined/.test(sent[3].error),'decline reported');
  check(chatImages.length===2,'decline shows nothing in the conversation');
 
  // A turn ending (cancelVisualCapture) withdraws silently.
  deny=false; requestVisualCapture({request_id:10,source:'camera'}); cancelVisualCapture();
- check(!node('captureDialog').open && sent.length===3,'silent withdrawal');
+ check(!node('captureDialog').open && sent.length===4,'silent withdrawal');
  check(chatImages.length===2,'silent withdrawal shows nothing in the conversation');
+ // Flush the cancelled asynchronous camera acquisition: no stale image, stream stopped.
+ for(let i=0;i<12;i++) await Promise.resolve();
+ check(sent.length===4 && stopped===2,'cancelled camera stream stopped without sending');
+ requestVisualCapture({request_id:12,source:'camera'});
+ check(!node('captureDialog').open,'camera starts without SAIL approval');
+ for(let i=0;i<12;i++) await Promise.resolve();
+ check(sent[4].request_id===12 && sent[4].image && stopped===3,'automatic one-shot camera delivered and stopped');
+ window.AdaptiveFeedEngine.desktopActive=true;
+ requestVisualCapture({request_id:13,source:'screen'});
+ check(sent[5].request_id===13 && !node('captureDialog').open,'live screen captured immediately');
  print('Snapshot request, live-frame, consent, denial, decline, chat preview and cleanup checks passed');
 })().catch(e=>{printerr(e.stack||e);imports.system.exit(1);}).finally(()=>loop.quit());`);
 loop.run();
