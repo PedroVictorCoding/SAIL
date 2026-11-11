@@ -3,7 +3,8 @@
 //! out-of-sample IC check as the price signals before they get any weight.
 //!
 //! Each model is opt-in through `SAIL_MODEL_SIGNALS` (a comma list, e.g.
-//! `chronos,yolo`). Its helper runs with `SAIL_SIGNALS_PYTHON` (default
+//! `chronos,yolo`); `run.sh` sets the full local list by default, and an empty value
+//! keeps every helper off. Its helper runs with `SAIL_SIGNALS_PYTHON` (default
 //! [`DEFAULT_PYTHON`], made by `scripts/signals/setup.sh`) from `SAIL_SIGNALS_SCRIPTS`
 //! (default [`DEFAULT_SCRIPTS`]). Helpers read prices on stdin and write values on stdout.
 //! They download their model weights once from Hugging Face. No holdings, amounts or

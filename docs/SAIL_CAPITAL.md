@@ -416,9 +416,10 @@ prediction surface rather than two competing ones.
 
 **Setup.** Run `scripts/signals/setup.sh` once. It installs CPU-only PyTorch, Chronos,
 Ultralytics, mplfinance and scikit-learn into `/srv/sail-data/venvs/signals` (about
-1.8 GB). Then set `SAIL_MODEL_SIGNALS=chronos,yolo,yolo_trend,gbdt` and press **Run
-models** in Data. The first run downloads the weights and scores years of weekly charts,
-which can take an hour. Later runs only add new weeks.
+1.8 GB). `./run.sh` enables `chronos,yolo,yolo_trend,gbdt` by default, then press **Run
+models** in Data. Set `SAIL_MODEL_SIGNALS=` (empty) to keep the helpers off, or use a
+comma list to choose a subset. The first run downloads the weights and scores years of
+weekly charts, which can take an hour. Later runs only add new weeks.
 
 `SAIL_SIGNALS_PYTHON`, `SAIL_SIGNALS_SCRIPTS` and `SAIL_SIGNALS_CACHE` override the
 defaults. Helpers receive instrument keys and prices only, never amounts or names.
