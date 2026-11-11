@@ -304,6 +304,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-v
 .message-user { align-self:stretch; border-bottom-right-radius:7px; background:linear-gradient(130deg,color-mix(in srgb,var(--ambient-one) 7%,#1b1e2a),#171a23) }
 .message-assistant { align-self:stretch; border-bottom-left-radius:7px; background:linear-gradient(130deg,#1a1d27,#151821) }
 .message-label { display:block; margin-bottom:5px; color:#a0a5b5; font-size:10px; letter-spacing:.09em; text-transform:uppercase }
+.message-image { padding:10px 10px 8px }
+.message-media { display:grid; gap:6px; white-space:normal }
+.message-image-preview { display:block; width:100%; max-width:100%; height:auto; border-radius:12px; border:1px solid #ffffff14; background:#0b0d13 }
+.message-image-note { color:var(--muted); font-size:11px; line-height:1.35 }
 /* Rendered Markdown in assistant replies: calm, flat reading surface (DESIGN.md). */
 .message-body.markdown { white-space:normal }
 .markdown > :first-child { margin-top:0 }
