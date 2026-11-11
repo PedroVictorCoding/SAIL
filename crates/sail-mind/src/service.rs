@@ -92,7 +92,7 @@ impl MindService {
         scheduler: Arc<ResourceScheduler>,
     ) -> Result<Self> {
         validate_limits(&limits)?;
-        if backends.is_empty() {
+        if backends.first().is_none_or(|backend| backend.is_external()) {
             return Err(InferenceError::new(
                 ErrorCode::InvalidConfiguration,
                 "At least one explicit local model backend is required",

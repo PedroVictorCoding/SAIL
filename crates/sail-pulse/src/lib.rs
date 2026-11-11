@@ -95,7 +95,11 @@ impl ReminderStatus {
             "due" => Self::Due,
             "delivered" => Self::Delivered,
             "cancelled" => Self::Cancelled,
-            other => return Err(PulseError::Storage(format!("unknown reminder state {other}"))),
+            other => {
+                return Err(PulseError::Storage(format!(
+                    "unknown reminder state {other}"
+                )));
+            }
         })
     }
 
@@ -352,9 +356,8 @@ impl Pulse {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                PulseError::Storage(format!("create {}: {e}", parent.display()))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| PulseError::Storage(format!("create {}: {e}", parent.display())))?;
         }
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
@@ -521,7 +524,10 @@ impl Pulse {
             "SELECT * FROM reminders WHERE status IN ('pending', 'due')
              ORDER BY due_at ASC LIMIT ?1",
         )?;
-        let rows = statement.query_map(params![limit.clamp(1, DEFAULT_LIST_LIMIT) as i64], row_to_reminder)?;
+        let rows = statement.query_map(
+            params![limit.clamp(1, DEFAULT_LIST_LIMIT) as i64],
+            row_to_reminder,
+        )?;
         collect_reminders(rows)
     }
 
@@ -572,10 +578,9 @@ impl Pulse {
                  ORDER BY due_at ASC LIMIT ?2",
             )?;
             statement
-                .query_map(
-                    params![format_ts(now), MAX_FIRE_PER_TICK as i64],
-                    |row| row.get::<_, String>(0),
-                )?
+                .query_map(params![format_ts(now), MAX_FIRE_PER_TICK as i64], |row| {
+                    row.get::<_, String>(0)
+                })?
                 .collect::<std::result::Result<Vec<_>, _>>()?
         };
         for id in ids {
@@ -773,7 +778,10 @@ fn row_to_reminder(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Reminder>
 }
 
 fn collect_reminders(
-    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<Result<Reminder>>>,
+    rows: rusqlite::MappedRows<
+        '_,
+        impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<Result<Reminder>>,
+    >,
 ) -> Result<Vec<Reminder>> {
     let mut reminders = Vec::new();
     for row in rows {
@@ -809,5 +817,3 @@ fn reminder_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Reminde
     })();
     Ok(result)
 }
-
-

@@ -15,7 +15,7 @@ What works end to end today (merged and tested), as opposed to specified:
 | Area | Real today | Main gap |
 | --- | --- | --- |
 | Voice (Dialogue) | Local VAD/STT/TTS chain, barge-in, speak-while-searching, optional on-device speech with measured gate | Speaker identity (#198 open), Android client |
-| Mind | One resident local model, GPU offload, voice-first admission on real memory pressure | External providers (P1) |
+| Mind | One resident local model, GPU offload, voice-first admission on real memory pressure; opt-in external API library/demo with guarded egress and quota receipts | P1 CLI adapters, Arena egress composition, Forge escalation and daemon/UI integration |
 | Memory (Arena) | Arena Learn is Arena's main product ([spec](SAIL_ARENA_LEARN.md), #215): probe → plan → teach/check, separate practice, a persistent proposition/chain learning graph, bounded gated retrieval and note imports, with tested replay and HTTP acceptance. Memory substrate: structured knowledge, validated change sets, scoped retrieval, consent, retention, owner views | Real local-model multi-topic acceptance; predicated device-fabric work (#293) |
 | Guardian | Grants, approvals, vault, nono/bwrap sandboxes, adversarially tested Forge sandbox | Dedicated runner verified end to end (#43); durable audit CI (#33) |
 | Forge | Local solver, sandboxed builds, gates, mutation gate, failure memory, nightly runner, draft PRs, pauses for voice | Issue decomposition (#118), escalation to external models (P1) |

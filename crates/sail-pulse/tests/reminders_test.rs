@@ -1,7 +1,5 @@
 use chrono::{DateTime, Duration, Utc};
-use sail_pulse::{
-    NewReminder, Pulse, PulseError, PulseSettings, ReminderStatus, default_path,
-};
+use sail_pulse::{NewReminder, Pulse, PulseError, PulseSettings, ReminderStatus, default_path};
 
 fn at(text: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(text)
@@ -102,6 +100,53 @@ fn reminder_lifecycle_is_durable_and_fires_once() {
 }
 
 #[test]
+fn active_list_survives_restart_and_is_ordered_bounded_and_excludes_finished_items() {
+    let (path, dir) = temp_path();
+    let now = at("2026-11-04T12:00:00Z");
+    let (due_id, pending_id) = {
+        let pulse = Pulse::open(&path).unwrap();
+        // Create out of order so insertion order cannot stand in for due time.
+        let pending = pulse
+            .create_at(reminder("later", now + Duration::minutes(5)), now)
+            .unwrap();
+        let cancelled = pulse
+            .create_at(reminder("cancelled", now + Duration::minutes(3)), now)
+            .unwrap();
+        let due = pulse
+            .create_at(
+                reminder("waiting for acknowledgement", now + Duration::minutes(2)),
+                now,
+            )
+            .unwrap();
+        let delivered = pulse
+            .create_at(
+                reminder("already delivered", now + Duration::minutes(1)),
+                now,
+            )
+            .unwrap();
+        pulse.cancel(&cancelled.id).unwrap();
+        pulse.fire_due_at(now + Duration::minutes(2)).unwrap();
+        pulse.acknowledge(&delivered.id).unwrap();
+        (due.id, pending.id)
+    };
+    {
+        let pulse = Pulse::open(&path).unwrap();
+        let active = pulse.list_active(100).unwrap();
+        assert_eq!(
+            active.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec![due_id.as_str(), pending_id.as_str()]
+        );
+        assert_eq!(active[0].status, ReminderStatus::Due);
+        assert_eq!(active[1].status, ReminderStatus::Pending);
+        let limited = pulse.list_active(1).unwrap();
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].id, due_id);
+        assert_eq!(pulse.list_history(100).unwrap().len(), 2);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn quiet_hours_defer_delivery_until_the_window_ends() {
     let (path, dir) = temp_path();
     let pulse = Pulse::open(&path).unwrap();
@@ -131,9 +176,7 @@ fn quiet_hours_defer_delivery_until_the_window_ends() {
     );
     assert_eq!(pulse.get(&id).unwrap().status, ReminderStatus::Pending);
 
-    let fired = pulse
-        .fire_due_at(at("2026-11-05T07:05:00-03:00"))
-        .unwrap();
+    let fired = pulse.fire_due_at(at("2026-11-05T07:05:00-03:00")).unwrap();
     assert_eq!(fired.len(), 1);
     assert_eq!(fired[0].id, id);
 
@@ -170,10 +213,7 @@ fn invalid_inputs_are_rejected() {
         pulse.acknowledge(&id),
         Err(PulseError::InvalidState { .. })
     ));
-    assert!(matches!(
-        pulse.get("missing"),
-        Err(PulseError::NotFound(_))
-    ));
+    assert!(matches!(pulse.get("missing"), Err(PulseError::NotFound(_))));
     assert!(pulse.cancel(&id).is_ok());
     assert!(matches!(
         pulse.snooze(&id, now + Duration::minutes(10)),

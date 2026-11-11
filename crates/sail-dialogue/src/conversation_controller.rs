@@ -227,7 +227,7 @@ impl ConversationController {
 
         inner.input_state = InputState::Listening;
 
-        tracing::info!(reason = ?reason, generation = ?active.generation, "Conversation stopped");
+        tracing::info!(reason = ?reason, turn = ?active.turn_id, generation = ?active.generation, "Conversation stopped");
 
         CancellationOutcome {
             reason,

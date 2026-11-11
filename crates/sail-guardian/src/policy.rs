@@ -72,6 +72,11 @@ pub fn standing_sandbox_protocol(request: &str) -> Option<&'static str> {
 
 impl LearnedPattern {
     pub fn matches(&self, capability: &Capability) -> bool {
+        if matches!(capability, Capability::Tool(ToolCapability::Invocation { tool, .. }) if tool == "external:infer")
+        {
+            // A historical wildcard learned for ordinary tools cannot authorize egress.
+            return matches!(self, Self::ExactCapability(expected) if expected == capability);
+        }
         match (self, capability) {
             (LearnedPattern::ExactCapability(expected), actual) => expected == actual,
             (
@@ -110,6 +115,11 @@ impl LearnedPattern {
 
     pub fn from_capability(capability: &Capability) -> Self {
         match capability {
+            Capability::Tool(ToolCapability::Invocation { tool, .. })
+                if tool == "external:infer" =>
+            {
+                Self::ExactCapability(capability.clone())
+            }
             Capability::Tool(ToolCapability::Invocation { tool, .. }) => {
                 LearnedPattern::AnyToolInvocation {
                     tool_name: tool.clone(),

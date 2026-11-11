@@ -124,7 +124,9 @@ impl Capability {
                 {
                     RiskLevel::Low
                 }
-                ToolCapability::Invocation { tool, .. } if tool == "command:execute" => {
+                ToolCapability::Invocation { tool, .. }
+                    if tool == "command:execute" || tool == "external:infer" =>
+                {
                     RiskLevel::Critical
                 }
                 ToolCapability::Invocation { .. } => RiskLevel::High,
