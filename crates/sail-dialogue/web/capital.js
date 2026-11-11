@@ -3016,7 +3016,17 @@ function renderModelsStatus(data) {
     }
   }
 
-  const models = (data && data.models) || [];
+  // Signal models store values; outlook models (round 12) store quantile paths. Show
+  // both in one table, with the outlook rows labelled.
+  const outlookRows = ((data && data.outlook) || []).map(m => ({
+    spec: { ...(m.spec || {}), name: `${(m.spec && m.spec.name) || "model"} · outlook` },
+    enabled: m.enabled,
+    last_run: m.last_run,
+    stored: m.stored
+      ? { values: m.stored[2], instruments: m.stored[1], latest: null, paths: true }
+      : null,
+  }));
+  const models = ((data && data.models) || []).concat(outlookRows);
   if (models.length === 0) {
     tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">No models configured.</td></tr>`;
     return;
@@ -3035,7 +3045,8 @@ function renderModelsStatus(data) {
     let storedStr = "None";
     if (m.stored && m.stored.values > 0) {
       const lat = m.stored.latest ? `, latest ${escapeHtml(m.stored.latest)}` : "";
-      storedStr = `${m.stored.values} values (${m.stored.instruments} instruments${lat})`;
+      const unit = m.stored.paths ? "paths" : "values";
+      storedStr = `${m.stored.values} ${unit} (${m.stored.instruments} instruments${lat})`;
     }
 
     let runStr = "Never run";

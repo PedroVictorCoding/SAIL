@@ -200,7 +200,12 @@ pub(crate) fn external_at(
 ) -> Option<&ExternalPath> {
     let mut best: Option<&ExternalPath> = None;
     for path in paths {
-        if path.component != component || path.horizon != horizon || path.origin > at {
+        // A path older than a weekly refresh means the helper wasn't run for that week.
+        if path.component != component
+            || path.horizon != horizon
+            || path.origin > at
+            || (at - path.origin).num_days() > crate::signals::MAX_EXTERNAL_AGE_DAYS
+        {
             continue;
         }
         match best {
