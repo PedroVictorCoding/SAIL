@@ -121,3 +121,50 @@ fn the_store_refuses_edits_and_deletes() {
             .is_err()
     );
 }
+
+#[test]
+fn a_grant_reaches_the_ledger_until_it_is_retracted() {
+    let (_dir, svc, account) = setup();
+    let recorded = Utc::now();
+    let grant = svc
+        .record_grant(&account, input("GALP.PT", "1", "2025-06-01"), recorded)
+        .unwrap();
+    let held = |as_of: sail_capital::AsOf| {
+        svc.portfolio(&account, as_of)
+            .unwrap()
+            .positions
+            .iter()
+            .find(|p| p.instrument.symbol == "GALP.PT")
+            .map(|p| p.quantity.to_string())
+    };
+    let now = sail_capital::AsOf::now();
+    assert_eq!(held(now), Some("1".to_string()));
+    let warnings = svc.portfolio(&account, now).unwrap().warnings;
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("GALP.PT") && w.contains("free"))
+    );
+
+    let retracted_at = recorded + Duration::seconds(10);
+    svc.retract_grant(&account, &grant.id, retracted_at)
+        .unwrap();
+    // Asked as of after the retraction, it's gone.
+    let after = sail_capital::AsOf {
+        occurred_by: retracted_at + Duration::seconds(1),
+        known_by: retracted_at + Duration::seconds(1),
+    };
+    assert_eq!(held(after), None);
+    // Asked as of between recording and retraction, SAIL still knew it.
+    let between = sail_capital::AsOf {
+        occurred_by: recorded + Duration::seconds(5),
+        known_by: recorded + Duration::seconds(5),
+    };
+    assert_eq!(held(between), Some("1".to_string()));
+    // Asked as of before it was recorded, SAIL didn't know it yet.
+    let before = sail_capital::AsOf {
+        occurred_by: recorded - Duration::seconds(5),
+        known_by: recorded - Duration::seconds(5),
+    };
+    assert_eq!(held(before), None);
+}
