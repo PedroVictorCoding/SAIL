@@ -50,6 +50,10 @@
       <h3>Variances</h3>
       <ul class="cp-var-list" id="cpVariancesList"></ul>
     </div>
+    <div class="cp-grants" id="cpGrants" hidden>
+      <h3>Received Shares (Grants)</h3>
+      <ul class="cp-grants-list" id="cpGrantsList"></ul>
+    </div>
   </section>
 
   <!-- Key Metrics / Tiles -->
@@ -73,6 +77,20 @@
       <span class="cp-tile-label">Fees & Financing</span>
       <div class="cp-tile-val" id="cpFeesVal">—</div>
       <span class="cp-tile-sub" id="cpFeesSub">Commissions & swaps</span>
+    </div>
+  </section>
+
+  <!-- Portfolio Insights (Round 9) -->
+  <section class="cp-panel" id="cpInsightsPanel" aria-labelledby="cpInsightsTitle">
+    <header class="cp-panel-head">
+      <div class="cp-title-group">
+        <h2 id="cpInsightsTitle">Insights</h2>
+        <span class="cp-sub-notice" id="cpInsightsFreshness">Deterministic calculation from ledger</span>
+      </div>
+      <span class="cp-badge" id="cpInsightsBadge">Portfolio</span>
+    </header>
+    <div class="cp-insights-body" id="cpInsightsBody">
+      <p class="cp-empty">Import a report to see insights</p>
     </div>
   </section>
 
@@ -234,6 +252,64 @@
     <footer class="cp-dialog-actions">
       <button class="cp-button" id="cpDialogCancel" type="button">Cancel</button>
       <button class="cp-button cp-primary" id="cpDialogSubmit" type="button">Import Now</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- Record Received Shares Dialog -->
+<dialog class="cp-dialog" id="cpGrantDialog" aria-labelledby="cpGrantDialogTitle">
+  <form method="dialog" class="cp-dialog-form" id="cpGrantForm">
+    <header class="cp-dialog-head">
+      <h2 id="cpGrantDialogTitle">Record Received Shares</h2>
+      <p>Declare shares received without a purchase row (e.g. corporate grant or promotional shares).</p>
+    </header>
+    <div class="cp-dialog-body">
+      <div class="cp-field-row">
+        <div class="cp-field">
+          <label for="cpGrantSymbol">Symbol</label>
+          <input type="text" class="cp-input" id="cpGrantSymbol" required placeholder="e.g. GALP.PT">
+        </div>
+        <div class="cp-field">
+          <label for="cpGrantKind">Kind</label>
+          <select class="cp-select" id="cpGrantKind">
+            <option value="stock" selected>Stock</option>
+            <option value="etf">ETF</option>
+          </select>
+        </div>
+      </div>
+      <div class="cp-field-row">
+        <div class="cp-field">
+          <label for="cpGrantQuantity">Quantity</label>
+          <input type="text" class="cp-input" id="cpGrantQuantity" required placeholder="e.g. 1" pattern="^[0-9]+(\.[0-9]+)?$">
+        </div>
+        <div class="cp-field">
+          <label for="cpGrantDate">Date Received</label>
+          <input type="date" class="cp-input" id="cpGrantDate" required>
+        </div>
+      </div>
+      <div class="cp-field-row">
+        <div class="cp-field">
+          <label for="cpGrantCostAmount">Cost Basis (Optional)</label>
+          <input type="text" class="cp-input" id="cpGrantCostAmount" placeholder="0 (leave blank for zero)">
+        </div>
+        <div class="cp-field">
+          <label for="cpGrantCostCurrency">Currency</label>
+          <select class="cp-select" id="cpGrantCostCurrency">
+            <option value="EUR" selected>EUR</option>
+            <option value="USD">USD</option>
+            <option value="GBP">GBP</option>
+            <option value="PLN">PLN</option>
+          </select>
+        </div>
+      </div>
+      <div class="cp-field">
+        <label for="cpGrantNote">Note (Optional)</label>
+        <input type="text" class="cp-input" id="cpGrantNote" placeholder="e.g. promotional campaign">
+      </div>
+    </div>
+    <footer class="cp-dialog-actions">
+      <button class="cp-button" id="cpGrantCancel" type="button">Cancel</button>
+      <button class="cp-button cp-primary" id="cpGrantSubmit" type="button">Record Shares</button>
     </footer>
   </form>
 </dialog>

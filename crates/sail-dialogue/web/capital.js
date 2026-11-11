@@ -193,6 +193,14 @@ function renderEmptyPortfolio() {
   const reconSection = document.getElementById("cpReconciliation");
   if (reconSection) reconSection.hidden = true;
 
+  const grantsContainer = document.getElementById("cpGrants");
+  if (grantsContainer) grantsContainer.hidden = true;
+
+  const insightsBody = document.getElementById("cpInsightsBody");
+  if (insightsBody) insightsBody.innerHTML = `<p class="cp-empty">Import a report to see insights</p>`;
+  const insightsFreshness = document.getElementById("cpInsightsFreshness");
+  if (insightsFreshness) insightsFreshness.textContent = "Deterministic calculation from ledger";
+
   document.getElementById("cpCashVal").textContent = "—";
   document.getElementById("cpHoldingsVal").textContent = "—";
   document.getElementById("cpHoldingsSub").textContent = "0 positions";
@@ -240,6 +248,23 @@ function renderPortfolio(p) {
       for (const v of p.reconciliation.variances) {
         const li = document.createElement("li");
         li.className = "cp-var-item";
+
+        // Check if broker has more units than ledger
+        const missingQty = getMissingQuantity(v);
+        let actionBtnHtml = "";
+        if (missingQty !== null) {
+          const sym = resolveVarianceSymbol(v.subject, p);
+          actionBtnHtml = `
+            <div class="cp-var-actions">
+              <button type="button" class="cp-button cp-button-sm cp-record-grant-btn"
+                data-symbol="${escapeHtml(sym)}"
+                data-qty="${escapeHtml(missingQty)}">
+                Record received shares
+              </button>
+            </div>
+          `;
+        }
+
         li.innerHTML = `
           <div class="cp-var-subject">${escapeHtml(v.subject)}</div>
           <div class="cp-var-figures">
@@ -247,9 +272,18 @@ function renderPortfolio(p) {
             <span>Broker: <strong>${escapeHtml(v.broker || "—")}</strong></span>
           </div>
           <div class="cp-var-note">${escapeHtml(v.note || "")}</div>
+          ${actionBtnHtml}
         `;
         variancesList.appendChild(li);
       }
+
+      variancesList.querySelectorAll(".cp-record-grant-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const sym = btn.getAttribute("data-symbol");
+          const qty = btn.getAttribute("data-qty");
+          openGrantDialog(sym, qty, p.snapshot_as_of);
+        });
+      });
     } else {
       reconSummary.textContent = `No snapshot available to verify ledger against broker figures.`;
       variancesDiv.hidden = true;
@@ -361,9 +395,13 @@ function renderPositionsTable(tbodyId, positions, isCfd) {
       const lotTr = document.createElement("tr");
       lotTr.id = `${tbodyId}-lots-${i}`;
       lotTr.hidden = true;
-      const lotsHtml = pos.lots.map(l =>
-        `<li>${formatDate(l.opened ? l.opened.at : null)} · <strong>${escapeHtml(l.quantity)}</strong> units @ ${l.unit_cost ? formatMoney(l.unit_cost) : "not stated"}</li>`
-      ).join("");
+      const lotsHtml = pos.lots.map(l => {
+        const isGranted = l.origin === "granted";
+        const originBadge = isGranted
+          ? `<span class="cp-lot-badge cp-lot-badge-granted">granted</span>`
+          : "";
+        return `<li>${formatDate(l.opened ? l.opened.at : null)} · <strong>${escapeHtml(l.quantity)}</strong> units @ ${l.unit_cost ? formatMoney(l.unit_cost) : "not stated"} ${originBadge}</li>`;
+      }).join("");
       lotTr.innerHTML = `
         <td colspan="5" class="cp-lots-detail">
           <ul class="cp-lots-list">${lotsHtml}</ul>
@@ -528,6 +566,8 @@ function setupUploadDialog() {
       // Refresh first, then report the result so the refresh doesn't hide it.
       await loadAccounts();
       await loadPortfolio();
+      await loadInsights();
+      await loadGrants();
       await loadFilings();
       await loadSecStatus();
       await loadSyncStatus();
@@ -743,15 +783,534 @@ function setupCollapsibles() {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Received Shares Grants & Variance Helpers (Round 9)
+// -----------------------------------------------------------------------------
+
+function getMissingQuantity(v) {
+  if (!v || !v.subject) return null;
+  if (!v.subject.startsWith("quantity ") && !v.subject.startsWith("fifo ")) {
+    return null;
+  }
+  const brokerStr = v.broker || "0";
+  const ledgerStr = v.ledger || "0";
+  const brokerVal = parseFloat(brokerStr);
+  const ledgerVal = parseFloat(ledgerStr);
+  if (isNaN(brokerVal) || brokerVal <= ledgerVal) {
+    return null;
+  }
+  return sumDecimals([brokerStr, "-" + ledgerStr]);
+}
+
+function resolveVarianceSymbol(subject, portfolio) {
+  const raw = subject.replace(/^(quantity|fifo)\s+/, "").replace(/#cfd$/, "").trim();
+  if (raw.startsWith("sym:")) {
+    return raw.slice(4).trim().toUpperCase();
+  }
+  if (raw.startsWith("isin:")) {
+    const isin = raw.slice(5).trim();
+    if (portfolio && portfolio.positions) {
+      const match = portfolio.positions.find(p => p.instrument && p.instrument.isin === isin);
+      if (match && match.instrument && match.instrument.symbol) {
+        return match.instrument.symbol;
+      }
+    }
+    if (portfolio && portfolio.dividends) {
+      const match = portfolio.dividends.find(d => d.instrument && d.instrument.isin === isin);
+      if (match && match.instrument && match.instrument.symbol) {
+        return match.instrument.symbol;
+      }
+    }
+    if (portfolio && portfolio.realized) {
+      const match = portfolio.realized.find(r => r.instrument && r.instrument.isin === isin);
+      if (match && match.instrument && match.instrument.symbol) {
+        return match.instrument.symbol;
+      }
+    }
+    return isin;
+  }
+  return raw.toUpperCase();
+}
+
+function openGrantDialog(symbol, quantity, snapshotAsOf) {
+  const dialog = document.getElementById("cpGrantDialog");
+  const symInput = document.getElementById("cpGrantSymbol");
+  const qtyInput = document.getElementById("cpGrantQuantity");
+  const dateInput = document.getElementById("cpGrantDate");
+  const costInput = document.getElementById("cpGrantCostAmount");
+  const currSelect = document.getElementById("cpGrantCostCurrency");
+  const noteInput = document.getElementById("cpGrantNote");
+  const kindSelect = document.getElementById("cpGrantKind");
+
+  if (!dialog) return;
+
+  if (symInput) symInput.value = symbol || "";
+  if (qtyInput) qtyInput.value = quantity || "1";
+  if (kindSelect) kindSelect.value = "stock";
+  if (costInput) costInput.value = "";
+  if (noteInput) noteInput.value = "";
+
+  const defaultDate = snapshotAsOf
+    ? snapshotAsOf.slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+  if (dateInput) dateInput.value = defaultDate;
+
+  if (currSelect) {
+    const acct = accountList.find(a => a.account === currentAccount);
+    if (acct && acct.currency && acct.currency !== "multi") {
+      currSelect.value = acct.currency;
+    } else {
+      currSelect.value = "EUR";
+    }
+  }
+
+  dialog.showModal();
+}
+
+function setupGrantDialog() {
+  const dialog = document.getElementById("cpGrantDialog");
+  const cancelBtn = document.getElementById("cpGrantCancel");
+  const submitBtn = document.getElementById("cpGrantSubmit");
+
+  if (!dialog || !cancelBtn || !submitBtn) return;
+
+  cancelBtn.addEventListener("click", () => {
+    dialog.close();
+  });
+
+  submitBtn.addEventListener("click", async () => {
+    const symInput = document.getElementById("cpGrantSymbol");
+    const qtyInput = document.getElementById("cpGrantQuantity");
+    const dateInput = document.getElementById("cpGrantDate");
+    const costInput = document.getElementById("cpGrantCostAmount");
+    const currSelect = document.getElementById("cpGrantCostCurrency");
+    const noteInput = document.getElementById("cpGrantNote");
+    const kindSelect = document.getElementById("cpGrantKind");
+
+    const symbol = (symInput ? symInput.value : "").trim().toUpperCase();
+    const quantity = (qtyInput ? qtyInput.value : "").trim();
+    const receivedAt = (dateInput ? dateInput.value : "").trim();
+    const costAmount = (costInput ? costInput.value : "").trim();
+    const currency = currSelect ? currSelect.value : "EUR";
+    const note = (noteInput ? noteInput.value : "").trim();
+    const kind = (kindSelect ? kindSelect.value : "stock").toLowerCase();
+
+    if (!symbol) {
+      showBanner("Please enter a security symbol.", true);
+      return;
+    }
+    const qtyNum = parseFloat(quantity);
+    if (isNaN(qtyNum) || qtyNum <= 0) {
+      showBanner("Quantity must be a positive number.", true);
+      return;
+    }
+    if (!receivedAt) {
+      showBanner("Please enter the date shares were received.", true);
+      return;
+    }
+
+    let cost = null;
+    if (costAmount && costAmount !== "0") {
+      const costVal = parseFloat(costAmount);
+      if (isNaN(costVal) || costVal < 0) {
+        showBanner("Cost basis must be non-negative.", true);
+        return;
+      }
+      cost = { amount: costAmount, currency: currency };
+    }
+
+    const payload = {
+      symbol,
+      kind,
+      quantity,
+      received_at: receivedAt,
+      cost,
+      note: note || undefined,
+    };
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Recording…";
+
+    try {
+      const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+      const grant = await fetchJson(`/api/capital/grants${query}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      dialog.close();
+      showBanner(`Recorded received shares: ${grant.quantity} units of ${grant.symbol}.`);
+      await loadAccounts();
+      await loadPortfolio();
+      await loadInsights();
+      await loadGrants();
+    } catch (err) {
+      showBanner(`Failed to record grant: ${err.message}`, true);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Record Shares";
+    }
+  });
+}
+
+async function loadGrants() {
+  const grantsContainer = document.getElementById("cpGrants");
+  const grantsList = document.getElementById("cpGrantsList");
+  if (!grantsContainer || !grantsList) return;
+
+  if (accountList.length === 0) {
+    grantsContainer.hidden = true;
+    grantsList.innerHTML = "";
+    return;
+  }
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const grants = await fetchJson(`/api/capital/grants${query}`);
+    if (!grants || grants.length === 0) {
+      grantsContainer.hidden = true;
+      grantsList.innerHTML = "";
+      return;
+    }
+
+    grantsContainer.hidden = false;
+    grantsList.innerHTML = "";
+    for (const g of grants) {
+      const li = document.createElement("li");
+      li.className = "cp-grant-item";
+      const isRetracted = Boolean(g.retracted_at);
+      const statusHtml = isRetracted
+        ? `<span class="cp-grant-retracted">Retracted ${formatDate(g.retracted_at)}</span>`
+        : `<button type="button" class="cp-button cp-button-sm cp-retract-grant-btn" data-grant-id="${escapeHtml(g.id)}" data-symbol="${escapeHtml(g.symbol)}">Retract</button>`;
+
+      const costText = g.cost && g.cost.amount && g.cost.amount !== "0"
+        ? formatMoney(g.cost)
+        : "Free (zero cost)";
+
+      li.innerHTML = `
+        <div class="cp-grant-info">
+          <span class="cp-grant-symbol">${escapeHtml(g.symbol)}</span>
+          <span class="cp-badge">${escapeHtml((g.kind || "stock").toUpperCase())}</span>
+          <span class="cp-grant-qty"><strong>${escapeHtml(g.quantity)}</strong> units</span>
+          <span class="cp-grant-date">Received ${formatDate(g.received_at)}</span>
+          <span class="cp-grant-cost">Basis: ${costText}</span>
+          ${g.note ? `<span class="cp-grant-note">${escapeHtml(g.note)}</span>` : ""}
+        </div>
+        <div class="cp-grant-status">${statusHtml}</div>
+      `;
+      grantsList.appendChild(li);
+    }
+
+    grantsList.querySelectorAll(".cp-retract-grant-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-grant-id");
+        const sym = btn.getAttribute("data-symbol");
+        btn.disabled = true;
+        btn.textContent = "Retracting…";
+        try {
+          const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+          await fetchJson(`/api/capital/grants/${encodeURIComponent(id)}/retract${query}`, {
+            method: "POST",
+          });
+          showBanner(`Retracted received shares for ${sym}.`);
+          await loadPortfolio();
+          await loadInsights();
+          await loadGrants();
+        } catch (err) {
+          showBanner(`Failed to retract grant: ${err.message}`, true);
+          btn.disabled = false;
+          btn.textContent = "Retract";
+        }
+      });
+    });
+  } catch (err) {
+    console.error("Failed to load grants:", err);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Portfolio Insights (Round 9)
+// -----------------------------------------------------------------------------
+
+async function loadInsights() {
+  const body = document.getElementById("cpInsightsBody");
+  const freshnessSpan = document.getElementById("cpInsightsFreshness");
+  if (!body) return;
+
+  if (accountList.length === 0) {
+    body.innerHTML = `<p class="cp-empty">Import a report to see insights</p>`;
+    if (freshnessSpan) freshnessSpan.textContent = "Deterministic calculation from ledger";
+    return;
+  }
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const ins = await fetchJson(`/api/capital/insights${query}`);
+    renderInsights(ins);
+  } catch (err) {
+    // 404 means no portfolio yet — show empty state, not an error
+    if (String(err.message).includes("404") || String(err.message).toLowerCase().includes("not found")) {
+      body.innerHTML = `<p class="cp-empty">Import a report to see insights</p>`;
+      if (freshnessSpan) freshnessSpan.textContent = "Deterministic calculation from ledger";
+    } else {
+      body.innerHTML = `<p class="cp-empty" style="color:var(--sail-text-subtle)">Insights unavailable: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+}
+
+function renderInsights(ins) {
+  const body = document.getElementById("cpInsightsBody");
+  const freshnessSpan = document.getElementById("cpInsightsFreshness");
+  if (!body) return;
+
+  // 1. Freshness
+  const f = ins.freshness || {};
+  let freshnessHtml = "";
+  if (f.snapshot_as_of) {
+    const age = f.snapshot_age_hours !== null && f.snapshot_age_hours !== undefined
+      ? ` (${f.snapshot_age_hours} h ago)`
+      : "";
+    const label = `Data as of ${formatDate(f.snapshot_as_of)}${age}`;
+    if (freshnessSpan) {
+      freshnessSpan.textContent = label;
+      freshnessSpan.className = f.stale ? "cp-sub-notice cp-freshness-stale" : "cp-sub-notice";
+    }
+    freshnessHtml = `
+      <div class="cp-insights-freshness-line">
+        <span class="cp-freshness ${f.stale ? "cp-freshness-stale" : ""}">Data as of ${formatDate(f.snapshot_as_of)}${age}</span>
+        ${f.stale ? `<span style="font-size:11px;color:#f3b05a">Snapshot older than 72h</span>` : ""}
+      </div>
+    `;
+  } else {
+    if (freshnessSpan) freshnessSpan.textContent = "No broker snapshot";
+  }
+
+  // 2. Return on Deposits
+  let returnHtml = "";
+  if (ins.total_return) {
+    const tr = ins.total_return;
+    const isGainNegative = tr.gain && tr.gain.amount && String(tr.gain.amount).startsWith("-");
+    const gainClass = isGainNegative ? "negative" : "positive";
+    const gainRatioFormatted = tr.gain_ratio !== null && tr.gain_ratio !== undefined
+      ? `${(parseFloat(tr.gain_ratio) * 100).toFixed(2)}%`
+      : "—";
+    returnHtml = `
+      <div class="cp-insights-block">
+        <h3 class="cp-insights-subtitle">Return on Deposits</h3>
+        <div class="cp-insights-stats">
+          <div class="cp-stat-card">
+            <span class="cp-stat-label">Net Deposits</span>
+            <span class="cp-stat-val">${formatMoney(tr.net_deposits)}</span>
+          </div>
+          <div class="cp-stat-card">
+            <span class="cp-stat-label">Current Value</span>
+            <span class="cp-stat-val">${formatMoney(tr.current_value)}</span>
+          </div>
+          <div class="cp-stat-card">
+            <span class="cp-stat-label">Gain / Loss</span>
+            <span class="cp-stat-val ${gainClass}">${formatMoney(tr.gain)}</span>
+          </div>
+          <div class="cp-stat-card">
+            <span class="cp-stat-label">Gain Ratio</span>
+            <span class="cp-stat-val ${gainClass}">${gainRatioFormatted}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 3. Concentration
+  let concentrationHtml = "";
+  if (ins.concentration) {
+    const c = ins.concentration;
+    const effStr = c.effective_positions ? `${c.effective_positions}` : "—";
+    const largestPct = (parseFloat(c.largest_share) * 100).toFixed(1);
+    const topNPct = (parseFloat(c.top_n_share) * 100).toFixed(1);
+
+    concentrationHtml = `
+      <div class="cp-insights-block">
+        <h3 class="cp-insights-subtitle">Portfolio Concentration</h3>
+        <div class="cp-concentration-card">
+          <p class="cp-concentration-summary">
+            Portfolio concentration is <strong>as concentrated as ${escapeHtml(effStr)} equal holdings</strong> across ${c.positions} valued position${c.positions === 1 ? "" : "s"}.
+          </p>
+          <div class="cp-concentration-grid">
+            <div class="cp-conc-item">
+              <span class="cp-conc-label">Largest Position</span>
+              <span class="cp-conc-val">${escapeHtml(c.largest_symbol)} (${largestPct}%)</span>
+            </div>
+            <div class="cp-conc-item">
+              <span class="cp-conc-label">Top 5 Holdings</span>
+              <span class="cp-conc-val">${topNPct}% of portfolio</span>
+            </div>
+            <div class="cp-conc-item">
+              <span class="cp-conc-label">Effective Positions</span>
+              <span class="cp-conc-val">${escapeHtml(effStr)} equal holdings</span>
+            </div>
+            <div class="cp-conc-item">
+              <span class="cp-conc-label">HHI Index</span>
+              <span class="cp-conc-val">${escapeHtml(c.hhi)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 4. Allocation by Position & By Kind
+  let allocationHtml = "";
+  if (ins.allocation && ins.allocation.length > 0) {
+    const rows = ins.allocation.map(slice => {
+      const shareVal = parseFloat(slice.share) || 0;
+      const pct = (shareVal * 100).toFixed(1);
+      const widthPct = Math.min(100, Math.max(0, shareVal * 100));
+      return `
+        <div class="cp-alloc-row">
+          <div class="cp-alloc-info">
+            <span class="cp-alloc-symbol">${escapeHtml(slice.symbol)}</span>
+            ${slice.name ? `<span class="cp-alloc-name">${escapeHtml(slice.name)}</span>` : ""}
+            <span class="cp-alloc-val">${formatMoney(slice.value)}</span>
+            <span class="cp-alloc-share">${pct}%</span>
+          </div>
+          <div class="cp-bar-track">
+            <div class="cp-bar-fill" style="width: ${widthPct}%"></div>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    let kindCards = "";
+    if (ins.by_kind && ins.by_kind.length > 0) {
+      kindCards = ins.by_kind.map(k => {
+        const shareVal = parseFloat(k.share) || 0;
+        const pct = (shareVal * 100).toFixed(1);
+        const kindLabel = k.kind.charAt(0).toUpperCase() + k.kind.slice(1);
+        return `
+          <div class="cp-kind-card">
+            <div class="cp-kind-top">
+              <strong>${escapeHtml(kindLabel)}</strong>
+              <span class="cp-badge">${k.positions} pos</span>
+            </div>
+            <div class="cp-kind-meta">
+              <span class="cp-kind-val">${formatMoney(k.value)}</span>
+              <span class="cp-kind-share">${pct}%</span>
+            </div>
+            <div class="cp-bar-track">
+              <div class="cp-bar-fill" style="width: ${Math.min(100, Math.max(0, shareVal * 100))}%"></div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    allocationHtml = `
+      <div class="cp-insights-block">
+        <div class="cp-insights-subtitle">
+          <span>Allocation by Position</span>
+          <span style="font-size:11px;color:var(--sail-text-subtle);font-weight:normal">${ins.allocation.length} position${ins.allocation.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="cp-alloc-bars">${rows}</div>
+        ${kindCards ? `
+          <div class="cp-insights-subtitle" style="margin-top:12px">
+            <span>By Instrument Kind</span>
+          </div>
+          <div class="cp-by-kind-grid">${kindCards}</div>
+        ` : ""}
+      </div>
+    `;
+  }
+
+  // 5. Income & Distributions
+  let incomeHtml = "";
+  if (ins.income) {
+    const inc = ins.income;
+    const trailing12m = inc.trailing_12m_net && inc.trailing_12m_net.length > 0
+      ? inc.trailing_12m_net.map(formatMoney).join(" · ")
+      : "—";
+    const yieldStr = inc.trailing_yield !== null && inc.trailing_yield !== undefined
+      ? `${(parseFloat(inc.trailing_yield) * 100).toFixed(2)}%`
+      : "—";
+
+    const months = (inc.by_month || []).slice(-24);
+    let monthRows = "";
+    if (months.length > 0) {
+      let maxNet = 0;
+      for (const m of months) {
+        const netVal = parseFloat(m.net ? m.net.amount : "0");
+        if (netVal > maxNet) maxNet = netVal;
+      }
+      monthRows = months.map(m => {
+        const netVal = parseFloat(m.net ? m.net.amount : "0");
+        const barPct = maxNet > 0 ? Math.min(100, Math.max(0, (netVal / maxNet) * 100)) : 0;
+        return `
+          <div class="cp-income-month-row">
+            <span class="cp-month-label">${escapeHtml(m.month)}</span>
+            <div class="cp-month-bar-wrap">
+              <div class="cp-month-bar-fill" style="width: ${barPct}%"></div>
+            </div>
+            <span class="cp-month-net">${formatMoney(m.net)}</span>
+          </div>
+        `;
+      }).join("");
+    } else {
+      monthRows = `<p class="cp-empty" style="padding:10px">No income recorded in the last 24 months.</p>`;
+    }
+
+    incomeHtml = `
+      <div class="cp-insights-block">
+        <h3 class="cp-insights-subtitle">Income & Distributions</h3>
+        <div class="cp-income-meta">
+          <div class="cp-income-stat">Trailing 12M Net: <strong>${trailing12m}</strong></div>
+          <div class="cp-income-stat">Trailing Yield: <strong>${yieldStr}</strong></div>
+        </div>
+        <div class="cp-income-months">${monthRows}</div>
+      </div>
+    `;
+  }
+
+  // 6. Warnings and Unvalued Notes
+  let notesHtml = "";
+  const notes = [];
+  if (ins.unvalued && ins.unvalued.length > 0) {
+    notes.push(`Positions without broker market value (excluded from allocation): <strong>${ins.unvalued.map(escapeHtml).join(", ")}</strong>`);
+  }
+  if (ins.warnings && ins.warnings.length > 0) {
+    for (const w of ins.warnings) {
+      notes.push(escapeHtml(w));
+    }
+  }
+  if (notes.length > 0) {
+    const items = notes.map(n => `<div class="cp-insight-note">${n}</div>`).join("");
+    notesHtml = `
+      <div class="cp-insight-notes">
+        ${items}
+      </div>
+    `;
+  }
+
+  body.innerHTML = `
+    ${freshnessHtml}
+    ${returnHtml}
+    ${concentrationHtml}
+    ${allocationHtml}
+    ${incomeHtml}
+    ${notesHtml}
+  `;
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   setupCollapsibles();
   setupUploadDialog();
+  setupGrantDialog();
 
   const refreshBtn = document.getElementById("cpRefreshBtn");
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => {
       showBanner("");
       loadPortfolio();
+      loadInsights();
+      loadGrants();
       loadFilings();
       loadSecStatus();
       loadSyncStatus();
@@ -787,6 +1346,8 @@ document.addEventListener("DOMContentLoaded", () => {
     accountSelect.addEventListener("change", (e) => {
       currentAccount = e.target.value;
       loadPortfolio();
+      loadInsights();
+      loadGrants();
       loadFilings();
       loadSecStatus();
       loadSyncStatus();
@@ -795,6 +1356,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   loadAccounts().then(() => {
     loadPortfolio();
+    loadInsights();
+    loadGrants();
     loadFilings();
     loadSecStatus();
     loadSyncStatus();
