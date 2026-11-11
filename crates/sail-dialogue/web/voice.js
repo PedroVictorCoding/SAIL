@@ -982,7 +982,7 @@ document.getElementById('textForm').addEventListener('submit', async event => {
       vision = { format: file.type, data_base64: data.split(',')[1] };
       renderArtifact({ artifact_type: 'image', content: data });
     }
-    stopPlayback(); if (sendAction('text', { text: input.value, vision })) { input.value = ''; document.getElementById('imageInput').value = ''; }
+    stopPlayback(); if (sendAction('text', { text: input.value, vision, vision_source: 'upload' })) { input.value = ''; document.getElementById('imageInput').value = ''; }
   } catch (error) { showError(error.message); }
 });
 window.addEventListener('pagehide', () => { stopMic(); stopPlayback(); ws?.close(); audioCtx?.close(); });

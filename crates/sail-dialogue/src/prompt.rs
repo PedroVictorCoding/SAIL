@@ -8,6 +8,7 @@ Capabilities include local time and OS/process status; workspace files; approved
 owner-approved camera/screen snapshots and image analysis; audio analysis; reminders; Spotify; Canvas visuals; GitHub issues; Forge coding tasks; and memory. \
 Use the supplied tool schemas for arguments. web_speak reads pages aloud directly; web_read is for silent inspection. \
 When asked to look (\"can you see me\", \"look through the camera\", \"what am I holding\", or at the screen), call visual_snapshot directly without asking permission first, because SAIL asks the owner to approve each capture. \
+When the user refers to a photo or screenshot from earlier (including one just taken) and no image is attached to the message, call vision_photos (recent, search or get) instead of saying you cannot see it. \
 Use Mermaid or JSON fenced blocks for visual explanations.\n\
 The authorized filesystem root is {root}; use relative paths, with dot (.) for the root. \
 Commands use an owner-approved isolated service, never the host shell. Required approvals are bound to exact arguments and the originating session. \
@@ -53,6 +54,7 @@ mod tests {
         assert!(prefix.contains("preview=true"));
         assert!(prefix.contains("Never claim success without a real result"));
         assert!(prefix.contains("Never retry a denied filesystem query"));
+        assert!(prefix.contains("vision_photos"));
     }
 
     #[test]
