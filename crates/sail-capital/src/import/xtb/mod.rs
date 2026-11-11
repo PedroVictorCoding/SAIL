@@ -91,14 +91,18 @@ pub fn parse(
     // Phase 1: Pre-scan sheets for preamble metadata and snapshot "as of" date
     for sheet in &raw_sheets {
         if let Some(header) = detect_sheet_header(sheet) {
-            let meta = extract_preamble(sheet, header.header_row, options.report_tz);
+            let meta = extract_preamble(sheet, header.header_row, sheet_tz(&header, options));
             if account_label.is_none() && meta.account_label.is_some() {
                 account_label = meta.account_label;
             }
             if account_currency.is_none() && meta.account_currency.is_some() {
                 account_currency = meta.account_currency;
             }
-            if snapshot.as_of.is_none() && meta.as_of.is_some() {
+            // The snapshot describes open positions, so that sheet's own time wins over
+            // another sheet's "Date to".
+            if meta.as_of.is_some()
+                && (snapshot.as_of.is_none() || header.sheet_kind == SheetKind::OpenPositions)
+            {
                 snapshot.as_of = meta.as_of;
             }
         }
@@ -149,6 +153,7 @@ pub fn parse(
             continue;
         };
 
+        let tz = sheet_tz(&header, options);
         match header.sheet_kind {
             SheetKind::CashOperations => {
                 known_sheets_count += 1;
@@ -161,12 +166,12 @@ pub fn parse(
                     sheet_name: sheet.name.as_deref(),
                     account_currency: effective_currency.clone(),
                     default_currency: options.default_currency.clone(),
-                    tz: options.report_tz,
+                    tz,
                 };
 
                 let data_rows = &sheet.rows[(header.header_row as usize)..];
                 for row in data_rows {
-                    if row.is_all_empty() {
+                    if row.is_all_empty() || is_footer_row(row) {
                         continue;
                     }
                     if total_data_rows >= MAX_REPORT_ROWS {
@@ -222,8 +227,19 @@ pub fn parse(
                 let mut rows_count = 0u32;
 
                 let data_rows = &sheet.rows[(header.header_row as usize)..];
+                // XTB lists each instrument once (category set, no side) followed by its
+                // individual positions (side set, no category). The instrument rows carry
+                // the totals, so the position rows are folded into them, never added twice.
+                let grouped = data_rows
+                    .iter()
+                    .any(|r| is_instrument_total_row(r, &header));
+                let mut folded = 0u32;
                 for row in data_rows {
-                    if row.is_all_empty() {
+                    if row.is_all_empty() || is_footer_row(row) {
+                        continue;
+                    }
+                    if grouped && !is_instrument_total_row(row, &header) {
+                        folded += 1;
                         continue;
                     }
 
@@ -266,7 +282,7 @@ pub fn parse(
                         sheet.name.as_deref(),
                         effective_currency.clone(),
                         options.default_currency.clone(),
-                        options.report_tz,
+                        tz,
                         &mut row_issues,
                     ) {
                         Ok(pos) => {
@@ -286,6 +302,20 @@ pub fn parse(
                     }
                 }
 
+                if folded > 0 {
+                    record_issue(
+                        ImportIssue {
+                            severity: Severity::Info,
+                            code: "positions_folded".to_string(),
+                            message: format!(
+                                "{folded} individual position rows were read through their instrument totals"
+                            ),
+                            source: None,
+                        },
+                        &mut issues,
+                        &mut issues_dropped,
+                    );
+                }
                 sheets.push(SheetSummary {
                     name: sheet.name.clone(),
                     kind: SheetKind::OpenPositions,
@@ -303,7 +333,7 @@ pub fn parse(
 
                 let data_rows = &sheet.rows[(header.header_row as usize)..];
                 for row in data_rows {
-                    if row.is_all_empty() {
+                    if row.is_all_empty() || is_footer_row(row) {
                         continue;
                     }
                     if total_data_rows >= MAX_REPORT_ROWS {
@@ -331,7 +361,7 @@ pub fn parse(
                         sheet.name.as_deref(),
                         effective_currency.clone(),
                         options.default_currency.clone(),
-                        options.report_tz,
+                        tz,
                         &mut row_issues,
                     ) {
                         Ok(pos) => {
@@ -411,4 +441,47 @@ pub fn parse(
         issues,
         issues_dropped,
     })
+}
+
+/// The time zone a sheet's times are in: UTC when the export labels them so, else the
+/// owner's report time zone.
+fn sheet_tz(header: &headers::HeaderMap, options: &ImportOptions) -> chrono_tz::Tz {
+    if header.times_utc {
+        chrono_tz::UTC
+    } else {
+        options.report_tz
+    }
+}
+
+/// A closing totals row such as `Total | … | 1234.5` or `Profit/loss | … `. It sums the
+/// rows above it and is not an operation.
+fn is_footer_row(row: &table::RawRow) -> bool {
+    let Some(first) = row.cells.iter().find(|c| !c.is_empty()) else {
+        return false;
+    };
+    let label = first.as_str().trim().to_lowercase();
+    let label = label.trim_end_matches(':');
+    let is_total_label = matches!(
+        label,
+        "total" | "totals" | "totais" | "profit/loss" | "profit / loss" | "lucro/prejuizo"
+    );
+    // Apart from the label, a totals row holds only numbers.
+    let text_cells = row
+        .cells
+        .iter()
+        .filter(|c| !c.is_empty() && c.to_decimal().is_none())
+        .count();
+    is_total_label && text_cells == 1
+}
+
+/// In a grouped open-positions sheet, true for the instrument's own row: it names a
+/// category and has no buy/sell side.
+fn is_instrument_total_row(row: &table::RawRow, header: &headers::HeaderMap) -> bool {
+    let (Some(category), Some(side)) = (
+        header.col(CanonicalColumn::Category),
+        header.col(CanonicalColumn::Type),
+    ) else {
+        return false;
+    };
+    !row.text(category).trim().is_empty() && row.text(side).trim().is_empty()
 }

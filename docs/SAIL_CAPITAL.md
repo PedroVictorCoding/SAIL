@@ -88,7 +88,9 @@ this slice depends on it.
    parameters:
    - `?account=` sets the account for files that don't name one. The account a file
      names always wins. Digits are masked to the last four.
-   - `?tz=` sets the time zone of the report's times. The default is `Europe/Lisbon`.
+   - `?tz=` sets the time zone for files whose times aren't labelled. XTB's current
+     exports label them `(UTC)`, and then this option doesn't apply. The default is
+     `Europe/Lisbon`.
    - `?currency=` sets the account currency, for files that don't state one. It is
      never assumed.
 3. Re-uploading a file adds nothing. A longer export of the same history adds only the
@@ -96,9 +98,29 @@ this slice depends on it.
    `/conflicts` and is never applied silently.
 
 The importer finds columns by their header text, in English or Portuguese. It ignores
-column positions and sheet names. The export layout comes from public examples and has
-not yet been checked against a real export. Every row it can't read is reported as an
-issue.
+column positions and sheet names. Every row it can't read is reported as an issue.
+
+The layout was checked against a real web-platform export in November 2026, and
+`tests/fixtures/xtb/xtb_2026_layout.xlsx` reproduces it with invented values:
+- **Account block.** Each sheet starts with the account number and date range, above the
+  table. The open-positions sheet also states the account currency.
+- **Times.** They are in UTC, labelled `(UTC)`, and stored as spreadsheet serial numbers.
+- **Instrument and Ticker.** "Instrument" is the security's name and "Ticker" its symbol.
+- **Category.** It says whether a row is a STOCK, ETF, ETC or CFD. ETCs are treated as
+  owned funds.
+- **Totals rows.** They are skipped: `Total` and `Profit/loss` sum the rows above them and
+  aren't operations.
+- **Open positions.** Each instrument row is followed by its individual positions. The
+  importer reads the instrument rows, which carry the totals and the value in account
+  currency, so nothing is counted twice.
+- **Cash operation types.** They include CFD "Dividend equivalent", which is kept with
+  the CFD and never mixed with owned-share dividends. Its "Adjustment fee" is recorded
+  as a broker fee, not a tax.
+- **Comments.** "OPEN BUY SYM 3 @ …" repeats the symbol. In "CLOSE BUY 2/5 @ …", 2 of 5
+  units were closed.
+- **Unclassified types.** "Spinoff", "Correction" and "Fractional shares" are kept as
+  unsupported rows with a warning. Their cash still counts. The ledger doesn't model
+  splits or spin-offs yet, so the reconciliation reports any resulting difference.
 
 **Currencies.**
 - Cash amounts, purchase values and P/L are in the account currency.

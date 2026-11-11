@@ -74,7 +74,9 @@ fn test_english_cash_xlsx_and_csv() {
                 // The comment price is in USD but the row only states EUR cash, so it
                 // is dropped rather than mislabelled; the quantity is still exact.
                 assert_eq!(*price, None);
-                assert!(position_ref.is_some());
+                // This layout has no Position ID column, and the operation's own ID is
+                // not a position id.
+                assert_eq!(*position_ref, None);
             }
             other => panic!("expected Trade Buy, got {other:?}"),
         }
