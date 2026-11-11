@@ -40,3 +40,40 @@ __pycache__/
 # Agent scratch state (worktrees live here) and runtime job logs
 .claude/
 logs/
+
+# Credentials and machine-specific environment (keep sanitized templates public)
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+id_rsa
+id_ed25519
+credentials.json
+service-account*.json
+secrets/
+.secrets/
+.aws/
+.ssh/
+
+# Private runtime data, sessions and local tooling
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.log
+.venv/
+venv/
+node_modules/
+playwright-report/
+test-results/
+android/local.properties
+android/key.properties
