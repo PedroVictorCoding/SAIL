@@ -86,7 +86,7 @@ pub enum ServiceError {
 /// The Capital service: one store, used through the importers, the ledger and the
 /// research sources.
 pub struct CapitalService {
-    store: CapitalStore,
+    store: std::sync::Arc<CapitalStore>,
     edgar: std::sync::Arc<dyn EdgarApi>,
     sec_configured: bool,
     sec_status: std::sync::Mutex<SecStatus>,
@@ -145,7 +145,7 @@ impl CapitalService {
         sec_configured: bool,
     ) -> Result<Self, ServiceError> {
         Ok(Self {
-            store: CapitalStore::open(dir)?,
+            store: std::sync::Arc::new(CapitalStore::open(dir)?),
             edgar,
             sec_configured,
             sec_status: std::sync::Mutex::new(SecStatus {
@@ -845,7 +845,13 @@ impl CapitalService {
             for (key, symbol) in held {
                 match self.prices.daily(&symbol).await {
                     Ok(series) => {
-                        self.store.record_prices(&key, &series, Utc::now())?;
+                        let store = self.store.clone();
+                        tokio::task::spawn_blocking(move || {
+                            store.record_prices(&key, &series, Utc::now())
+                        })
+                        .await
+                        .map_err(|_| ServiceError::Store(crate::store::StoreError::Poisoned))?
+                        .map_err(ServiceError::from)?;
                     }
                     Err(crate::market::PriceSourceError::UnknownSymbol(_)) => unmapped.push(symbol),
                     Err(
@@ -935,13 +941,9 @@ impl CapitalService {
         else {
             return Ok(Vec::new());
         };
-        let mut rows: Vec<_> = self
-            .store
-            .prices(&coverage.instrument_key, Utc::now())?
-            .into_iter()
-            .filter(|o| from.is_none_or(|f| o.session >= f))
-            .filter(|o| to.is_none_or(|t| o.session <= t))
-            .collect();
+        let mut rows =
+            self.store
+                .prices_in_range(&coverage.instrument_key, Utc::now(), from, to)?;
         if rows.len() > MAX_PRICES_REPLY {
             rows.drain(..rows.len() - MAX_PRICES_REPLY);
         }
@@ -962,32 +964,60 @@ impl CapitalService {
         )>,
         ServiceError,
     > {
+        let held = self.held_instruments(account)?;
+        self.closes_for(&held, known_by)
+    }
+
+    /// Closes for an already resolved held set, so callers that need the set for a cache
+    /// key don't project the portfolio twice.
+    #[allow(clippy::type_complexity)]
+    fn closes_for(
+        &self,
+        held: &[(String, String)],
+        known_by: DateTime<Utc>,
+    ) -> Result<
+        Vec<(
+            String,
+            String,
+            Vec<(chrono::NaiveDate, rust_decimal::Decimal)>,
+        )>,
+        ServiceError,
+    > {
         let mut out = Vec::new();
-        for (key, symbol) in self.held_instruments(account)? {
+        for (key, symbol) in held {
             let closes: Vec<_> = self
                 .store
-                .prices(&key, known_by)?
+                .prices(key, known_by)?
                 .into_iter()
                 .map(|o| (o.session, o.close))
                 .collect();
-            out.push((key, symbol, closes));
+            out.push((key.clone(), symbol.clone(), closes));
         }
         Ok(out)
     }
 
-    /// The walk-forward evaluation over held instruments, cached until prices change.
+    /// The walk-forward evaluation over held instruments, cached until prices or the held
+    /// set change.
     pub fn evaluation(
         &self,
         account: &AccountId,
     ) -> Result<crate::forecast::EvalReport, ServiceError> {
-        let version = format!("{}|{}", account.as_str(), self.store.price_version()?);
+        let held = self.held_instruments(account)?;
+        let mut held_keys: Vec<&str> = held.iter().map(|(key, _)| key.as_str()).collect();
+        held_keys.sort_unstable();
+        let version = format!(
+            "{}|{}|{}",
+            account.as_str(),
+            self.store.price_version()?,
+            held_keys.join("|")
+        );
         if let Ok(cache) = self.evaluation_cache.lock()
             && let Some((cached_version, report)) = cache.as_ref()
             && *cached_version == version
         {
             return Ok(report.clone());
         }
-        let data = self.held_closes(account, Utc::now())?;
+        let data = self.closes_for(&held, Utc::now())?;
         let series: Vec<crate::forecast::CloseSeries<'_>> = data
             .iter()
             .filter(|(_, _, closes)| !closes.is_empty())

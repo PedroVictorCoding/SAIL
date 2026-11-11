@@ -118,6 +118,30 @@ async fn refresh_is_idempotent_and_revisions_keep_first_availability() {
 }
 
 #[tokio::test]
+async fn a_reverted_close_is_stored_as_a_new_visible_revision() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = fake(false);
+    let svc = service(dir.path(), source.clone(), true);
+    svc.refresh_prices(None).await.unwrap();
+    let first = svc.prices("AAPL.US", None, None).unwrap();
+    let first_seen = first.last().unwrap().first_available_at;
+    assert_eq!(first.last().unwrap().close, Decimal::new(109, 0));
+
+    // A correction, then a revert to the content that was stored first. Both must win
+    // while the revision is current, and the original first-availability time must stick.
+    *source.last_close.lock().unwrap() = Decimal::new(1095, 1);
+    svc.refresh_prices(None).await.unwrap();
+    let corrected = svc.prices("AAPL.US", None, None).unwrap();
+    assert_eq!(corrected.last().unwrap().close, Decimal::new(1095, 1));
+
+    *source.last_close.lock().unwrap() = Decimal::new(109, 0);
+    svc.refresh_prices(None).await.unwrap();
+    let reverted = svc.prices("AAPL.US", None, None).unwrap();
+    assert_eq!(reverted.last().unwrap().close, Decimal::new(109, 0));
+    assert_eq!(reverted.last().unwrap().first_available_at, first_seen);
+}
+
+#[tokio::test]
 async fn prices_known_later_are_invisible_earlier() {
     let dir = tempfile::tempdir().unwrap();
     let store = sail_capital::store::CapitalStore::open(dir.path()).unwrap();

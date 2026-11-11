@@ -56,8 +56,9 @@ pub enum ModelId {
     /// scaled by √h. Gaussian.
     EwmaVolatility,
     /// The empirical distribution of every past non-overlapping h-session log return in
-    /// the last 3 years, needing at least 20 of them. Quantiles are read off directly, and
-    /// the mean and σ are sample moments. Not Gaussian.
+    /// about the last 3 years, widened at long horizons so at least 20 samples fit.
+    /// Needs at least 20 of them. Quantiles are read off directly, and the mean and σ are
+    /// sample moments. Not Gaussian.
     EmpiricalHorizon,
 }
 

@@ -268,6 +268,19 @@ fn gaussian_invariants_hold() {
 }
 
 #[test]
+fn empirical_sixty_session_forecast_uses_a_wide_enough_window() {
+    let closes = random_walk(1_600, 0.0, 0.01, 71);
+    let distribution = ok(forecast(
+        &series(&closes, "empirical", "EMP"),
+        ModelId::EmpiricalHorizon,
+        60,
+        unverified(),
+    ));
+    assert!(distribution.observations_used >= 1_200);
+    assert_eq!(distribution.quantiles.len(), QUANTILE_LEVELS.len());
+}
+
+#[test]
 fn empirical_invariants_hold() {
     let closes = random_walk(1_200, 0.0001, 0.011, 22);
     let distribution = ok(forecast(

@@ -7,12 +7,10 @@
 //! A neutral User-Agent (`"SAIL-capital/1"`) is used. The owner's email or identity is
 //! never sent.
 use super::{
-    Adjustment, MAX_BARS_PER_SERIES, MAX_PRICE_RESPONSE_BYTES, PRICE_MAX_REQUESTS_PER_SECOND,
-    PriceBar, PriceSeries, PriceSource, PriceSourceError,
+    Adjustment, MAX_PRICE_RESPONSE_BYTES, PRICE_MAX_REQUESTS_PER_SECOND, PriceColumns, PriceSeries,
+    PriceSource, PriceSourceError, read_price_bars,
 };
 use chrono::NaiveDate;
-use rust_decimal::Decimal;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -129,85 +127,21 @@ pub fn parse_stooq_csv(
     let close_idx = close_col
         .ok_or_else(|| PriceSourceError::Malformed("missing Close column in Stooq CSV".into()))?;
 
-    let mut by_session: BTreeMap<NaiveDate, PriceBar> = BTreeMap::new();
-    let mut skipped = 0;
-
-    for result in reader.records() {
-        let record = match result {
-            Ok(r) => r,
-            Err(_) => {
-                skipped += 1;
-                continue;
-            }
-        };
-
-        let Some(date_str) = record.get(date_idx) else {
-            skipped += 1;
-            continue;
-        };
-        let Ok(session) = NaiveDate::parse_from_str(date_str.trim(), "%Y-%m-%d") else {
-            skipped += 1;
-            continue;
-        };
-
-        let Some(close_str) = record.get(close_idx) else {
-            skipped += 1;
-            continue;
-        };
-        let Some(close) = super::machine_decimal(close_str) else {
-            skipped += 1;
-            continue;
-        };
-        if close <= Decimal::ZERO {
-            skipped += 1;
-            continue;
-        }
-
-        let open = open_col
-            .and_then(|i| record.get(i))
-            .and_then(super::machine_decimal);
-        let high = high_col
-            .and_then(|i| record.get(i))
-            .and_then(super::machine_decimal);
-        let low = low_col
-            .and_then(|i| record.get(i))
-            .and_then(super::machine_decimal);
-        let volume = volume_col
-            .and_then(|i| record.get(i))
-            .and_then(super::machine_decimal);
-
-        let bar = PriceBar {
-            session,
-            open,
-            high,
-            low,
-            close,
-            volume,
-        };
-
-        if by_session.insert(session, bar).is_some() {
-            tracing::warn!(%session, "duplicate session in Stooq CSV; keeping last occurrence");
-        }
-    }
-
-    if skipped > 0 {
-        tracing::warn!(
-            skipped,
-            "skipped malformed or non-positive close rows in Stooq CSV"
-        );
-    }
-
-    if by_session.is_empty() {
-        return Err(PriceSourceError::Malformed(
-            "no valid price bars in Stooq CSV".into(),
-        ));
-    }
-
-    let mut bars: Vec<PriceBar> = by_session.into_values().collect();
-    if bars.len() > MAX_BARS_PER_SERIES {
-        let excess = bars.len() - MAX_BARS_PER_SERIES;
-        bars.drain(0..excess);
-    }
+    let columns = PriceColumns {
+        date: date_idx,
+        close: close_idx,
+        open: open_col,
+        high: high_col,
+        low: low_col,
+        volume: volume_col,
+    };
+    let bars = read_price_bars(
+        &mut reader,
+        &columns,
+        |text| NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d").ok(),
+        super::machine_decimal,
+        "Stooq CSV",
+    )?;
 
     Ok(PriceSeries {
         source_id: "stooq".to_string(),
