@@ -190,8 +190,8 @@ fn a_confirmed_policy_gives_one_sized_fix() {
     let plan = f.policy_plan.as_mut().unwrap();
     plan.breaches_before = vec![idle_cash()];
     plan.changes = vec![Change {
-        instrument_key: "sym:VWRA.UK".into(),
-        symbol: "VWRA.UK".into(),
+        instrument_key: "sym:ABC.UK".into(),
+        symbol: "ABC.UK".into(),
         from_pct: 20.0,
         to_pct: 35.0,
         amount: 3_000.0,
