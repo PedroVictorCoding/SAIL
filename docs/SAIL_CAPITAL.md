@@ -15,8 +15,10 @@ Round 7 (2026-11-10) builds the **portfolio foundation**:
 - serve the result read-only at `/api/capital`.
 
 Round 8 adds the first research source, **SEC EDGAR filings** for the US companies the
-owner holds (see below). House/Senate, FRED/ECB and Polymarket adapters, the risk engine and
-any forecasting model come in later rounds.
+owner holds (see below). Round 9 adds splits, received shares and portfolio insights.
+Round 10 adds **daily prices and baseline forecasts** with an honest out-of-sample score
+(see below). House/Senate, FRED/ECB and Polymarket adapters, the risk engine and any neural
+or `.sea` model come in later rounds.
 
 ## ADR-0001: one crate, ledger first
 
@@ -206,6 +208,77 @@ asked `AsOf { occurred_by, known_by }` sees a filing only if it was published by
 **watch** item or a **research proposal**, with the reason quoting only the form type and
 8-K item numbers. There is no buy or sell output.
 
+## Prices and baseline forecasts (round 10)
+
+**What it is.** Statistical ranges for each held instrument's price over 5, 20 and 60
+trading sessions (about a week, a month and a quarter), from four simple baselines, scored
+out of sample against "no change". It is not advice: nothing proposes or places a trade,
+and the page opens with "Statistical ranges from past prices, not predictions of what to
+do."
+
+**Getting prices.** Either:
+- **upload a price file** (CSV with a date and a close column, comma or semicolon
+  separated, English or Portuguese headers). Nothing leaves the host;
+- **fetch from Yahoo Finance** through the `yfinance` Python library. Run
+  `scripts/prices/setup.sh` once (it installs into `/srv/sail-data/venvs/prices`), then set
+  `SAIL_PRICES_SOURCE=yfinance`. Only ticker symbols are sent, never amounts, the account
+  or the owner's name. SAIL runs `scripts/prices/yfinance_daily.py` once per symbol with a
+  cleared environment, at most one per second, 100 per refresh, 8 MB of output and
+  90 seconds each. Fetching only happens when the owner presses **Fetch prices**.
+  `SAIL_YFINANCE_PYTHON`, `SAIL_YFINANCE_SCRIPT` and `SAIL_YFINANCE_CACHE` override the
+  defaults.
+
+XTB suffixes map to Yahoo's: `.US` has none (`BRK.B.US` becomes `BRK-B`), `.PT` becomes
+`.LS`, `.NL` `.AS`, `.UK` `.L`, `.FR` `.PA`, `.ES` `.MC`, `.IT` `.MI` and `.DE` stays
+`.DE`. CFDs and unknown suffixes are listed as unmapped and never sent. Yahoo's close is
+split-adjusted but not dividend-adjusted. Pence-quoted listings keep `GBX`, so they are
+never mistaken for pounds. A Stooq client also exists (`SAIL_PRICES_SOURCE=stooq`), but
+Stooq now answers automated downloads with a browser check. SAIL reports that as blocked
+and doesn't try to get past it.
+
+**Storage and time.** Bars go into an append-only `price_bars` table. A changed bar is a
+new version that keeps the session's original `first_available_at`, and every question
+asked "as of" a time sees only the versions stored by then. Prices from machines (Yahoo,
+Stooq, comma-separated files) are read as dot decimals. The report parser would refuse
+`54.123` as ambiguous.
+
+**The models** (`forecast/`, pure, no I/O):
+
+| Model | Centre | Spread |
+|---|---|---|
+| `no_change` | zero drift | σ of the last 252 daily log returns × √h |
+| `trailing_drift` | mean of the last 252 daily log returns × h | as `no_change` |
+| `ewma_volatility` | zero drift | EWMA variance (λ = 0.94) × √h |
+| `empirical_horizon` | the past non-overlapping h-session returns of the last 3 years (at least 20) | read directly |
+
+**Safeguards from the EPIC:**
+- With fewer than 252 daily returns, a forecast is `insufficient_evidence` with a reason.
+  The same applies when the last 252 prices span more than 400 days (the source is missing
+  trading days) or, at 60 sessions, when `empirical_horizon` has fewer than 20 samples.
+- Typical (median) and average (mean) outcomes stay apart.
+- `probability_positive` is published only for a model and horizon that passed the
+  calibration check, and only by models that estimate a direction. Zero-drift models would
+  always say 50%.
+
+**Evaluation.** A walk-forward over held instruments: origins every 5 sessions after 252
+returns of history, each forecast using only earlier closes. Scores:
+- CRPS, and skill against `no_change` on the same forecasts;
+- pinball loss and Gaussian NLL;
+- coverage at each quantile, and the 5–95% interval;
+- direction hit rate;
+- cross-sectional rank IC (with at least 5 instruments).
+
+**Calibrated** means at least 100 forecasts, a 90% interval holding 85–95% of outcomes, and
+42–58% of outcomes below the median. Origins whose outcome spans missing trading days are
+skipped and counted. The report's notes state its limits: overlapping windows,
+survivorship (only held instruments), and no costs, taxes or FX. The result is cached until
+prices change.
+
+**What the first real evaluation showed (2026-11-11).** Volatility models are well
+calibrated. EWMA volatility beats `no_change` by about 1–2% CRPS at a week and a month.
+Trailing drift is worse than `no_change` at every horizon, by about 12% at a quarter. Rank
+IC is near zero. In short, the baselines describe how much prices move, not which way.
+
 ## API (`/api/capital`, owner token required)
 
 | Route | Returns |
@@ -225,6 +298,12 @@ asked `AsOf { occurred_by, known_by }` sees a filing only if it was published by
 | `GET /grants?account=` | Received shares the owner recorded, newest first, retracted ones included |
 | `POST /grants?account=` | Records received shares. The body is JSON: `symbol`, `kind` (stock/etf), `quantity`, `received_at`, `cost` (or null), `note` |
 | `POST /grants/{id}/retract?account=` | Retracts a grant, once |
+| `GET /prices/status` | Whether fetching is on and its source, the last refresh and error, per-instrument coverage and unmapped symbols |
+| `POST /prices/refresh?account=` | Fetches daily history for held instruments, then returns the status |
+| `POST /prices/import?account=&symbol=&currency=&adjustment=` | Stores an uploaded price file (raw body, `X-File-Name`) for a held symbol |
+| `GET /prices?symbol=&from=&to=` | Stored closes for one symbol |
+| `GET /forecasts?account=&horizon=&model=` | One forecast per held instrument with prices, plus `without_prices` |
+| `GET /forecasts/evaluation?account=` | The walk-forward report: scores, rank IC, skipped instruments and notes |
 
 All amounts are decimal strings. Errors are `{"error": "..."}`, with these status codes:
 
@@ -242,9 +321,11 @@ Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capit
 
 ## Not in this slice
 
-- Market prices, FX conversion and EUR totals across currencies.
+- FX conversion and EUR totals across currencies. Prices are stored in the trading
+  currency and feed forecasts only.
 - Tax computation. Withholding is recorded and matched to dividends, but the slice does
   not estimate Portuguese tax due.
-- Research beyond SEC filings, forecasts, and dossiers built from research proposals.
+- Research beyond SEC filings, models beyond the four baselines, and dossiers built from
+  research proposals.
 - The XTB browser companion (CAP-27), which depends on reviewing XTB's terms first.
 - Multi-user or public use.
