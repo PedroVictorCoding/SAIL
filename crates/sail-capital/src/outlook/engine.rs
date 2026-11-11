@@ -120,7 +120,8 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 scores.push(score);
             }
         }
-        fit::fit_weights(&scores, active, initial)
+        let (fitted, used) = fit::fit_weights(&scores, active, initial);
+        (shrink_to_equal(fitted, active, used, horizon), used)
     }
 
     fn alpha(&self, horizon: u32) -> f64 {
@@ -137,6 +138,31 @@ impl<'a, 'b> Ctx<'a, 'b> {
             })
             .unwrap_or(0.0)
     }
+}
+
+/// Prior strength of the equal-weight blend, in independent horizon-length windows.
+const SHRINK_WINDOWS: f64 = 20.0;
+
+/// Weekly origins overlap when the horizon is longer than a week, so `used` origins hold
+/// only about `used·5/h` independent outcomes. Fitted weights on so little data swing to
+/// one component (seen on real holdings), so they are trusted in proportion:
+/// `λ = n_eff / (n_eff + 20)`, and the rest goes to equal weights over active components.
+fn shrink_to_equal(fitted: [f64; 5], active: [bool; 5], used: u32, horizon: u32) -> [f64; 5] {
+    let count = active.iter().filter(|a| **a).count();
+    if count == 0 || fitted.iter().sum::<f64>() <= 0.0 {
+        return fitted;
+    }
+    let n_eff = used as f64 * WEIGHT_SPACING as f64 / (horizon.max(1) as f64);
+    let lambda = n_eff / (n_eff + SHRINK_WINDOWS);
+    let equal = 1.0 / count as f64;
+    let mut out = [0.0; 5];
+    for i in 0..5 {
+        if active[i] {
+            out[i] = lambda * fitted[i] + (1.0 - lambda) * equal;
+        }
+    }
+    let total: f64 = out.iter().sum();
+    out.map(|w| w / total)
 }
 
 fn available(dists: &[Option<Dist>; 5]) -> [bool; 5] {
