@@ -162,7 +162,8 @@ and the ledger: there are no market prices, no FX conversion and no model.
 | Allocation | Each owned position's share of the owned value, by the broker's value at its snapshot, plus the same by kind (stock, ETF). CFDs are never included. |
 | Concentration | The largest position and the top 5. The Herfindahl–Hirschman index (the sum of squared shares) and its inverse, "as concentrated as N equal holdings". |
 | Income | Owned-share dividends minus withholding, plus interest after its tax, by UTC month. Also the trailing 12 months, and a trailing yield on the owned value. CFD dividend equivalents are excluded. |
-| Return on deposits | Ledger cash plus owned value, minus net deposits (deposits minus withdrawals; transfers between the owner's own sub-accounts don't count). It reports the gain and the gain over net deposits. |
+| Account | XTB's own terms, so the figures can be checked against the app: account value = free funds + positions; invested = what the open positions cost (their cost basis); free funds = ledger cash; open profit/loss = positions − invested. |
+| Since the first deposit | Deposits and withdrawals added up (transfers between the owner's own sub-accounts don't count), and how far the account value is above or below that net amount. It includes dividends, interest, fees, closed trades and CFD results. |
 | Freshness | The broker snapshot's time and age. The data counts as stale after 72 hours. |
 
 A figure that would need two currencies combined is left out, with a warning. Positions

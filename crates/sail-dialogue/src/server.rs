@@ -1013,15 +1013,16 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                 let current=epoch.load(Ordering::SeqCst);
                                 emit(&tx,current,json!({"type":"transcript","channel":"voice:stt","text":text,"is_final":true,"source":"client"})).await;
                                 emit(&tx,current,json!({"type":"turn_committed","cause":"client","chars":text.chars().count()})).await;
-                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(text.into(),None,consent),epoch.clone(),live_context.clone(),client_speech.output()));
+                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(text.into(),None,None,consent),epoch.clone(),live_context.clone(),client_speech.output()));
                                 capture_priority.take();
                             },
                             "text"=>{
                                 let prompt=value["text"].as_str().unwrap_or_default();
                                 if prompt.trim().is_empty()||prompt.len()>16000{continue;}
                                 let vision=match parse_vision(&value["vision"]) {Ok(v)=>v,Err(e)=>{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":e.to_string()})).await;continue;}};
+                                let vision_source=value["vision_source"].as_str().filter(|source|matches!(*source,"camera"|"screen"|"upload")).map(str::to_string);
                                 client_capture.take();capture_priority.take();observation.take();turn.take();partial.take();pipe.reset_capture();pipe.advance_turn();pending.clear();let current=epoch.fetch_add(1,Ordering::SeqCst)+1;
-                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision,state.arena.learning_epoch(&session)),epoch.clone(),live_context.clone(),client_speech.output()));
+                                turn=Some(start_turn(state.clone(),session.clone(),current,tx.clone(),pipe.stt.clone(),pipe.tts.clone(),pipe.vlm.clone(),TurnInput::Text(prompt.into(),vision,vision_source,state.arena.learning_epoch(&session)),epoch.clone(),live_context.clone(),client_speech.output()));
                             },
                             "kernel_tool"=>{
                                 let name=value["tool"].as_str().unwrap_or_default();
@@ -1428,7 +1429,8 @@ fn execute_tool_for(
 
 enum TurnInput {
     Audio(Vec<i16>, Option<u64>),
-    Text(String, Option<VisionFrameInput>, Option<u64>),
+    /// Prompt, optional image, image source (`camera`/`screen`/`upload`), learning consent.
+    Text(String, Option<VisionFrameInput>, Option<String>, Option<u64>),
 }
 
 /// Where the reply is turned into speech. `Client`: the browser runs Kokoro and the
@@ -1560,9 +1562,9 @@ async fn run_turn(
         && live_context.lock().expect("live context lock").enabled();
     let learning_epoch = match &input {
         TurnInput::Audio(_, consent) => *consent,
-        TurnInput::Text(_, _, consent) => *consent,
+        TurnInput::Text(_, _, _, consent) => *consent,
     };
-    let (prompt, vision) = match input {
+    let (prompt, vision, vision_source) = match input {
         TurnInput::Audio(audio, _) => {
             let (text, tokens) = stt.transcribe(&audio, false).await?;
             emit(
@@ -1571,9 +1573,9 @@ async fn run_turn(
                 json!({"type":"transcript","text":text,"tokens":tokens,"is_final":true}),
             )
             .await;
-            (text, None)
+            (text, None, None)
         }
-        TurnInput::Text(text, vision, _) => (text, vision),
+        TurnInput::Text(text, vision, source, _) => (text, vision, source),
     };
     if prompt.trim().is_empty() {
         emit(&tx, current, json!({"type":"turn_finished","state":"idle"})).await;
@@ -1611,6 +1613,22 @@ async fn run_turn(
         .as_ref()
         .map(crate::vlm::raw_vision_frame)
         .transpose()?;
+    // Keep the original encoded image, not the downscaled analysis frame, so the owner can
+    // ask about it in a later turn. Failure here never blocks the current turn.
+    let archived_upload = vision.as_ref().and_then(|frame| {
+        match crate::vision_archive::store_attached(
+            frame,
+            vision_source.as_deref().unwrap_or("upload"),
+            &session,
+            &prompt,
+        ) {
+            Ok(meta) => Some(meta.id),
+            Err(error) => {
+                warn!(%error, "Attached image could not be archived");
+                None
+            }
+        }
+    });
     let conversation = state.arena.conversation_context(&session, &prompt);
     let memory_lines = conversation.memory.lines();
     debug!(
@@ -1638,6 +1656,15 @@ async fn run_turn(
             "Earlier in this conversation (JSON list):\n{}\n",
             serde_json::to_string(&memory_lines)?
         ));
+    }
+    // The archive is what lets a follow-up ask about a photo from an earlier turn. Saying
+    // so in the turn context also keeps the tool offered when the message itself does not
+    // mention an image.
+    if let Ok(archive) = crate::vision_archive::Archive::open()
+        && archive.has_images(&session).unwrap_or(false)
+    {
+        memory_block.push_str(crate::vision_archive::ARCHIVE_CONTEXT_NOTE);
+        memory_block.push_str("; use vision_photos to find or reopen one.\n");
     }
     let observed_context = live_context
         .lock()
@@ -1669,6 +1696,9 @@ async fn run_turn(
                         chars = description.chars().count(),
                         "Attached image described locally for a text-only model"
                     );
+                    if let Some(id) = &archived_upload {
+                        crate::vision_archive::describe_stored(id, &description);
+                    }
                     (
                         crate::visual_snapshot::attached_image_context(&description, &prompt),
                         None,
@@ -1988,9 +2018,27 @@ async fn take_snapshot(
         }
     };
     drop(request);
+    // Archive the frame before looking at it: a later turn can retrieve it by id even if
+    // this turn's answer is forgotten. Archiving is best effort and never blocks the turn.
+    let archived = match crate::vision_archive::store_snapshot(
+        &frame,
+        source.as_str(),
+        session,
+        question.as_deref(),
+    ) {
+        Ok(meta) => Some(meta.id),
+        Err(error) => {
+            warn!(%error, "Snapshot could not be archived");
+            None
+        }
+    };
     let started = Instant::now();
     match snapshot::observe(vlm, &frame, source.as_str(), question.as_deref()).await {
         Ok(observation) => {
+            if let (Some(id), snapshot::Observation::Text(text)) = (archived.as_deref(), &observation)
+            {
+                crate::vision_archive::describe_stored(id, text);
+            }
             info!(
                 source = source.as_str(),
                 image_bytes = frame.data.len(),
@@ -2225,6 +2273,7 @@ async fn reason_turn(
             info!(round, calls = calls.len(), "Model requested local tools");
             for call in calls {
                 let mut snapshot_image = None;
+                let mut archived_image = None;
                 let name = call["function"]["name"].as_str().unwrap_or_default();
                 let arguments = call["function"]["arguments"].as_str().unwrap_or("{}");
                 trace!(
@@ -2284,6 +2333,19 @@ async fn reason_turn(
                             let (result, image) =
                                 take_snapshot(vlm, session, &params, tx, current).await;
                             snapshot_image = image;
+                            guard.record(name, &params, result.clone());
+                            result
+                        } else if name == crate::vision_archive::TOOL || name == "vision:photos" {
+                            emit(
+                                tx,
+                                current,
+                                json!({"type":"tool_started","channel":"voice:vlm","tool":crate::vision_archive::TOOL}),
+                            )
+                            .await;
+                            let session = memory.as_ref().map(|scope| scope.session);
+                            let (result, image) =
+                                crate::vision_archive::run_tool(vlm, session, &params).await;
+                            archived_image = image;
                             guard.record(name, &params, result.clone());
                             result
                         } else if name == crate::vlm::MEMORY_SEARCH_TOOL {
@@ -2570,8 +2632,9 @@ async fn reason_turn(
                 messages.push(
                     json!({"role":"tool","name":name,"tool_call_id":call["id"],"content":content}),
                 );
-                // A vision-capable model sees the snapshot itself, right after its tool result.
-                if let Some(image) = snapshot_image {
+                // A vision-capable model sees the snapshot (or retrieved photo) itself,
+                // right after its tool result.
+                if let Some(image) = snapshot_image.or(archived_image) {
                     messages.push(image);
                 }
             }
@@ -3150,6 +3213,96 @@ mod tests {
                 .unwrap()
                 .starts_with("data:image/jpeg;base64,")
         );
+    }
+
+    fn tiny_jpeg() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let image = image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0]));
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Jpeg,
+            )
+            .expect("test jpeg");
+        bytes
+    }
+
+    #[tokio::test]
+    async fn archived_photos_are_found_by_conversation_and_returned_by_id() {
+        let (_server, vlm) = snapshot_fixture(true).await;
+        let session = format!("archive-test-{}", uuid::Uuid::new_v4());
+        let jpeg = tiny_jpeg();
+        let frame = crate::VisionFrameInput {
+            width: 1,
+            height: 1,
+            format: "image/jpeg".into(),
+            data: jpeg,
+        };
+        let archive = crate::vision_archive::Archive::open().expect("archive");
+        let meta = archive
+            .store(crate::vision_archive::NewImage {
+                bytes: &frame.data,
+                format: &frame.format,
+                source: "camera",
+                origin: "snapshot",
+                conversation_id: &session,
+                caption: Some("Whiteboard with equations"),
+                description: None,
+            })
+            .expect("store archived photo");
+
+        let (recent, image) = crate::vision_archive::run_tool(
+            &vlm,
+            Some(&session),
+            &json!({"mode":"recent"}),
+        )
+        .await;
+        assert!(recent.success, "{:?}", recent.output);
+        assert_eq!(recent.output["count"], 1);
+        assert_eq!(recent.output["images"][0]["id"], meta.id);
+        assert!(image.is_none(), "recent must not attach an image");
+
+        let (found, image) = crate::vision_archive::run_tool(
+            &vlm,
+            Some(&session),
+            &json!({"mode":"get","id":meta.id}),
+        )
+        .await;
+        assert!(found.success, "{:?}", found.output);
+        assert_eq!(found.output["attached"], true);
+        assert!(image.is_some(), "a vision model receives the image");
+    }
+
+    #[tokio::test]
+    async fn archived_photos_describe_for_a_text_only_model() {
+        let (_server, vlm) = snapshot_fixture(false).await;
+        let session = format!("archive-text-test-{}", uuid::Uuid::new_v4());
+        let jpeg = tiny_jpeg();
+        let archive = crate::vision_archive::Archive::open().expect("archive");
+        let meta = archive
+            .store(crate::vision_archive::NewImage {
+                bytes: &jpeg,
+                format: "image/jpeg",
+                source: "screen",
+                origin: "snapshot",
+                conversation_id: &session,
+                caption: Some("Which error is shown?"),
+                description: Some("A dark terminal showing a compiler error."),
+            })
+            .expect("store archived photo");
+
+        let (found, image) = crate::vision_archive::run_tool(
+            &vlm,
+            Some(&session),
+            &json!({"mode":"get","id":meta.id}),
+        )
+        .await;
+        assert!(found.success, "{:?}", found.output);
+        assert_eq!(
+            found.output["description"],
+            "A dark terminal showing a compiler error."
+        );
+        assert!(image.is_none(), "a text-only model gets the stored description");
     }
 
     #[tokio::test]

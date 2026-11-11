@@ -1456,6 +1456,49 @@ fn file_extensions(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Words that make an earlier photo relevant. Kept narrow so the archive tool does not
+/// displace tools that the current request needs.
+fn mentions_visual_context(query: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "photo",
+        "photos",
+        "picture",
+        "pictures",
+        "image",
+        "images",
+        "screenshot",
+        "screenshots",
+        "snapshot",
+        "snapshots",
+        "camera",
+        "webcam",
+        "upload",
+        "uploaded",
+        "selfie",
+        "foto",
+        "fotos",
+        "fotografia",
+        "fotografias",
+        "imagem",
+        "imagens",
+        "ecra",
+        "ecrã",
+        "tela",
+        "captura",
+        "camara",
+        "câmara",
+    ];
+    let tokens: Vec<String> = query
+        .to_lowercase()
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect();
+    WORDS
+        .iter()
+        .any(|word| tokens.iter().any(|token| token == word))
+}
+
 /// A request naming a file (`README.md`, `*.rs`, a path like `src/main.rs`), or asking
 /// to open a file ("open … file", "abre o ficheiro").
 fn names_file(text: &str) -> bool {
@@ -1584,6 +1627,10 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
     let more_knowledge = messages
         .iter()
         .any(|m| m.to_string().contains(KNOWLEDGE_MORE_NOTE));
+    let has_archived_photos = messages.iter().any(|m| {
+        m.to_string()
+            .contains(crate::vision_archive::ARCHIVE_CONTEXT_NOTE)
+    });
     let query = messages
         .iter()
         .rev()
@@ -1645,17 +1692,37 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
         let search = ranked.remove(pos);
         ranked.insert(usize::from(has_handles), search);
     }
-    // Always offer visual_snapshot, as realtime voice assistants do: the model decides when
-    // to look, and the user approves each capture. It follows the memory tools.
-    if let Some(pos) = ranked
-        .iter()
-        .position(|(_, _, tool)| tool["function"]["name"] == crate::visual_snapshot::TOOL)
+    // Always offer the current-turn snapshot tool. When the turn may refer to an earlier
+    // photo (or the conversation has archived ones), keep the archive tool beside it; the
+    // model decides when to look, and the user approves each capture. They follow the
+    // memory tools.
+    let mut visual_at = usize::from(has_handles) + usize::from(more_knowledge);
+    let wants_archive = has_archived_photos || mentions_visual_context(&query);
+    let mut visual_tools = vec![crate::visual_snapshot::TOOL];
+    if wants_archive {
+        visual_tools.push(crate::vision_archive::TOOL);
+    }
+    for name in visual_tools {
+        if let Some(pos) = ranked
+            .iter()
+            .position(|(_, _, tool)| tool["function"]["name"] == name)
+        {
+            let tool = ranked.remove(pos);
+            ranked.insert(visual_at, tool);
+            visual_at += 1;
+        }
+    }
+    // Without a visual cue or an archive note the archive tool still stays available, but
+    // behind the tools the request ranks higher. It must not vanish from a turn that says
+    // only "what did I show you?".
+    if !wants_archive
+        && let Some(pos) = ranked
+            .iter()
+            .position(|(_, _, tool)| tool["function"]["name"] == crate::vision_archive::TOOL)
+        && pos >= 8
     {
-        let snapshot = ranked.remove(pos);
-        ranked.insert(
-            usize::from(has_handles) + usize::from(more_knowledge),
-            snapshot,
-        );
+        let tool = ranked.remove(pos);
+        ranked.insert(7.min(ranked.len()), tool);
     }
     // spotify_play goes right after spotify_find. When no playlist name matches, the model
     // has to pick one from the list and play it, and "put on something by X" shares no
@@ -1679,6 +1746,12 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
             ranked
                 .iter()
                 .any(|(_, _, tool)| tool["function"]["name"] == crate::visual_snapshot::TOOL),
+        )
+        + usize::from(
+            wants_archive
+                && ranked
+                    .iter()
+                    .any(|(_, _, tool)| tool["function"]["name"] == crate::vision_archive::TOOL),
         );
     // Keep fs_read within the first 8 when a file or path is named, or opening a file is asked.
     if names_file(&query)
@@ -1736,6 +1809,7 @@ pub fn tool_definitions() -> serde_json::Value {
         serde_json::json!({"type":"function","function":{"name":"vision_frame","description":"Measure luminance and edge density of the currently attached image. For semantic questions reason directly from the image input.","parameters":{"type":"object","properties":{}}}}),
     );
     tools.push(crate::visual_snapshot::tool_definition());
+    tools.push(crate::vision_archive::tool_definition());
     tools.push(serde_json::json!({"type":"function","function":{"name":MEMORY_RECALL_TOOL,"description":"Read this conversation's archived memory: an earlier turn or a full tool result by id (mem:N), optionally only the parts matching query or a page from offset; or search the archive by query alone.","parameters":{"type":"object","properties":{"id":{"type":"string","description":"Archive handle such as mem:12"},"query":{"type":"string","maxLength":500,"description":"Words to look for"},"offset":{"type":"integer","minimum":0,"description":"Character offset to page through a long record"},"max_chars":{"type":"integer","minimum":200,"maximum":6000}},"additionalProperties":false}}}));
     tools.push(serde_json::json!({"type":"function","function":{"name":MEMORY_SEARCH_TOOL,"description":"Search what SAIL remembers long-term about the user: people, preferences, projects, decisions and facts from earlier conversations. Returns one fact per line.","parameters":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":500,"description":"Names or words to look for"},"limit":{"type":"integer","minimum":1,"maximum":20}},"required":["query"],"additionalProperties":false}}}));
     serde_json::Value::Array(tools)
@@ -1841,7 +1915,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 32);
+        assert_eq!(tools.len(), 33);
 
         let names: Vec<_> = tools
             .iter()
@@ -1869,6 +1943,7 @@ mod schema_selection_tests {
         assert!(names.contains(&"memory_recall"));
         assert!(names.contains(&"memory_search"));
         assert!(names.contains(&"visual_snapshot"));
+        assert!(names.contains(&"vision_photos"));
         for pulse in ["pulse_create", "pulse_list", "pulse_cancel", "pulse_snooze"] {
             assert!(names.contains(&pulse), "{pulse}");
         }
@@ -1939,6 +2014,19 @@ mod schema_selection_tests {
             offered(&[serde_json::json!({"role":"user","content":more})])[0],
             "memory_search"
         );
+    }
+
+    #[test]
+    fn archived_photos_keep_the_archive_tool_offered() {
+        let prompt = format!(
+            "What did I show you earlier?\n{}",
+            crate::vision_archive::ARCHIVE_CONTEXT_NOTE
+        );
+        let offered = offered_for(&prompt);
+        let rank = offered
+            .iter()
+            .position(|name| name == crate::vision_archive::TOOL);
+        assert!(rank.is_some_and(|rank| rank <= 2), "{offered:?}");
     }
 
     #[test]

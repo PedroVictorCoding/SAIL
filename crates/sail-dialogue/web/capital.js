@@ -1111,36 +1111,55 @@ function renderInsights(ins) {
     if (freshnessSpan) freshnessSpan.textContent = "No broker snapshot";
   }
 
-  // 2. Return on Deposits
+  // 2. Account (in XTB's own terms) and return since the first deposit
+  const signClass = (money) =>
+    money && String(money.amount).startsWith("-") ? "negative" : "positive";
   let returnHtml = "";
-  if (ins.total_return) {
-    const tr = ins.total_return;
-    const isGainNegative = tr.gain && tr.gain.amount && String(tr.gain.amount).startsWith("-");
-    const gainClass = isGainNegative ? "negative" : "positive";
-    const gainRatioFormatted = tr.gain_ratio !== null && tr.gain_ratio !== undefined
-      ? `${(parseFloat(tr.gain_ratio) * 100).toFixed(2)}%`
-      : "—";
-    returnHtml = `
+  if (ins.account) {
+    const acc = ins.account;
+    returnHtml += `
       <div class="cp-insights-block">
-        <h3 class="cp-insights-subtitle">Return on Deposits</h3>
+        <h3 class="cp-insights-subtitle">Account</h3>
         <div class="cp-insights-stats">
           <div class="cp-stat-card">
-            <span class="cp-stat-label">Net Deposits</span>
-            <span class="cp-stat-val">${formatMoney(tr.net_deposits)}</span>
+            <span class="cp-stat-label">Account value</span>
+            <span class="cp-stat-val">${formatMoney(acc.account_value)}</span>
+            <span class="cp-stat-hint">Free funds + positions</span>
           </div>
           <div class="cp-stat-card">
-            <span class="cp-stat-label">Current Value</span>
-            <span class="cp-stat-val">${formatMoney(tr.current_value)}</span>
+            <span class="cp-stat-label">Invested</span>
+            <span class="cp-stat-val">${acc.invested ? formatMoney(acc.invested) : "—"}</span>
+            <span class="cp-stat-hint">What the open positions cost</span>
           </div>
           <div class="cp-stat-card">
-            <span class="cp-stat-label">Gain / Loss</span>
-            <span class="cp-stat-val ${gainClass}">${formatMoney(tr.gain)}</span>
+            <span class="cp-stat-label">Free funds</span>
+            <span class="cp-stat-val">${formatMoney(acc.free_funds)}</span>
+            <span class="cp-stat-hint">Cash in the account</span>
           </div>
           <div class="cp-stat-card">
-            <span class="cp-stat-label">Gain Ratio</span>
-            <span class="cp-stat-val ${gainClass}">${gainRatioFormatted}</span>
+            <span class="cp-stat-label">Open profit / loss</span>
+            <span class="cp-stat-val ${signClass(acc.open_result)}">${acc.open_result ? formatMoney(acc.open_result) : "—"}</span>
+            <span class="cp-stat-hint">Positions − invested</span>
           </div>
         </div>
+      </div>
+    `;
+  }
+  if (ins.total_return) {
+    const tr = ins.total_return;
+    const ratio = tr.gain_ratio !== null && tr.gain_ratio !== undefined
+      ? ` (${(parseFloat(tr.gain_ratio) * 100).toFixed(2)}%)`
+      : "";
+    returnHtml += `
+      <div class="cp-insights-block">
+        <h3 class="cp-insights-subtitle">Since the first deposit</h3>
+        <p class="cp-insights-line">
+          Deposited ${formatMoney(tr.deposits)}, withdrew ${formatMoney(tr.withdrawals)}:
+          <strong>net ${formatMoney(tr.net_deposits)}</strong> put in.
+          The account is worth ${formatMoney(tr.current_value)} now, so it is
+          <strong class="${signClass(tr.gain)}">${formatMoney(tr.gain)}${escapeHtml(ratio)}</strong>
+          above what was put in. This includes dividends, interest, fees, closed trades and CFD results.
+        </p>
       </div>
     `;
   }
