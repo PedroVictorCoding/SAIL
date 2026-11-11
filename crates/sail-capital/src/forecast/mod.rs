@@ -22,7 +22,7 @@
 //! - expected and median terminal prices are kept apart (`P0·exp(μ+σ²/2)` vs `P0·exp(μ)`);
 //! - nothing here proposes a trade.
 mod model;
-mod stats;
+pub(crate) mod stats;
 
 use std::collections::BTreeMap;
 
