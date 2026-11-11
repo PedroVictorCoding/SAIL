@@ -115,7 +115,7 @@
 
     <!-- Opt-in Note when prices not configured -->
     <div class="cp-price-note" id="cpPriceOptInNote" hidden>
-      <p>Price fetching is off by default to protect your privacy. SAIL never transmits personal data, but fetching quotes sends the ticker symbols of your held instruments to Stooq over HTTPS. To enable automatic price fetching, set <code>SAIL_PRICES_SOURCE=stooq</code> in your environment, or use <strong>Upload price file</strong> to import price history privately without network calls.</p>
+      <p>Price fetching is off. Turning it on sends the ticker symbols you hold, and nothing else, to Yahoo Finance through the yfinance library: no amounts, account or name. To turn it on, run <code>scripts/prices/setup.sh</code> once and set <code>SAIL_PRICES_SOURCE=yfinance</code>. Or use <strong>Upload price file</strong>, which sends nothing.</p>
     </div>
 
     <!-- Unmapped Symbols Note -->

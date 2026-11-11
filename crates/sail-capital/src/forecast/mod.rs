@@ -132,7 +132,8 @@ pub struct ForecastDistribution {
     pub variance_log_return: Option<f64>,
     /// At [`QUANTILE_LEVELS`].
     pub quantiles: Vec<Quantile>,
-    /// P(log return > 0). Only when `calibration.verified`; else `None`.
+    /// P(log return > 0). Only when `calibration.verified`, and only for models that
+    /// estimate drift (`TrailingDrift`, `EmpiricalHorizon`); else `None`.
     pub probability_positive: Option<f64>,
     /// `P0·exp(μ+σ²/2)` for Gaussian models; `None` for `EmpiricalHorizon`.
     pub expected_terminal_price: Option<f64>,

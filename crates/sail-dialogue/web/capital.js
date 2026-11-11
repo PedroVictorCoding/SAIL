@@ -1354,7 +1354,7 @@ async function loadPriceStatus() {
 
     const badge = document.getElementById("cpPriceBadge");
     if (badge) {
-      badge.textContent = status.configured ? (status.source === "stooq" ? "Stooq" : status.source || "Active") : "Unconfigured";
+      badge.textContent = status.configured ? ({ yfinance: "Yahoo", stooq: "Stooq" }[status.source] || status.source || "Active") : "Unconfigured";
     }
 
     const unmappedNote = document.getElementById("cpPriceUnmappedNote");

@@ -311,6 +311,12 @@ fn probability_positive_waits_for_verification() {
         .expect("calibrated probability");
     assert!((0.0..=1.0).contains(&probability));
     assert_eq!(verified_distribution.calibration, verified);
+
+    // Zero-drift models would always say 50%, so they publish nothing even when verified.
+    for model in [ModelId::NoChange, ModelId::EwmaVolatility] {
+        let zero_drift = ok(forecast(&input, model, 20, verified.clone()));
+        assert!(zero_drift.probability_positive.is_none(), "{model:?}");
+    }
 }
 
 #[test]

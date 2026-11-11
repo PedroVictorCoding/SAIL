@@ -212,7 +212,10 @@ fn gaussian_forecast(
     let mu = mu_daily * h;
     let sigma = sigma_daily * h.sqrt();
     let quantiles = QUANTILE_LEVELS.map(|p| mu + sigma * normal_quantile(p));
-    let probability_positive = verified.then(|| gaussian_probability_positive(mu, sigma));
+    // Zero-drift models put the median at today's close, so their P(rise) is 50% by
+    // construction and says nothing; only a model that estimates drift publishes one.
+    let probability_positive = (verified && model == ModelId::TrailingDrift)
+        .then(|| gaussian_probability_positive(mu, sigma));
 
     Ok(ModelForecast {
         expected_log_return: mu,
