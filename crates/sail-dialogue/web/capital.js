@@ -5,6 +5,8 @@ let currentAccount = null;
 let currentTz = "Europe/Lisbon";
 let selectedFile = null;
 let accountList = [];
+let currentHorizon = 20;
+let currentModel = "no_change";
 
 function setState(state, text) {
   const pill = document.getElementById("cpState");
@@ -587,6 +589,9 @@ function setupUploadDialog() {
       await loadFilings();
       await loadSecStatus();
       await loadSyncStatus();
+      await loadPriceStatus();
+      await loadForecasts();
+      await loadEvaluation();
       showBanner(
         batch.already_imported
           ? "This exact file was already imported; nothing changed."
@@ -1319,10 +1324,523 @@ function renderInsights(ins) {
   `;
 }
 
+// -----------------------------------------------------------------------------
+// Forecasts & Baselines (Round 10)
+// -----------------------------------------------------------------------------
+
+async function loadPriceStatus() {
+  try {
+    const status = await fetchJson("/api/capital/prices/status");
+    const optInNote = document.getElementById("cpPriceOptInNote");
+    if (optInNote) {
+      optInNote.hidden = Boolean(status.configured);
+    }
+
+    const statusLine = document.getElementById("cpPriceStatusLine");
+    if (statusLine) {
+      if (!status.configured) {
+        statusLine.textContent = "Prices not configured · 0 instruments priced";
+      } else {
+        const sourceName = status.source || "provider";
+        const instCount = status.instruments || 0;
+        const obsCount = status.observations || 0;
+        let line = `Source: ${sourceName} · ${instCount} instruments priced (${obsCount} bars) · Last refresh: ${formatDate(status.last_refresh_at)}`;
+        if (status.last_error) {
+          line += ` · Last error: ${status.last_error}`;
+        }
+        statusLine.textContent = line;
+      }
+    }
+
+    const badge = document.getElementById("cpPriceBadge");
+    if (badge) {
+      badge.textContent = status.configured ? (status.source === "stooq" ? "Stooq" : status.source || "Active") : "Unconfigured";
+    }
+
+    const unmappedNote = document.getElementById("cpPriceUnmappedNote");
+    if (unmappedNote) {
+      if (status.unmapped && status.unmapped.length > 0) {
+        unmappedNote.hidden = false;
+        unmappedNote.innerHTML = `<p>Unmapped instruments (CFD or unrecognised suffix): <strong>${status.unmapped.map(escapeHtml).join(", ")}</strong>. Track prices by uploading a price file.</p>`;
+      } else {
+        unmappedNote.hidden = true;
+        unmappedNote.innerHTML = "";
+      }
+    }
+  } catch (err) {
+    console.error("Failed to load price status:", err);
+  }
+}
+
+function setupPriceControls() {
+  const horizonBtns = document.querySelectorAll(".cp-horizon-btn");
+  horizonBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      horizonBtns.forEach(b => {
+        b.classList.remove("cp-active");
+        b.removeAttribute("aria-checked");
+      });
+      btn.classList.add("cp-active");
+      btn.setAttribute("aria-checked", "true");
+      currentHorizon = parseInt(btn.getAttribute("data-horizon"), 10) || 20;
+      loadForecasts();
+    });
+  });
+
+  const modelSelect = document.getElementById("cpForecastModelSelect");
+  if (modelSelect) {
+    modelSelect.addEventListener("change", (e) => {
+      currentModel = e.target.value;
+      loadForecasts();
+    });
+  }
+
+  const refreshBtn = document.getElementById("cpPriceRefreshBtn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", async () => {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = "Fetching prices...";
+      try {
+        const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+        const res = await fetchJson(`/api/capital/prices/refresh${query}`, { method: "POST" });
+        await loadPriceStatus();
+        await loadForecasts();
+        await loadEvaluation();
+        if (res.last_error) {
+          showBanner(`Price fetch stopped: ${res.last_error}`, true);
+        } else {
+          showBanner(`Prices refreshed: ${res.instruments || 0} instruments priced (${res.observations || 0} bars).`);
+        }
+      } catch (err) {
+        showBanner(`Price refresh failed: ${err.message}`, true);
+      } finally {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = "Fetch prices";
+      }
+    });
+  }
+}
+
+function setupPriceFileDialog() {
+  const dialog = document.getElementById("cpPriceFileDialog");
+  const openBtn = document.getElementById("cpPriceUploadBtn");
+  const cancelBtn = document.getElementById("cpPriceFileCancel");
+  const submitBtn = document.getElementById("cpPriceFileSubmit");
+  const symInput = document.getElementById("cpPriceFileSymbol");
+  const curSelect = document.getElementById("cpPriceFileCurrency");
+  const adjSelect = document.getElementById("cpPriceFileAdjustment");
+  const fileInput = document.getElementById("cpPriceFileInput");
+  if (!dialog || !openBtn) return;
+
+  openBtn.addEventListener("click", () => {
+    if (symInput) symInput.value = "";
+    if (fileInput) fileInput.value = "";
+    dialog.showModal();
+  });
+
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", () => {
+      dialog.close();
+    });
+  }
+
+  if (submitBtn) {
+    submitBtn.addEventListener("click", async () => {
+      const symbol = (symInput.value || "").trim().toUpperCase();
+      const file = fileInput.files && fileInput.files[0];
+      if (!symbol) {
+        showBanner("Please enter a broker symbol (e.g. GALP.PT).", true);
+        return;
+      }
+      if (!file) {
+        showBanner("Please choose a CSV file to import.", true);
+        return;
+      }
+
+      dialog.close();
+      setState("loading", "Importing prices…");
+      showBanner(`Uploading price file for ${symbol}…`);
+
+      try {
+        const buffer = await file.arrayBuffer();
+        const params = new URLSearchParams({
+          symbol,
+          currency: curSelect.value,
+          adjustment: adjSelect.value,
+        });
+        if (currentAccount) params.set("account", currentAccount);
+        const res = await fetchJson(`/api/capital/prices/import?${params.toString()}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-File-Name": file.name,
+          },
+          body: buffer,
+        });
+
+        showBanner(`Imported ${res.added || 0} daily closes for ${res.symbol || symbol} (${res.sessions_seen || 0} seen, ${res.revisions || 0} revisions).`);
+        setState("idle", "Ready");
+        await loadPriceStatus();
+        await loadForecasts();
+        await loadEvaluation();
+      } catch (err) {
+        setState("error", "Error");
+        showBanner(`Price import failed: ${err.message}`, true);
+      } finally {
+        symInput.value = "";
+        fileInput.value = "";
+      }
+    });
+  }
+}
+
+async function loadForecasts() {
+  const list = document.getElementById("cpForecastsList");
+  const withoutPricesWrap = document.getElementById("cpWithoutPricesWrap");
+  if (!list) return;
+
+  if (accountList.length === 0) {
+    list.innerHTML = `<p class="cp-empty">Fetch or upload prices to see forecasts</p>`;
+    if (withoutPricesWrap) withoutPricesWrap.hidden = true;
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams({
+      horizon: String(currentHorizon),
+      model: currentModel,
+    });
+    if (currentAccount) params.set("account", currentAccount);
+    const data = await fetchJson(`/api/capital/forecasts?${params.toString()}`);
+    renderForecasts(data);
+  } catch (err) {
+    if (String(err.message).includes("404") || String(err.message).toLowerCase().includes("not found")) {
+      list.innerHTML = `<p class="cp-empty">Fetch or upload prices to see forecasts</p>`;
+    } else {
+      list.innerHTML = `<p class="cp-empty" style="color:var(--sail-text-subtle)">Forecasts unavailable: ${escapeHtml(err.message)}</p>`;
+    }
+    if (withoutPricesWrap) withoutPricesWrap.hidden = true;
+  }
+}
+
+function renderForecasts(data) {
+  const list = document.getElementById("cpForecastsList");
+  const withoutPricesWrap = document.getElementById("cpWithoutPricesWrap");
+  if (!list) return;
+
+  if (!data || !data.forecasts || data.forecasts.length === 0) {
+    list.innerHTML = `<p class="cp-empty">Fetch or upload prices to see forecasts</p>`;
+    if (withoutPricesWrap) withoutPricesWrap.hidden = true;
+    return;
+  }
+
+  list.innerHTML = "";
+  for (const f of data.forecasts) {
+    const card = document.createElement("div");
+    card.className = "cp-forecast-card";
+
+    // Symbol & Close header
+    const sym = escapeHtml(f.symbol);
+    const dateStr = formatDay(f.as_of_session);
+    const closeStr = f.reference_close ? `${groupDecimal(f.reference_close)}` : "—";
+
+    let calibratedHtml = "";
+    if (f.probability_positive !== null && f.probability_positive !== undefined) {
+      const probPct = (f.probability_positive * 100).toFixed(0);
+      calibratedHtml = `<span class="cp-badge-calibrated" title="Verified calibrated in evaluation">P(&gt;0): ${probPct}% (calibrated)</span>`;
+    }
+
+    const headHtml = `
+      <div class="cp-forecast-card-head">
+        <div class="cp-forecast-card-sym">
+          <strong>${sym}</strong>
+          <span class="cp-forecast-card-close">Last close: ${closeStr} (${dateStr})</span>
+        </div>
+        <div class="cp-forecast-badges">
+          ${calibratedHtml}
+        </div>
+      </div>
+    `;
+
+    let bodyHtml = "";
+    if (f.status && f.status.status === "insufficient_evidence") {
+      const reason = f.status.reason || "Not enough observations for baseline calculation";
+      bodyHtml = `
+        <div class="cp-forecast-insufficient">
+          <span class="cp-badge-insufficient">insufficient evidence</span>
+          <span class="cp-forecast-reason">${escapeHtml(reason)}</span>
+        </div>
+      `;
+    } else if (f.quantiles && f.quantiles.length >= 2) {
+      // Find 5%, median (50%), and 95% quantiles
+      const q05 = f.quantiles.find(q => Math.abs(q.p - 0.05) < 0.01) || f.quantiles[0];
+      const q95 = f.quantiles.find(q => Math.abs(q.p - 0.95) < 0.01) || f.quantiles[f.quantiles.length - 1];
+      const q50 = f.quantiles.find(q => Math.abs(q.p - 0.50) < 0.01) || {
+        log_return: f.median_log_return !== null && f.median_log_return !== undefined ? f.median_log_return : 0,
+      };
+
+      const r05 = q05.log_return;
+      const r50 = q50.log_return;
+      const r95 = q95.log_return;
+
+      // Percent changes: exp(q) - 1
+      const pct05Val = (Math.exp(r05) - 1) * 100;
+      const pct50Val = (Math.exp(r50) - 1) * 100;
+      const pct95Val = (Math.exp(r95) - 1) * 100;
+
+      const fmtPct = (val) => `${val >= 0 ? "+" : ""}${val.toFixed(1)}%`;
+      const pct05Str = fmtPct(pct05Val);
+      const pct50Str = fmtPct(pct50Val);
+      const pct95Str = fmtPct(pct95Val);
+
+      // Price levels: close * exp(q)
+      const refCloseNum = parseFloat(f.reference_close);
+      const p05Val = !isNaN(refCloseNum) ? refCloseNum * Math.exp(r05) : null;
+      const p50Val = f.median_terminal_price !== null && f.median_terminal_price !== undefined
+        ? f.median_terminal_price
+        : (!isNaN(refCloseNum) ? refCloseNum * Math.exp(r50) : null);
+      const p95Val = !isNaN(refCloseNum) ? refCloseNum * Math.exp(r95) : null;
+
+      const fmtPrice = (val) => val !== null && !isNaN(val) ? val.toFixed(2) : "—";
+      const p05Str = fmtPrice(p05Val);
+      const p50Str = fmtPrice(p50Val);
+      const p95Str = fmtPrice(p95Val);
+
+      // Visual range bar calculations
+      const span = r95 - r05;
+      let medianPos = 50;
+      let zeroPos = null;
+      if (span > 0.000001) {
+        medianPos = Math.min(98, Math.max(2, ((r50 - r05) / span) * 100));
+        if (r05 <= 0 && r95 >= 0) {
+          zeroPos = ((0 - r05) / span) * 100;
+        }
+      }
+
+      const zeroTickHtml = zeroPos !== null
+        ? `<div class="cp-forecast-bar-zero" style="left: ${zeroPos.toFixed(1)}%" title="Reference price (0% change)"></div>`
+        : "";
+      const medianTickHtml = `<div class="cp-forecast-bar-median" style="left: ${medianPos.toFixed(1)}%" title="Median: ${pct50Str} (${p50Str})"></div>`;
+
+      bodyHtml = `
+        <div class="cp-forecast-range-wrap">
+          <div class="cp-forecast-bar-track">
+            <div class="cp-forecast-bar-fill"></div>
+            ${zeroTickHtml}
+            ${medianTickHtml}
+          </div>
+          <div class="cp-forecast-range-labels">
+            <div class="cp-forecast-label-col">
+              <span class="cp-forecast-val-pct ${pct05Val < 0 ? "neg" : "pos"}">5%: ${pct05Str}</span>
+              <span class="cp-forecast-val-price">${p05Str}</span>
+            </div>
+            <div class="cp-forecast-label-col center">
+              <span class="cp-forecast-val-pct ${pct50Val < 0 ? "neg" : "pos"}">Median: ${pct50Str}</span>
+              <span class="cp-forecast-val-price">${p50Str}</span>
+            </div>
+            <div class="cp-forecast-label-col right">
+              <span class="cp-forecast-val-pct ${pct95Val < 0 ? "neg" : "pos"}">95%: ${pct95Str}</span>
+              <span class="cp-forecast-val-price">${p95Str}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    card.innerHTML = `${headHtml}${bodyHtml}`;
+    list.appendChild(card);
+  }
+
+  if (withoutPricesWrap) {
+    if (data.without_prices && data.without_prices.length > 0) {
+      withoutPricesWrap.hidden = false;
+      withoutPricesWrap.innerHTML = `Holdings without price history: <strong>${data.without_prices.map(escapeHtml).join(", ")}</strong> (import prices using <em>Upload price file</em>).`;
+    } else {
+      withoutPricesWrap.hidden = true;
+      withoutPricesWrap.innerHTML = "";
+    }
+  }
+}
+
+function modelDisplayName(m) {
+  switch (m) {
+    case "no_change": return "No Change (baseline)";
+    case "trailing_drift": return "Trailing Drift";
+    case "ewma_volatility": return "EWMA Volatility";
+    case "empirical_horizon": return "Empirical Horizon";
+    default: return m;
+  }
+}
+
+async function loadEvaluation() {
+  const wrap = document.getElementById("cpScorecardWrap");
+  const meta = document.getElementById("cpScorecardMeta");
+  const notesWrap = document.getElementById("cpScorecardNotes");
+  if (!wrap) return;
+
+  if (accountList.length === 0) {
+    wrap.innerHTML = `<p class="cp-empty">No evaluation available yet</p>`;
+    if (notesWrap) notesWrap.hidden = true;
+    return;
+  }
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const report = await fetchJson(`/api/capital/forecasts/evaluation${query}`);
+    renderEvaluation(report);
+  } catch (err) {
+    if (String(err.message).includes("404") || String(err.message).toLowerCase().includes("not found")) {
+      wrap.innerHTML = `<p class="cp-empty">No evaluation available yet</p>`;
+    } else {
+      wrap.innerHTML = `<p class="cp-empty" style="color:var(--sail-text-subtle)">Evaluation unavailable: ${escapeHtml(err.message)}</p>`;
+    }
+    if (notesWrap) notesWrap.hidden = true;
+  }
+}
+
+function renderEvaluation(report) {
+  const wrap = document.getElementById("cpScorecardWrap");
+  const meta = document.getElementById("cpScorecardMeta");
+  const notesWrap = document.getElementById("cpScorecardNotes");
+  if (!wrap) return;
+
+  if (!report || !report.scores || report.scores.length === 0) {
+    wrap.innerHTML = `<p class="cp-empty">Evaluation needs at least 252 daily returns per instrument to score baselines.</p>`;
+    if (notesWrap) notesWrap.hidden = true;
+    if (meta) meta.textContent = "Out-of-sample backtest";
+    return;
+  }
+
+  if (meta) {
+    const instCount = report.instruments ? report.instruments.length : 0;
+    const originsStr = report.origins && report.origins[0] && report.origins[1]
+      ? ` · ${report.origins[0]} to ${report.origins[1]}`
+      : "";
+    meta.textContent = `${instCount} instruments evaluated${originsStr}`;
+  }
+
+  const horizons = (report.config && report.config.horizons) || [5, 20, 60];
+  const rankIcMap = new Map();
+  if (report.rank_ic) {
+    for (const r of report.rank_ic) {
+      rankIcMap.set(`${r.model}:${r.horizon_sessions}`, r);
+    }
+  }
+
+  let html = `<div class="cp-scorecard-groups">`;
+  for (const h of horizons) {
+    const horizonScores = report.scores.filter(s => s.horizon_sessions === h);
+    if (horizonScores.length === 0) continue;
+
+    const horizonLabel = h === 5 ? "5 sessions (1 week)" : (h === 20 ? "20 sessions (1 month)" : `${h} sessions (1 quarter)`);
+
+    let rowsHtml = "";
+    for (const s of horizonScores) {
+      const name = modelDisplayName(s.model);
+      const count = s.forecasts;
+
+      // CRPS Skill vs NoChange
+      let skillHtml = "—";
+      if (s.model === "no_change") {
+        skillHtml = `<span class="cp-skill-zero">0.0% (base)</span>`;
+      } else {
+        const skillPct = (s.crps_skill * 100).toFixed(1);
+        if (s.crps_skill > 0.0005) {
+          skillHtml = `<span class="cp-skill-pos">+${skillPct}%</span>`;
+        } else if (s.crps_skill < -0.0005) {
+          skillHtml = `<span class="cp-skill-neg">${skillPct}%</span>`;
+        } else {
+          skillHtml = `<span class="cp-skill-zero">${skillPct}%</span>`;
+        }
+      }
+
+      // 90% coverage
+      const cov90Pct = (s.interval_90 * 100).toFixed(1);
+
+      // Direction hit rate
+      const dirPct = (s.direction_hit_rate * 100).toFixed(1);
+
+      // Calibrated tick
+      const calHtml = s.calibrated
+        ? `<span class="cp-scorecard-calibrated-yes" title="Calibrated (covers 85-95% & median 42-58%)">✓</span>`
+        : `<span class="cp-scorecard-calibrated-no">—</span>`;
+
+      // Rank IC
+      const icKey = `${s.model}:${h}`;
+      const ic = rankIcMap.get(icKey);
+      let icStr = "—";
+      if (ic && ic.origins > 0) {
+        icStr = ic.mean >= 0 ? `+${ic.mean.toFixed(3)}` : ic.mean.toFixed(3);
+      }
+
+      rowsHtml += `
+        <tr>
+          <td><strong>${escapeHtml(name)}</strong></td>
+          <td class="num">${count}</td>
+          <td class="num">${skillHtml}</td>
+          <td class="num">${cov90Pct}%</td>
+          <td class="num">${dirPct}%</td>
+          <td class="center">${calHtml}</td>
+          <td class="num">${icStr}</td>
+        </tr>
+      `;
+    }
+
+    html += `
+      <div class="cp-scorecard-group">
+        <h4 class="cp-scorecard-group-title">Horizon: ${horizonLabel}</h4>
+        <div class="cp-table-wrap">
+          <table class="cp-scorecard-table">
+            <thead>
+              <tr>
+                <th scope="col">Model</th>
+                <th scope="col" class="num">Forecasts</th>
+                <th scope="col" class="num">CRPS Skill</th>
+                <th scope="col" class="num">90% Coverage</th>
+                <th scope="col" class="num">Direction Hit</th>
+                <th scope="col" class="center">Calibrated</th>
+                <th scope="col" class="num">Rank IC</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+  html += `</div>`;
+  wrap.innerHTML = html;
+
+  // Notes and Skipped
+  if (notesWrap) {
+    const notes = [];
+    if (report.skipped && report.skipped.length > 0) {
+      const skippedStr = report.skipped.map(([sym, reason]) => `${sym} (${reason})`).join(", ");
+      notes.push(`Skipped from evaluation: ${skippedStr}`);
+    }
+    if (report.notes && report.notes.length > 0) {
+      for (const n of report.notes) {
+        notes.push(n);
+      }
+    }
+    if (notes.length > 0) {
+      notesWrap.hidden = false;
+      notesWrap.innerHTML = notes.map(n => `<div class="cp-scorecard-note">${escapeHtml(n)}</div>`).join("");
+    } else {
+      notesWrap.hidden = true;
+      notesWrap.innerHTML = "";
+    }
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   setupCollapsibles();
   setupUploadDialog();
   setupGrantDialog();
+  setupPriceControls();
+  setupPriceFileDialog();
 
   const refreshBtn = document.getElementById("cpRefreshBtn");
   if (refreshBtn) {
@@ -1334,6 +1852,9 @@ document.addEventListener("DOMContentLoaded", () => {
       loadFilings();
       loadSecStatus();
       loadSyncStatus();
+      loadPriceStatus();
+      loadForecasts();
+      loadEvaluation();
     });
   }
 
@@ -1371,6 +1892,9 @@ document.addEventListener("DOMContentLoaded", () => {
       loadFilings();
       loadSecStatus();
       loadSyncStatus();
+      loadPriceStatus();
+      loadForecasts();
+      loadEvaluation();
     });
   }
 
@@ -1381,5 +1905,8 @@ document.addEventListener("DOMContentLoaded", () => {
     loadFilings();
     loadSecStatus();
     loadSyncStatus();
+    loadPriceStatus();
+    loadForecasts();
+    loadEvaluation();
   });
 });

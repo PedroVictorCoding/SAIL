@@ -94,6 +94,75 @@
     </div>
   </section>
 
+  <!-- Portfolio Forecasts & Baselines (Round 10) -->
+  <section class="cp-panel" id="cpForecastsPanel" aria-labelledby="cpForecastsTitle">
+    <header class="cp-panel-head">
+      <div class="cp-title-group">
+        <h2 id="cpForecastsTitle">Forecasts</h2>
+        <span class="cp-sub-notice" id="cpPriceStatusLine">Point-in-time price distributions</span>
+      </div>
+      <div class="cp-panel-actions">
+        <button class="cp-button" id="cpPriceRefreshBtn" type="button" aria-label="Fetch prices">Fetch prices</button>
+        <button class="cp-button" id="cpPriceUploadBtn" type="button" aria-label="Upload price file">Upload price file</button>
+        <span class="cp-badge" id="cpPriceBadge">Prices</span>
+      </div>
+    </header>
+
+    <!-- Required Disclaimer Banner -->
+    <div class="cp-forecast-disclaimer">
+      <p>Statistical ranges from past prices, not predictions of what to do. No model here is better than chance until its score says so.</p>
+    </div>
+
+    <!-- Opt-in Note when prices not configured -->
+    <div class="cp-price-note" id="cpPriceOptInNote" hidden>
+      <p>Price fetching is off by default to protect your privacy. SAIL never transmits personal data, but fetching quotes sends the ticker symbols of your held instruments to Stooq over HTTPS. To enable automatic price fetching, set <code>SAIL_PRICES_SOURCE=stooq</code> in your environment, or use <strong>Upload price file</strong> to import price history privately without network calls.</p>
+    </div>
+
+    <!-- Unmapped Symbols Note -->
+    <div class="cp-unmapped-note" id="cpPriceUnmappedNote" hidden></div>
+
+    <!-- Controls Bar: Horizon and Model -->
+    <div class="cp-forecast-controls">
+      <div class="cp-control-group">
+        <span class="cp-control-label">Horizon:</span>
+        <div class="cp-horizon-pills" role="radiogroup" aria-label="Forecast horizon">
+          <button type="button" class="cp-horizon-btn" data-horizon="5">5 sessions (1w)</button>
+          <button type="button" class="cp-horizon-btn cp-active" data-horizon="20" aria-checked="true">20 sessions (1m)</button>
+          <button type="button" class="cp-horizon-btn" data-horizon="60">60 sessions (1q)</button>
+        </div>
+      </div>
+      <div class="cp-control-group">
+        <label for="cpForecastModelSelect" class="cp-control-label">Baseline model:</label>
+        <select class="cp-select" id="cpForecastModelSelect">
+          <option value="no_change" selected>No change (zero drift, 252d σ)</option>
+          <option value="trailing_drift">Trailing drift (252d mean &amp; σ)</option>
+          <option value="ewma_volatility">EWMA volatility (RiskMetrics λ=0.94)</option>
+          <option value="empirical_horizon">Empirical horizon (3y historical samples)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Per Holding Forecast Cards -->
+    <div class="cp-forecasts-body">
+      <div class="cp-forecast-list" id="cpForecastsList">
+        <p class="cp-empty">Fetch or upload prices to see forecasts</p>
+      </div>
+      <div class="cp-without-prices-wrap" id="cpWithoutPricesWrap" hidden></div>
+    </div>
+
+    <!-- Scorecard (Evaluation) -->
+    <div class="cp-scorecard-section" id="cpScorecardSection">
+      <div class="cp-scorecard-head">
+        <h3 class="cp-scorecard-title">Walk-Forward Evaluation Scorecard</h3>
+        <span class="cp-scorecard-meta" id="cpScorecardMeta">Out-of-sample backtest</span>
+      </div>
+      <div id="cpScorecardWrap">
+        <p class="cp-empty">No evaluation available yet</p>
+      </div>
+      <div class="cp-scorecard-notes" id="cpScorecardNotes" hidden></div>
+    </div>
+  </section>
+
   <!-- Owned Positions -->
   <section class="cp-panel" id="cpPositionsPanel" aria-labelledby="cpPositionsTitle">
     <header class="cp-panel-head">
@@ -310,6 +379,52 @@
     <footer class="cp-dialog-actions">
       <button class="cp-button" id="cpGrantCancel" type="button">Cancel</button>
       <button class="cp-button cp-primary" id="cpGrantSubmit" type="button">Record Shares</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- Upload Price File Dialog (Round 10) -->
+<dialog class="cp-dialog" id="cpPriceFileDialog" aria-labelledby="cpPriceFileDialogTitle">
+  <form method="dialog" class="cp-dialog-form" id="cpPriceFileForm">
+    <header class="cp-dialog-head">
+      <h2 id="cpPriceFileDialogTitle">Upload Price File</h2>
+      <p>Import historical daily closes from a CSV file (e.g. Yahoo Finance, broker exports, or Stooq).</p>
+    </header>
+    <div class="cp-dialog-body">
+      <div class="cp-field-row">
+        <div class="cp-field">
+          <label for="cpPriceFileSymbol">Broker Symbol</label>
+          <input type="text" class="cp-input" id="cpPriceFileSymbol" required placeholder="e.g. GALP.PT">
+        </div>
+        <div class="cp-field">
+          <label for="cpPriceFileCurrency">Currency</label>
+          <select class="cp-select" id="cpPriceFileCurrency">
+            <option value="EUR" selected>EUR</option>
+            <option value="USD">USD</option>
+            <option value="GBP">GBP</option>
+            <option value="PLN">PLN</option>
+          </select>
+        </div>
+      </div>
+      <div class="cp-field-row">
+        <div class="cp-field">
+          <label for="cpPriceFileAdjustment">Price Adjustment</label>
+          <select class="cp-select" id="cpPriceFileAdjustment">
+            <option value="split_adjusted" selected>Split-adjusted (recommended)</option>
+            <option value="unadjusted">Unadjusted</option>
+            <option value="total_return">Total return</option>
+            <option value="unknown">Unknown</option>
+          </select>
+        </div>
+        <div class="cp-field">
+          <label for="cpPriceFileInput">CSV File</label>
+          <input type="file" class="cp-input" id="cpPriceFileInput" accept=".csv,.txt" required>
+        </div>
+      </div>
+    </div>
+    <footer class="cp-dialog-actions">
+      <button class="cp-button" id="cpPriceFileCancel" type="button">Cancel</button>
+      <button class="cp-button cp-primary" id="cpPriceFileSubmit" type="button">Import Prices</button>
     </footer>
   </form>
 </dialog>
