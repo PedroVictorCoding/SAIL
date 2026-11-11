@@ -64,6 +64,99 @@ pub struct PriceBar {
     pub volume: Option<Decimal>,
 }
 
+/// Column indexes read from a CSV header, shared by the price adapters.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PriceColumns {
+    /// Date column.
+    pub(crate) date: usize,
+    /// Close column.
+    pub(crate) close: usize,
+    /// Open column, if present.
+    pub(crate) open: Option<usize>,
+    /// High column, if present.
+    pub(crate) high: Option<usize>,
+    /// Low column, if present.
+    pub(crate) low: Option<usize>,
+    /// Volume column, if present.
+    pub(crate) volume: Option<usize>,
+}
+
+/// Reads bars from a CSV reader with the policy both adapters share: skip malformed rows
+/// and non-positive closes, keep the last duplicate session with a warning, and cap at
+/// [`MAX_BARS_PER_SERIES`] from the newest end. `label` names the source in warnings and
+/// the empty-result error.
+pub(crate) fn read_price_bars<R: std::io::Read>(
+    reader: &mut csv::Reader<R>,
+    columns: &PriceColumns,
+    parse_date: impl Fn(&str) -> Option<NaiveDate>,
+    label: &str,
+) -> Result<Vec<PriceBar>, PriceSourceError> {
+    let mut by_session: std::collections::BTreeMap<NaiveDate, PriceBar> = Default::default();
+    let mut skipped = 0usize;
+    for result in reader.records() {
+        let record = match result {
+            Ok(record) => record,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
+        };
+        let Some(session) = record.get(columns.date).and_then(&parse_date) else {
+            skipped += 1;
+            continue;
+        };
+        let Some(close) = record
+            .get(columns.close)
+            .and_then(crate::contracts::parse_decimal_text)
+        else {
+            skipped += 1;
+            continue;
+        };
+        if close <= Decimal::ZERO {
+            skipped += 1;
+            continue;
+        }
+        let number = |column: Option<usize>| {
+            column
+                .and_then(|index| record.get(index))
+                .and_then(crate::contracts::parse_decimal_text)
+        };
+        let bar = PriceBar {
+            session,
+            open: number(columns.open),
+            high: number(columns.high),
+            low: number(columns.low),
+            close,
+            volume: number(columns.volume),
+        };
+        if by_session.insert(session, bar).is_some() {
+            tracing::warn!(
+                %session,
+                label,
+                "duplicate session in price data; keeping last occurrence"
+            );
+        }
+    }
+    if skipped > 0 {
+        tracing::warn!(
+            skipped,
+            label,
+            "skipped malformed or non-positive close rows"
+        );
+    }
+    if by_session.is_empty() {
+        return Err(PriceSourceError::Malformed(format!(
+            "no valid price bars in {label}"
+        )));
+    }
+    let mut bars: Vec<PriceBar> = by_session.into_values().collect();
+    if bars.len() > MAX_BARS_PER_SERIES {
+        let excess = bars.len() - MAX_BARS_PER_SERIES;
+        bars.drain(0..excess);
+    }
+    Ok(bars)
+}
+
 /// A series as one fetch or one file delivered it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriceSeries {

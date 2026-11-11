@@ -17,7 +17,8 @@ const VOL_WINDOW: usize = 252;
 /// RiskMetrics decay for the EWMA variance.
 const EWMA_LAMBDA: f64 = 0.94;
 
-/// About three years of sessions, the window for the empirical h-session sample.
+/// About three years of sessions, the window for the empirical h-session sample. It is
+/// widened at long horizons so at least [`MIN_EMPIRICAL_SAMPLES`] samples still fit.
 const EMPIRICAL_LOOKBACK_SESSIONS: usize = 756;
 
 /// Fewest non-overlapping h-session returns the empirical model accepts.
@@ -220,7 +221,8 @@ fn empirical_forecast(
         ));
     }
     let last_start = last - h;
-    let window_start = last.saturating_sub(EMPIRICAL_LOOKBACK_SESSIONS);
+    let lookback = EMPIRICAL_LOOKBACK_SESSIONS.max(MIN_EMPIRICAL_SAMPLES.saturating_mul(h));
+    let window_start = last.saturating_sub(lookback);
     let mut samples = Vec::new();
     let mut start = last_start;
     loop {
@@ -235,7 +237,7 @@ fn empirical_forecast(
     }
     if samples.len() < MIN_EMPIRICAL_SAMPLES {
         return Err(format!(
-            "needs at least {MIN_EMPIRICAL_SAMPLES} non-overlapping {horizon}-session returns in the last three years; has {}",
+            "needs at least {MIN_EMPIRICAL_SAMPLES} non-overlapping {horizon}-session returns in the available history; has {}",
             samples.len()
         ));
     }

@@ -456,7 +456,11 @@ async fn price_import(
         }
     };
     let result = blocking(&s, move |svc| {
-        let account = svc.resolve_account(q.account.as_deref()).ok();
+        let account = if q.account.as_deref().is_some_and(|a| !a.is_empty()) {
+            Some(svc.resolve_account(q.account.as_deref())?)
+        } else {
+            svc.resolve_account(None).ok()
+        };
         svc.import_price_file(
             account.as_ref(),
             &q.symbol,
