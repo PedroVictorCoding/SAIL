@@ -407,6 +407,13 @@ three years:
 
 The ranges are honest, but no model sees direction better than "no change".
 
+**Page layout.** The Forecasts tab shows one holding at a time: a compact holding,
+horizon and replay row, the fan chart, three numbers (median, 68% range, 90% range),
+and the replay sentence. Component weights, direction tilt and the full track record
+sit behind **How this fan was built**. Baseline forecasts, the walk-forward scorecard
+and signal skill live in **Data** as model diagnostics, so the Forecasts tab has one
+prediction surface rather than two competing ones.
+
 **Setup.** Run `scripts/signals/setup.sh` once. It installs CPU-only PyTorch, Chronos,
 Ultralytics, mplfinance and scikit-learn into `/srv/sail-data/venvs/signals` (about
 1.8 GB). Then set `SAIL_MODEL_SIGNALS=chronos,yolo,yolo_trend,gbdt` and press **Run
