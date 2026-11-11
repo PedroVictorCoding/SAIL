@@ -93,8 +93,19 @@ fn an_overweight_position_is_trimmed_to_the_cap() {
     assert!((big.to_pct - 10.0).abs() < 1e-6, "{big:?}");
     assert!(big.amount < 0.0);
     assert!(rules_for(&plan, "BIG").contains(&Rule::MaxPosition));
+    // The proceeds raise free funds to 20%; the excess over 15% is one free-funds line,
+    // not a purchase spread over every holding.
     assert!((plan.cash_to_pct - 15.0).abs() < 1e-6, "{plan:?}");
-    assert_eq!(plan.changes.len(), 10);
+    assert_eq!(changed_symbols(&plan), vec!["BIG", "Free funds"]);
+    let cash = &plan.changes[1];
+    assert_eq!(cash.instrument_key, sail_capital::optimize::CASH_KEY);
+    assert_eq!(cash.amount, -5_000.0);
+    assert_eq!(cash.reasons, vec![Rule::IdleCash]);
+    assert!(
+        plan.note.contains("invest the excess free funds"),
+        "{}",
+        plan.note
+    );
 }
 
 #[test]
@@ -147,10 +158,11 @@ fn low_free_funds_are_raised_to_the_reserve() {
     assert!(plan.feasible, "{plan:?}");
     assert!(plan.breaches_after.is_empty(), "{plan:?}");
     assert!((plan.cash_to_pct - 5.0).abs() < 1e-6, "{plan:?}");
-    assert!(plan.changes.iter().all(|change| change.amount <= 0.0));
-    for change in &plan.changes {
-        assert!(change.reasons.contains(&Rule::CashReserve), "{change:?}");
-    }
+    // One free-funds line: raise 3,000 by selling holdings of the owner's choice.
+    assert_eq!(changed_symbols(&plan), vec!["Free funds"]);
+    assert_eq!(plan.changes[0].amount, 3_000.0);
+    assert_eq!(plan.changes[0].reasons, vec![Rule::CashReserve]);
+    assert!(plan.note.contains("raise free funds"), "{}", plan.note);
 }
 
 #[test]
@@ -167,11 +179,10 @@ fn idle_free_funds_are_invested_up_to_the_limit() {
     assert!(plan.feasible, "{plan:?}");
     assert!(plan.breaches_after.is_empty(), "{plan:?}");
     assert!((plan.cash_to_pct - 15.0).abs() < 1e-6, "{plan:?}");
-    assert!(plan.changes.iter().all(|change| change.amount > 0.0));
-    for change in &plan.changes {
-        assert!(change.reasons.contains(&Rule::IdleCash), "{change:?}");
-        assert!(change.to_pct <= 10.0 + 1e-9);
-    }
+    // One free-funds line: invest 35,000; no instrument is chosen without evidence.
+    assert_eq!(changed_symbols(&plan), vec!["Free funds"]);
+    assert_eq!(plan.changes[0].amount, -35_000.0);
+    assert_eq!(plan.changes[0].reasons, vec![Rule::IdleCash]);
 }
 
 #[test]
@@ -202,7 +213,10 @@ fn changes_below_the_smallest_trade_are_dropped() {
         .map(|index| asset(&format!("S{index}"), 98.0 / 12.0 / 100.0))
         .collect();
     let problem = problem(assets, 0.02, 10_000.0);
-    let plan = plan(&problem, &limits(), Mode::Policy);
+    // Raising 3% of 10,000 is 300, below a 500 smallest trade.
+    let mut small = limits();
+    small.min_trade = rust_decimal::Decimal::from(500);
+    let plan = plan(&problem, &small, Mode::Policy);
     assert!(plan.changes.is_empty(), "{plan:?}");
     assert!(!plan.feasible);
     assert!(

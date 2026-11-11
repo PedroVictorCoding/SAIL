@@ -302,29 +302,7 @@ pub fn plan(problem: &Problem, limits: &RiskLimits, mode: Mode) -> Plan {
     }
 
     match mode {
-        Mode::Policy => {
-            if before.is_empty() {
-                return unchanged(
-                    problem,
-                    mode,
-                    before,
-                    "Every limit is met; no change is needed.",
-                );
-            }
-            let point = setup.policy_point();
-            let within = setup.feasible_set().holds(&point, 1e-6);
-            let mut weights = setup.final_weights(&point);
-            setup.apply_min_trade(&mut weights);
-            if !setup.changed(&weights) {
-                return unchanged(
-                    problem,
-                    mode,
-                    before,
-                    "No change large enough to matter would fix the limits, so nothing is proposed.",
-                );
-            }
-            assemble(&setup, mode, weights, before, within)
-        }
+        Mode::Policy => policy_plan(problem, limits, before),
         Mode::Ideas => {
             if !setup.has_alpha() {
                 return unchanged(
@@ -351,6 +329,108 @@ pub fn plan(problem: &Problem, limits: &RiskLimits, mode: Mode) -> Plan {
             assemble(&setup, mode, weights, before, within)
         }
     }
+}
+
+/// The instrument key of the free-funds line in a policy plan.
+pub const CASH_KEY: &str = "cash";
+
+/// Policy mode. Positions break their own limits (largest position, high-volatility
+/// share) only through the smallest change to those positions, with the proceeds going
+/// to free funds. Free funds outside the cash band become one free-funds line: "invest
+/// about X" or "raise about X". SAIL has no evidence for which holdings to buy or sell
+/// with it, so it doesn't spread the cash over every holding.
+fn policy_plan(problem: &Problem, limits: &RiskLimits, before: Vec<Breach>) -> Plan {
+    if before.is_empty() {
+        return unchanged(
+            problem,
+            Mode::Policy,
+            before,
+            "Every limit is met; no change is needed.",
+        );
+    }
+    let mut relaxed = limits.clone();
+    relaxed.cash_min_pct = rust_decimal::Decimal::ZERO;
+    relaxed.cash_max_pct = rust_decimal::Decimal::from(100);
+    let setup = Setup::new(problem, Fractions::new(&relaxed));
+    let position_breach = before
+        .iter()
+        .any(|b| matches!(b.rule, Rule::MaxPosition | Rule::HighVolShare));
+    let mut plan = if position_breach {
+        let point = setup.policy_point();
+        let within = setup.feasible_set().holds(&point, 1e-6);
+        let mut weights = setup.final_weights(&point);
+        setup.apply_min_trade(&mut weights);
+        if setup.changed(&weights) {
+            assemble(&setup, Mode::Policy, weights, before.clone(), within)
+        } else {
+            unchanged(problem, Mode::Policy, before.clone(), "")
+        }
+    } else {
+        unchanged(problem, Mode::Policy, before.clone(), "")
+    };
+
+    let fractions = Fractions::new(limits);
+    let cash = plan.cash_to_pct / 100.0;
+    let target = if cash > fractions.cash_max + EPSILON {
+        Some((fractions.cash_max, Rule::IdleCash))
+    } else if cash < fractions.cash_min - EPSILON {
+        Some((fractions.cash_min, Rule::CashReserve))
+    } else {
+        None
+    };
+    // Cash breaches are answered by the free-funds line; only position limits remain,
+    // unless the line is too small to propose.
+    plan.breaches_after
+        .retain(|b| matches!(b.rule, Rule::MaxPosition | Rule::HighVolShare));
+    if let Some((to, rule)) = target {
+        let amount = ((to - cash) * problem.account_value).round();
+        if amount.abs() < decimal_f64(limits.min_trade) {
+            plan.breaches_after.push(Breach {
+                rule,
+                symbol: None,
+                actual_pct: cash * 100.0,
+                limit_pct: to * 100.0,
+            });
+        } else {
+            plan.changes.push(Change {
+                instrument_key: CASH_KEY.into(),
+                symbol: "Free funds".into(),
+                from_pct: cash * 100.0,
+                to_pct: to * 100.0,
+                amount,
+                reasons: vec![rule],
+            });
+            plan.cash_to_pct = to * 100.0;
+        }
+    }
+    plan.feasible = plan.breaches_after.is_empty();
+    plan.changes
+        .sort_by(|a, b| b.amount.abs().total_cmp(&a.amount.abs()));
+    let positions = plan
+        .changes
+        .iter()
+        .filter(|c| c.instrument_key != CASH_KEY)
+        .count();
+    let cash_line = plan.changes.iter().find(|c| c.instrument_key == CASH_KEY);
+    plan.note = match (positions, cash_line) {
+        (0, None) => {
+            "No change large enough to matter would fix the limits, so nothing is proposed.".into()
+        }
+        (n, None) => format!("{n} position change(s) bring the portfolio within your limits."),
+        (n, Some(c)) => {
+            let what = if c.amount < 0.0 {
+                "invest the excess free funds in holdings of your choice"
+            } else {
+                "raise free funds by selling holdings of your choice"
+            };
+            if n == 0 {
+                format!("To meet the cash band, {what}.")
+            } else {
+                format!("{n} position change(s), then {what}.")
+            }
+        }
+    };
+    plan
 }
 
 fn unchanged(problem: &Problem, mode: Mode, before: Vec<Breach>, note: &str) -> Plan {
