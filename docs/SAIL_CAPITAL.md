@@ -16,7 +16,7 @@ Round 7 (2026-11-10) builds the **portfolio foundation**:
 
 Round 8 adds the first research source, **SEC EDGAR filings** for the US companies the
 owner holds (see below). Round 9 adds splits, received shares and portfolio insights.
-Round 10 adds **daily prices and baseline forecasts** with an honest out-of-sample score
+Round 11 adds the **Today view, risk limits and suggestions**. Round 10 added **daily prices and baseline forecasts** with an honest out-of-sample score
 (see below). House/Senate, FRED/ECB and Polymarket adapters, the risk engine and any neural
 or `.sea` model come in later rounds.
 
@@ -279,6 +279,61 @@ calibrated. EWMA volatility beats `no_change` by about 1–2% CRPS at a week and
 Trailing drift is worse than `no_change` at every horizon, by about 12% at a quarter. Rank
 IC is near zero. In short, the baselines describe how much prices move, not which way.
 
+## Today, limits and suggestions (round 11)
+
+**Layout.** The page opens on **Today**: four account tiles, a one-line stance, and a
+ranked list of suggestions. Everything else sits in tabs: Holdings, Income, Forecasts,
+Research and Data. The open tab is kept in the URL hash.
+
+**Limits.** SAIL starts from a draft: largest position 10%, free funds between 5% and
+15%, high-volatility holdings (above 50% a year) at most 15% together, at most 20% of
+the account moved by one proposal, a smallest change of 50, costs of 10 bp (plus 50 bp
+for another currency), and caution 4. The owner edits and confirms them in Data →
+Limits. Each save is a new append-only version. **Nothing is sized against a draft.**
+
+**Suggestions.** Three kinds, built by fixed rules (`suggest::build`):
+- **Attention:** old XTB data, figures that differ from XTB, holdings without prices,
+  prices not being fetched, new SEC filings, positions XTB didn't value, and a draft
+  policy.
+- **Policy:** a confirmed limit is broken. The fix trims only the positions that break
+  their own limits. Free funds outside the band become **one free-funds line** ("invest
+  about X" or "raise about X"). SAIL has no evidence for which holdings to buy or sell
+  with cash, so it doesn't choose them.
+- **Idea:** validated signals favour a change, and its expected gain beats the extra risk
+  and the trading costs. Each idea shows its confidence and what doing nothing means.
+
+Dismissing a suggestion or marking it done is stored append-only. The suggestion's id
+hashes its evidence, so it comes back only when the evidence changes. SAIL never places
+orders.
+
+**Signals** (`signals/`):
+- Price signals: 12-1 momentum, short-term reversal, low volatility, and distance from
+  the 200-session average.
+- Each one is scored walk-forward by its rank IC across held instruments, on weekly
+  cross-sections.
+- The standard error is widened for overlapping outcomes. The horizon is converted to
+  calendar days, about 1.4 per session.
+- A signal needs 26 cross-sections, and 8 effectively independent ones, before it can
+  pass.
+- Its IC is shrunk by two standard errors, so one that isn't clearly better than chance
+  gets weight 0.
+- Survivors combine as `w = (C + 0.1·I)⁻¹·IC*`, with `α_j = IC_c · σ_j(h) · s_j`
+  (Grinold–Kahn).
+- Model scores from Python helpers count at a date only when they are at most 10 days
+  old.
+
+**Optimizer** (`optimize/`):
+- One long-only problem over the holdings and free funds, limited by the confirmed
+  limits.
+- Ideas maximize `α'w − λ/2·w'Σw − costs`. They run only when some `α ≠ 0`, so caution
+  alone never turns into trading advice.
+- The covariance comes from weekly returns over two years, shrunk toward constant
+  correlation.
+
+**First run on the owner's holdings (2026-11-11).** No price signal passed at 60
+sessions, so there are no ideas. The draft limits flagged the idle free funds and one
+position above 10%.
+
 ## API (`/api/capital`, owner token required)
 
 | Route | Returns |
@@ -304,6 +359,11 @@ IC is near zero. In short, the baselines describe how much prices move, not whic
 | `GET /prices?symbol=&from=&to=` | Stored closes for one symbol |
 | `GET /forecasts?account=&horizon=&model=` | One forecast per held instrument with prices, plus `without_prices` |
 | `GET /forecasts/evaluation?account=` | The walk-forward report: scores, rank IC, skipped instruments and notes |
+| `GET /today?account=` | Account tiles, stance, suggestions (dismissed and done ones hidden and counted) and the plans behind them |
+| `POST /suggestions/{id}/action?account=` | Body `{"action": "dismissed" \| "done"}`. Records it |
+| `GET /policy?account=` | The policy in force (the built-in draft until one is saved) and every version |
+| `POST /policy?account=` | Body `{"limits": {...}, "confirm": bool}`. Stores a new version, or returns 400 with the reason |
+| `GET /signals?account=` | Signal skill per horizon, the combined IC and the latest combined scores |
 
 All amounts are decimal strings. Errors are `{"error": "..."}`, with these status codes:
 

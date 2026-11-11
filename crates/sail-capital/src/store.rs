@@ -170,7 +170,8 @@ impl CapitalStore {
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(EVIDENCE_SCHEMA)?;
         conn.execute_batch(GRANT_SCHEMA)?;
-        conn.execute_batch(PRICE_SCHEMA)?;
+        conn.execute_batch(SUGGEST_SCHEMA)?;
+        init_price_schema(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
             dir: dir.to_path_buf(),
@@ -848,6 +849,90 @@ mod tests {
         let evidence = root.join("reports").join(format!("{}.csv", s.file_sha256));
         assert_eq!(mode(&evidence), 0o600);
     }
+
+    #[test]
+    fn a_pre_release_price_table_is_rebuilt_without_losing_rows() {
+        use crate::market::{Adjustment, MarketObservation, PriceBar, PriceSeries};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("capital.sqlite3");
+        let session = chrono::NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+        let old = MarketObservation {
+            instrument_key: "sym:X".into(),
+            symbol: "X".into(),
+            session,
+            close: Decimal::from_str("100").unwrap(),
+            currency: None,
+            price_kind: "close".into(),
+            adjustment: Adjustment::Unknown,
+            source_id: "fake".into(),
+            first_available_at: t(10),
+            ingested_at: t(10),
+        };
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE price_bars (
+                    id TEXT PRIMARY KEY,
+                    instrument_key TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    session TEXT NOT NULL,
+                    bar_sha256 TEXT NOT NULL,
+                    first_available_at TEXT NOT NULL,
+                    ingested_at TEXT NOT NULL,
+                    observation_json TEXT NOT NULL,
+                    UNIQUE (instrument_key, source_id, session, bar_sha256)
+                );",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO price_bars VALUES ('old', 'sym:X', 'fake', '2025-01-02',
+                    'old', ?1, ?1, ?2)",
+                params![t(10).to_rfc3339(), encode(&old).unwrap()],
+            )
+            .unwrap();
+        }
+
+        let store = CapitalStore::open(dir.path()).unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            let sql: String = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'price_bars'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(!sql.contains("UNIQUE (instrument_key, source_id, session, bar_sha256)"));
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM price_bars", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 1);
+        }
+
+        let series = PriceSeries {
+            source_id: "fake".into(),
+            symbol: "X".into(),
+            source_symbol: "x".into(),
+            currency: None,
+            adjustment: Adjustment::Unknown,
+            bars: vec![PriceBar {
+                session,
+                open: None,
+                high: None,
+                low: None,
+                close: Decimal::from_str("110").unwrap(),
+                volume: None,
+            }],
+            payload_sha256: "x".into(),
+        };
+        let outcome = store.record_prices("sym:X", &series, t(20)).unwrap();
+        assert_eq!((outcome.added, outcome.revisions), (0, 1));
+        let rows = store.prices("sym:X", t(20)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].close, Decimal::from_str("110").unwrap());
+        assert_eq!(rows[0].first_available_at, t(10));
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -977,10 +1062,10 @@ pub enum RetractOutcome {
 // Daily prices (round 10)
 // ---------------------------------------------------------------------------------------
 
-/// One row per (instrument, source, session, content). A changed bar for a known session
-/// is a revision that keeps the session's first availability time.
-const PRICE_SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS price_bars (
+/// One row per (instrument, source, session, version). A changed bar for a known session
+/// is a revision that keeps the session's first availability time. A revert to an older
+/// content is a new version too, so the append-only history can represent it.
+const PRICE_TABLE_COLUMNS: &str = "
     id TEXT PRIMARY KEY,
     instrument_key TEXT NOT NULL,
     source_id TEXT NOT NULL,
@@ -988,15 +1073,50 @@ CREATE TABLE IF NOT EXISTS price_bars (
     bar_sha256 TEXT NOT NULL,
     first_available_at TEXT NOT NULL,
     ingested_at TEXT NOT NULL,
-    observation_json TEXT NOT NULL,
-    UNIQUE (instrument_key, source_id, session, bar_sha256)
-);
-CREATE INDEX IF NOT EXISTS price_bars_by_instrument ON price_bars (instrument_key, session);
-CREATE TRIGGER IF NOT EXISTS price_bars_no_update BEFORE UPDATE ON price_bars
-BEGIN SELECT RAISE(ABORT, 'price bars are append-only'); END;
-CREATE TRIGGER IF NOT EXISTS price_bars_no_delete BEFORE DELETE ON price_bars
-BEGIN SELECT RAISE(ABORT, 'price bars are append-only'); END;
+    observation_json TEXT NOT NULL
 ";
+
+/// Creates the price schema, rebuilding a pre-release table that still had the old
+/// `(instrument, source, session, content)` uniqueness rule. That rule would silently drop
+/// a revision that reverts to an older close.
+fn init_price_schema(conn: &Connection) -> Result<(), StoreError> {
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'price_bars'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if existing
+        .as_deref()
+        .is_some_and(|sql| sql.contains("UNIQUE (instrument_key, source_id, session, bar_sha256)"))
+    {
+        conn.execute_batch(&format!(
+            "BEGIN IMMEDIATE;
+             DROP TRIGGER IF EXISTS price_bars_no_update;
+             DROP TRIGGER IF EXISTS price_bars_no_delete;
+             DROP INDEX IF EXISTS price_bars_by_instrument;
+             ALTER TABLE price_bars RENAME TO price_bars_old;
+             CREATE TABLE price_bars ({PRICE_TABLE_COLUMNS});
+             INSERT INTO price_bars (id, instrument_key, source_id, session, bar_sha256,
+                 first_available_at, ingested_at, observation_json)
+             SELECT id, instrument_key, source_id, session, bar_sha256,
+                 first_available_at, ingested_at, observation_json
+             FROM price_bars_old ORDER BY session, ingested_at, id;
+             DROP TABLE price_bars_old;
+             COMMIT;"
+        ))?;
+    }
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS price_bars ({PRICE_TABLE_COLUMNS});
+         CREATE INDEX IF NOT EXISTS price_bars_by_instrument ON price_bars (instrument_key, session);
+         CREATE TRIGGER IF NOT EXISTS price_bars_no_update BEFORE UPDATE ON price_bars
+         BEGIN SELECT RAISE(ABORT, 'price bars are append-only'); END;
+         CREATE TRIGGER IF NOT EXISTS price_bars_no_delete BEFORE DELETE ON price_bars
+         BEGIN SELECT RAISE(ABORT, 'price bars are append-only'); END;"
+    ))?;
+    Ok(())
+}
 
 /// What storing one series did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1039,23 +1159,39 @@ impl CapitalStore {
         let mut conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
         let tx = conn.transaction()?;
         let mut outcome = PriceOutcome::default();
+
+        // One grouped read for the whole series instead of one query per bar. It keeps the
+        // latest version and the session's first availability, so a refresh that only
+        // repeats stored bars writes nothing.
+        let mut latest: std::collections::BTreeMap<String, (String, String)> = Default::default();
+        {
+            let mut stmt = tx.prepare(
+                "SELECT session, bar_sha256, first_available_at FROM price_bars
+                 WHERE instrument_key = ?1 AND source_id = ?2
+                 ORDER BY session, ingested_at, rowid",
+            )?;
+            let rows = stmt.query_map(params![instrument_key, series.source_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (session, bar_sha, first_available_at) = row?;
+                latest.insert(session, (bar_sha, first_available_at));
+            }
+        }
+
         for bar in &series.bars {
             outcome.seen += 1;
             let session = bar.session.format("%Y-%m-%d").to_string();
             let content = encode(&(bar, &series.currency, series.adjustment))?;
             let bar_sha = sha256_hex(content.as_bytes());
-            let earliest: Option<String> = tx
-                .query_row(
-                    "SELECT MIN(first_available_at) FROM price_bars
-                     WHERE instrument_key = ?1 AND source_id = ?2 AND session = ?3",
-                    params![instrument_key, series.source_id, session],
-                    |r| r.get(0),
-                )
-                .optional()?
-                .flatten();
-            let first_available_at = match &earliest {
-                Some(text) => parse_ts(text)?,
-                None => now,
+            let (first_available_at, is_revision) = match latest.get(&session) {
+                Some((stored_sha, first_available_at)) if stored_sha == &bar_sha => continue,
+                Some((_, first_available_at)) => (parse_ts(first_available_at)?, true),
+                None => (now, false),
             };
             let observation = MarketObservation {
                 instrument_key: instrument_key.to_string(),
@@ -1069,10 +1205,13 @@ impl CapitalStore {
                 first_available_at,
                 ingested_at: now,
             };
+            // The ingest time is part of the id so a revision that reverts to an older
+            // content is stored as a new version rather than being ignored.
             let id = sha256_hex(
                 format!(
-                    "{instrument_key}\n{}\n{session}\n{bar_sha}",
-                    series.source_id
+                    "{instrument_key}\n{}\n{session}\n{bar_sha}\n{}",
+                    series.source_id,
+                    now.to_rfc3339()
                 )
                 .as_bytes(),
             )[..16]
@@ -1093,12 +1232,13 @@ impl CapitalStore {
                 ],
             )?;
             if inserted > 0 {
-                if earliest.is_some() {
+                if is_revision {
                     outcome.revisions += 1;
                 } else {
                     outcome.added += 1;
                 }
             }
+            latest.insert(session, (bar_sha, first_available_at.to_rfc3339()));
         }
         tx.commit()?;
         Ok(outcome)
@@ -1112,15 +1252,33 @@ impl CapitalStore {
         instrument_key: &str,
         known_by: DateTime<Utc>,
     ) -> Result<Vec<crate::market::MarketObservation>, StoreError> {
+        self.prices_in_range(instrument_key, known_by, None, None)
+    }
+
+    /// Closes for `instrument_key` as known at `known_by`, optionally restricted to a
+    /// session range. The range is applied in SQL so a narrow request never materializes
+    /// the whole stored history.
+    pub fn prices_in_range(
+        &self,
+        instrument_key: &str,
+        known_by: DateTime<Utc>,
+        from: Option<chrono::NaiveDate>,
+        to: Option<chrono::NaiveDate>,
+    ) -> Result<Vec<crate::market::MarketObservation>, StoreError> {
         let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
         let mut stmt = conn.prepare(
             "SELECT session, observation_json FROM price_bars
              WHERE instrument_key = ?1 AND ingested_at <= ?2
-             ORDER BY session, ingested_at, id",
+               AND (?3 IS NULL OR session >= ?3)
+               AND (?4 IS NULL OR session <= ?4)
+             ORDER BY session, ingested_at, rowid",
         )?;
-        let rows = stmt.query_map(params![instrument_key, known_by.to_rfc3339()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
+        let from = from.map(|date| date.format("%Y-%m-%d").to_string());
+        let to = to.map(|date| date.format("%Y-%m-%d").to_string());
+        let rows = stmt.query_map(
+            params![instrument_key, known_by.to_rfc3339(), from, to],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )?;
         let mut latest: std::collections::BTreeMap<String, String> = Default::default();
         for row in rows {
             let (session, json) = row?;
@@ -1177,11 +1335,124 @@ impl CapitalStore {
     /// A value that changes whenever prices are added, for caching evaluations.
     pub fn price_version(&self) -> Result<String, StoreError> {
         let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
-        let (count, last): (i64, Option<String>) = conn.query_row(
-            "SELECT COUNT(*), MAX(ingested_at) FROM price_bars",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+        let last: Option<i64> =
+            conn.query_row("SELECT MAX(rowid) FROM price_bars", [], |r| r.get(0))?;
+        Ok(last.unwrap_or(0).to_string())
+    }
+}
+
+const SUGGEST_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS policy_versions (
+    account TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    saved_at TEXT NOT NULL,
+    policy_json TEXT NOT NULL,
+    PRIMARY KEY (account, version)
+);
+CREATE TRIGGER IF NOT EXISTS policy_versions_no_update BEFORE UPDATE ON policy_versions
+BEGIN SELECT RAISE(ABORT, 'policy versions are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS policy_versions_no_delete BEFORE DELETE ON policy_versions
+BEGIN SELECT RAISE(ABORT, 'policy versions are append-only'); END;
+CREATE TABLE IF NOT EXISTS suggestion_actions (
+    rowid_ INTEGER PRIMARY KEY AUTOINCREMENT,
+    account TEXT NOT NULL,
+    suggestion_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS suggestion_actions_by_account ON suggestion_actions (account, suggestion_id);
+CREATE TRIGGER IF NOT EXISTS suggestion_actions_no_update BEFORE UPDATE ON suggestion_actions
+BEGIN SELECT RAISE(ABORT, 'suggestion actions are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS suggestion_actions_no_delete BEFORE DELETE ON suggestion_actions
+BEGIN SELECT RAISE(ABORT, 'suggestion actions are append-only'); END;
+";
+
+impl CapitalStore {
+    /// Stores a new policy version for `account` (the next number) and returns it.
+    pub fn save_policy(
+        &self,
+        account: &AccountId,
+        limits: &crate::policy::RiskLimits,
+        status: crate::policy::PolicyStatus,
+        now: DateTime<Utc>,
+    ) -> Result<crate::policy::RiskPolicy, StoreError> {
+        let mut conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let tx = conn.transaction()?;
+        let last: Option<u32> = tx.query_row(
+            "SELECT MAX(version) FROM policy_versions WHERE account = ?1",
+            params![account.as_str()],
+            |r| r.get(0),
         )?;
-        Ok(format!("{count}:{}", last.unwrap_or_default()))
+        let policy = crate::policy::RiskPolicy {
+            version: last.unwrap_or(0) + 1,
+            status,
+            limits: limits.clone(),
+            saved_at: Some(now),
+        };
+        tx.execute(
+            "INSERT INTO policy_versions (account, version, saved_at, policy_json)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                account.as_str(),
+                policy.version,
+                now.to_rfc3339(),
+                encode(&policy)?
+            ],
+        )?;
+        tx.commit()?;
+        Ok(policy)
+    }
+
+    /// Every stored policy version for `account`, newest first.
+    pub fn policies(
+        &self,
+        account: &AccountId,
+    ) -> Result<Vec<crate::policy::RiskPolicy>, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let mut stmt = conn.prepare(
+            "SELECT policy_json FROM policy_versions WHERE account = ?1 ORDER BY version DESC",
+        )?;
+        let rows = stmt.query_map(params![account.as_str()], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(decode(&row?)?);
+        }
+        Ok(out)
+    }
+
+    /// Records what the owner did with a suggestion.
+    pub fn record_suggestion_action(
+        &self,
+        account: &AccountId,
+        record: &crate::suggest::ActionRecord,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        conn.execute(
+            "INSERT INTO suggestion_actions (account, suggestion_id, action, at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                account.as_str(),
+                record.suggestion_id,
+                encode(&record.action)?,
+                record.at.to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Suggestion ids the owner dismissed or marked done.
+    pub fn handled_suggestions(
+        &self,
+        account: &AccountId,
+    ) -> Result<std::collections::BTreeSet<String>, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT suggestion_id FROM suggestion_actions WHERE account = ?1")?;
+        let rows = stmt.query_map(params![account.as_str()], |r| r.get::<_, String>(0))?;
+        let mut out = std::collections::BTreeSet::new();
+        for row in rows {
+            out.insert(row?);
+        }
+        Ok(out)
     }
 }

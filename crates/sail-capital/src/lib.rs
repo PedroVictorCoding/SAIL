@@ -13,8 +13,12 @@ pub mod import;
 pub mod insights;
 pub mod ledger;
 pub mod market;
+pub mod optimize;
+pub mod policy;
 pub mod sec;
 pub mod service;
+pub mod signals;
 pub mod store;
+pub mod suggest;
 
 pub use contracts::*;

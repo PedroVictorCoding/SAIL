@@ -3,12 +3,10 @@
 //! Accepts CSV files with comma (`,`) or semicolon (`;`) separators and an optional
 //! UTF-8 BOM. Headers are recognized in English or Portuguese. Closes must be positive.
 use super::{
-    Adjustment, MAX_BARS_PER_SERIES, MAX_PRICE_FILE_BYTES, PriceBar, PriceSeries, PriceSourceError,
+    Adjustment, MAX_PRICE_FILE_BYTES, PriceColumns, PriceSeries, PriceSourceError, read_price_bars,
 };
 use crate::contracts::Currency;
 use chrono::NaiveDate;
-use rust_decimal::Decimal;
-use std::collections::BTreeMap;
 
 /// Parse dates formatted as `YYYY-MM-DD`, `DD.MM.YYYY`, or `DD/MM/YYYY`.
 fn parse_flexible_date(text: &str) -> Option<NaiveDate> {
@@ -19,17 +17,7 @@ fn parse_flexible_date(text: &str) -> Option<NaiveDate> {
         .ok()
 }
 
-/// Column mapping extracted from the header row.
-struct Columns {
-    date: usize,
-    close: usize,
-    open: Option<usize>,
-    high: Option<usize>,
-    low: Option<usize>,
-    volume: Option<usize>,
-}
-
-fn detect_columns(headers: &csv::StringRecord) -> Option<Columns> {
+fn detect_columns(headers: &csv::StringRecord) -> Option<PriceColumns> {
     let mut date_col = None;
     let mut primary_close_col = None;
     let mut adj_close_col = None;
@@ -55,7 +43,7 @@ fn detect_columns(headers: &csv::StringRecord) -> Option<Columns> {
     let date = date_col?;
     let close = primary_close_col.or(adj_close_col)?;
 
-    Some(Columns {
+    Some(PriceColumns {
         date,
         close,
         open: open_col,
@@ -69,7 +57,7 @@ fn detect_columns(headers: &csv::StringRecord) -> Option<Columns> {
 /// comma, so a lone `.` is the decimal point (`54.123` is fifty-four, as Yahoo and Stooq
 /// downloads write it). Anything else goes through the report parser, which refuses
 /// ambiguous text rather than guessing.
-fn file_number(text: &str, delimiter: u8) -> Option<Decimal> {
+fn file_number(text: &str, delimiter: u8) -> Option<rust_decimal::Decimal> {
     let t = text.trim();
     if delimiter == b','
         && !t.contains(',')
@@ -135,89 +123,13 @@ pub fn parse_price_file(
         .flexible(true)
         .from_reader(payload);
 
-    let mut by_session: BTreeMap<NaiveDate, PriceBar> = BTreeMap::new();
-    let mut skipped = 0;
-
-    for result in reader.records() {
-        let record = match result {
-            Ok(r) => r,
-            Err(_) => {
-                skipped += 1;
-                continue;
-            }
-        };
-
-        let Some(date_str) = record.get(cols.date) else {
-            skipped += 1;
-            continue;
-        };
-        let Some(session) = parse_flexible_date(date_str) else {
-            skipped += 1;
-            continue;
-        };
-
-        let Some(close_str) = record.get(cols.close) else {
-            skipped += 1;
-            continue;
-        };
-        let Some(close) = file_number(close_str, delimiter) else {
-            skipped += 1;
-            continue;
-        };
-        if close <= Decimal::ZERO {
-            skipped += 1;
-            continue;
-        }
-
-        let open = cols
-            .open
-            .and_then(|i| record.get(i))
-            .and_then(|t| file_number(t, delimiter));
-        let high = cols
-            .high
-            .and_then(|i| record.get(i))
-            .and_then(|t| file_number(t, delimiter));
-        let low = cols
-            .low
-            .and_then(|i| record.get(i))
-            .and_then(|t| file_number(t, delimiter));
-        let volume = cols
-            .volume
-            .and_then(|i| record.get(i))
-            .and_then(|t| file_number(t, delimiter));
-
-        let bar = PriceBar {
-            session,
-            open,
-            high,
-            low,
-            close,
-            volume,
-        };
-
-        if by_session.insert(session, bar).is_some() {
-            tracing::warn!(%session, "duplicate session in price file; keeping last occurrence");
-        }
-    }
-
-    if skipped > 0 {
-        tracing::warn!(
-            skipped,
-            "skipped malformed or non-positive close rows in price file"
-        );
-    }
-
-    if by_session.is_empty() {
-        return Err(PriceSourceError::Malformed(
-            "no valid price bars in file".into(),
-        ));
-    }
-
-    let mut bars: Vec<PriceBar> = by_session.into_values().collect();
-    if bars.len() > MAX_BARS_PER_SERIES {
-        let excess = bars.len() - MAX_BARS_PER_SERIES;
-        bars.drain(0..excess);
-    }
+    let bars = read_price_bars(
+        &mut reader,
+        &cols,
+        parse_flexible_date,
+        |t| file_number(t, delimiter),
+        "price file",
+    )?;
 
     Ok(PriceSeries {
         source_id: "owner-file".to_string(),
