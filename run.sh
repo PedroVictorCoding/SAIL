@@ -25,6 +25,10 @@ KILL_FIRST=false
 ACTION="run"
 # Keep the model server loaded across SAIL restarts unless --no-persist / SAIL_LLAMA_PERSIST=0.
 export SAIL_LLAMA_PERSIST="${SAIL_LLAMA_PERSIST:-1}"
+# Capital model helpers. This installation runs the local Chronos, YOLO and GBDT
+# helpers by default; set SAIL_MODEL_SIGNALS= (empty) to keep them off, or give a
+# comma list such as chronos,gbdt. The `-` (not `:-`) keeps an explicit empty value.
+export SAIL_MODEL_SIGNALS="${SAIL_MODEL_SIGNALS-chronos,yolo,yolo_trend,gbdt}"
 # The sandbox runner reads PDFs (scripts/setup-sail-runner.sh). Use it when it's installed
 # and this shell can reach its socket (membership of the `sail` group).
 if [[ -z "${SAIL_RUNNER_SOCKET:-}" ]] && id -u sail-runner >/dev/null 2>&1; then
