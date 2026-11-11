@@ -803,6 +803,7 @@ fn signal_label(signal: SignalId) -> &'static str {
         SignalId::FoundationForecast => "foundation forecast",
         SignalId::FilingSentiment => "filing sentiment",
         SignalId::InsiderBuying => "insider buying",
+        SignalId::ChartTrend => "chart trend",
     }
 }
 

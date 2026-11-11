@@ -8,9 +8,9 @@
 //!   last 252 daily log returns. Quantile `q` at step `t` is `μt + z_q·σ√t`, where
 //!   `μ` is the mean daily log return.
 //! - `ewma`: zero drift, RiskMetrics EWMA volatility (λ = 0.94), `z_q·σ√t`.
-//! - `bootstrap`: stationary block bootstrap of the last 756 daily log returns (mean block
-//!   10), 2,000 paths with a fixed seed from (instrument key, origin), so it is
-//!   deterministic. Quantiles of the cumulative sums.
+//! - `historical`: historical simulation. The empirical quantiles, at each step `t`, of
+//!   every overlapping `t`-session log return in the last 756 sessions before the origin.
+//!   Cheap, deterministic, and keeps fat tails and skew.
 //! - `chronos`: Chronos-Bolt quantile path, from a Python helper. Only up to 64 steps.
 //! - `gbdt`: gradient-boosted quantile regression (scikit-learn
 //!   `HistGradientBoostingRegressor`, `loss="quantile"`), from a Python helper. It is
@@ -35,6 +35,14 @@
 //! **Replay.** Exactly the same computation, with every input cut at `cutoff`: prices,
 //! component values, weights and signal validation. The actual prices after the cutoff
 //! are then laid over the fan. Nothing after the cutoff is visible to any part of it.
+//!
+//! **Cost.** Component paths at weekly origins depend only on the instrument and the
+//! origin, never on the cutoff. Compute them once per call and reuse them for every
+//! cutoff's weights. A track record over 36 instruments must take seconds, not minutes.
+//!
+//! **Tails.** Pooled quantiles are found by bisection on the mixture CDF. Each component's
+//! CDF is piecewise linear through its quantiles. Beyond 5% and 95% it uses a normal tail
+//! fitted to the 16–84% spread.
 //!
 //! **Track record.** Replays at monthly cutoffs over the last three years, reporting:
 //! - how often the actual price ended inside the 68% and 90% bands;
@@ -69,8 +77,8 @@ pub enum ComponentId {
     Gbm,
     /// Zero drift, EWMA volatility (the "no change" reference).
     Ewma,
-    /// Block bootstrap of past returns.
-    Bootstrap,
+    /// Historical simulation over past windows of the same length.
+    Historical,
     /// Chronos-Bolt (Python helper).
     Chronos,
     /// Gradient-boosted quantile regression (Python helper).
@@ -178,7 +186,7 @@ pub struct Instrument<'a> {
     pub tilt_signals: Vec<String>,
 }
 
-/// The built-in components (`gbm`, `ewma`, `bootstrap`) for the series cut at index
+/// The built-in components (`gbm`, `ewma`, `historical`) for the series cut at index
 /// `origin` (inclusive), or `None` for each when there are fewer than 252 returns.
 pub fn builtin_paths(
     series: &crate::forecast::CloseSeries<'_>,
