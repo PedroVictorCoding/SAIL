@@ -7,14 +7,14 @@
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
 use sail_capital::AsOf;
-use sail_capital::service::{CapitalService, ServiceError};
+use sail_capital::service::{CapitalService, GrantInput, ServiceError};
 use sail_guardian::authority::ApprovalAuthority;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -45,6 +45,9 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/filings", get(filings))
         .route("/sec/status", get(sec_status))
         .route("/sec/refresh", post(sec_refresh))
+        .route("/insights", get(insights))
+        .route("/grants", get(grants).post(record_grant))
+        .route("/grants/:id/retract", post(retract_grant))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
         .with_state(Arc::new(CapitalState { service, authority }))
 }
@@ -171,6 +174,75 @@ async fn portfolio(
     })
     .await?;
     Ok(no_store(to_json(&projection)?))
+}
+
+async fn insights(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<PortfolioQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let now = Utc::now();
+    let as_of = AsOf {
+        occurred_by: q.occurred_by.unwrap_or(now).min(now),
+        known_by: q.known_by.unwrap_or(now).min(now),
+    };
+    let insights = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.insights(&account, as_of, now)
+    })
+    .await?;
+    Ok(no_store(to_json(&insights)?))
+}
+
+async fn grants(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let grants = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.grants(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&grants)?))
+}
+
+async fn record_grant(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let input: GrantInput = serde_json::from_slice(&body).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "The grant must be JSON with symbol, quantity and received_at."})),
+        )
+    })?;
+    let grant = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.record_grant(&account, input, Utc::now())
+    })
+    .await?;
+    Ok(no_store(to_json(&grant)?))
+}
+
+async fn retract_grant(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let grant = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.retract_grant(&account, &id, Utc::now())
+    })
+    .await?;
+    Ok(no_store(to_json(&grant)?))
 }
 
 async fn positions(

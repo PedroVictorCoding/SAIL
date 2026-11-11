@@ -118,9 +118,53 @@ The layout was checked against a real web-platform export in November 2026, and
   as a broker fee, not a tax.
 - **Comments.** "OPEN BUY SYM 3 @ …" repeats the symbol. In "CLOSE BUY 2/5 @ …", 2 of 5
   units were closed.
-- **Unclassified types.** "Spinoff", "Correction" and "Fractional shares" are kept as
-  unsupported rows with a warning. Their cash still counts. The ledger doesn't model
-  splits or spin-offs yet, so the reconciliation reports any resulting difference.
+- **Splits.** A "Fractional shares" row whose comment says "SYM split 1 for 10" is
+  imported as a split (see below).
+- **Unclassified types.** "Spinoff", "Correction" and any other "Fractional shares" row
+  are kept as unsupported rows with a warning. Their cash still counts. The ledger
+  doesn't model spin-offs, so the reconciliation reports any resulting difference.
+
+## Splits and received shares (round 9)
+
+**Splits.** A split of `new` units for every `old` scales every open lot of the holding
+by `new / old`. Each lot keeps its total cost, so its per-unit cost changes.
+
+When the broker cashes out a fractional remainder (the split row carries the cash),
+that fraction is removed from the **newest** lots first, as XTB does. The ledger records
+it as a realized sale: the proceeds are the cash and the cost is the removed lots'
+share. A split with nothing held changes nothing and adds a warning.
+
+**Received shares.** Some units have no purchase in the export: promotional shares,
+gifts, or transfers in from another broker. The owner records them on the Capital page
+(`POST /grants`) with these fields:
+- symbol;
+- quantity;
+- date received;
+- an optional cost basis, where blank means zero;
+- a note.
+
+Each one opens a lot marked as granted. While granted units with zero cost are held, the
+position carries a warning saying so.
+
+Grants are kept apart from imported rows and are never edited or deleted. A mistaken
+grant is **retracted**, once, and the time of retraction is recorded. A question asked
+as of before the retraction still sees the grant; one asked after it doesn't.
+
+## Portfolio insights (round 9)
+
+`GET /insights` summarises the projection. Every figure uses only the broker's own values
+and the ledger: there are no market prices, no FX conversion and no model.
+
+| Figure | How it's computed |
+|---|---|
+| Allocation | Each owned position's share of the owned value, by the broker's value at its snapshot, plus the same by kind (stock, ETF). CFDs are never included. |
+| Concentration | The largest position and the top 5. The Herfindahl–Hirschman index (the sum of squared shares) and its inverse, "as concentrated as N equal holdings". |
+| Income | Owned-share dividends minus withholding, plus interest after its tax, by UTC month. Also the trailing 12 months, and a trailing yield on the owned value. CFD dividend equivalents are excluded. |
+| Return on deposits | Ledger cash plus owned value, minus net deposits (deposits minus withdrawals; transfers between the owner's own sub-accounts don't count). It reports the gain and the gain over net deposits. |
+| Freshness | The broker snapshot's time and age. The data counts as stale after 72 hours. |
+
+A figure that would need two currencies combined is left out, with a warning. Positions
+with no broker value are listed and named in a warning.
 
 **Currencies.**
 - Cash amounts, purchase values and P/L are in the account currency.
@@ -176,6 +220,10 @@ asked `AsOf { occurred_by, known_by }` sees a filing only if it was published by
 | `GET /filings?account=&occurred_by=&known_by=` | Watch items and research proposals for held issuers, plus how each position matched |
 | `GET /sec/status` | Whether SEC access is configured, the last refresh and its counts or error |
 | `POST /sec/refresh?account=` | Runs a refresh now and returns the new status |
+| `GET /insights?account=&occurred_by=&known_by=` | Allocation, concentration, income, return on deposits and freshness |
+| `GET /grants?account=` | Received shares the owner recorded, newest first, retracted ones included |
+| `POST /grants?account=` | Records received shares. The body is JSON: `symbol`, `kind` (stock/etf), `quantity`, `received_at`, `cost` (or null), `note` |
+| `POST /grants/{id}/retract?account=` | Retracts a grant, once |
 
 All amounts are decimal strings. Errors are `{"error": "..."}`, with these status codes:
 
