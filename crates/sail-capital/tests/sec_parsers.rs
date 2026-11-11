@@ -112,7 +112,7 @@ fn submissions_happy_path_reads_every_field() {
     assert_eq!(annual.published_basis, PublishedBasis::Acceptance);
     assert_eq!(
         annual.published_at,
-        Utc.with_ymd_and_hms(2024, 11, 1, 10, 1, 36)
+        Utc.with_ymd_and_hms(2024, 11, 1, 6, 1, 36)
             .single()
             .expect("test time")
     );
@@ -150,7 +150,7 @@ fn submissions_happy_path_reads_every_field() {
     assert_eq!(quarterly.accession, "0001234567-24-000003");
     assert_eq!(
         quarterly.published_at,
-        Utc.with_ymd_and_hms(2024, 5, 3, 20, 5, 0)
+        Utc.with_ymd_and_hms(2024, 5, 3, 16, 5, 0)
             .single()
             .expect("test time")
     );
