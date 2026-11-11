@@ -50,6 +50,11 @@
 //! - CRPS skill against `ewma` alone, which acts as "no change".
 //!
 //! **Purity.** No I/O and no clock. Component values from Python helpers are passed in.
+mod dist;
+mod engine;
+mod fit;
+mod paths;
+
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -193,9 +198,14 @@ pub fn builtin_paths(
     origin: usize,
     horizon: u32,
 ) -> Vec<(ComponentId, Option<PathQuantiles>)> {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = (series, origin, horizon);
-    Vec::new()
+    let Ok(series) = paths::Series::new(series.closes) else {
+        return vec![
+            (ComponentId::Gbm, None),
+            (ComponentId::Ewma, None),
+            (ComponentId::Historical, None),
+        ];
+    };
+    paths::builtin_paths(&series, origin, horizon).to_vec()
 }
 
 /// The blended outlook at `horizon` from `cutoff` (the last session on or before it), or
@@ -203,51 +213,13 @@ pub fn builtin_paths(
 /// the cutoff is in the past, `actual` and `actual_percentile` are filled from the closes
 /// after it.
 pub fn outlook(instrument: &Instrument<'_>, horizon: u32, cutoff: Option<NaiveDate>) -> Outlook {
-    // Kilo implements this; the stub keeps the crate building.
-    let (origin, origin_close) = instrument
-        .series
-        .closes
-        .last()
-        .map(|(d, c)| {
-            (
-                *d,
-                rust_decimal::prelude::ToPrimitive::to_f64(c).unwrap_or(0.0),
-            )
-        })
-        .unwrap_or((NaiveDate::MIN, 0.0));
-    let _ = cutoff;
-    Outlook {
-        instrument_key: instrument.series.instrument_key.to_string(),
-        symbol: instrument.series.symbol.to_string(),
-        origin,
-        origin_close,
-        horizon,
-        status: crate::forecast::ForecastStatus::InsufficientEvidence {
-            reason: "not implemented".into(),
-        },
-        fan: Vec::new(),
-        weights: Vec::new(),
-        weight_origins: 0,
-        tilt: 0.0,
-        tilt_signals: Vec::new(),
-        actual: Vec::new(),
-        actual_percentile: None,
-    }
+    engine::outlook(instrument, horizon, cutoff)
 }
 
 /// The blend's out-of-sample record at `horizon`: replays at the last session of each
 /// month over the three years before `today`, pooled over `instruments`, keeping those
-/// whose outcome is known.
+/// whose outcome is known. The instruments' `tilt` is ignored: it is known only at the
+/// caller's cutoff, and a replay must not see it.
 pub fn track_record(instruments: &[Instrument<'_>], horizon: u32, today: NaiveDate) -> TrackRecord {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = (instruments, today);
-    TrackRecord {
-        horizon,
-        replays: 0,
-        inside_68: 0.0,
-        inside_90: 0.0,
-        mean_percentile: 0.0,
-        skill_vs_no_change: 0.0,
-        direction_hit_rate: 0.0,
-    }
+    engine::track_record(instruments, horizon, today)
 }
