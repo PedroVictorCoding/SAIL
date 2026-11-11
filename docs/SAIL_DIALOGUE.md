@@ -135,3 +135,15 @@ disconnection hang up the shell and foreground process group.
 
 This improves the existing owner terminal; it does not grant agents shell access
 or implement the broader Guardian-scoped tool execution contract above.
+
+## Requested visual snapshots
+
+The owner's requested capture is sufficient authorization for one snapshot; SAIL
+does not ask for a second approval. Bare “camera”/“webcam” commands capture the
+camera, and “screenshot” captures the screen. Tool source selection follows the
+latest user wording, using recent user dialogue when the model omits the source.
+Existing live sources supply one frame immediately. Otherwise camera acquisition
+starts directly (browser device permission still applies); a new screen share
+requires a click to open the browser's mandatory screen picker. This is a bounded
+requested capture, not authorization for background recording. Cancellation,
+request/session matching, local analysis and real capture error reporting remain.

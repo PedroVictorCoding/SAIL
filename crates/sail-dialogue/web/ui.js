@@ -704,8 +704,8 @@ window.addEventListener('pagehide', () => {
 
 // Model-requested snapshots (visual_snapshot tool). The model chooses camera or screen.
 // A source the user is already sharing live answers at once from its current frame; any
-// other capture needs the user's click in the dialog (screen sharing also requires
-// transient user activation, so it is never started from a WebSocket callback).
+// camera capture starts directly; a new screen share requires a browser picker
+// gesture, so only that source needs a click from a WebSocket callback.
 // Matches what realtime voice demos send: enough for text on screen, few image tokens.
 const SNAPSHOT_MAX_EDGE = 768;
 const SNAPSHOT_QUALITY = 0.8;
@@ -751,15 +751,19 @@ function requestVisualCapture(request) {
   const live = liveSnapshot(request.source);
   if (live && deliverSnapshot(request, live)) return;
   pendingVisualCapture = request;
+  if (request.source === 'camera') {
+    void captureRequestedVisual('camera');
+    return;
+  }
   const why = request.question ? ` SAIL wants to know: “${request.question}”` : '';
-  document.getElementById('captureTitle').textContent = request.source === 'screen' ? 'SAIL wants to see your screen' : 'SAIL wants to see your camera';
+  document.getElementById('captureTitle').textContent = request.source === 'screen' ? 'Choose a screen to capture' : 'Camera snapshot';
   document.getElementById('captureExplanation').textContent = (request.source === 'screen'
     ? 'Share a screen or window to take one screenshot. It is analyzed locally.'
     : 'Allow the camera to take one picture. It is analyzed locally.') + why;
-  // The model chose a source; the user can still pick the other one or cancel.
+  // Only screen capture needs a click to open the browser's picker.
   const cameraChoice = document.getElementById('captureCameraChoice');
   const screenChoice = document.getElementById('captureScreenChoice');
-  cameraChoice.hidden = false; screenChoice.hidden = false;
+  cameraChoice.hidden = true; screenChoice.hidden = false;
   captureDialog.showModal();
   (request.source === 'screen' ? screenChoice : cameraChoice).focus();
 }
@@ -790,10 +794,15 @@ async function captureRequestedVisual(source) {
     ]);
     if (pendingVisualCapture !== request) return;
     const data = frameFromVideo(video);
-    if (data && deliverSnapshot(request, data)) cancelVisualCapture();
+    if (!data) throw new Error("No image frame was received.");
+    if (deliverSnapshot(request, data)) cancelVisualCapture();
   } catch (error) {
-    if (pendingVisualCapture === request) showError(error.name === 'NotAllowedError'
-      ? 'Capture cancelled or permission denied. Choose a source to retry, or cancel.' : error.message);
+    if (pendingVisualCapture === request) {
+      const message = error.name === 'NotAllowedError' ? 'Capture cancelled or browser permission denied.' : error.message;
+      sendAction('snapshot', { request_id:request.request_id, error:message });
+      cancelVisualCapture();
+      showError(message);
+    }
   } finally {
     stream?.getTracks().forEach(track => track.stop());
     buttons.forEach(button => button.disabled = false);

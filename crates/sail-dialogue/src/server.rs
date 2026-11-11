@@ -1430,7 +1430,12 @@ fn execute_tool_for(
 enum TurnInput {
     Audio(Vec<i16>, Option<u64>),
     /// Prompt, optional image, image source (`camera`/`screen`/`upload`), learning consent.
-    Text(String, Option<VisionFrameInput>, Option<String>, Option<u64>),
+    Text(
+        String,
+        Option<VisionFrameInput>,
+        Option<String>,
+        Option<u64>,
+    ),
 }
 
 /// Where the reply is turned into speech. `Client`: the browser runs Kokoro and the
@@ -1970,7 +1975,7 @@ struct MemoryScope<'a> {
 }
 
 /// Run a model-requested `visual_snapshot`: ask the browser for one frame, wait for the
-/// user to allow it, then hand the model the image (vision model) or a compact local
+/// browser capture to complete, then hand the model the image (vision model) or a compact local
 /// description (text-only model). Returns the tool result and, for a vision model, the
 /// message carrying the image.
 async fn take_snapshot(
@@ -2035,7 +2040,8 @@ async fn take_snapshot(
     let started = Instant::now();
     match snapshot::observe(vlm, &frame, source.as_str(), question.as_deref()).await {
         Ok(observation) => {
-            if let (Some(id), snapshot::Observation::Text(text)) = (archived.as_deref(), &observation)
+            if let (Some(id), snapshot::Observation::Text(text)) =
+                (archived.as_deref(), &observation)
             {
                 crate::vision_archive::describe_stored(id, text);
             }
@@ -2084,6 +2090,35 @@ async fn reason_turn(
     let mut reply = String::new();
     let mut final_assistant = None;
     let mut guard = ToolLoopGuard::new(prompt);
+    // Short capture commands are deterministic, including for text-only local models.
+    let command = prompt
+        .trim()
+        .trim_end_matches(['.', '!', '?'])
+        .to_lowercase();
+    if matches!(command.as_str(), "camera" | "webcam" | "screenshot") {
+        let source = crate::visual_snapshot::dialogue_source(&command).expect("capture command");
+        let params = json!({"source":source.as_str()});
+        emit(tx, current, json!({"type":"tool_started","channel":"voice:vlm","tool":crate::visual_snapshot::TOOL})).await;
+        let (result, image) = take_snapshot(
+            vlm,
+            memory.as_ref().map(|s| s.session),
+            &params,
+            tx,
+            current,
+        )
+        .await;
+        messages.push(json!({"role":"assistant","tool_calls":[{"id":"requested_snapshot","type":"function","function":{"name":crate::visual_snapshot::TOOL,"arguments":params.to_string()}}]}));
+        messages.push(json!({"role":"tool","tool_call_id":"requested_snapshot","name":crate::visual_snapshot::TOOL,"content":serde_json::to_string(&result)?}));
+        if let Some(image) = image {
+            messages.push(image);
+        }
+        emit(tx, current, json!({"type":"tool_result","result":result})).await;
+        if !result.success {
+            // The final prose pass strips native tool protocol; retain the observed error.
+            messages.push(json!({"role":"user","content":format!("[SAIL snapshot failed: {}]", result.output)}));
+        }
+        guard.record(crate::visual_snapshot::TOOL, &params, result);
+    }
     let gen_start = Instant::now();
     let mut first_token_instant: Option<Instant> = None;
     let mut total_token_count = 0usize;
@@ -2286,6 +2321,11 @@ async fn reason_turn(
                 let mut publish = true;
                 let result = match params {
                     Ok(params) => {
+                        let params = if name == crate::visual_snapshot::TOOL {
+                            crate::visual_snapshot::contextual_params(&params, prompt, messages)
+                        } else {
+                            params
+                        };
                         debug!(round, tool = name, "Model proposed tool arguments");
                         if let Some(cached) = guard.cached(name, &params) {
                             publish = false;
@@ -3251,12 +3291,8 @@ mod tests {
             })
             .expect("store archived photo");
 
-        let (recent, image) = crate::vision_archive::run_tool(
-            &vlm,
-            Some(&session),
-            &json!({"mode":"recent"}),
-        )
-        .await;
+        let (recent, image) =
+            crate::vision_archive::run_tool(&vlm, Some(&session), &json!({"mode":"recent"})).await;
         assert!(recent.success, "{:?}", recent.output);
         assert_eq!(recent.output["count"], 1);
         assert_eq!(recent.output["images"][0]["id"], meta.id);
@@ -3302,7 +3338,10 @@ mod tests {
             found.output["description"],
             "A dark terminal showing a compiler error."
         );
-        assert!(image.is_none(), "a text-only model gets the stored description");
+        assert!(
+            image.is_none(),
+            "a text-only model gets the stored description"
+        );
     }
 
     #[tokio::test]
@@ -3418,6 +3457,19 @@ mod tests {
         drop(server);
         (requests, events, reply)
     }
+    #[tokio::test]
+    async fn bare_snapshot_commands_attempt_capture_before_model_inference() {
+        for prompt in ["camera", "screenshot!"] {
+            let (requests, events, _) =
+                exercise(prompt, vec![json!({"content":"No browser is connected."})]).await;
+            assert_eq!(requests.len(), 1);
+            assert!(events.iter().any(|event| event["type"] == "tool_started"
+                && event["tool"] == crate::visual_snapshot::TOOL));
+            // The capture already failed without a browser: no model-directed retry.
+            assert_eq!(requests[0]["tool_choice"], "none");
+        }
+    }
+
     #[tokio::test]
     async fn first_sentence_reaches_speech_before_model_stream_finishes() {
         // The mock model will not produce its final text until a speech consumer
