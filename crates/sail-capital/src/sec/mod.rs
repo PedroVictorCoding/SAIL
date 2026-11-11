@@ -4,28 +4,20 @@
 //! thing it sends is the owner-declared User-Agent that SEC's fair-access policy requires.
 //! The parsers are pure functions, so they can be tested on fixtures without the network.
 //!
-//! Two conservative choices are visible here:
-//! - [`ACCEPTANCE_TIME_IS_NEW_YORK_LOCAL`] records how EDGAR's `acceptanceDateTime` is read.
-//!   The field carries a `Z` suffix, but the value may be New York wall-clock time. The
-//!   constant is the single switch Claude flips after the live check.
+//! Two choices are visible here:
+//! - EDGAR's `acceptanceDateTime` is real UTC: its `Z` means what it says. Checked live on
+//!   2026-11-11: the submissions JSON gave `2026-11-06T02:54:06.000Z` for a filing whose
+//!   sec.gov index page says "Accepted 2026-11-05 21:54:06" (Eastern, UTC-5).
 //! - [`ACCEPT_ENCODING`] is `identity`: the workspace builds `reqwest` without its gzip
 //!   feature, so asking for a compressed body would leave it undecoded.
 use crate::evidence::*;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use chrono_tz::America::New_York;
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
-
-/// Whether `acceptanceDateTime` is New York wall-clock time despite its `Z` suffix.
-///
-/// EDGAR's live value is the open question of this round: public examples show a `Z`, but
-/// the time of day matches New York working hours. Until Claude's live check proves
-/// otherwise, the value is treated as `America/New_York` local time and converted to UTC.
-/// Flip this to `false` if the live check shows the value is already UTC.
-const ACCEPTANCE_TIME_IS_NEW_YORK_LOCAL: bool = true;
 
 /// What the client advertises it can decode. The workspace builds `reqwest` without the
 /// gzip feature, so a compressed response could not be read; `identity` keeps SEC's body
@@ -396,32 +388,13 @@ fn parse_date(text: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d").ok()
 }
 
-/// Parse `acceptanceDateTime` according to [`ACCEPTANCE_TIME_IS_NEW_YORK_LOCAL`].
-///
-/// With the default interpretation the `Z` suffix is treated as decoration: the wall-clock
-/// digits are New York local time. A DST fall-back hour resolves to the earlier instant.
-/// An explicit numeric offset isn't part of EDGAR's format and falls back to the filing
-/// date, which is conservative: the filing is never treated as published earlier than it was.
+/// Parse `acceptanceDateTime`, an RFC 3339 UTC time such as `2026-11-06T02:54:06.000Z`.
+/// Anything else is `None`, and the caller falls back to the end of the filing day in New
+/// York, which is never earlier than the real publication.
 fn parse_acceptance(text: &str) -> Option<DateTime<Utc>> {
-    let text = text.trim();
-    if text.is_empty() {
-        return None;
-    }
-    if ACCEPTANCE_TIME_IS_NEW_YORK_LOCAL {
-        let wall = text
-            .strip_suffix('Z')
-            .or_else(|| text.strip_suffix('z'))
-            .unwrap_or(text);
-        let naive = NaiveDateTime::parse_from_str(wall, "%Y-%m-%dT%H:%M:%S%.f").ok()?;
-        New_York
-            .from_local_datetime(&naive)
-            .earliest()
-            .map(|moment| moment.with_timezone(&Utc))
-    } else {
-        DateTime::parse_from_rfc3339(text)
-            .ok()
-            .map(|moment| moment.with_timezone(&Utc))
-    }
+    DateTime::parse_from_rfc3339(text.trim())
+        .ok()
+        .map(|moment| moment.with_timezone(&Utc))
 }
 
 /// The latest instant of `date` in New York, used when only `filingDate` is known. Never
