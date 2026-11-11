@@ -78,8 +78,16 @@ fn series<'a>(
 fn config(horizons: &[u32]) -> SignalEvalConfig {
     SignalEvalConfig {
         horizons: horizons.to_vec(),
-        step_days: 7,
-        start: None,
+        ..SignalEvalConfig::default()
+    }
+}
+
+/// For the hand-computed formula check only: three cross-sections are judged.
+fn formula_config(horizons: &[u32]) -> SignalEvalConfig {
+    SignalEvalConfig {
+        min_origins: 2,
+        min_effective_origins: 0.0,
+        ..config(horizons)
     }
 }
 
@@ -166,7 +174,7 @@ fn momentum_survives_when_it_is_planted() {
     let drifts: Vec<f64> = (0..12)
         .map(|index| -0.0006 + 0.00016 * index as f64)
         .collect();
-    let rows = drift_universe(&drifts, 900, 0.002, 11);
+    let rows = drift_universe(&drifts, 1100, 0.002, 11);
     let names = symbols(12);
     let report = report_for(&rows, &names, &config(&[20, 60]));
 
@@ -261,7 +269,9 @@ fn the_combination_matches_a_hand_computed_case() {
             values: names
                 .iter()
                 .enumerate()
-                .map(|(index, name)| (name.clone(), date_at(0), index as f64))
+                .flat_map(|(index, name)| {
+                    (0..20).map(move |session| (name.clone(), date_at(session), index as f64))
+                })
                 .collect(),
         },
         ExternalScores {
@@ -269,11 +279,13 @@ fn the_combination_matches_a_hand_computed_case() {
             values: names
                 .iter()
                 .enumerate()
-                .map(|(index, name)| (name.clone(), date_at(0), index as f64))
+                .flat_map(|(index, name)| {
+                    (0..20).map(move |session| (name.clone(), date_at(session), index as f64))
+                })
                 .collect(),
         },
     ];
-    let report = evaluate_and_combine(&series, &external, &sigma_constant, &config(&[5]));
+    let report = evaluate_and_combine(&series, &external, &sigma_constant, &formula_config(&[5]));
 
     let z: Vec<f64> = (0..6)
         .map(|index| (index as f64 - 2.5) / 3.5f64.sqrt())

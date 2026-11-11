@@ -43,9 +43,20 @@ pub const MIN_CROSS_SECTION: usize = 5;
 /// Horizons, in sessions, that signals are scored and combined at.
 pub const SIGNAL_HORIZONS: [u32; 2] = [20, 60];
 
-/// Fewest cross-sections before an IC is judged. A single cross-section has no sampling
-/// spread, so it never shrinks to a usable IC.
-const MIN_ORIGINS: usize = 2;
+/// Default fewest cross-sections before an IC is judged (about half a year of weekly
+/// dates).
+pub const MIN_ORIGINS: usize = 26;
+
+/// Default fewest effectively independent cross-sections (`origins / overlap`) before an
+/// IC is judged. Overlapping outcomes carry less information than their count suggests.
+pub const MIN_EFFECTIVE_ORIGINS: f64 = 8.0;
+
+/// Calendar days per session, to convert a horizon in sessions to calendar days.
+const DAYS_PER_SESSION: f64 = 7.0 / 5.0;
+
+/// Oldest an external (model) value may be, in calendar days, to count at a date.
+/// Helpers score weekly, so anything older means the model wasn't run for that week.
+pub const MAX_EXTERNAL_AGE_DAYS: i64 = 10;
 
 /// The signals. Price signals are computed here. Model signals (chart patterns,
 /// foundation forecasters, filing sentiment, insider buying) come from Python helpers in
@@ -136,7 +147,8 @@ pub struct SignalSkill {
     /// Mean Spearman IC across origins.
     pub ic_mean: f64,
     /// Standard error of the mean IC, widened for overlapping outcomes: `sd(IC) /
-    /// sqrt(origins / max(1, h / step))`.
+    /// sqrt(origins / overlap)`, with `overlap = max(1, 1.4·h / step_days)` (the horizon
+    /// in calendar days over the spacing of cross-sections).
     pub ic_se: f64,
     /// `ic_mean / ic_se`.
     pub t_stat: f64,
@@ -155,6 +167,20 @@ pub struct SignalEvalConfig {
     pub step_days: u32,
     /// Earliest date to score from (`None`: as soon as five instruments have values).
     pub start: Option<NaiveDate>,
+    /// Fewest cross-sections before a signal can pass ([`MIN_ORIGINS`]).
+    #[serde(default = "default_min_origins")]
+    pub min_origins: usize,
+    /// Fewest effectively independent cross-sections ([`MIN_EFFECTIVE_ORIGINS`]).
+    #[serde(default = "default_min_effective")]
+    pub min_effective_origins: f64,
+}
+
+fn default_min_origins() -> usize {
+    MIN_ORIGINS
+}
+
+fn default_min_effective() -> f64 {
+    MIN_EFFECTIVE_ORIGINS
 }
 
 impl Default for SignalEvalConfig {
@@ -163,6 +189,8 @@ impl Default for SignalEvalConfig {
             horizons: SIGNAL_HORIZONS.to_vec(),
             step_days: 7,
             start: None,
+            min_origins: MIN_ORIGINS,
+            min_effective_origins: MIN_EFFECTIVE_ORIGINS,
         }
     }
 }
@@ -281,7 +309,11 @@ pub fn evaluate_and_combine(
             }
             let origins = ics.len();
             let ic_mean = if origins == 0 { 0.0 } else { mean(&ics) };
-            let overlap = (horizon_sessions as f64 / config.step_days.max(1) as f64).max(1.0);
+            // Outcomes span `h` sessions (about `1.4·h` calendar days) and cross-sections
+            // are `step_days` apart, so that many consecutive ICs share outcomes.
+            let overlap = (horizon_sessions as f64 * DAYS_PER_SESSION
+                / config.step_days.max(1) as f64)
+                .max(1.0);
             let ic_se = if origins >= 2 {
                 sample_std(&ics, ic_mean) / (origins as f64 / overlap).sqrt()
             } else {
@@ -292,7 +324,11 @@ pub fn evaluate_and_combine(
             } else {
                 0.0
             };
-            let ic_used = if origins >= MIN_ORIGINS && ic_se.is_finite() {
+            let effective = origins as f64 / overlap;
+            let ic_used = if origins >= config.min_origins
+                && effective >= config.min_effective_origins
+                && ic_se.is_finite()
+            {
                 ic_mean.signum() * (ic_mean.abs() - 2.0 * ic_se).max(0.0)
             } else {
                 0.0
@@ -522,8 +558,9 @@ fn signal_value(
         Some(by_key) => {
             let rows = by_key.get(&instrument.key)?;
             let position = rows.partition_point(|(session, _)| *session <= date);
-            let (_, value) = rows.get(position.checked_sub(1)?)?;
-            value.is_finite().then_some(*value)
+            let (session, value) = rows.get(position.checked_sub(1)?)?;
+            ((date - *session).num_days() <= MAX_EXTERNAL_AGE_DAYS && value.is_finite())
+                .then_some(*value)
         }
         None => value_from(&instrument.closes, &instrument.log_closes, signal, index),
     }
