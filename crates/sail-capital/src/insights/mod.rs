@@ -266,7 +266,12 @@ pub fn insights(projection: &Projection, records: &[LedgerRecord], now: DateTime
                     positions: count,
                 });
             }
-            by_kind_slices.sort_by_key(|a| std::cmp::Reverse(a.value.amount));
+            by_kind_slices.sort_by(|a, b| {
+                b.value
+                    .amount
+                    .cmp(&a.value.amount)
+                    .then_with(|| format!("{:?}", a.kind).cmp(&format!("{:?}", b.kind)))
+            });
 
             // Concentration
             let largest_share = alloc_slices[0].share;
@@ -541,6 +546,13 @@ pub fn insights(projection: &Projection, records: &[LedgerRecord], now: DateTime
                     .find(|c| c.currency == target_curr)
                     .map(|c| c.amount)
                     .unwrap_or(Decimal::ZERO);
+                if !unvalued.is_empty() {
+                    warnings.push(format!(
+                        "Current value leaves out {} position(s) with no broker value: {}",
+                        unvalued.len(),
+                        unvalued.join(", ")
+                    ));
+                }
                 let curr_val_amount = cash_amount + ov_amount;
                 let gain_amount = curr_val_amount - net_dep_amount;
 

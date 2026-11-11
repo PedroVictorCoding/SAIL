@@ -4,15 +4,15 @@ use std::str::FromStr;
 
 use chrono::{TimeZone, Utc};
 use rust_decimal::Decimal;
+use sail_capital::AsOf;
 use sail_capital::contracts::{
     AccountId, Currency, EntryKind, EventTime, Instrument, InstrumentKind, LedgerRecord, Money,
     ParsedEntry, RowRef, SheetKind, TaxKind, TimePrecision,
 };
-use sail_capital::insights::{insights, Concentration};
+use sail_capital::insights::{Concentration, insights};
 use sail_capital::ledger::{
     DividendView, FlowTotal, Position, Projection, Reconciliation, ReconciliationStatus,
 };
-use sail_capital::AsOf;
 
 fn d(s: &str) -> Decimal {
     Decimal::from_str(s).expect("valid decimal")
