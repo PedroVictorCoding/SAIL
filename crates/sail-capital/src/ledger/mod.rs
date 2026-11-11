@@ -27,17 +27,31 @@ mod reconcile;
 #[cfg(test)]
 mod tests;
 
+/// How a lot came into the ledger. The distinction matters because a granted lot has no
+/// purchase row: its cost is the owner's declaration, and zero cost must stay visible
+/// instead of looking like a purchase that lost its price.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LotOrigin {
+    /// Bought with cash in a trade row.
+    Bought,
+    /// Received free (a promotion, gift or transfer in) and declared by the owner.
+    Granted,
+}
+
 /// One open lot after FIFO matching.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lot {
-    /// When the lot was bought.
+    /// When the lot was bought or granted.
     pub opened: EventTime,
     /// Units still open, positive.
     #[serde(with = "rust_decimal::serde::str")]
     pub quantity: Decimal,
-    /// Price per unit paid, if the buy row stated it.
+    /// Price per unit paid, if the buy row stated it. A granted lot can be zero here.
     pub unit_cost: Option<Money>,
-    /// Ledger record id of the buy.
+    /// Whether the lot was bought or received free.
+    pub origin: LotOrigin,
+    /// Ledger record id of the buy or grant.
     pub record_id: String,
 }
 
@@ -187,10 +201,34 @@ pub fn project(
 ) -> Projection {
     let visible = visible_records(account, records, &as_of);
     let visible_snapshot = visible_snapshot(account, snapshots, &as_of);
+    let cash = cash_totals(&visible);
+
+    // A zero-cost grant needs "the account currency" only to label its zero. That is known
+    // when the projection holds cash in exactly one currency; with mixed cash there is no
+    // unambiguous account currency, so the cost stays unlabelled.
+    let account_currency = match cash.as_slice() {
+        [single] => Some(single.currency.clone()),
+        _ => None,
+    };
 
     let mut warnings: Vec<String> = Vec::new();
     let mut internal_variances: Vec<Variance> = Vec::new();
-    let (books, realized) = fifo::build_positions(&visible, &mut warnings, &mut internal_variances);
+    let (books, realized) = fifo::build_positions(
+        &visible,
+        account_currency.as_ref(),
+        &mut warnings,
+        &mut internal_variances,
+    );
+    for book in books.values() {
+        let units = book.granted_zero_cost_units();
+        if units > Decimal::ZERO {
+            warnings.push(format!(
+                "{} includes {} units received free (zero cost basis)",
+                book.symbol(),
+                units
+            ));
+        }
+    }
 
     let market_values = match visible_snapshot {
         Some(snapshot) => market_values_by_key(snapshot),
@@ -210,7 +248,6 @@ pub fn project(
     }
 
     let dividends = dividends::build_dividends(&visible, &mut warnings);
-    let cash = cash_totals(&visible);
     let flows = flow_totals(&visible);
     let (reconciliation, snapshot_as_of) = reconcile::reconcile(
         &positions,
