@@ -421,7 +421,7 @@ function renderPortfolio(p) {
   renderDividendsTable(p.dividends || []);
 
   // Update Outlook holding picker (Round 12)
-  const heldSymbols = Array.from(new Set((p.positions || []).map(pos => pos.symbol).filter(Boolean))).sort();
+  const heldSymbols = Array.from(new Set((p.positions || []).map(pos => (pos.instrument && pos.instrument.symbol) || pos.symbol).filter(Boolean))).sort();
   updateOutlookHoldings(heldSymbols);
 }
 
@@ -1425,7 +1425,11 @@ async function loadPriceStatus() {
 }
 
 function setupPriceControls() {
-  const horizonBtns = document.querySelectorAll(".cp-horizon-btn");
+  // Only the baseline-forecast pills: the outlook's horizon and replay pills share the
+  // button class and have their own handlers.
+  const horizonBtns = document.querySelectorAll(
+    '.cp-horizon-pills[aria-label="Forecast horizon"] .cp-horizon-btn'
+  );
   horizonBtns.forEach(btn => {
     btn.addEventListener("click", () => {
       horizonBtns.forEach(b => {
@@ -2765,7 +2769,7 @@ function renderOutlookChart(res) {
   const accessibleSummary = `Blended outlook fan chart for ${sym} across ${hLabel}. Origin price ${groupDecimal(originClose.toFixed(2))} on ${originDate}. Median expectation at horizon is ${groupDecimal(p50End.toFixed(2))}. 68% range is ${groupDecimal((lastFan ? lastFan.prices[1] : 0).toFixed(2))} to ${groupDecimal((lastFan ? lastFan.prices[3] : 0).toFixed(2))}; 90% range is ${groupDecimal(p5End.toFixed(2))} to ${groupDecimal(p95End.toFixed(2))}.`;
 
   const svgHtml = `
-    <svg viewBox="0 0 ${W} ${H}" width="100%" height="auto" role="img" aria-labelledby="cpFanTitle cpFanDesc" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 ${W} ${H}" width="100%" style="height:auto;display:block" role="img" aria-labelledby="cpFanTitle cpFanDesc" xmlns="http://www.w3.org/2000/svg">
       <title id="cpFanTitle">Blended Outlook Fan Chart for ${sym}</title>
       <desc id="cpFanDesc">${escapeHtml(accessibleSummary)}</desc>
 
