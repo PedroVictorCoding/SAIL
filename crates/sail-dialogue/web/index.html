@@ -72,7 +72,7 @@
             <div class="card-heading-actions">
               <div class="card-tabs" role="tablist" aria-label="Visual workspace tabs">
                 <button type="button" class="card-tab active" data-tab-card="canvasCard" data-tab-panel="canvasPanelMain" title="Canvas Visuals and Approvals"><span>Canvas</span></button>
-                <button type="button" class="card-tab" data-tab-card="canvasCard" data-tab-panel="canvasPanelCamera" title="Live Camera Feed (Adaptive Slow Mode)"><span>Camera</span></button>
+                <button type="button" class="card-tab" data-tab-card="canvasCard" data-tab-panel="canvasPanelCamera" title="Live Camera Feed (steady rate)"><span>Camera</span></button>
                 <button type="button" class="card-tab" data-tab-card="canvasCard" data-tab-panel="canvasPanelDesktop" title="Live Desktop Screen Share (Adaptive Slow Mode)"><span>Desktop</span></button>
               </div>
               <button class="card-action" id="canvasClearBtn" type="button" aria-label="Clear Canvas" title="Clear Canvas">×</button>
@@ -82,7 +82,7 @@
           <div class="card-tab-panel active" id="canvasPanelMain">
             <div class="canvas-panel" id="canvasPanel" aria-label="Canvas output"><p class="canvas-empty" id="canvasEmptyState">Diagrams, images, structured results, plans and Guardian approvals appear here. Say “Plan: …” to plan a goal.</p></div>
           </div>
-          <!-- Tab 2: Live Camera Feed (Adaptive slow frame mode) -->
+          <!-- Tab 2: Live Camera Feed (steady low frame rate) -->
           <div class="card-tab-panel" id="canvasPanelCamera" hidden>
             <div class="live-feed-container">
               <div class="live-feed-toolbar">
@@ -102,11 +102,11 @@
                 <div class="feed-placeholder" id="cameraPlaceholder">
                   <span class="feed-placeholder-icon" aria-hidden="true">📷</span>
                   <p>Live camera preview is off</p>
-                  <small>Click "Start Camera" for low-resource adaptive vision</small>
+                  <small>Click "Start Camera" for a steady, low-resource preview</small>
                 </div>
-                <div class="feed-overlay-badge" id="cameraOverlayStats">Adaptive Slow Mode · Inversely matched to CPU</div>
+                <div class="feed-overlay-badge" id="cameraOverlayStats">Steady preview · independent of CPU</div>
               </div>
-              <p class="card-footnote">Image update speed inversely matches processor usage to preserve local compute.</p>
+              <p class="card-footnote">Your own camera keeps a steady low rate; SAIL does not slow it down for CPU load.</p>
             </div>
           </div>
           <!-- Tab 3: Live Desktop Feed (Adaptive slow frame mode) -->
@@ -1256,13 +1256,13 @@
                 <div class="governor-bar"><div class="governor-fill" id="governorCpuFill" style="width:15%;"></div></div>
               </div>
               <div class="governor-row">
-                <div class="governor-label"><span>Vision Feed Update Rate</span><strong id="governorFpsTarget">2.5 FPS (400 ms)</strong></div>
+                <div class="governor-label"><span>Desktop Feed Update Rate</span><strong id="governorFpsTarget">2.5 FPS (400 ms)</strong></div>
                 <div class="governor-bar"><div class="governor-fill governor-fps-fill" id="governorFpsFill" style="width:40%;"></div></div>
               </div>
-              <div class="diag-line" style="margin-top:8px;"><span>Scaling policy</span><strong>Inverse CPU Matching</strong></div>
+              <div class="diag-line" style="margin-top:8px;"><span>Scaling policy</span><strong>Inverse CPU matching (desktop)</strong></div>
               <div class="diag-line"><span>Resource state</span><strong id="governorStatusBadge" class="good-text">Optimal autonomy</strong></div>
             </div>
-            <p class="card-footnote">Image update speeds automatically slow down during model inference or compilation.</p>
+            <p class="card-footnote">Desktop screen-share frames slow down during model inference or compilation; the camera preview keeps its steady rate.</p>
           </div>
         </article>
         </div>

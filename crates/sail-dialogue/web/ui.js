@@ -259,7 +259,7 @@ function switchCardTab(cardId, targetPanelId) {
     if (targetPanelId === 'canvasPanelCamera') {
       if (iconEl) iconEl.textContent = '📷';
       if (titleEl) titleEl.textContent = 'Live Camera';
-      if (subEl) subEl.textContent = 'Adaptive slow frame preview';
+      if (subEl) subEl.textContent = 'Steady low-resource preview';
       if (clearBtn) clearBtn.hidden = true;
     } else if (targetPanelId === 'canvasPanelDesktop') {
       if (iconEl) iconEl.textContent = '🖥';
@@ -326,6 +326,9 @@ const AdaptiveFeedEngine = {
   cameraStream: null,
   desktopStream: null,
   cameraFacing: 'user',
+  // The owner's own camera keeps a steady preview rate. Only SAIL's desktop capture is
+  // throttled by the CPU governor; slowing the camera preview would not save its capture.
+  cameraPreviewMs: 250,
   cameraTimer: null,
   desktopTimer: null,
   telemetryTimer: null,
@@ -357,15 +360,16 @@ const AdaptiveFeedEngine = {
     const fps = this.getTargetFps();
     const cpu = this.cpuUsage;
 
+    const cameraFps = (1000 / this.cameraPreviewMs).toFixed(1);
     const camRateBadge = document.getElementById('cameraRateBadge');
     if (camRateBadge) {
       camRateBadge.textContent = this.cameraActive
-        ? `${fps} FPS (${interval}ms) · CPU ${cpu}%`
-        : `Slow Mode · Idle (CPU ${cpu}%)`;
+        ? `${cameraFps} FPS (${this.cameraPreviewMs}ms) · Own camera`
+        : 'Steady rate · Idle';
     }
     const camOverlay = document.getElementById('cameraOverlayStats');
     if (camOverlay) {
-      camOverlay.textContent = `Adaptive: ${interval}ms (${fps} FPS) · Inversely matched to CPU`;
+      camOverlay.textContent = `Steady ${cameraFps} FPS · independent of CPU`;
     }
 
     const deskRateBadge = document.getElementById('desktopRateBadge');
@@ -394,10 +398,10 @@ const AdaptiveFeedEngine = {
     const govStatus = document.getElementById('governorStatusBadge');
     if (govStatus) {
       if (cpu < 30) {
-        govStatus.textContent = 'Optimal autonomy (Full FPS)';
+        govStatus.textContent = 'Optimal autonomy (full desktop rate)';
         govStatus.className = 'good-text';
       } else if (cpu < 70) {
-        govStatus.textContent = 'Moderate load (Adaptive throttle)';
+        govStatus.textContent = 'Moderate load (adaptive desktop rate)';
         govStatus.className = 'good-text';
       } else {
         govStatus.textContent = 'High system load (Power conserve)';
@@ -526,8 +530,7 @@ const AdaptiveFeedEngine = {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, w, h);
     }
-    const interval = this.calculateInterval();
-    this.cameraTimer = setTimeout(() => this.tickCamera(), interval);
+    this.cameraTimer = setTimeout(() => this.tickCamera(), this.cameraPreviewMs);
   },
 
   captureCameraFrame() {
@@ -542,7 +545,10 @@ const AdaptiveFeedEngine = {
       renderArtifact({ artifact_type: 'image', content: data });
     }
     if (typeof sendAction === 'function') {
-      sendAction('text', { text: 'Analyze this camera frame.', vision });
+      const sent = sendAction('text', { text: 'Analyze this camera frame.', vision });
+      if (sent && typeof appendConversationImage === 'function') {
+        appendConversationImage('You', data, 'Camera snapshot');
+      }
       if (typeof updateState === 'function') updateState('thinking');
     }
   },
@@ -663,7 +669,10 @@ const AdaptiveFeedEngine = {
       renderArtifact({ artifact_type: 'image', content: data });
     }
     if (typeof sendAction === 'function') {
-      sendAction('text', { text: 'Analyze this desktop screen.', vision });
+      const sent = sendAction('text', { text: 'Analyze this desktop screen.', vision });
+      if (sent && typeof appendConversationImage === 'function') {
+        appendConversationImage('You', data, 'Screen snapshot');
+      }
       if (typeof updateState === 'function') updateState('thinking');
     }
   }
@@ -720,6 +729,9 @@ function liveSnapshot(source) {
 }
 function deliverSnapshot(request, dataUrl) {
   if (!sendAction('snapshot', { request_id:request.request_id, image:{ format:'image/jpeg', data_base64:dataUrl.split(',')[1] } })) return false;
+  if (typeof appendConversationImage === 'function') {
+    appendConversationImage('You', dataUrl, request.source === 'screen' ? 'Screen snapshot' : 'Camera snapshot');
+  }
   renderArtifact({ artifact_type:'image', content:dataUrl });
   updateState('thinking');
   return true;

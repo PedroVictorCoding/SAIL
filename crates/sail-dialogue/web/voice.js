@@ -342,6 +342,30 @@ const chatFollow = (() => {
   new ResizeObserver(schedule).observe(box);
   return { resume() { follow = true; schedule(); } };
 })();
+// A camera or screen snapshot also belongs in the conversation, not only on the Canvas.
+// The image is a browser-generated data URL; anything else is refused rather than shown.
+function appendConversationImage(role, dataUrl, caption) {
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return null;
+  const node = document.createElement('article');
+  node.className = `message message-${role.toLowerCase()} message-image`;
+  const label = document.createElement('span'); label.className = 'message-label'; label.textContent = role;
+  const content = document.createElement('div'); content.className = 'message-body message-media';
+  const image = document.createElement('img');
+  image.className = 'message-image-preview';
+  image.src = dataUrl;
+  image.alt = caption || 'Image';
+  image.loading = 'lazy';
+  content.append(image);
+  if (caption) {
+    const note = document.createElement('span'); note.className = 'message-image-note'; note.textContent = caption;
+    content.append(note);
+  }
+  node.append(label, content);
+  document.getElementById('conversation').append(node);
+  chatFollow.resume();
+  return node;
+}
+window.appendConversationImage = appendConversationImage;
 // Assistant replies are Markdown; user turns (mostly speech transcripts) stay plain text.
 function setMessageText(node, text) {
   const content = node.lastChild;
