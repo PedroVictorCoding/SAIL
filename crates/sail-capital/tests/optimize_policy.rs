@@ -236,8 +236,16 @@ fn impossible_limits_are_reported_not_hidden() {
     assert!(!before.is_empty());
     let plan = plan(&problem, &limits(), Mode::Policy);
     assert!(!plan.feasible);
-    assert!(plan.changes.is_empty(), "{plan:?}");
-    assert_eq!(plan.breaches_after, before);
+    // The locked position can't be trimmed, but the cash reserve can still be raised.
+    assert_eq!(changed_symbols(&plan), vec!["Free funds"], "{plan:?}");
+    assert_eq!(
+        plan.breaches_after,
+        before
+            .iter()
+            .filter(|b| b.rule == Rule::MaxPosition)
+            .cloned()
+            .collect::<Vec<_>>()
+    );
     assert!(plan.note.contains("cannot all be met"), "{}", plan.note);
 }
 

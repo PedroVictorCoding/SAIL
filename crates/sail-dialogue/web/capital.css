@@ -2090,7 +2090,7 @@ main {
   flex-shrink: 0;
 }
 
-.cp-suggestion-card.cp-collapsed .cp-suggestion-chevron {
+.cp-suggestion-card.cp-card-collapsed .cp-suggestion-chevron {
   transform: rotate(-90deg);
 }
 
@@ -2103,7 +2103,7 @@ main {
   gap: 14px;
 }
 
-.cp-suggestion-card.cp-collapsed .cp-suggestion-body {
+.cp-suggestion-card.cp-card-collapsed .cp-suggestion-body {
   display: none;
 }
 

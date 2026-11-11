@@ -292,6 +292,9 @@ pub fn plan(problem: &Problem, limits: &RiskLimits, mode: Mode) -> Plan {
     let setup = Setup::new(problem, fractions);
     let before = breaches(problem, limits);
 
+    if mode == Mode::Policy {
+        return policy_plan(problem, limits, before);
+    }
     if !setup.structural {
         return unchanged(
             problem,
@@ -352,9 +355,10 @@ fn policy_plan(problem: &Problem, limits: &RiskLimits, before: Vec<Breach>) -> P
     relaxed.cash_min_pct = rust_decimal::Decimal::ZERO;
     relaxed.cash_max_pct = rust_decimal::Decimal::from(100);
     let setup = Setup::new(problem, Fractions::new(&relaxed));
-    let position_breach = before
-        .iter()
-        .any(|b| matches!(b.rule, Rule::MaxPosition | Rule::HighVolShare));
+    let position_breach = setup.structural
+        && before
+            .iter()
+            .any(|b| matches!(b.rule, Rule::MaxPosition | Rule::HighVolShare));
     let mut plan = if position_breach {
         let point = setup.policy_point();
         let within = setup.feasible_set().holds(&point, 1e-6);
@@ -430,6 +434,11 @@ fn policy_plan(problem: &Problem, limits: &RiskLimits, before: Vec<Breach>) -> P
             }
         }
     };
+    if !plan.feasible {
+        plan.note.push_str(
+            " Some limits cannot all be met: positions that can't be traded here break them.",
+        );
+    }
     plan
 }
 

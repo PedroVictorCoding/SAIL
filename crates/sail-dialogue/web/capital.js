@@ -2123,7 +2123,7 @@ function renderSuggestions(suggestions, account) {
     const tabName = targetTab.charAt(0).toUpperCase() + targetTab.slice(1);
 
     return `
-      <article class="cp-suggestion-card cp-collapsed" data-id="${escapeHtml(s.id)}">
+      <article class="cp-suggestion-card cp-card-collapsed" data-id="${escapeHtml(s.id)}">
         <header class="cp-suggestion-head" role="button" tabindex="0" aria-expanded="false" aria-label="Toggle suggestion: ${escapeHtml(s.title)}">
           <span class="cp-severity-dot ${severity}" title="Severity: ${severity}"></span>
           <span class="cp-kind-chip ${kind}">${escapeHtml(kindLabel)}</span>
@@ -2154,13 +2154,13 @@ function renderSuggestions(suggestions, account) {
   container.querySelectorAll(".cp-suggestion-card").forEach(card => {
     const head = card.querySelector(".cp-suggestion-head");
     head.addEventListener("click", () => {
-      const isCollapsed = card.classList.toggle("cp-collapsed");
+      const isCollapsed = card.classList.toggle("cp-card-collapsed");
       head.setAttribute("aria-expanded", String(!isCollapsed));
     });
     head.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        const isCollapsed = card.classList.toggle("cp-collapsed");
+        const isCollapsed = card.classList.toggle("cp-card-collapsed");
         head.setAttribute("aria-expanded", String(!isCollapsed));
       }
     });
@@ -2208,6 +2208,7 @@ async function handleSuggestionAction(id, action) {
 // -----------------------------------------------------------------------------
 function formatSignalName(sig) {
   switch (sig) {
+    case "momentum12_1":
     case "momentum_12_1": return "12-1 Momentum";
     case "short_term_reversal": return "Short-term reversal";
     case "low_volatility": return "Low volatility";
@@ -2216,6 +2217,7 @@ function formatSignalName(sig) {
     case "foundation_forecast": return "Foundation forecast";
     case "filing_sentiment": return "Filing sentiment";
     case "insider_buying": return "Insider buying";
+    case "chart_trend": return "Chart trend (YOLO)";
     default: return sig ? sig.replace(/_/g, " ") : "—";
   }
 }
@@ -2331,6 +2333,8 @@ async function loadPolicy() {
       }
     }
   } catch (err) {
+    // Before the first import there is no account, so no policy to show yet.
+    if (!currentAccount && /No portfolio/.test(String(err && err.message))) return;
     console.error("Failed to load risk policy:", err);
   }
 }
