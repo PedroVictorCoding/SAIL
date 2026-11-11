@@ -345,11 +345,49 @@ pub enum EntryKind {
         /// Broker position id, if stated.
         position_ref: Option<String>,
     },
+    /// A corporate action that changes how many units of a holding exist, booked at
+    /// `occurred`. `cash_effect`, if any, is cash in lieu of a fractional remainder.
+    CorporateAction {
+        /// The security.
+        instrument: Instrument,
+        /// What happened.
+        action: CorporateAction,
+    },
+    /// Units the owner received without buying them (a promotion, a gift, a transfer in
+    /// from another broker), declared by the owner because the export has no purchase
+    /// row. Never produced by an importer; `ParsedEntry::comment` holds the owner's note.
+    Grant {
+        /// The security.
+        instrument: Instrument,
+        /// Units received, positive.
+        #[serde(with = "rust_decimal::serde::str")]
+        quantity: Decimal,
+        /// Cost basis the owner states for the units. `None` means zero (shares given
+        /// free); the ledger marks such lots so the zero cost is never mistaken for data.
+        cost: Option<Money>,
+    },
     /// A row the importer read but can't classify. Kept, shown to the owner, and excluded
     /// from every projection except the raw cash balance (which uses `cash_effect`).
     Unsupported {
         /// The broker's type text, capped at [`MAX_CELL_CHARS`].
         raw_type: String,
+    },
+}
+
+/// A corporate action on a holding.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CorporateAction {
+    /// `new_units` for every `old_units`: "split 1 for 10" (a reverse split) is
+    /// `new_units = 1, old_units = 10`; a 3-for-1 split is `3, 1`. Every open lot's
+    /// quantity is scaled by `new_units / old_units` and its total cost is unchanged.
+    Split {
+        /// Units after.
+        #[serde(with = "rust_decimal::serde::str")]
+        new_units: Decimal,
+        /// Units before.
+        #[serde(with = "rust_decimal::serde::str")]
+        old_units: Decimal,
     },
 }
 

@@ -864,3 +864,60 @@ main {
     gap: 8px;
   }
 }
+
+/* Collapsible sections */
+.cp-collapsible > .cp-panel-head h2,
+.cp-collapsible > .cp-recon-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cp-collapse {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--sail-glass-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sail-text-muted, currentColor);
+  cursor: pointer;
+}
+
+.cp-collapse svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 160ms ease;
+}
+
+.cp-collapse:hover {
+  color: var(--sail-text);
+}
+
+.cp-collapse:focus-visible {
+  outline: 2px solid var(--sail-accent, currentColor);
+  outline-offset: 2px;
+}
+
+.cp-collapsed .cp-collapse svg {
+  transform: rotate(-90deg);
+}
+
+.cp-collapsed > :not(.cp-panel-head):not(.cp-recon-header) {
+  display: none !important;
+}
+
+.cp-collapsed > .cp-panel-head {
+  border-bottom-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-collapse svg {
+    transition: none;
+  }
+}

@@ -9,6 +9,7 @@ pub mod contracts;
 pub mod evidence;
 pub mod exposure;
 pub mod import;
+pub mod insights;
 pub mod ledger;
 pub mod sec;
 pub mod service;

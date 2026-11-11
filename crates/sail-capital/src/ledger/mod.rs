@@ -392,6 +392,8 @@ fn flow_label(kind: &EntryKind) -> String {
         EntryKind::Interest => "interest".to_string(),
         EntryKind::Fee { kind, .. } => format!("fee:{}", fee_kind_label(*kind)),
         EntryKind::DerivativeResult { .. } => "derivative_result".to_string(),
+        EntryKind::CorporateAction { .. } => "corporate_action".to_string(),
+        EntryKind::Grant { .. } => "grant".to_string(),
         EntryKind::Unsupported { .. } => "unsupported".to_string(),
     }
 }

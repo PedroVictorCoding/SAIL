@@ -688,7 +688,63 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
+// Collapsible sections. Each section keeps its header visible; the chevron (or the title)
+// hides the rest. Which sections are collapsed is remembered per browser.
+const COLLAPSED_KEY = "sail_capital_collapsed";
+
+function readCollapsed() {
+  try {
+    const value = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]");
+    return new Set(Array.isArray(value) ? value : []);
+  } catch (_) {
+    return new Set();
+  }
+}
+
+function writeCollapsed(set) {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set]));
+  } catch (_) {}
+}
+
+function setupCollapsibles() {
+  const collapsed = readCollapsed();
+  const sections = document.querySelectorAll("#cpMain > section[id]");
+  for (const section of sections) {
+    const head = section.querySelector(":scope > .cp-panel-head, :scope > .cp-recon-header");
+    const title = head && head.querySelector("h2");
+    if (!title) continue;
+    section.classList.add("cp-collapsible");
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cp-collapse";
+    button.setAttribute("aria-controls", section.id);
+    button.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    title.prepend(button);
+
+    const apply = (isCollapsed) => {
+      section.classList.toggle("cp-collapsed", isCollapsed);
+      button.setAttribute("aria-expanded", String(!isCollapsed));
+      button.setAttribute(
+        "aria-label",
+        `${isCollapsed ? "Expand" : "Collapse"} ${title.textContent.trim()}`,
+      );
+    };
+    apply(collapsed.has(section.id));
+
+    title.addEventListener("click", () => {
+      const now = !section.classList.contains("cp-collapsed");
+      apply(now);
+      if (now) collapsed.add(section.id);
+      else collapsed.delete(section.id);
+      writeCollapsed(collapsed);
+    });
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  setupCollapsibles();
   setupUploadDialog();
 
   const refreshBtn = document.getElementById("cpRefreshBtn");

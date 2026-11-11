@@ -4,8 +4,8 @@
 //! from trade comments using exact patterns, derives natural keys with collision
 //! disambiguation, and emits typed [`ParsedEntry`] records.
 use crate::contracts::{
-    Currency, EntryKind, FeeKind, ImportIssue, Instrument, InstrumentKind, Money, ParsedEntry,
-    RowRef, Severity, Side, TaxKind, isin_is_valid, sha256_hex,
+    CorporateAction, Currency, EntryKind, FeeKind, ImportIssue, Instrument, InstrumentKind, Money,
+    ParsedEntry, RowRef, Severity, Side, TaxKind, isin_is_valid, sha256_hex,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -56,6 +56,22 @@ pub(super) fn kind_from_category(raw: &str) -> Option<InstrumentKind> {
         "etf" | "etc" | "etn" => Some(InstrumentKind::Etf),
         _ => None,
     }
+}
+
+/// Reads "<SYM> split <new> for <old>" (or just "split <new> for <old>"), e.g.
+/// "LCID.US split 1 for 10" → `(1, 10)`. Both numbers must be positive.
+pub fn parse_split_comment(comment: &str) -> Option<(Decimal, Decimal)> {
+    let words: Vec<String> = comment
+        .split_whitespace()
+        .map(|w| w.to_ascii_lowercase())
+        .collect();
+    let at = words.iter().position(|w| w == "split")?;
+    let new_units = crate::contracts::parse_decimal_text(words.get(at + 1)?)?;
+    if words.get(at + 2)?.as_str() != "for" {
+        return None;
+    }
+    let old_units = crate::contracts::parse_decimal_text(words.get(at + 3)?)?;
+    (new_units > Decimal::ZERO && old_units > Decimal::ZERO).then_some((new_units, old_units))
 }
 
 /// Parse quantity, price and optional position reference from a trade comment.
@@ -473,6 +489,29 @@ pub fn parse_cash_row(
             kind: FeeKind::Swap,
             instrument: instrument.clone(),
         },
+        // "LCID.US split 1 for 10": the split itself, with cash in lieu of the fraction.
+        "fractional shares" | "fracoes de acoes"
+            if instrument.is_some()
+                && comment.as_deref().and_then(parse_split_comment).is_some() =>
+        {
+            let (new_units, old_units) = comment
+                .as_deref()
+                .and_then(parse_split_comment)
+                .unwrap_or_default();
+            EntryKind::CorporateAction {
+                instrument: instrument.clone().unwrap_or_else(|| Instrument {
+                    symbol: raw_symbol.clone(),
+                    isin: None,
+                    name: None,
+                    currency: None,
+                    kind: InstrumentKind::Stock,
+                }),
+                action: CorporateAction::Split {
+                    new_units,
+                    old_units,
+                },
+            }
+        }
         "close trade" | "fecho de negociacao" | "fechar negociacao" => {
             let inst = instrument.clone().unwrap_or_else(|| Instrument {
                 symbol: raw_symbol.clone(),
@@ -539,6 +578,8 @@ pub fn parse_cash_row(
                 } => "fee:swap",
                 EntryKind::Fee { .. } => "fee:other",
                 EntryKind::DerivativeResult { .. } => "derivative_result",
+                EntryKind::CorporateAction { .. } => "corporate_action",
+                EntryKind::Grant { .. } => "grant",
                 EntryKind::Unsupported { raw_type } => raw_type.as_str(),
             };
             let time_str = occurred.at.to_rfc3339();
