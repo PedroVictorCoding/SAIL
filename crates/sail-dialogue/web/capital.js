@@ -44,6 +44,13 @@ function formatMoney(money) {
   return `${groupDecimal(money.amount)} ${money.currency || ""}`.trim();
 }
 
+/** "5 h ago" up to two days, then "3 days ago". */
+function formatAge(hours) {
+  if (hours < 48) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} days ago`;
+}
+
 function sumDecimals(amounts) {
   let scale = 0;
   for (const a of amounts) {
@@ -81,6 +88,15 @@ function formatDate(isoStr) {
   } catch {
     return isoStr;
   }
+}
+
+/** A calendar date only, read in UTC: received dates are stored as the start of a UTC day. */
+function formatDay(isoStr) {
+  if (!isoStr) return "—";
+  const d = new Date(isoStr);
+  return isNaN(d.getTime())
+    ? isoStr
+    : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 // Every /api/capital route needs the owner token, obtained the same way the School and
@@ -792,6 +808,10 @@ function getMissingQuantity(v) {
   if (!v.subject.startsWith("quantity ") && !v.subject.startsWith("fifo ")) {
     return null;
   }
+  // Received shares are owned units; a CFD difference is never one.
+  if (v.subject.endsWith("#cfd")) {
+    return null;
+  }
   const brokerStr = v.broker || "0";
   const ledgerStr = v.ledger || "0";
   const brokerVal = parseFloat(brokerStr);
@@ -993,7 +1013,7 @@ async function loadGrants() {
           <span class="cp-grant-symbol">${escapeHtml(g.symbol)}</span>
           <span class="cp-badge">${escapeHtml((g.kind || "stock").toUpperCase())}</span>
           <span class="cp-grant-qty"><strong>${escapeHtml(g.quantity)}</strong> units</span>
-          <span class="cp-grant-date">Received ${formatDate(g.received_at)}</span>
+          <span class="cp-grant-date">Received ${formatDay(g.received_at)}</span>
           <span class="cp-grant-cost">Basis: ${costText}</span>
           ${g.note ? `<span class="cp-grant-note">${escapeHtml(g.note)}</span>` : ""}
         </div>
@@ -1069,7 +1089,7 @@ function renderInsights(ins) {
   let freshnessHtml = "";
   if (f.snapshot_as_of) {
     const age = f.snapshot_age_hours !== null && f.snapshot_age_hours !== undefined
-      ? ` (${f.snapshot_age_hours} h ago)`
+      ? ` (${formatAge(f.snapshot_age_hours)})`
       : "";
     const label = `Data as of ${formatDate(f.snapshot_as_of)}${age}`;
     if (freshnessSpan) {

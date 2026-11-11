@@ -47,7 +47,7 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/sec/refresh", post(sec_refresh))
         .route("/insights", get(insights))
         .route("/grants", get(grants).post(record_grant))
-        .route("/grants/{id}/retract", post(retract_grant))
+        .route("/grants/:id/retract", post(retract_grant))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
         .with_state(Arc::new(CapitalState { service, authority }))
 }
