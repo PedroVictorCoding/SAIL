@@ -1,0 +1,156 @@
+# Local runtime reference
+
+This preserves the earlier runtime overview. Some model names and UI availability notes are historical; use [USAGE.md](../USAGE.md) and the [master vision](SAIL_MASTER_VISION.md) for current guidance.
+
+# SAIL
+
+Local-first proactive AI assistant runtime, inference orchestration, persistent memory, autonomous research, and distributed computing.
+
+Start with the [usage guide](../USAGE.md) for the recommended local voice workflow, controls, examples and optional LAN access.
+
+![SAIL ECOSYSTEM](../assets/images/sail_ecosystem.png)
+
+## Core Architecture & Subsystem Interactions
+
+SAIL Core operates around an event-driven coordination model connecting user interfaces, autonomous discovery, agent planning, and local neural intelligence.
+
+```mermaid
+flowchart TB
+    USER["User / Mobile / Desktop"]
+
+    subgraph CORE["SAIL Core"]
+        direction TB
+
+        subgraph TOP_LAYER[" "]
+            direction LR
+            DISCOVERY["SAIL Discovery"]
+            FLOW["SAIL Flow"]
+            DIALOGUE["SAIL Dialogue"]
+        end
+
+        AGENTS["SAIL Agents"]
+
+        subgraph BOTTOM_LAYER[" "]
+            direction LR
+            ARENA["SAIL Arena"]
+            MIND["SAIL Mind"]
+            BRIDGE["SAIL Bridge"]
+            CANVAS["SAIL Canvas"]
+        end
+    end
+
+    %% External Connections
+    USER <-->|"Real-time speech & conversation"| DIALOGUE
+    CANVAS -->|"Visual artifacts & interactive cards"| USER
+
+    %% Top Layer to Middle Layer
+    DISCOVERY -->|"Triggers & research workflows"| FLOW
+    FLOW <-->|"Task dispatch & progress events"| AGENTS
+    FLOW -->|"Direct visual triggers"| CANVAS
+    DIALOGUE <-->|"Intent & streamed responses"| AGENTS
+
+    %% Middle Layer to Bottom Layer
+    AGENTS -->|"Store episodes & extracted facts"| ARENA
+    ARENA -->|"Knowledge graph & gaps"| DISCOVERY
+    AGENTS <-->|"Model routing & inference"| MIND
+    AGENTS <-->|"OS & external tool execution"| BRIDGE
+    AGENTS -->|"Visual explanations & doc generation"| CANVAS
+```
+
+## What each subsystem owns
+
+- **SAIL Dialogue**: Real-time speech, conversation turns, interruption handling, streaming transcripts, and the voice Orb. Uses **Silero ONNX**, **Whisper base (CTranslate2, int8)** and **Kokoro-82M ONNX** through offline workers managed by Mind.
+- **SAIL Arena**: Persistent associative knowledge graph, episodic memory, research collections, and semantic relationships.
+- **SAIL Canvas**: Text-to-visual documents, diagrams, interactive boards, and visual explanations rendered directly to the user.
+- **SAIL Flow**: Workflow orchestration, triggers, automation nodes, condition evaluation, and execution scheduling.
+- **SAIL Discovery**: Autonomous curiosity engine, learning resources, knowledge-gap identification, and proactive interest exploration.
+- **SAIL Agents**: Goal decomposition, specialized worker delegation, tool proposal & authorization, step verification, and task coordination.
+- **SAIL Mind**: One resident local model, Qwen3.6-35B-A3B (`models/Qwen3.6-35B-A3B-Q4_K_M.gguf` via `llama-server`), shared by voice, agents and Forge, inference adapters, context window allocation, and compute routing.
+- **SAIL Guardian**: Access control, capability grants (`devices`, `files`, `system`, `tools`), sandbox policy, interactive user approvals, and tamper-evident SHA-256 audit receipts.
+- **SAIL Bridge**: Host OS integration, sandboxed command execution, browser/application connectors, and peripheral communication.
+
+Guardian execution hardening, owner approvals, the optional dedicated command service and the typed tool scheduler are documented in [Guardian execution](../Docs/ARCHITECTURE/Guardian_Execution.md). The command service requires administrator provisioning and target-host validation before activation.
+
+
+## Local Model Service
+
+SAIL Mind provides versioned Rust inference contracts, shared model routing and budgets, cancellation, capability detection, and supervised local CPU/Vulkan execution. See the [Mind guide](../Docs/ARCHITECTURE/Local_Inference.md) and [inference v1 contracts](../Docs/PROTOCOL/Inference_V1.md). Run `cargo run -p sail-core --bin saild -- mind-status` to inspect the running daemon.
+
+## Local Voice Pipeline
+
+`16kHz PCM → Silero → Whisper → Session → Gemma → Kokoro → Orb`
+
+The Rust runtime owns sessions, turn detection, interruption, streaming, authorization and telemetry. Persistent local Python workers run the actual speech models; no cloud inference APIs are used. Arena retrieves session context, Agents authorize read-only tools, Flow executes them, and Canvas presents Mermaid diagrams, images and structured data alongside the conversation.
+
+The speech models and Gemma 4 12B vision projector are downloaded to `models/voice/`. The existing Gemma weights stay in `models/gemma4-v2-Q4_K_M.gguf`.
+
+```bash
+# First-time setup requires Python 3.11 and internet for package/model downloads.
+# This workspace already has .venv-voice and the downloaded models.
+./scripts/voice/setup.sh
+./run.sh
+```
+
+Open **https://localhost:8088** (or `https://<LAN_IP>:8088`) on your computer or phone. The `./run.sh` runner automatically detects and provisions TLS certificates in `.local/tls/`, selects the local model, guards against invalid target directory permissions, and launches all 10 subsystems.
+
+For another device on your LAN, microphone capture requires **trusted HTTPS**:
+
+```bash
+# Automatically loads .local/tls/ certificates and binds to 0.0.0.0:8088
+./run.sh
+```
+
+Open `https://192.168.1.101:8088` after trusting the certificate. Plain HTTP on a LAN IP cannot provide browser microphone or camera access. The Home screen shows when local services are disconnected and the browser explains denied device permissions.
+
+Choose a Portuguese or English voice in the Orb controls. Start/stop, mute, end-turn, interrupt, tier selection, text input and image upload work independently. Tiers change STT/TTS CPU threads (2/4/8) and partial-transcription cadence; PCM remains 16kHz in every tier. Kernel tools are restricted to `os:status`, `proc:list`, `fs:query` (workspace scope), and `vision:frame` (validated pixels). Set `SAIL_TOOL_ROOT` to choose the permitted filesystem root.
+
+The responsive Home/Dialogue interface follows a three-region ambient dashboard: navigation, local workspace status, and the persistent assistant conversation. System metrics and local model health are fetched only when requested; Canvas shows real artifacts from the current conversation. Unsupported areas such as Flow and Agents remain clearly marked unavailable. UI tokens and first-party assets are documented in [the Minimal Ambient UI guide](../Docs/ARCHITECTURE/Minimal_Ambient_UI.md); run `cargo xtask assets verify` to check local asset provenance and hashes.
+
+```bash
+cargo test --workspace
+.venv-voice/bin/python scripts/voice/smoke.py
+# Optional browser/WebSocket test dependencies:
+.venv-voice/bin/python -m pip install -r scripts/voice/requirements-test.txt
+# With SAIL running, test the real PCM, text, vision and cancellation paths:
+.venv-voice/bin/python scripts/voice/e2e.py 8088
+```
+
+### Interface hot reload
+
+The browser interface (`crates/sail-dialogue/web/`) is compiled into the binary, so a normal run serves what was built. While working on the interface, start SAIL with `SAIL_WEB_DEV` to edit files without rebuilding:
+
+```bash
+SAIL_WEB_DEV=1 ./run.sh                              # serve from this checkout
+SAIL_WEB_DEV=/home/main/SAIL/.worktrees/my-branch ./run.sh   # or from another worktree
+```
+
+- Saving a `.css` file swaps the stylesheet in place, so the conversation, the map and open panels keep their state.
+- Saving a page or script reloads only the open pages that use it.
+- When the server restarts (for example after a Rust change), open pages reload once it is back.
+
+Only the interface files listed in `crates/sail-dialogue/src/ui_assets.rs` are served from disk. New files must be added there, and a test fails if `index.html` references a file that is not listed. Rust changes still need a rebuild and restart.
+
+VAD latency is measured per frame, including separate inference and worker round-trip timings; <3ms is a hardware-dependent target. Whisper partial hypotheses can be revised; TTS streams ordered 100ms audio packets as sentence fragments are synthesized. Runtime model loading is offline and missing models produce explicit errors.
+
+See [the voice architecture and protocol](../Docs/ARCHITECTURE/Realtime_Voice_Pipeline.md) for configuration, boundaries and verification.
+
+## Workspace Layout
+
+```
+SAIL/
+├── crates/
+│   ├── sail-common/       # Shared domain types, event bus, errors, and subsystem traits
+│   ├── sail-dialogue/     # Real-time audio, VAD, ASR/TTS contracts, conversation turns
+│   ├── sail-arena/        # Associative memory, knowledge graph, vector indices
+│   ├── sail-canvas/       # Document rendering, diagrams, UI artifacts
+│   ├── sail-flow/         # Automation DAG engine, trigger routing, schedules
+│   ├── sail-discovery/    # Autonomous curiosity, gap detection, research pipelines
+│   ├── sail-agents/       # Planner, worker orchestration, tool verification
+│   ├── sail-mind/         # LLM/SSM inference router and llama.cpp/Gemma 4 adapter
+│   ├── sail-guardian/     # Access control, capability grants, sandbox policy & tamper-evident audit
+│   ├── sail-bridge/       # Host OS integration, sandboxed tool runner, client tools
+│   └── sail-core/         # Orchestrator binary, event dispatch loop, CLI daemon
+├── Docs/ARCHITECTURE/     # Architecture specifications and Mermaid diagrams
+├── models/                # Local model weights and GGUF checkpoints
+└── assets/                # Visual assets and documentation diagrams
+```
