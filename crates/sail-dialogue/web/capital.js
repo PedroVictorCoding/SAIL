@@ -2497,13 +2497,22 @@ function updateOutlookHoldings(symbols) {
 async function loadOutlook() {
   const wrap = document.getElementById("cpOutlookChartWrap");
   const replayBox = document.getElementById("cpOutlookReplaySummary");
-  const metaGrid = document.getElementById("cpOutlookMetaGrid");
+  const statsBox = document.getElementById("cpOutlookStats");
+  const details = document.getElementById("cpOutlookDetails");
   if (!wrap) return;
+
+  function hideSupportingPanels() {
+    if (replayBox) replayBox.hidden = true;
+    if (statsBox) {
+      statsBox.hidden = true;
+      statsBox.innerHTML = "";
+    }
+    if (details) details.hidden = true;
+  }
 
   if (!currentOutlookSymbol) {
     wrap.innerHTML = `<p class="cp-empty">Select a holding to see its blended outlook.</p>`;
-    if (replayBox) replayBox.hidden = true;
-    if (metaGrid) metaGrid.hidden = true;
+    hideSupportingPanels();
     return;
   }
 
@@ -2527,8 +2536,7 @@ async function loadOutlook() {
     const outlook = res.outlook;
     if (!outlook) {
       wrap.innerHTML = `<p class="cp-empty">No outlook data returned.</p>`;
-      if (replayBox) replayBox.hidden = true;
-      if (metaGrid) metaGrid.hidden = true;
+      hideSupportingPanels();
       return;
     }
 
@@ -2541,8 +2549,7 @@ async function loadOutlook() {
           <span class="cp-forecast-reason">${escapeHtml(reason)}</span>
         </div>
       `;
-      if (replayBox) replayBox.hidden = true;
-      if (metaGrid) metaGrid.hidden = true;
+      hideSupportingPanels();
       return;
     }
 
@@ -2577,15 +2584,14 @@ async function loadOutlook() {
       }
     }
 
-    // Component weights and tilt
-    if (metaGrid) metaGrid.hidden = false;
+    // Model detail stays out of the first reading path.
+    if (details) details.hidden = false;
     renderComponentWeights(outlook.weights || []);
     renderTilt(outlook.tilt, outlook.tilt_signals);
 
   } catch (err) {
     wrap.innerHTML = `<p class="cp-empty">Outlook unavailable: ${escapeHtml(err.message)}</p>`;
-    if (replayBox) replayBox.hidden = true;
-    if (metaGrid) metaGrid.hidden = true;
+    hideSupportingPanels();
   }
 }
 
@@ -2597,6 +2603,7 @@ function renderOutlookChart(res) {
   const history = res.history || [];
   const fan = outlook.fan || [];
   const actual = outlook.actual || [];
+  const narrow = window.innerWidth <= 700;
 
   const originClose = Number(outlook.origin_close) || 0;
   const originDate = outlook.origin ? formatDay(outlook.origin) : "Origin";
@@ -2632,13 +2639,15 @@ function renderOutlookChart(res) {
   const pMin = minPrice - span * 0.08;
   const pMax = maxPrice + span * 0.08;
 
-  // ViewBox coordinates
-  const W = 820;
+  // ViewBox coordinates. The narrow layout drops the end labels and gives the
+  // fan the width they used, so the whole forecast fits a phone without a
+  // sideways-scrolling chart.
+  const W = narrow ? 520 : 820;
   const H = 360;
-  const ml = 65;
-  const mr = 135;
+  const ml = narrow ? 60 : 65;
+  const mr = narrow ? 24 : 135;
   const mt = 40;
-  const mb = 36;
+  const mb = narrow ? 48 : 36;
   const pw = W - ml - mr;
   const ph = H - mt - mb;
   const yTop = mt;
@@ -2650,7 +2659,7 @@ function renderOutlookChart(res) {
 
   const nHist = Math.max(1, history.length);
   const nFan = Math.max(1, outlook.horizon || 21);
-  const histRatio = Math.min(0.45, Math.max(0.3, nHist / (nHist + nFan)));
+  const histRatio = Math.min(narrow ? 0.34 : 0.45, Math.max(0.3, nHist / (nHist + nFan)));
   const xLeft = ml;
   const xOrigin = ml + pw * histRatio;
   const xRight = ml + pw;
@@ -2738,28 +2747,63 @@ function renderOutlookChart(res) {
     p50End = lastFan.prices[2];
     p5End = lastFan.prices[0];
 
-    const pct95 = ((p95End - originClose) / originClose) * 100;
-    const pct50 = ((p50End - originClose) / originClose) * 100;
-    const pct5 = ((p5End - originClose) / originClose) * 100;
+    if (!narrow) {
+      const pct95 = ((p95End - originClose) / originClose) * 100;
+      const pct50 = ((p50End - originClose) / originClose) * 100;
+      const pct5 = ((p5End - originClose) / originClose) * 100;
 
-    let y95 = yPrice(p95End);
-    let y50 = yPrice(p50End);
-    let y5 = yPrice(p5End);
+      let y95 = yPrice(p95End);
+      let y50 = yPrice(p50End);
+      let y5 = yPrice(p5End);
 
-    if (y50 - y95 < 15) y95 = y50 - 15;
-    if (y5 - y50 < 15) y5 = y50 + 15;
+      if (y50 - y95 < 15) y95 = y50 - 15;
+      if (y5 - y50 < 15) y5 = y50 + 15;
 
-    const sign95 = pct95 >= 0 ? "+" : "";
-    const sign50 = pct50 >= 0 ? "+" : "";
-    const sign5 = pct5 >= 0 ? "+" : "";
+      const sign95 = pct95 >= 0 ? "+" : "";
+      const sign50 = pct50 >= 0 ? "+" : "";
+      const sign5 = pct5 >= 0 ? "+" : "";
 
-    endLabelsHtml = `
-      <g class="cp-end-labels">
-        <text x="${(xRight + 8).toFixed(1)}" y="${y95.toFixed(1)}" class="cp-chart-label cp-label-high">95%: ${groupDecimal(p95End.toFixed(2))} (${sign95}${pct95.toFixed(1)}%)</text>
-        <text x="${(xRight + 8).toFixed(1)}" y="${y50.toFixed(1)}" class="cp-chart-label cp-label-med">50%: ${groupDecimal(p50End.toFixed(2))} (${sign50}${pct50.toFixed(1)}%)</text>
-        <text x="${(xRight + 8).toFixed(1)}" y="${y5.toFixed(1)}" class="cp-chart-label cp-label-low">5%: ${groupDecimal(p5End.toFixed(2))} (${sign5}${pct5.toFixed(1)}%)</text>
-      </g>
-    `;
+      endLabelsHtml = `
+        <g class="cp-end-labels">
+          <text x="${(xRight + 8).toFixed(1)}" y="${y95.toFixed(1)}" class="cp-chart-label cp-label-high">95%: ${groupDecimal(p95End.toFixed(2))} (${sign95}${pct95.toFixed(1)}%)</text>
+          <text x="${(xRight + 8).toFixed(1)}" y="${y50.toFixed(1)}" class="cp-chart-label cp-label-med">50%: ${groupDecimal(p50End.toFixed(2))} (${sign50}${pct50.toFixed(1)}%)</text>
+          <text x="${(xRight + 8).toFixed(1)}" y="${y5.toFixed(1)}" class="cp-chart-label cp-label-low">5%: ${groupDecimal(p5End.toFixed(2))} (${sign5}${pct5.toFixed(1)}%)</text>
+        </g>
+      `;
+    }
+  }
+
+  // Three numbers replace the old five-card summary. The full breakdown stays
+  // behind the "How this fan was built" disclosure.
+  const statsBox = document.getElementById("cpOutlookStats");
+  if (statsBox) {
+    if (lastFan) {
+      const p68Low = lastFan.prices[1];
+      const p68High = lastFan.prices[3];
+      const p90Low = lastFan.prices[0];
+      const p90High = lastFan.prices[4];
+      const pctMed = ((p50End - originClose) / originClose) * 100;
+      const signMed = pctMed >= 0 ? "+" : "";
+      const statsHorizon = outlook.horizon || nFan;
+      statsBox.innerHTML = `
+        <div class="cp-outlook-stat">
+          <span class="cp-outlook-stat-label">Median at +${statsHorizon}d</span>
+          <span class="cp-outlook-stat-val">${groupDecimal(p50End.toFixed(2))} <span class="cp-outlook-stat-delta">${signMed}${pctMed.toFixed(1)}%</span></span>
+        </div>
+        <div class="cp-outlook-stat">
+          <span class="cp-outlook-stat-label">68% range</span>
+          <span class="cp-outlook-stat-val">${groupDecimal(p68Low.toFixed(2))} – ${groupDecimal(p68High.toFixed(2))}</span>
+        </div>
+        <div class="cp-outlook-stat">
+          <span class="cp-outlook-stat-label">90% range</span>
+          <span class="cp-outlook-stat-val">${groupDecimal(p90Low.toFixed(2))} – ${groupDecimal(p90High.toFixed(2))}</span>
+        </div>
+        <p class="cp-outlook-stat-note">Dashed lines: median (50%) and mean. Bands: 68% and 90% of outcomes.</p>`;
+      statsBox.hidden = false;
+    } else {
+      statsBox.hidden = true;
+      statsBox.innerHTML = "";
+    }
   }
 
   // Accessible summary text
@@ -2798,7 +2842,7 @@ function renderOutlookChart(res) {
 
       <!-- Horizontal Origin Price Line -->
       <line x1="${xLeft}" y1="${yOrigin.toFixed(1)}" x2="${xRight}" y2="${yOrigin.toFixed(1)}" stroke="rgba(255, 255, 255, 0.18)" stroke-dasharray="3 3" stroke-width="1" />
-      <text x="${(xOrigin + 6).toFixed(1)}" y="${(yOrigin - 6).toFixed(1)}" class="cp-chart-axis-text" fill="var(--sail-text-subtle)">Origin: ${groupDecimal(originClose.toFixed(2))}</text>
+      <text x="${(xLeft + 6).toFixed(1)}" y="${(yOrigin - 6).toFixed(1)}" class="cp-chart-axis-text" fill="var(--sail-text-subtle)" stroke="rgba(10, 13, 18, 0.9)" stroke-width="3" paint-order="stroke">Origin: ${groupDecimal(originClose.toFixed(2))}</text>
 
       <!-- Fan Bands -->
       ${fan.length > 0 ? `
@@ -2828,29 +2872,8 @@ function renderOutlookChart(res) {
       <text x="${xLeft.toFixed(1)}" y="${(H - 12).toFixed(1)}" text-anchor="start" class="cp-chart-axis-text">${history.length > 0 ? formatDay(history[0][0]) : ""}</text>
       <text x="${xOrigin.toFixed(1)}" y="${(H - 12).toFixed(1)}" text-anchor="middle" class="cp-chart-axis-text">Origin (${originDate})</text>
       <text x="${xRight.toFixed(1)}" y="${(H - 12).toFixed(1)}" text-anchor="end" class="cp-chart-axis-text">+${outlook.horizon}d</text>
-
-      <!-- Legend -->
-      <g class="cp-chart-legend" transform="translate(${xLeft}, 16)">
-        <line x1="0" y1="0" x2="16" y2="0" stroke="#7dd3fc" stroke-width="2" />
-        <text x="22" y="3" class="cp-chart-axis-text">Past Closes</text>
-
-        <line x1="90" y1="0" x2="106" y2="0" stroke="#ffd69f" stroke-width="2" stroke-dasharray="4 3" />
-        <text x="112" y="3" class="cp-chart-axis-text">Median (50%)</text>
-
-        <line x1="190" y1="0" x2="206" y2="0" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="2 3" />
-        <text x="212" y="3" class="cp-chart-axis-text">Mean</text>
-
-        <rect x="256" y="-5" width="12" height="10" fill="#5ccda4" opacity="0.35" />
-        <text x="274" y="3" class="cp-chart-axis-text">68% / 90% Fan</text>
-
-        ${actual.length > 0 ? `
-          <line x1="365" y1="0" x2="381" y2="0" stroke="#ffffff" stroke-width="2.5" />
-          <circle cx="373" cy="0" r="3" fill="#ffffff" />
-          <text x="388" y="3" class="cp-chart-axis-text">Actual Replay</text>
-        ` : ""}
-      </g>
     </svg>
-    <div class="cp-chart-accessible-summary">${escapeHtml(accessibleSummary)}</div>
+    <p class="cp-sr-only">${escapeHtml(accessibleSummary)}</p>
   `;
 
   wrap.innerHTML = svgHtml;
@@ -2990,19 +3013,13 @@ function setupOutlookControls() {
     });
   });
 
-  const replayBtns = document.querySelectorAll(".cp-outlook-replay-pills .cp-horizon-btn");
-  replayBtns.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      replayBtns.forEach((b) => {
-        b.classList.remove("cp-active");
-        b.setAttribute("aria-checked", "false");
-      });
-      btn.classList.add("cp-active");
-      btn.setAttribute("aria-checked", "true");
-      currentOutlookTrim = parseInt(btn.dataset.trim, 10) || 0;
+  const replaySelect = document.getElementById("cpOutlookReplaySelect");
+  if (replaySelect) {
+    replaySelect.addEventListener("change", (e) => {
+      currentOutlookTrim = parseInt(e.target.value, 10) || 0;
       loadOutlook();
     });
-  });
+  }
 }
 
 function renderModelsStatus(data) {
