@@ -186,3 +186,10 @@ fn test_price_file_size_cap() {
     let err = parse_price_file(&oversized, "BIG.US", None, Adjustment::Unknown).unwrap_err();
     assert_eq!(err, PriceSourceError::TooLarge);
 }
+
+#[test]
+fn stooq_bot_check_page_is_blocked_not_malformed() {
+    let page = b"<!DOCTYPE html><html><head></head><body><noscript>This site requires JavaScript to verify your browser.</noscript></body></html>";
+    let err = sail_capital::market::parse_stooq_csv(page, "AAPL.US", "aapl.us").unwrap_err();
+    assert_eq!(err, sail_capital::market::PriceSourceError::Blocked);
+}

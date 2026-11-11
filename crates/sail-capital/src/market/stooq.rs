@@ -81,6 +81,13 @@ pub fn parse_stooq_csv(
 
     if let Ok(text) = std::str::from_utf8(body) {
         let trimmed = text.trim();
+        let head = trimmed
+            .get(..trimmed.len().min(256))
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if head.starts_with('<') || head.contains("<html") {
+            return Err(PriceSourceError::Blocked);
+        }
         if trimmed.eq_ignore_ascii_case("no data")
             || trimmed.to_ascii_lowercase().starts_with("no data")
         {

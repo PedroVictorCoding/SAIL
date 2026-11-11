@@ -848,7 +848,10 @@ impl CapitalService {
                         self.store.record_prices(&key, &series, Utc::now())?;
                     }
                     Err(crate::market::PriceSourceError::UnknownSymbol(_)) => unmapped.push(symbol),
-                    Err(e @ crate::market::PriceSourceError::Refused(_)) => {
+                    Err(
+                        e @ (crate::market::PriceSourceError::Refused(_)
+                        | crate::market::PriceSourceError::Blocked),
+                    ) => {
                         last_error = Some(e.to_string());
                         break;
                     }

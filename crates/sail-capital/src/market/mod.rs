@@ -124,6 +124,12 @@ pub enum PriceSourceError {
     /// HTTP 429 or 403.
     #[error("the price source refused the request (HTTP {0}); SAIL will back off")]
     Refused(u16),
+    /// The source answered with a web page (a bot check) instead of data. SAIL does not
+    /// try to get past such checks.
+    #[error(
+        "the price source asked for a browser check instead of returning prices; SAIL won't get around that, so upload price files instead"
+    )]
+    Blocked,
     /// Any other non-success status.
     #[error("the price source returned HTTP {0}")]
     Http(u16),
