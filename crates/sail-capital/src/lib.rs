@@ -15,6 +15,7 @@ pub mod ledger;
 pub mod market;
 pub mod models;
 pub mod optimize;
+pub mod outlook;
 pub mod policy;
 pub mod sec;
 pub mod service;

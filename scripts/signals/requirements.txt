@@ -5,3 +5,4 @@ mplfinance==0.12.10b0
 transformers==5.22.2
 huggingface_hub==2.4.0
 six
+scikit-learn==1.9.1

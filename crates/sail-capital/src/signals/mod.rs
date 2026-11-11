@@ -53,6 +53,8 @@ pub enum SignalId {
     Trend,
     /// Chart patterns found by the YOLOv8 pattern detector (later round).
     ChartPattern,
+    /// Up/Down trend found by the YOLOv8 trend detector (round 12).
+    ChartTrend,
     /// Median forecast of a time-series foundation model, e.g. Chronos-Bolt (later round).
     FoundationForecast,
     /// Tone of the latest filings, e.g. FinBERT on 8-K text (later round).
