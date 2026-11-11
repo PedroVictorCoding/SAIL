@@ -14,6 +14,8 @@
 //! Nothing here places an order. The owner can dismiss a suggestion or mark it done.
 //! Its id hashes its kind, subject and evidence, so a dismissed suggestion comes back
 //! only when the evidence changes.
+pub mod build;
+
 use crate::optimize::{Mode, Plan, Rule};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -54,6 +54,10 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/prices", get(prices))
         .route("/forecasts", get(forecasts))
         .route("/forecasts/evaluation", get(forecast_evaluation))
+        .route("/today", get(today))
+        .route("/suggestions/:id/action", post(suggestion_action))
+        .route("/policy", get(policy).post(save_policy))
+        .route("/signals", get(signals))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
         .with_state(Arc::new(CapitalState { service, authority }))
 }
@@ -547,4 +551,101 @@ async fn sec_refresh(
     };
     let status = s.service.refresh_sec(account.as_ref()).await;
     Ok(no_store(to_json(&status)?))
+}
+
+async fn today(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let today = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.today(&account, Utc::now())
+    })
+    .await?;
+    Ok(no_store(to_json(&today)?))
+}
+
+#[derive(Deserialize)]
+struct ActionBody {
+    action: sail_capital::suggest::Action,
+}
+
+async fn suggestion_action(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<AccountQuery>,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let input: ActionBody = serde_json::from_slice(&body).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "The body must be {\"action\": \"dismissed\"} or {\"action\": \"done\"}."})),
+        )
+    })?;
+    let record = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.suggestion_action(&account, &id, input.action, Utc::now())
+    })
+    .await?;
+    Ok(no_store(to_json(&record)?))
+}
+
+async fn policy(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let view = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.policy(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&view)?))
+}
+
+#[derive(Deserialize)]
+struct PolicyBody {
+    limits: sail_capital::policy::RiskLimits,
+    #[serde(default)]
+    confirm: bool,
+}
+
+async fn save_policy(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let input: PolicyBody = serde_json::from_slice(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("The limits couldn't be read: {e}")})),
+        )
+    })?;
+    let saved = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.save_policy(&account, &input.limits, input.confirm, Utc::now())
+    })
+    .await?;
+    Ok(no_store(to_json(&saved)?))
+}
+
+async fn signals(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let report = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.signals(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&report)?))
 }
