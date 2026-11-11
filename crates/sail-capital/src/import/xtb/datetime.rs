@@ -141,6 +141,25 @@ pub fn parse_cell_time(cell: &RawCell, tz: Tz, source: Option<RowRef>) -> Option
             }
         }
         RawCell::Text(s) => parse_time_text(s, tz, source),
-        _ => None,
+        RawCell::Float(serial) => excel_serial_time(*serial, tz, source),
+        RawCell::Int(serial) => excel_serial_time(*serial as f64, tz, source),
+        RawCell::Empty => None,
     }
+}
+
+/// Earliest and latest spreadsheet serial accepted as a date: 1954-10-03 and 2119-01-10.
+/// A number outside this range in a time column is not a date.
+const SERIAL_RANGE: std::ops::RangeInclusive<f64> = 20_000.0..=80_000.0;
+
+/// Read a spreadsheet serial date-time (days since 1899-12-30, the 1900 date system) that
+/// arrives as a plain number because the cell has no date format. XTB's exports store
+/// times this way. Rounded to the nearest second.
+fn excel_serial_time(serial: f64, tz: Tz, source: Option<RowRef>) -> Option<ParsedTime> {
+    if !serial.is_finite() || !SERIAL_RANGE.contains(&serial) {
+        return None;
+    }
+    let epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?.and_hms_opt(0, 0, 0)?;
+    let seconds = (serial * 86_400.0).round() as i64;
+    let naive = epoch.checked_add_signed(chrono::Duration::seconds(seconds))?;
+    Some(local_datetime_to_utc(naive, tz, source))
 }

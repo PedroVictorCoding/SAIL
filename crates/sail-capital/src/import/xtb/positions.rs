@@ -42,25 +42,24 @@ pub fn detect_open_positions_summary_row(
     let mut equity = None;
 
     for (idx, cell) in row.cells.iter().enumerate() {
+        // Whole-cell labels only: a security can be called "TotalEnergies".
         let norm = normalise_text(cell.as_str());
-        if norm.contains("total")
-            || norm.contains("totais")
-            || norm.contains("balance")
-            || norm.contains("saldo")
-            || norm.contains("equity")
-            || norm.contains("patrimonio")
-        {
+        let norm = norm.trim_end_matches(':').trim();
+        if matches!(
+            norm,
+            "total" | "totais" | "balance" | "saldo" | "equity" | "patrimonio"
+        ) {
             is_summary = true;
         }
 
-        if (norm.contains("balance") || norm.contains("saldo")) && balance.is_none() {
+        if matches!(norm, "balance" | "saldo") && balance.is_none() {
             let next_dec = row.cells.get(idx + 1).and_then(|c| c.to_decimal());
             if let Some(dec) = next_dec {
                 balance = Some(Money::new(dec, currency.clone()));
             }
         }
 
-        if (norm.contains("equity") || norm.contains("patrimonio")) && equity.is_none() {
+        if matches!(norm, "equity" | "patrimonio") && equity.is_none() {
             let next_dec = row.cells.get(idx + 1).and_then(|c| c.to_decimal());
             if let Some(dec) = next_dec {
                 equity = Some(Money::new(dec, currency.clone()));
@@ -207,8 +206,14 @@ pub fn parse_open_position_row(
     let is_stock = norm_type.contains("stocks/etf")
         || norm_type.contains("stock")
         || norm_type.contains("acoes");
+    let category_kind = headers
+        .col(CanonicalColumn::Category)
+        .and_then(|c| row.get(c))
+        .and_then(|c| super::cash::kind_from_category(c.as_str()));
 
-    let kind = if is_cfd {
+    let kind = if let Some(kind) = category_kind {
+        kind
+    } else if is_cfd {
         InstrumentKind::Cfd
     } else if is_stock {
         InstrumentKind::Stock
@@ -251,12 +256,15 @@ pub fn parse_open_position_row(
     // securities the broker's own figures give the value at export: purchase value plus
     // gross P/L, both in account currency. CFD "purchase value" is a notional, so no
     // market value is derived for them.
-    let market_value = match (&purchase_value, &unrealized) {
+    // XTB's current layout states it directly as "Value", in account currency.
+    let stated_value = parse_money_col(row, headers, CanonicalColumn::MarketValue, &currency)
+        .filter(|_| kind != InstrumentKind::Cfd);
+    let market_value = stated_value.or_else(|| match (&purchase_value, &unrealized) {
         (Some(paid), Some(pl)) if kind != InstrumentKind::Cfd && paid.currency == pl.currency => {
             Some(Money::new(paid.amount + pl.amount, paid.currency.clone()))
         }
         _ => None,
-    };
+    });
 
     // 6. Open time
     let opened = headers
@@ -382,8 +390,14 @@ pub fn parse_closed_position_row(
     let is_stock = norm_type.contains("stocks/etf")
         || norm_type.contains("stock")
         || norm_type.contains("acoes");
+    let category_kind = headers
+        .col(CanonicalColumn::Category)
+        .and_then(|c| row.get(c))
+        .and_then(|c| super::cash::kind_from_category(c.as_str()));
 
-    let kind = if is_cfd {
+    let kind = if let Some(kind) = category_kind {
+        kind
+    } else if is_cfd {
         InstrumentKind::Cfd
     } else if is_stock {
         InstrumentKind::Stock

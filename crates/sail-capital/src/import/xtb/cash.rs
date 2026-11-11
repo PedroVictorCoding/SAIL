@@ -40,17 +40,30 @@ fn normalise_type(raw: &str) -> String {
             'ó' | 'ò' | 'õ' | 'ô' => out.push('o'),
             'ú' | 'ù' => out.push('u'),
             'ç' => out.push('c'),
+            '-' => out.push(' '),
             _ => out.push(c),
         }
     }
-    out
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The instrument kind a `Category` cell states, if it states one.
+pub(super) fn kind_from_category(raw: &str) -> Option<InstrumentKind> {
+    match normalise_type(raw).as_str() {
+        "cfd" => Some(InstrumentKind::Cfd),
+        "stock" | "stocks" | "acoes" | "acao" => Some(InstrumentKind::Stock),
+        // Exchange-traded funds and commodities are both owned units of a listed fund.
+        "etf" | "etc" | "etn" => Some(InstrumentKind::Etf),
+        _ => None,
+    }
 }
 
 /// Parse quantity, price and optional position reference from a trade comment.
 ///
 /// Supported patterns include:
 /// - `OPEN BUY 3 @ 172.50`
-/// - `CLOSE BUY 2/5 @ 180.00`
+/// - `OPEN BUY AAPL.US 3 @ 172.50` (some rows repeat the symbol)
+/// - `CLOSE BUY 2/5 @ 180.00` (2 units of a 5-unit order; the quantity is 2)
 /// - `BUY 10 @ 45.20`
 /// - `ABERTURA COMPRA 3 @ 172.50`
 /// - `FECHO COMPRA 2/5 @ 180.00`
@@ -90,20 +103,17 @@ pub fn parse_trade_comment(
         return (None, None, None);
     }
 
-    // Quantity token: e.g. "3", "2/5", "0.5"
+    // Optional symbol, e.g. "AAPL.US", before the quantity.
+    if words[idx].chars().any(|c| c.is_ascii_alphabetic()) && idx + 1 < words.len() {
+        idx += 1;
+    }
+
+    // Quantity token: "3", "0.5", or "2/5" (2 units filled of a 5-unit order).
     let qty_token = words[idx];
     idx += 1;
 
-    let (qty_str, position_ref) = if let Some((q, p)) = qty_token.split_once('/') {
-        let pos = if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() {
-            Some(p.to_string())
-        } else {
-            None
-        };
-        (q, pos)
-    } else {
-        (qty_token, None)
-    };
+    let qty_str = qty_token.split_once('/').map_or(qty_token, |(q, _)| q);
+    let position_ref: Option<String> = None;
 
     let quantity = crate::contracts::parse_decimal_text(qty_str);
     if quantity.is_none() {
@@ -307,6 +317,24 @@ pub fn parse_cash_row(
 
     let norm_type = normalise_type(&raw_type_text);
 
+    // The broker's position id, when the sheet has a column for it.
+    let position_col_ref = ctx
+        .headers
+        .col(CanonicalColumn::Position)
+        .and_then(|c| row.get(c))
+        .map(|c| c.to_clean_text().0)
+        .filter(|s| !s.trim().is_empty());
+    // "Profit of position #123", "Swap of position #123".
+    let comment_position_ref = comment.as_deref().and_then(|c| {
+        let digits: String = c
+            .split_once('#')?
+            .1
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        (!digits.is_empty()).then_some(digits)
+    });
+
     // Instrument kind rules:
     // - Stock only when row type says Stocks/ETF
     // - Cfd only when sheet or type says so (e.g. close trade, swap, or CFD sheet)
@@ -321,7 +349,15 @@ pub fn parse_cash_row(
         || norm_type.contains("acoes")
         || norm_type.contains("stocks");
 
-    let inst_kind = if is_cfd_type {
+    let category_kind = ctx
+        .headers
+        .col(CanonicalColumn::Category)
+        .and_then(|c| row.get(c))
+        .and_then(|c| kind_from_category(c.as_str()));
+
+    let inst_kind = if let Some(kind) = category_kind {
+        kind
+    } else if is_cfd_type {
         InstrumentKind::Cfd
     } else if is_stock_type {
         InstrumentKind::Stock
@@ -346,7 +382,7 @@ pub fn parse_cash_row(
         "deposit" | "deposito" => EntryKind::Deposit,
         "withdrawal" | "levantamento" => EntryKind::Withdrawal,
         "sub account transfer"
-        | "sub-account transfer"
+        | "subaccount transfer"
         | "transfer"
         | "transferencia entre subcontas"
         | "transferencia" => EntryKind::Transfer,
@@ -372,11 +408,11 @@ pub fn parse_cash_row(
                 side: Side::Buy,
                 quantity,
                 price,
-                position_ref: pos_ref.or_else(|| broker_ref.clone()),
+                position_ref: position_col_ref.clone().or(pos_ref),
             }
         }
-        "stocks/etf sale" | "venda de acoes/etf" | "stock sale" | "etf sale" | "venda de acoes"
-        | "venda de etf" => {
+        "stocks/etf sale" | "venda de acoes/etf" | "stock sale" | "etf sale" | "stock sell"
+        | "etf sell" | "venda de acoes" | "venda de etf" => {
             let inst = instrument.clone().unwrap_or_else(|| Instrument {
                 symbol: "UNKNOWN".to_string(),
                 isin: None,
@@ -393,20 +429,35 @@ pub fn parse_cash_row(
                 side: Side::Sell,
                 quantity,
                 price,
-                position_ref: pos_ref.or_else(|| broker_ref.clone()),
+                position_ref: position_col_ref.clone().or(pos_ref),
             }
         }
         "divident" | "dividend" | "dividendo" | "dividendos" => EntryKind::Dividend {
+            instrument: instrument.clone(),
+        },
+        // Paid to CFD holders in place of a dividend. The instrument is the CFD, so it
+        // never mixes with owned-share dividends.
+        "dividend equivalent" | "equivalente de dividendo" => EntryKind::Dividend {
+            instrument: instrument.clone(),
+        },
+        // Charged on CFD dividend equivalents (the "ADJ n%" comment). A broker charge,
+        // not a tax.
+        "adjustment fee" | "taxa de ajuste" => EntryKind::Fee {
+            kind: FeeKind::Other,
+            instrument: instrument.clone(),
+        },
+        "rollover" => EntryKind::Fee {
+            kind: FeeKind::Swap,
             instrument: instrument.clone(),
         },
         "withholding tax" | "imposto retido na fonte" | "retencao na fonte" => EntryKind::Tax {
             kind: TaxKind::Withholding,
             instrument: instrument.clone(),
         },
-        "free-funds interest" | "juros de fundos livres" | "interest" | "juros" => {
+        "free funds interest" | "juros de fundos livres" | "interest" | "juros" => {
             EntryKind::Interest
         }
-        "free-funds interest tax" | "imposto sobre juros de fundos livres" => EntryKind::Tax {
+        "free funds interest tax" | "imposto sobre juros de fundos livres" => EntryKind::Tax {
             kind: TaxKind::OnInterest,
             instrument: None,
         },
@@ -432,7 +483,7 @@ pub fn parse_cash_row(
             });
             EntryKind::DerivativeResult {
                 instrument: inst,
-                position_ref: broker_ref.clone(),
+                position_ref: position_col_ref.clone().or(comment_position_ref.clone()),
             }
         }
         _ => {

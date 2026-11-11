@@ -56,11 +56,26 @@ pub enum CanonicalColumn {
     Margin,
     /// Nominal value.
     NominalValue,
+    /// Asset class as the broker states it (`STOCK`, `ETF`, `ETC`, `CFD`).
+    Category,
+    /// The position's value at export, in account currency (XTB "Value").
+    MarketValue,
+    /// A column titled "Instrument": the symbol in some layouts, the security's name in
+    /// others. Resolved after the whole header row is read: it is the name when a ticker
+    /// or symbol column exists, else the symbol.
+    InstrumentLabel,
 }
 
-/// Normalise a header text string for resilient matching.
+/// Normalise a header text string for resilient matching. A parenthesised suffix such as
+/// `(UTC)` is dropped; [`header_says_utc`] reads it separately.
 fn normalise_header(text: &str) -> String {
-    let lower = text.trim().to_lowercase();
+    let mut lower = text.trim().to_lowercase();
+    while let (Some(open), Some(close)) = (lower.find('('), lower.find(')')) {
+        if close < open {
+            break;
+        }
+        lower.replace_range(open..=close, " ");
+    }
     let mut out = String::with_capacity(lower.len());
     for c in lower.chars() {
         match c {
@@ -75,6 +90,11 @@ fn normalise_header(text: &str) -> String {
         }
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// True when a header or preamble cell labels its times as UTC, e.g. `Close Time (UTC)`.
+pub fn header_says_utc(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("(utc)")
 }
 
 /// Header alias table matching English and Portuguese labels to canonical columns.
@@ -112,8 +132,9 @@ const ALIASES: &[(&str, CanonicalColumn)] = &[
     ("symbol", CanonicalColumn::Symbol),
     ("simbolo", CanonicalColumn::Symbol),
     ("ticker", CanonicalColumn::Symbol),
-    ("instrument", CanonicalColumn::Symbol),
-    ("instrumento", CanonicalColumn::Symbol),
+    ("instrument", CanonicalColumn::InstrumentLabel),
+    ("instrumento", CanonicalColumn::InstrumentLabel),
+    ("instrument position", CanonicalColumn::InstrumentLabel),
     // Amount
     ("amount", CanonicalColumn::Amount),
     ("montante", CanonicalColumn::Amount),
@@ -136,6 +157,8 @@ const ALIASES: &[(&str, CanonicalColumn)] = &[
     ("posicao", CanonicalColumn::Position),
     ("posicoes", CanonicalColumn::Position),
     ("n da posicao", CanonicalColumn::Position),
+    ("position id", CanonicalColumn::Position),
+    ("id da posicao", CanonicalColumn::Position),
     ("no da posicao", CanonicalColumn::Position),
     // Volume
     ("volume", CanonicalColumn::Volume),
@@ -169,6 +192,7 @@ const ALIASES: &[(&str, CanonicalColumn)] = &[
     ("preco de mercado", CanonicalColumn::MarketPrice),
     ("preco atual", CanonicalColumn::MarketPrice),
     ("cotacao", CanonicalColumn::MarketPrice),
+    ("current price", CanonicalColumn::MarketPrice),
     // Purchase value
     ("purchase value", CanonicalColumn::PurchaseValue),
     ("valor de compra", CanonicalColumn::PurchaseValue),
@@ -177,12 +201,14 @@ const ALIASES: &[(&str, CanonicalColumn)] = &[
     ("valor de venda", CanonicalColumn::SaleValue),
     // Commission
     ("commission", CanonicalColumn::Commission),
+    ("open commission", CanonicalColumn::Commission),
     ("comissao", CanonicalColumn::Commission),
     // Swap
     ("swap", CanonicalColumn::Swap),
     // Gross P/L
     ("gross p l", CanonicalColumn::GrossPl),
     ("gross pl", CanonicalColumn::GrossPl),
+    ("gross profit", CanonicalColumn::GrossPl),
     ("p l bruto", CanonicalColumn::GrossPl),
     ("pl bruto", CanonicalColumn::GrossPl),
     ("lucro bruto", CanonicalColumn::GrossPl),
@@ -195,6 +221,13 @@ const ALIASES: &[(&str, CanonicalColumn)] = &[
     // Nominal value
     ("nominal value", CanonicalColumn::NominalValue),
     ("valor nominal", CanonicalColumn::NominalValue),
+    // Category
+    ("category", CanonicalColumn::Category),
+    ("categoria", CanonicalColumn::Category),
+    // Market value (account currency)
+    ("value", CanonicalColumn::MarketValue),
+    ("market value", CanonicalColumn::MarketValue),
+    ("valor de mercado", CanonicalColumn::MarketValue),
 ];
 
 /// Match a raw header cell text against canonical columns.
@@ -220,6 +253,10 @@ pub struct HeaderMap {
     pub header_row: u32,
     /// Map of canonical column to index.
     pub columns: HashMap<CanonicalColumn, usize>,
+    /// True when the header row or the rows above it label times as UTC. XTB's current
+    /// exports do (`Open Time (UTC)`, `Date from (UTC)`); the report time zone option then
+    /// doesn't apply.
+    pub times_utc: bool,
 }
 
 impl HeaderMap {
@@ -233,6 +270,7 @@ impl HeaderMap {
 pub fn detect_sheet_header(sheet: &RawSheet) -> Option<HeaderMap> {
     let scan_limit = sheet.rows.len().min(40);
     let mut best_match: Option<(SheetKind, u32, HashMap<CanonicalColumn, usize>, u32)> = None;
+    let mut utc_rows: Vec<u32> = Vec::new();
 
     // Hint from sheet name if present
     let sheet_hint = sheet.name.as_deref().map(normalise_header);
@@ -241,11 +279,24 @@ pub fn detect_sheet_header(sheet: &RawSheet) -> Option<HeaderMap> {
         if row.is_all_empty() {
             continue;
         }
+        if row.cells.iter().any(|c| header_says_utc(c.as_str())) {
+            utc_rows.push((row_idx + 1) as u32);
+        }
 
         let mut cols = HashMap::new();
         for (col_idx, cell) in row.cells.iter().enumerate() {
             if let Some(canonical) = match_header_column(cell.as_str()) {
                 cols.entry(canonical).or_insert(col_idx);
+            }
+        }
+        if let Some(label) = cols.remove(&CanonicalColumn::InstrumentLabel) {
+            match cols.entry(CanonicalColumn::Symbol) {
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    cols.entry(CanonicalColumn::Name).or_insert(label);
+                }
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(label);
+                }
             }
         }
 
@@ -389,5 +440,6 @@ pub fn detect_sheet_header(sheet: &RawSheet) -> Option<HeaderMap> {
         sheet_kind,
         header_row,
         columns,
+        times_utc: utc_rows.iter().any(|r| *r <= header_row),
     })
 }
