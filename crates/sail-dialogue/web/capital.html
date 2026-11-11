@@ -225,6 +225,77 @@
 
   <!-- TAB 4: FORECASTS -->
   <div class="cp-tab-pane" id="cpPanel-forecasts" role="tabpanel" aria-labelledby="cpTab-forecasts" hidden>
+    <!-- Blended Outlook Card (Round 12) -->
+    <section class="cp-panel cp-outlook-panel" id="cpOutlookPanel" aria-labelledby="cpOutlookTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpOutlookTitle">Blended Outlook</h2>
+          <span class="cp-sub-notice">Multimodal fan forecast &amp; track record</span>
+        </div>
+        <span class="cp-badge" id="cpOutlookBadge">Outlook</span>
+      </header>
+
+      <!-- Required Disclaimer Banner -->
+      <div class="cp-forecast-disclaimer">
+        <p>Statistical range from past prices and models; not a price target or advice.</p>
+      </div>
+
+      <!-- Controls: Holding picker, Horizon pills, Replay segmented control -->
+      <div class="cp-outlook-controls">
+        <div class="cp-control-group">
+          <label for="cpOutlookSymbolSelect" class="cp-control-label">Holding:</label>
+          <select class="cp-select" id="cpOutlookSymbolSelect" aria-label="Select holding for outlook">
+            <option value="" disabled selected>Select a holding</option>
+          </select>
+        </div>
+
+        <div class="cp-control-group">
+          <span class="cp-control-label">Horizon:</span>
+          <div class="cp-horizon-pills cp-outlook-horizon-pills" role="radiogroup" aria-label="Outlook horizon">
+            <button type="button" class="cp-horizon-btn cp-active" data-horizon="21" aria-checked="true">1M (21d)</button>
+            <button type="button" class="cp-horizon-btn" data-horizon="63">3M (63d)</button>
+            <button type="button" class="cp-horizon-btn" data-horizon="126">6M (126d)</button>
+            <button type="button" class="cp-horizon-btn" data-horizon="252">1Y (252d)</button>
+          </div>
+        </div>
+
+        <div class="cp-control-group">
+          <span class="cp-control-label">Replay:</span>
+          <div class="cp-horizon-pills cp-outlook-replay-pills" role="radiogroup" aria-label="Replay cutoff">
+            <button type="button" class="cp-horizon-btn cp-active" data-trim="0" aria-checked="true">Today</button>
+            <button type="button" class="cp-horizon-btn" data-trim="21">trim 1M</button>
+            <button type="button" class="cp-horizon-btn" data-trim="63">trim 3M</button>
+            <button type="button" class="cp-horizon-btn" data-trim="126">trim 6M</button>
+            <button type="button" class="cp-horizon-btn" data-trim="252">trim 1Y</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chart Container -->
+      <div class="cp-outlook-chart-wrap" id="cpOutlookChartWrap">
+        <p class="cp-empty" id="cpOutlookEmpty">Select a holding to see its blended outlook.</p>
+      </div>
+
+      <!-- Replay result statement (when replay active) -->
+      <div class="cp-outlook-replay-summary" id="cpOutlookReplaySummary" hidden></div>
+
+      <!-- Details Under the Chart: Component Weights & Track Record -->
+      <div class="cp-outlook-meta-grid" id="cpOutlookMetaGrid" hidden>
+        <!-- Component weights & direction tilt -->
+        <div class="cp-outlook-weights-block">
+          <h3 class="cp-outlook-subheading">Component Weights &amp; Tilt</h3>
+          <div class="cp-outlook-weights-list" id="cpOutlookWeightsList"></div>
+          <div class="cp-outlook-tilt-note" id="cpOutlookTiltNote"></div>
+        </div>
+
+        <!-- Track Record for selected horizon -->
+        <div class="cp-outlook-track-record-block">
+          <h3 class="cp-outlook-subheading">Track Record (<span id="cpTrackRecordHorizonLabel">1M</span>)</h3>
+          <div class="cp-track-record-grid" id="cpTrackRecordGrid"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- Portfolio Forecasts & Baselines -->
     <section class="cp-panel" id="cpForecastsPanel" aria-labelledby="cpForecastsTitle">
       <header class="cp-panel-head">
@@ -469,6 +540,42 @@
         <p>Price fetching is off. Turning it on sends ticker symbols you hold to Yahoo Finance through yfinance. To enable, set <code>SAIL_PRICES_SOURCE=yfinance</code>, or upload a CSV file privately.</p>
       </div>
       <div class="cp-unmapped-note" id="cpDataPriceUnmappedNote" hidden></div>
+    </section>
+
+    <!-- Predictive Models Panel (Round 12) -->
+    <section class="cp-panel" id="cpModelsPanel" aria-labelledby="cpModelsTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpModelsTitle">Predictive Models</h2>
+          <span class="cp-sub-notice">Model signals (Chronos, YOLO) run as local Python helpers</span>
+        </div>
+        <div class="cp-panel-actions">
+          <button class="cp-button cp-primary" id="cpRunModelsBtn" type="button">Run models</button>
+          <span class="cp-badge" id="cpModelsBadge">Helpers</span>
+        </div>
+      </header>
+
+      <div class="cp-models-note">
+        <p>Model runs compute out-of-sample features and forecast paths. The first run downloads weights and scans weekly charts, which may take several minutes.</p>
+      </div>
+
+      <div class="cp-table-wrap">
+        <table class="cp-table" id="cpModelsTable">
+          <thead>
+            <tr>
+              <th scope="col">Model</th>
+              <th scope="col">Summary</th>
+              <th scope="col">Licence</th>
+              <th scope="col">Status</th>
+              <th scope="col" class="num">Stored Values</th>
+              <th scope="col">Last Run</th>
+            </tr>
+          </thead>
+          <tbody id="cpModelsBody">
+            <tr><td colspan="6" class="cp-empty">Loading models…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <!-- Import Status & Batches -->
