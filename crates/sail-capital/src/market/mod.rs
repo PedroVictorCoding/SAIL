@@ -147,36 +147,11 @@ pub trait PriceSource: Send + Sync {
     async fn daily(&self, symbol: &str) -> Result<PriceSeries, PriceSourceError>;
 }
 
-/// The source's name for a broker symbol, or `None` when it can't be mapped. XTB writes
-/// `TICKER.SUFFIX` with suffixes such as `US`, `DE`, `UK`, `FR`, `NL`, `PT`.
-pub fn stooq_symbol(broker_symbol: &str) -> Option<String> {
-    // Antigravity implements this; the stub keeps the crate building.
-    let _ = broker_symbol;
-    None
-}
+pub mod file;
+pub mod stooq;
 
-/// Reads Stooq's daily CSV (`Date,Open,High,Low,Close,Volume`).
-pub fn parse_stooq_csv(
-    body: &[u8],
-    symbol: &str,
-    source_symbol: &str,
-) -> Result<PriceSeries, PriceSourceError> {
-    let _ = (body, symbol, source_symbol);
-    Err(PriceSourceError::Malformed("not implemented".into()))
-}
-
-/// Reads an owner-uploaded price file: CSV with a header row naming at least a date and
-/// a close column (English or Portuguese), comma or semicolon separated. `currency` and
-/// `adjustment` are what the owner declares for the file.
-pub fn parse_price_file(
-    bytes: &[u8],
-    symbol: &str,
-    currency: Option<Currency>,
-    adjustment: Adjustment,
-) -> Result<PriceSeries, PriceSourceError> {
-    let _ = (bytes, symbol, currency, adjustment);
-    Err(PriceSourceError::Malformed("not implemented".into()))
-}
+pub use file::parse_price_file;
+pub use stooq::{StooqClient, parse_stooq_csv, stooq_symbol};
 
 /// A source that never fetches: what SAIL uses until the owner opts in.
 pub struct DisabledSource;
@@ -193,7 +168,12 @@ impl PriceSource for DisabledSource {
 }
 
 /// The source the owner chose with `SAIL_PRICES_SOURCE`, and whether fetching is on.
-/// Until the Stooq client lands this is always the disabled source.
+/// Returns StooqClient when `SAIL_PRICES_SOURCE=stooq`, and DisabledSource otherwise.
 pub fn source_from_env() -> (std::sync::Arc<dyn PriceSource>, bool) {
-    (std::sync::Arc::new(DisabledSource), false)
+    let client = stooq::StooqClient::from_env();
+    if client.is_configured() {
+        (std::sync::Arc::new(client), true)
+    } else {
+        (std::sync::Arc::new(DisabledSource), false)
+    }
 }
