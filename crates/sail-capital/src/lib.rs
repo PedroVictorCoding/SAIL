@@ -6,6 +6,7 @@
 //! market-data feed, no model and no broker connection: SAIL never places, modifies or
 //! cancels orders and never holds broker credentials. See `docs/SAIL_CAPITAL.md`.
 pub mod contracts;
+pub mod dividends;
 pub mod evidence;
 pub mod exposure;
 pub mod forecast;

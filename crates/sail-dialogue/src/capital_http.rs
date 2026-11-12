@@ -66,6 +66,8 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/signals/trade/record", get(trade_record))
         .route("/signals/trade/guards", get(trade_guards))
         .route("/universe/watchlist", get(watchlist).post(change_watchlist))
+        .route("/dividends/projection", get(dividend_projection))
+        .route("/dividends/refresh", post(dividend_refresh))
         .route("/outlook/track-record", get(track_record))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
         .with_state(Arc::new(CapitalState { service, authority }))
@@ -810,4 +812,50 @@ async fn change_watchlist(
         })?;
     let list = blocking(&s, move |svc| svc.change_watchlist(change, Utc::now())).await?;
     Ok(no_store(to_json(&list)?))
+}
+
+#[derive(Deserialize)]
+struct ProjectionQuery {
+    account: Option<String>,
+    years: Option<u32>,
+    reinvest_pct: Option<f64>,
+    allocation: Option<sail_capital::dividends::Allocation>,
+    reserve_pt_tax: Option<bool>,
+}
+
+async fn dividend_projection(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<ProjectionQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let outlook = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.dividend_projection(
+            &account,
+            q.years.unwrap_or(10),
+            q.reinvest_pct.unwrap_or(100.0),
+            q.allocation
+                .unwrap_or(sail_capital::dividends::Allocation::Proportional),
+            q.reserve_pt_tax.unwrap_or(false),
+        )
+    })
+    .await?;
+    Ok(no_store(to_json(&outlook)?))
+}
+
+async fn dividend_refresh(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let id = q.account.clone();
+    let account = blocking(&s, move |svc| svc.resolve_account(id.as_deref())).await?;
+    let result = s
+        .service
+        .refresh_dividend_histories(&account)
+        .await
+        .map_err(failure)?;
+    Ok(no_store(to_json(&result)?))
 }

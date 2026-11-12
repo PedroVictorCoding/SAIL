@@ -16,7 +16,7 @@ Round 7 (2026-11-10) builds the **portfolio foundation**:
 
 Round 8 adds the first research source, **SEC EDGAR filings** for the US companies the
 owner holds (see below). Round 9 adds splits, received shares and portfolio insights.
-Round 13 adds **trade signals with a verified record** (entry, stop, targets, sizing). Round 12 added **model signals (YOLO, Chronos) and a blended per-holding outlook with replay**. Round 11 added the **Today view, risk limits and suggestions**. Round 10 added **daily prices and baseline forecasts** with an honest out-of-sample score
+Round 14 adds the **dividend projection with reinvestment**. Round 13 added **trade signals with a verified record** (entry, stop, targets, sizing). Round 12 added **model signals (YOLO, Chronos) and a blended per-holding outlook with replay**. Round 11 added the **Today view, risk limits and suggestions**. Round 10 added **daily prices and baseline forecasts** with an honest out-of-sample score
 (see below). House/Senate, FRED/ECB and Polymarket adapters, the risk engine and any neural
 or `.sea` model come in later rounds.
 
@@ -487,6 +487,47 @@ on, plus **Run now** on the page. A run fetches prices for the holdings and the
 watchlist, refreshes earnings weekly, publishes and grades. Risk per trade is a limit
 (draft 0.5% of the account lost at the stop).
 
+## Expected dividends with reinvestment (round 14)
+
+**Income → Dividend projection** projects net dividend income for 1–30 years, month by
+month (`dividends/`).
+
+**Inputs per holding:**
+- the units held and the latest price;
+- FX from the watchlist pairs, else the rate implied by XTB's own valuation;
+- the per-share payout history from Yahoo (`scripts/prices/dividends.py`, refreshed
+  weekly; only symbols are sent);
+- the withholding actually observed in the ledger over 24 months, else a default by
+  listing country.
+
+**Reinvestment.** A share of each net payment buys more units the same month:
+- **proportionally** across paying holdings by current value (the default, keeping the
+  mix);
+- or back into the **same holding** (a DRIP).
+
+The rest stays as cash. A comparison line shows the same projection without
+reinvesting.
+
+**Growth.** Past payout growth over up to five complete years, shrunk toward zero by
+`n/(n+3)` and capped at ±15%. A year without payment after a paying year counts as a
+cut. Low and high scenarios shift each holding's growth by its own payout volatility.
+They are scenarios, not probabilities.
+
+**Prices.** Each holding follows its own price trend over up to three years, shrunk by
+`years/(years+3)` and capped at −50% to +15% a year. A holding yielding more than 12%
+pays a constant share of its current price, and its price is assumed to fall by at
+least `yield − 8%` a year. Total return from yield alone is therefore capped at 8%, so a
+fund paying out of its capital can't compound at its headline yield. On real holdings
+an 81%-yield fund otherwise turned about 1,100 a year into 337,000.
+
+**Tax.** Withholding is subtracted. The optional Portuguese reserve is 28% of the gross
+minus what was withheld, floored at zero (simplified).
+
+**Cross-check with the ledger.** Each receipt is matched to the published payment it
+came from, using the units held on the payment date. A history is scaled only when the
+receipts consistently differ by more than 1.6× (for example a fund quoted in its base
+currency), and a note says so.
+
 ## API (`/api/capital`, owner token required)
 
 | Route | Returns |
@@ -525,6 +566,8 @@ watchlist, refreshes earnings weekly, publishes and grades. Risk per trade is a 
 | `GET /signals/trade/record?account=` | Every published card with its grade, and totals |
 | `GET /signals/trade/guards?account=` | Trailing stops and trend for each holding |
 | `GET /universe/watchlist` / `POST /universe/watchlist` | The watchlist, and a change: `{"op": "add", "item": {...}}` or `{"op": "remove", "symbol": "..."}` |
+| `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting, per-holding inputs and notes |
+| `POST /dividends/refresh?account=` | Fetches per-share payout histories for the holdings |
 | `GET /outlook/track-record?account=&horizon=` | Coverage, average percentile, skill and direction over monthly replays |
 
 All amounts are decimal strings. Errors are `{"error": "..."}`, with these status codes:
