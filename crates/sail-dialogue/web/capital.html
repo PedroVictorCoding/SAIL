@@ -331,6 +331,149 @@
 
   <!-- TAB 3: INCOME -->
   <div class="cp-tab-pane" id="cpPanel-income" role="tabpanel" aria-labelledby="cpTab-income" hidden>
+    <!-- Dividend Projection (Round 14) -->
+    <section class="cp-panel cp-projection-panel" id="cpProjectionPanel" aria-labelledby="cpProjectionTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpProjectionTitle">Dividend Projection</h2>
+          <span class="cp-sub-notice">Expected scaling with proportional or holding reinvestment</span>
+        </div>
+        <div class="cp-actions-group">
+          <button type="button" class="cp-btn cp-btn-sm" id="cpProjRefreshBtn">Refresh payout history</button>
+          <span class="cp-badge" id="cpProjectionBadge">Projection</span>
+        </div>
+      </header>
+
+      <!-- Disclaimer / Honest Wording Banner -->
+      <div class="cp-forecast-disclaimer">
+        <p>Projection from past payouts; dividends can be cut. Scenarios, not probabilities.</p>
+      </div>
+
+      <!-- Controls: Years slider, Reinvest % slider, Allocation pills, PT tax checkbox -->
+      <div class="cp-proj-controls">
+        <div class="cp-control-group">
+          <label for="cpProjYears" class="cp-control-label">Years: <strong id="cpProjYearsVal">10</strong></label>
+          <input type="range" class="cp-range" id="cpProjYears" min="1" max="30" value="10" step="1" aria-label="Projection horizon in years">
+        </div>
+
+        <div class="cp-control-group">
+          <label for="cpProjReinvest" class="cp-control-label">Reinvest: <strong id="cpProjReinvestVal">100%</strong></label>
+          <input type="range" class="cp-range" id="cpProjReinvest" min="0" max="100" value="100" step="5" aria-label="Reinvestment percentage">
+        </div>
+
+        <div class="cp-control-group">
+          <span class="cp-control-label" id="cpProjAllocLabel">Allocation</span>
+          <div class="cp-horizon-pills cp-proj-alloc-pills" role="radiogroup" aria-labelledby="cpProjAllocLabel">
+            <button type="button" class="cp-horizon-btn cp-active" data-allocation="proportional" aria-checked="true">Proportional</button>
+            <button type="button" class="cp-horizon-btn" data-allocation="same_holding" aria-checked="false">Same holding</button>
+          </div>
+        </div>
+
+        <div class="cp-control-group cp-control-checkbox">
+          <label class="cp-checkbox-label" for="cpProjReserveTax">
+            <input type="checkbox" id="cpProjReserveTax">
+            <span>Set aside Portuguese tax (28%)</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Status / empty message -->
+      <div id="cpProjStatus" class="cp-empty" hidden></div>
+
+      <!-- Headline Tiles (4 tiles) -->
+      <div class="cp-proj-tiles" id="cpProjTiles">
+        <div class="cp-proj-tile">
+          <span class="cp-proj-tile-label">Year 1 Net Income</span>
+          <span class="cp-proj-tile-val" id="cpProjTileYear1Net">—</span>
+          <span class="cp-proj-tile-sub">Base scenario</span>
+        </div>
+        <div class="cp-proj-tile">
+          <span class="cp-proj-tile-label" id="cpProjTileFinalNetLabel">Year 10 Net Income</span>
+          <span class="cp-proj-tile-val" id="cpProjTileFinalNet">—</span>
+          <span class="cp-proj-tile-sub" id="cpProjTileFinalNetRange">Low — · High —</span>
+        </div>
+        <div class="cp-proj-tile">
+          <span class="cp-proj-tile-label">Total Reinvested</span>
+          <span class="cp-proj-tile-val" id="cpProjTileTotalReinvested">—</span>
+          <span class="cp-proj-tile-sub" id="cpProjTileTotalReinvestedSub">Over projection period</span>
+        </div>
+        <div class="cp-proj-tile">
+          <span class="cp-proj-tile-label">Income Doubling</span>
+          <span class="cp-proj-tile-val" id="cpProjTileDoubling">—</span>
+          <span class="cp-proj-tile-sub" id="cpProjTileDoublingSub">Base scenario</span>
+        </div>
+      </div>
+
+      <!-- Chart Container -->
+      <div class="cp-proj-chart-wrap" id="cpProjChartWrap">
+        <p class="cp-empty" id="cpProjChartEmpty">Loading dividend projection chart...</p>
+      </div>
+
+      <!-- Annual Year Table Breakdown -->
+      <div class="cp-proj-section">
+        <div class="cp-proj-table-head">
+          <h3 class="cp-proj-subheading">Annual Projection Breakdown</h3>
+          <button type="button" class="cp-btn cp-btn-sm" id="cpProjToggleYearsBtn" hidden>Show all 10 years</button>
+        </div>
+        <div class="cp-table-wrap">
+          <table class="cp-table" id="cpProjYearsTable">
+            <thead>
+              <tr>
+                <th scope="col">Year</th>
+                <th scope="col" class="num">Gross</th>
+                <th scope="col" class="num">Withheld</th>
+                <th scope="col" class="num">PT Reserve</th>
+                <th scope="col" class="num">Net</th>
+                <th scope="col" class="num">Reinvested</th>
+                <th scope="col" class="num">Cash</th>
+                <th scope="col" class="num">Portfolio Value</th>
+                <th scope="col" class="num">Yield on Cost</th>
+              </tr>
+            </thead>
+            <tbody id="cpProjYearsBody">
+              <tr><td colspan="9" class="cp-empty">Loading projection...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Per-Holding Breakdown Section -->
+      <div class="cp-proj-section">
+        <h3 class="cp-proj-subheading">Per-Holding Inputs &amp; Projections (Base Scenario)</h3>
+        <div class="cp-table-wrap">
+          <table class="cp-table" id="cpProjHoldingsTable">
+            <thead>
+              <tr>
+                <th scope="col">Symbol</th>
+                <th scope="col" class="num">TTM / Share</th>
+                <th scope="col" class="num">Growth Used</th>
+                <th scope="col">Withholding</th>
+                <th scope="col" class="num">Year 1 Net</th>
+                <th scope="col" class="num">Final Year Net</th>
+                <th scope="col" class="num">End Units</th>
+              </tr>
+            </thead>
+            <tbody id="cpProjHoldingsBody">
+              <tr><td colspan="7" class="cp-empty">No paying holdings.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <!-- Non-paying holdings list -->
+        <div class="cp-proj-non-paying" id="cpProjNonPaying" hidden>
+          <span class="cp-proj-non-paying-title">Non-paying holdings:</span>
+          <span id="cpProjNonPayingList" class="cp-proj-non-paying-content"></span>
+        </div>
+      </div>
+
+      <!-- Assumptions Box -->
+      <div class="cp-proj-assumptions" id="cpProjAssumptions">
+        <h4 class="cp-proj-assumptions-title">Assumptions &amp; Notes</h4>
+        <p class="cp-proj-assumptions-core">Projection from past payouts; dividends can be cut. Scenarios, not probabilities.</p>
+        <ul class="cp-proj-notes-list" id="cpProjNotesList">
+        </ul>
+      </div>
+    </section>
+
     <!-- Dividends & Income -->
     <section class="cp-panel" id="cpDividendsPanel" aria-labelledby="cpDividendsTitle">
       <header class="cp-panel-head">
