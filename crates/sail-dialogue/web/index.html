@@ -706,35 +706,28 @@
           </div>
         </div>
         <div class="card-tab-panel tl-panel" id="memoryPanelToolLog" role="tabpanel" aria-labelledby="toolLogTab" hidden>
-          <div class="tl-card">
-            <header class="tl-header">
-              <div class="tl-title-group">
-                <h3 class="tl-heading">SAIL Tool Log</h3>
-                <p id="toolLogStatus" class="tl-status" role="status">Persisted in /srv/sail-data memory.</p>
-              </div>
-              <div class="tl-actions">
-                <button type="button" class="quiet-button" id="toolLogRefresh">Refresh</button>
-                <button type="button" class="quiet-button" id="toolLogExport">Export .json</button>
-                <button type="button" class="quiet-button" id="toolLogClear">Clear</button>
-              </div>
-            </header>
-            <div class="tl-toolbar">
-              <div class="tl-filters" role="group" aria-label="Filter tool executions by status">
-                <button type="button" class="tl-filter-btn active" data-tl-filter="all" aria-pressed="true">All</button>
-                <button type="button" class="tl-filter-btn" data-tl-filter="ok" aria-pressed="false">OK</button>
-                <button type="button" class="tl-filter-btn" data-tl-filter="err" aria-pressed="false">Failed</button>
-              </div>
-              <form id="toolLogSearchForm" class="tl-search-form">
-                <label for="toolLogSearch" class="sr-only">Filter tool log</label>
-                <input id="toolLogSearch" type="search" maxlength="200" placeholder="Filter by tool, channel, or output…" autocomplete="off">
-              </form>
+          <div class="tl-toolbar">
+            <div class="tl-filters" role="group" aria-label="Filter tool executions by status">
+              <button type="button" class="quiet-button tl-filter-btn active" data-tl-filter="all" aria-pressed="true">All</button>
+              <button type="button" class="quiet-button tl-filter-btn" data-tl-filter="ok" aria-pressed="false">OK</button>
+              <button type="button" class="quiet-button tl-filter-btn" data-tl-filter="err" aria-pressed="false">Failed</button>
             </div>
-            <div class="tl-list" id="toolLogList" role="log" aria-live="polite" aria-relevant="additions">
-              <p class="tl-empty" id="toolLogEmpty">No tool executions recorded yet.</p>
+            <form id="toolLogSearchForm" class="tl-search-form">
+              <label for="toolLogSearch" class="sr-only">Filter tool log (prefix with - to exclude, e.g. -os:status)</label>
+              <input id="toolLogSearch" type="search" maxlength="200" placeholder="Search or exclude (-os:status, -os)…" autocomplete="off">
+            </form>
+            <div class="tl-actions">
+              <button type="button" class="quiet-button" id="toolLogRefresh">Refresh</button>
+              <button type="button" class="quiet-button" id="toolLogExport">Export .json</button>
+              <button type="button" class="quiet-button" id="toolLogClear">Clear</button>
             </div>
-            <div class="tl-footer" id="toolLogFooter" hidden>
-              <button type="button" class="quiet-button" id="toolLogLoadMore">Load older</button>
-            </div>
+          </div>
+          <p id="toolLogStatus" class="tl-status" role="status">Persisted in /srv/sail-data memory.</p>
+          <div class="tl-list" id="toolLogList" role="log" aria-live="polite" aria-relevant="additions">
+            <p class="tl-empty" id="toolLogEmpty">No tool executions recorded yet.</p>
+          </div>
+          <div class="tl-footer" id="toolLogFooter" hidden>
+            <button type="button" class="quiet-button" id="toolLogLoadMore">Load older</button>
           </div>
         </div>
       </article>

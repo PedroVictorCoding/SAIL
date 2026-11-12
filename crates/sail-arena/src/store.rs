@@ -416,6 +416,8 @@ impl MemoryStore {
     }
 
     /// List persisted tool logs in reverse chronological order, with optional filters.
+    /// `query` supports whitespace-separated terms; terms prefixed with `-` (e.g. `-os:status`
+    /// or `-os`) exclude matching tool names.
     pub fn list_tool_logs(
         &self,
         tool_filter: Option<&str>,
@@ -425,43 +427,73 @@ impl MemoryStore {
         before_id: Option<i64>,
     ) -> StoreResult<Vec<ToolLogEntry>> {
         let limit = limit.clamp(1, 500) as i64;
-        let tool_pat = tool_filter
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| format!("%{s}%"));
-        let query_pat = query
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| format!("%{s}%"));
-        let success_val = success_filter.map(i64::from);
+        let tool_filter = tool_filter.map(str::trim).filter(|s| !s.is_empty());
+        let mut include_terms: Vec<String> = Vec::new();
+        let mut exclude_terms: Vec<String> = Vec::new();
+        if let Some(q) = query {
+            for token in q.split_whitespace().take(16) {
+                if let Some(rest) = token.strip_prefix('-') {
+                    if !rest.is_empty() {
+                        exclude_terms.push(rest.to_lowercase());
+                    }
+                } else {
+                    include_terms.push(token.to_lowercase());
+                }
+            }
+        }
+        let mut sql = String::from(
+            "SELECT id,created_at,tool,channel,session,success,duration_ms,summary,params_json,output_json
+             FROM tool_logs WHERE 1=1",
+        );
+        let mut bind: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(id) = before_id {
+            sql.push_str(" AND id < ?");
+            bind.push(id.into());
+        }
+        if let Some(ok) = success_filter {
+            sql.push_str(" AND success = ?");
+            bind.push(i64::from(ok).into());
+        }
+        if let Some(tool) = tool_filter {
+            sql.push_str(" AND instr(lower(tool), lower(?)) > 0");
+            bind.push(tool.to_string().into());
+        }
+        for term in exclude_terms {
+            sql.push_str(" AND instr(lower(tool), ?) = 0");
+            bind.push(term.into());
+        }
+        for term in include_terms {
+            sql.push_str(
+                " AND (instr(lower(tool), ?) > 0
+                   OR instr(lower(channel), ?) > 0
+                   OR instr(lower(session), ?) > 0
+                   OR instr(lower(summary), ?) > 0
+                   OR instr(lower(coalesce(params_json,'')), ?) > 0
+                   OR instr(lower(coalesce(output_json,'')), ?) > 0)",
+            );
+            for _ in 0..6 {
+                bind.push(term.clone().into());
+            }
+        }
+        sql.push_str(" ORDER BY id DESC LIMIT ?");
+        bind.push(limit.into());
+
         self.with_reader(|conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT id,created_at,tool,channel,session,success,duration_ms,summary,params_json,output_json
-                 FROM tool_logs
-                 WHERE (?1 IS NULL OR id < ?1)
-                   AND (?2 IS NULL OR success = ?2)
-                   AND (?3 IS NULL OR tool LIKE ?3)
-                   AND (?4 IS NULL OR tool LIKE ?4 OR channel LIKE ?4 OR summary LIKE ?4 OR coalesce(params_json,'') LIKE ?4 OR coalesce(output_json,'') LIKE ?4)
-                 ORDER BY id DESC
-                 LIMIT ?5",
-            )?;
-            let rows = stmt.query_map(
-                params![before_id, success_val, tool_pat, query_pat, limit],
-                |row| {
-                    Ok(ToolLogEntry {
-                        id: row.get(0)?,
-                        created_at_ms: row.get(1)?,
-                        tool: row.get(2)?,
-                        channel: row.get(3)?,
-                        session: row.get(4)?,
-                        success: row.get::<_, i64>(5)? != 0,
-                        duration_ms: row.get::<_, Option<i64>>(6)?.map(|d| d.max(0) as u64),
-                        summary: row.get(7)?,
-                        params_json: row.get(8)?,
-                        output_json: row.get(9)?,
-                    })
-                },
-            )?;
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(bind.iter()), |row| {
+                Ok(ToolLogEntry {
+                    id: row.get(0)?,
+                    created_at_ms: row.get(1)?,
+                    tool: row.get(2)?,
+                    channel: row.get(3)?,
+                    session: row.get(4)?,
+                    success: row.get::<_, i64>(5)? != 0,
+                    duration_ms: row.get::<_, Option<i64>>(6)?.map(|d| d.max(0) as u64),
+                    summary: row.get(7)?,
+                    params_json: row.get(8)?,
+                    output_json: row.get(9)?,
+                })
+            })?;
             let mut out = Vec::new();
             for row in rows {
                 out.push(row?);
@@ -962,6 +994,29 @@ mod tests {
             .unwrap();
         assert_eq!(older.len(), 1);
         assert_eq!(older[0].id, id1);
+
+        let exclude_exact = store
+            .list_tool_logs(None, Some("-os:status"), None, 50, None)
+            .unwrap();
+        assert_eq!(exclude_exact.len(), 1);
+        assert_eq!(exclude_exact[0].id, id2);
+
+        let exclude_prefix = store
+            .list_tool_logs(None, Some("-os"), None, 50, None)
+            .unwrap();
+        assert_eq!(exclude_prefix.len(), 1);
+        assert_eq!(exclude_prefix[0].id, id2);
+
+        let exclude_both = store
+            .list_tool_logs(None, Some("-os -fs:read"), None, 50, None)
+            .unwrap();
+        assert!(exclude_both.is_empty());
+
+        let combined = store
+            .list_tool_logs(None, Some("s1 -os:status"), None, 50, None)
+            .unwrap();
+        assert_eq!(combined.len(), 1);
+        assert_eq!(combined[0].id, id2);
 
         assert_eq!(store.clear_tool_logs().unwrap(), 2);
         assert!(
