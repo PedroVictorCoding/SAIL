@@ -1894,7 +1894,7 @@ function renderEvaluation(report) {
 // -----------------------------------------------------------------------------
 // Tabs Setup (Round 11)
 // -----------------------------------------------------------------------------
-const TABS = ["today", "holdings", "income", "forecasts", "research", "data"];
+const TABS = ["today", "signals", "holdings", "income", "forecasts", "research", "data"];
 const TAB_STORAGE_KEY = "sail_capital_active_tab";
 
 function getActiveTab() {
@@ -2320,6 +2320,7 @@ async function loadPolicy() {
       setVal("cpLimitTradeCost", l.trade_cost_bps);
       setVal("cpLimitFxCost", l.fx_cost_bps);
       setVal("cpLimitRiskAversion", l.risk_aversion);
+      setVal("cpLimitRiskPerTrade", l.risk_per_trade_pct !== undefined ? l.risk_per_trade_pct : "0.5");
 
       const isConfirmed = current.status === "confirmed";
       badge.textContent = isConfirmed ? "Confirmed" : "Draft";
@@ -2371,6 +2372,7 @@ async function savePolicy(confirm) {
     trade_cost_bps: (document.getElementById("cpLimitTradeCost")?.value || "").trim(),
     fx_cost_bps: (document.getElementById("cpLimitFxCost")?.value || "").trim(),
     risk_aversion: (document.getElementById("cpLimitRiskAversion")?.value || "").trim(),
+    risk_per_trade_pct: (document.getElementById("cpLimitRiskPerTrade")?.value || "0.5").trim(),
   };
 
   try {
@@ -3155,10 +3157,677 @@ function setupModelsControls() {
   });
 }
 
+// -----------------------------------------------------------------------------
+// Round 13: Trade Signals, Holding Guards & Universe Watchlist
+// -----------------------------------------------------------------------------
+
+let latestTradeSignals = null;
+let latestHoldingGuards = null;
+let latestWatchlist = null;
+
+function formatSetupName(setup) {
+  switch (setup) {
+    case "trend_pullback":
+    case "TrendPullback":
+      return "Trend Pullback";
+    case "squeeze_breakout":
+    case "SqueezeBreakout":
+      return "Squeeze Breakout";
+    case "donchian55":
+    case "Donchian55":
+      return "Donchian 55";
+    case "bollinger_reversion":
+    case "BollingerReversion":
+      return "Bollinger Reversion";
+    case "inside_bar_break":
+    case "InsideBarBreak":
+      return "Inside Bar Break";
+    case "three_day_reversal":
+    case "ThreeDayReversal":
+      return "3-Day Reversal";
+    default:
+      return setup ? String(setup).replace(/([A-Z])/g, " $1").replace(/_/g, " ").trim() : "—";
+  }
+}
+
+function formatTradePrice(val) {
+  if (val === null || val === undefined || isNaN(val)) return "—";
+  const num = Number(val);
+  const abs = Math.abs(num);
+  if (abs === 0) return "0.00";
+  if (abs < 0.001) return num.toFixed(6);
+  if (abs < 10) {
+    const s = String(num);
+    if (s.includes(".") && s.split(".")[1].length > 2) {
+      return num.toFixed(Math.min(5, s.split(".")[1].length));
+    }
+  }
+  return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+}
+
+function formatDistPct(targetPrice, entryMid) {
+  if (!entryMid || !targetPrice) return "0.0";
+  const pct = ((targetPrice - entryMid) / entryMid) * 100;
+  return (pct >= 0 ? "+" : "") + pct.toFixed(1);
+}
+
+function formatCardSize(size, riskPct) {
+  const rPct = (riskPct !== undefined && riskPct !== null ? Number(riskPct) : 0.5).toFixed(1);
+  if (size && Array.isArray(size) && size.length >= 2) {
+    const units = Number(size[0]).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    const value = formatMoney(size[1]);
+    return `${units} units (${value}) at ${rPct}% risk`;
+  }
+  return `At ${rPct}% risk to stop (account size pending)`;
+}
+
+function formatEvidenceLine(verdict) {
+  if (!verdict) return "No evidence record available.";
+  const sel = verdict.selection || {};
+  const hold = verdict.holdout || {};
+
+  const hitPct = ((sel.hit_target1 || 0) * 100).toFixed(0);
+  const trades = sel.trades || 0;
+  const ciMin = Array.isArray(sel.hit_target1_ci) ? (sel.hit_target1_ci[0] * 100).toFixed(0) : "0";
+  const ciMax = Array.isArray(sel.hit_target1_ci) ? (sel.hit_target1_ci[1] * 100).toFixed(0) : "0";
+
+  const expR = Number(sel.expectancy_r || 0);
+  const expRStr = (expR >= 0 ? "+" : "") + expR.toFixed(2);
+
+  const expFrom = Array.isArray(sel.expectancy_ci) ? Number(sel.expectancy_ci[0] || 0) : 0;
+  const expFromStr = (expFrom >= 0 ? "+" : "") + expFrom.toFixed(2);
+
+  const holdR = Number(hold.expectancy_r || 0);
+  const holdRStr = (holdR >= 0 ? "+" : "") + holdR.toFixed(2);
+  const holdTrades = hold.trades || 0;
+
+  return `Reached target 1 in ${hitPct}% of ${trades} past trades (95%: ${ciMin}–${ciMax}%) · ${expRStr}R a trade after costs (from ${expFromStr}R) · holdout ${holdRStr}R over ${holdTrades}`;
+}
+
+function renderMiniSvgChart(card, closes) {
+  const width = 340;
+  const height = 120;
+  const padTop = 18;
+  const padBottom = 22;
+  const padLeft = 8;
+  const padRight = 50;
+
+  const entryLow = Math.min(card.entry_zone[0], card.entry_zone[1]);
+  const entryHigh = Math.max(card.entry_zone[0], card.entry_zone[1]);
+  const entryMid = (entryLow + entryHigh) / 2;
+
+  let allPrices = [entryLow, entryHigh, card.stop, ...card.targets];
+  if (Array.isArray(closes) && closes.length > 0) {
+    allPrices = allPrices.concat(closes);
+  }
+
+  let minP = Math.min(...allPrices);
+  let maxP = Math.max(...allPrices);
+  const range = maxP - minP || 1;
+  minP -= range * 0.08;
+  maxP += range * 0.08;
+
+  const y = (p) => {
+    return padTop + (1 - (p - minP) / (maxP - minP)) * (height - padTop - padBottom);
+  };
+
+  const yEntryLow = y(entryLow);
+  const yEntryHigh = y(entryHigh);
+  const yEntryMid = y(entryMid);
+  const yStop = y(card.stop);
+  const yT1 = y(card.targets[0]);
+  const yT2 = y(card.targets[1]);
+  const yT3 = y(card.targets[2]);
+
+  let svg = `<svg class="cp-sparkline-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Signal price levels for ${card.symbol}">`;
+
+  // Entry zone shaded band
+  const topY = Math.min(yEntryLow, yEntryHigh);
+  const bandHeight = Math.max(Math.abs(yEntryLow - yEntryHigh), 2);
+  svg += `<rect x="${padLeft}" y="${topY.toFixed(1)}" width="${width - padLeft - padRight}" height="${bandHeight.toFixed(1)}" fill="rgba(255, 255, 255, 0.08)" rx="2" />`;
+
+  // Horizontal guide lines & labels
+  // Stop Loss line (red)
+  svg += `<line x1="${padLeft}" y1="${yStop.toFixed(1)}" x2="${width - padRight}" y2="${yStop.toFixed(1)}" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="3,3" />`;
+  svg += `<text x="${width - padRight + 4}" y="${(yStop + 3.5).toFixed(1)}" fill="#ef4444" font-size="9" font-family="monospace">SL</text>`;
+
+  // Entry line (neutral)
+  svg += `<line x1="${padLeft}" y1="${yEntryMid.toFixed(1)}" x2="${width - padRight}" y2="${yEntryMid.toFixed(1)}" stroke="rgba(255,255,255,0.4)" stroke-width="1" stroke-dasharray="2,2" />`;
+  svg += `<text x="${width - padRight + 4}" y="${(yEntryMid + 3.5).toFixed(1)}" fill="rgba(255,255,255,0.6)" font-size="9" font-family="monospace">Entry</text>`;
+
+  // Targets (green)
+  svg += `<line x1="${padLeft}" y1="${yT1.toFixed(1)}" x2="${width - padRight}" y2="${yT1.toFixed(1)}" stroke="#22c55e" stroke-width="1" stroke-dasharray="2,2" opacity="0.8" />`;
+  svg += `<text x="${width - padRight + 4}" y="${(yT1 + 3.5).toFixed(1)}" fill="#22c55e" font-size="9" font-family="monospace">TP1</text>`;
+
+  svg += `<line x1="${padLeft}" y1="${yT2.toFixed(1)}" x2="${width - padRight}" y2="${yT2.toFixed(1)}" stroke="#22c55e" stroke-width="1" stroke-dasharray="2,2" opacity="0.6" />`;
+  svg += `<text x="${width - padRight + 4}" y="${(yT2 + 3.5).toFixed(1)}" fill="#22c55e" font-size="9" font-family="monospace">TP2</text>`;
+
+  svg += `<line x1="${padLeft}" y1="${yT3.toFixed(1)}" x2="${width - padRight}" y2="${yT3.toFixed(1)}" stroke="#22c55e" stroke-width="1" stroke-dasharray="2,2" opacity="0.4" />`;
+  svg += `<text x="${width - padRight + 4}" y="${(yT3 + 3.5).toFixed(1)}" fill="#22c55e" font-size="9" font-family="monospace">TP3</text>`;
+
+  // Price closes path if available
+  if (Array.isArray(closes) && closes.length > 1) {
+    const xStep = (width - padLeft - padRight) / (closes.length - 1);
+    let pathD = "";
+    closes.forEach((c, idx) => {
+      const cx = padLeft + idx * xStep;
+      const cy = y(c);
+      pathD += (idx === 0 ? "M" : " L") + `${cx.toFixed(1)},${cy.toFixed(1)}`;
+    });
+    svg += `<path d="${pathD}" fill="none" stroke="#60a5fa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />`;
+    const lastX = padLeft + (closes.length - 1) * xStep;
+    const lastY = y(closes[closes.length - 1]);
+    svg += `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="3" fill="#60a5fa" stroke="#0f172a" stroke-width="1" />`;
+  }
+
+  svg += `</svg>`;
+  return svg;
+}
+
+async function loadTradeSignals() {
+  const cardsGrid = document.getElementById("cpSignalsCardsGrid");
+  const emptyWrap = document.getElementById("cpSignalsEmpty");
+  const metaSpan = document.getElementById("cpSignalsSessionMeta");
+  const scoreboardBody = document.getElementById("cpScoreboardBody");
+  const scoreboardBadge = document.getElementById("cpScoreboardCountBadge");
+  const scoreboardContent = document.getElementById("cpScoreboardContent");
+
+  if (!cardsGrid) return;
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const res = await fetchJson(`/api/capital/signals/trade${query}`);
+    latestTradeSignals = res;
+
+    const sessionDate = res.session && res.session !== "1970-01-01" ? formatDate(res.session) : "—";
+    const lastRun = res.run_at ? formatDate(res.run_at) : (res.session ? formatDate(res.session) : "—");
+    if (metaSpan) {
+      metaSpan.textContent = `Session: ${sessionDate} · Last run: ${lastRun}`;
+    }
+
+    const cards = Array.isArray(res.cards) ? res.cards : [];
+    if (cards.length === 0) {
+      cardsGrid.innerHTML = "";
+      if (emptyWrap) emptyWrap.hidden = false;
+      // When empty: expand scoreboard below empty state
+      if (scoreboardContent) {
+        scoreboardContent.hidden = false;
+        const toggle = document.getElementById("cpScoreboardToggle");
+        if (toggle) toggle.setAttribute("aria-expanded", "true");
+        const chev = document.getElementById("cpScoreboardChevron");
+        if (chev) chev.textContent = "▲";
+      }
+    } else {
+      if (emptyWrap) emptyWrap.hidden = true;
+      cardsGrid.innerHTML = cards.map(c => {
+        const entryLow = Math.min(c.entry_zone[0], c.entry_zone[1]);
+        const entryHigh = Math.max(c.entry_zone[0], c.entry_zone[1]);
+        const entryMid = (entryLow + entryHigh) / 2;
+        const sideClass = c.side === "long" ? "cp-side-long" : "cp-side-short";
+        const sideLabel = c.side === "long" ? "BUY / LONG" : "SELL / SHORT";
+
+        return `
+          <article class="cp-signal-card" id="card-${c.id}">
+            <header class="cp-card-head">
+              <div class="cp-card-symbol-line">
+                <span class="cp-card-symbol">${escapeHtml(c.symbol)}</span>
+                <span class="cp-side-badge ${sideClass}">${sideLabel}</span>
+                ${c.needs_cfd ? '<span class="cp-badge cp-badge-cfd" title="Trades as CFD with leverage & overnight financing">Needs CFD</span>' : ''}
+              </div>
+              <div class="cp-card-meta-line">
+                <span class="cp-setup-badge">${escapeHtml(formatSetupName(c.setup))}</span>
+                <span class="cp-class-badge">${escapeHtml((c.class || "").toUpperCase())}</span>
+                <span class="cp-sessions-badge">Max ${c.max_sessions} sessions</span>
+              </div>
+            </header>
+
+            <div class="cp-card-levels">
+              <div class="cp-level-row cp-level-entry">
+                <span class="cp-level-label">Entry zone</span>
+                <span class="cp-level-val">${formatTradePrice(entryLow)} – ${formatTradePrice(entryHigh)}</span>
+              </div>
+              <div class="cp-level-row cp-level-stop">
+                <span class="cp-level-label">Stop loss</span>
+                <span class="cp-level-val">${formatTradePrice(c.stop)} <span class="cp-level-dist">(${formatDistPct(c.stop, entryMid)}%)</span></span>
+              </div>
+              <div class="cp-level-targets">
+                <div class="cp-level-row cp-level-target">
+                  <span class="cp-level-label">Target 1 (1R)</span>
+                  <span class="cp-level-val">${formatTradePrice(c.targets[0])} <span class="cp-level-dist">(${formatDistPct(c.targets[0], entryMid)}%)</span></span>
+                </div>
+                <div class="cp-level-row cp-level-target">
+                  <span class="cp-level-label">Target 2 (2R)</span>
+                  <span class="cp-level-val">${formatTradePrice(c.targets[1])} <span class="cp-level-dist">(${formatDistPct(c.targets[1], entryMid)}%)</span></span>
+                </div>
+                <div class="cp-level-row cp-level-target">
+                  <span class="cp-level-label">Target 3 (3R)</span>
+                  <span class="cp-level-val">${formatTradePrice(c.targets[2])} <span class="cp-level-dist">(${formatDistPct(c.targets[2], entryMid)}%)</span></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="cp-card-size">
+              <span class="cp-size-label">Suggested size:</span>
+              <span class="cp-size-val">${formatCardSize(c.size, c.risk_pct)}</span>
+            </div>
+
+            <div class="cp-card-evidence">
+              <span class="cp-evidence-tag">Verified Record</span>
+              <p class="cp-evidence-line">${escapeHtml(formatEvidenceLine(c.verdict))}</p>
+            </div>
+
+            ${c.relation ? `<div class="cp-card-relation"><span class="cp-info-icon" aria-hidden="true">ℹ</span> ${escapeHtml(c.relation)}</div>` : ''}
+
+            ${c.warnings && c.warnings.length > 0 ? `
+              <div class="cp-card-warnings">
+                ${c.warnings.map(w => `<span class="cp-warning-pill">⚠ ${escapeHtml(w)}</span>`).join("")}
+              </div>` : ''}
+
+            <div class="cp-card-chart" id="chart-wrap-${c.id}">
+              ${renderMiniSvgChart(c, null)}
+            </div>
+          </article>
+        `;
+      }).join("");
+
+      // Asynchronously fetch price history to update each mini SVG chart
+      cards.forEach(c => {
+        fetchJson(`/api/capital/prices?symbol=${encodeURIComponent(c.symbol)}`)
+          .then(rows => {
+            if (Array.isArray(rows) && rows.length > 0) {
+              const closes = rows.slice(-60).map(r => r.close);
+              const wrap = document.getElementById(`chart-wrap-${c.id}`);
+              if (wrap) {
+                wrap.innerHTML = renderMiniSvgChart(c, closes);
+              }
+            }
+          })
+          .catch(() => {});
+      });
+    }
+
+    // Render Scoreboard
+    const sb = Array.isArray(res.scoreboard) ? res.scoreboard : [];
+    if (scoreboardBadge) scoreboardBadge.textContent = `${sb.length} setups evaluated`;
+    if (scoreboardBody) {
+      if (sb.length === 0) {
+        scoreboardBody.innerHTML = `<tr><td colspan="9" class="cp-empty">No scoreboard data available.</td></tr>`;
+      } else {
+        scoreboardBody.innerHTML = sb.map(v => {
+          const sel = v.selection || {};
+          const hold = v.holdout || {};
+          const hitT1 = ((sel.hit_target1 || 0) * 100).toFixed(0);
+          const ciT1Min = Array.isArray(sel.hit_target1_ci) ? (sel.hit_target1_ci[0] * 100).toFixed(0) : "0";
+          const ciT1Max = Array.isArray(sel.hit_target1_ci) ? (sel.hit_target1_ci[1] * 100).toFixed(0) : "0";
+
+          const expR = Number(sel.expectancy_r || 0);
+          const expCiMin = Array.isArray(sel.expectancy_ci) ? Number(sel.expectancy_ci[0] || 0) : 0;
+          const expCiMax = Array.isArray(sel.expectancy_ci) ? Number(sel.expectancy_ci[1] || 0) : 0;
+
+          const holdMean = Number(hold.expectancy_r || 0);
+
+          return `
+            <tr>
+              <td><strong>${escapeHtml(formatSetupName(sel.setup))}</strong></td>
+              <td><span class="cp-badge ${sel.side === "long" ? "cp-side-long" : "cp-side-short"}">${(sel.side || "").toUpperCase()}</span></td>
+              <td>${escapeHtml((v.group || "").toUpperCase())}</td>
+              <td class="num">${sel.trades || 0}</td>
+              <td class="num">${hitT1}% [${ciT1Min}–${ciT1Max}%]</td>
+              <td class="num">${expR >= 0 ? "+" : ""}${expR.toFixed(2)}R [${expCiMin >= 0 ? "+" : ""}${expCiMin.toFixed(2)}, ${expCiMax >= 0 ? "+" : ""}${expCiMax.toFixed(2)}]</td>
+              <td class="num">${holdMean >= 0 ? "+" : ""}${holdMean.toFixed(2)}R (${hold.trades || 0})</td>
+              <td class="num">${v.publishes ? '<span class="cp-publishes-yes">✓</span>' : '<span class="cp-publishes-no">—</span>'}</td>
+              <td class="cp-scoreboard-reason">${escapeHtml(v.reason || "—")}</td>
+            </tr>
+          `;
+        }).join("");
+      }
+    }
+  } catch (err) {
+    if (cardsGrid) {
+      cardsGrid.innerHTML = `<p class="cp-empty">Signals data unavailable (${escapeHtml(err.message)}).</p>`;
+    }
+  }
+}
+
+async function loadTradeRecord() {
+  const closedEl = document.getElementById("cpRecordTotalClosed");
+  const hitT1El = document.getElementById("cpRecordTotalHitT1");
+  const meanREl = document.getElementById("cpRecordTotalMeanR");
+  const cumREl = document.getElementById("cpRecordTotalCumR");
+  const tbody = document.getElementById("cpRecordBody");
+
+  if (!tbody) return;
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const res = await fetchJson(`/api/capital/signals/trade/record${query}`);
+
+    const totals = res.totals || {};
+    if (closedEl) closedEl.textContent = totals.closed !== undefined ? String(totals.closed) : "0";
+    if (hitT1El) {
+      hitT1El.textContent = totals.hit_target1 !== undefined ? `${(totals.hit_target1 * 100).toFixed(1)}%` : "—";
+    }
+    if (meanREl) {
+      const m = Number(totals.mean_r || 0);
+      meanREl.textContent = totals.mean_r !== undefined ? `${m >= 0 ? "+" : ""}${m.toFixed(2)}R` : "—";
+      meanREl.className = `cp-stat-val ${m >= 0 ? "cp-val-pos" : "cp-val-neg"}`;
+    }
+    if (cumREl) {
+      const c = Number(totals.cumulative_r || 0);
+      cumREl.textContent = totals.cumulative_r !== undefined ? `${c >= 0 ? "+" : ""}${c.toFixed(2)}R` : "—";
+      cumREl.className = `cp-stat-val ${c >= 0 ? "cp-val-pos" : "cp-val-neg"}`;
+    }
+
+    const cards = Array.isArray(res.cards) ? res.cards : [];
+    if (cards.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" class="cp-empty">No past signals recorded yet.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = cards.map(item => {
+      const c = item.card || {};
+      const status = item.status || "open";
+      const graded = item.graded;
+
+      let exitLabel = status;
+      if (status === "closed" && graded && graded.exit) {
+        exitLabel = graded.exit.toUpperCase();
+      }
+
+      let rDisplay = "—";
+      let rClass = "";
+      if (status === "closed" && graded && graded.r_multiple !== undefined) {
+        const r = Number(graded.r_multiple);
+        rDisplay = `${r >= 0 ? "+" : ""}${r.toFixed(2)}R`;
+        rClass = r >= 0 ? "cp-r-pos" : "cp-r-neg";
+      }
+
+      const sideBadge = c.side === "long" ? "cp-side-long" : "cp-side-short";
+
+      return `
+        <tr>
+          <td>${formatDate(c.signal_session)}</td>
+          <td><strong>${escapeHtml(c.symbol || "—")}</strong></td>
+          <td><span class="cp-badge ${sideBadge}">${(c.side || "").toUpperCase()}</span></td>
+          <td><span class="cp-badge cp-badge-${status}">${escapeHtml(exitLabel)}</span></td>
+          <td class="num ${rClass}"><strong>${rDisplay}</strong></td>
+        </tr>
+      `;
+    }).join("");
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="cp-empty">Record data unavailable (${escapeHtml(err.message)}).</td></tr>`;
+  }
+}
+
+async function loadHoldingGuards() {
+  const tbody = document.getElementById("cpGuardsBody");
+  if (!tbody) return;
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const guards = await fetchJson(`/api/capital/signals/trade/guards${query}`);
+    latestHoldingGuards = guards;
+
+    if (!Array.isArray(guards) || guards.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8" class="cp-empty">No held positions to guard.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = guards.map(g => {
+      const dist = Number(g.stop_distance_pct || 0);
+      const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(1)}%`;
+
+      const statusBadge = g.stop_hit
+        ? `<span class="cp-badge cp-badge-stop-hit">trend stop hit</span>`
+        : `<span class="cp-badge cp-badge-ok">Holding</span>`;
+
+      let trendStr = "—";
+      if (g.above_200d === true) {
+        trendStr = `<span class="cp-trend-above">Above 200d</span>`;
+      } else if (g.above_200d === false) {
+        trendStr = `<span class="cp-trend-below">Below 200d</span>`;
+      }
+
+      const earningsStr = g.next_earnings ? formatDate(g.next_earnings) : "—";
+
+      let activeSignalLink = "—";
+      if (latestTradeSignals && Array.isArray(latestTradeSignals.cards)) {
+        const match = latestTradeSignals.cards.find(c => c.symbol === g.symbol || c.key === g.key);
+        if (match) {
+          activeSignalLink = `<button type="button" class="cp-link-btn cp-guard-card-link" data-card-id="${escapeHtml(match.id)}">${match.side.toUpperCase()} ${escapeHtml(formatSetupName(match.setup))} →</button>`;
+        }
+      }
+
+      return `
+        <tr>
+          <td><strong>${escapeHtml(g.symbol)}</strong></td>
+          <td class="num">${formatTradePrice(g.close)}</td>
+          <td class="num">${formatTradePrice(g.trailing_stop)}</td>
+          <td class="num ${g.stop_hit ? "cp-dist-alert" : ""}">${distStr}</td>
+          <td>${statusBadge}</td>
+          <td>${trendStr}</td>
+          <td>${earningsStr}</td>
+          <td>${activeSignalLink}</td>
+        </tr>
+      `;
+    }).join("");
+
+    // Hook up active card links
+    tbody.querySelectorAll(".cp-guard-card-link").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const cardId = btn.getAttribute("data-card-id");
+        switchTab("signals", true);
+        setTimeout(() => {
+          const cardEl = document.getElementById(`card-${cardId}`);
+          if (cardEl) {
+            cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
+            cardEl.classList.add("cp-card-highlight");
+            setTimeout(() => cardEl.classList.remove("cp-card-highlight"), 2500);
+          }
+        }, 80);
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="8" class="cp-empty">Holding guards unavailable (${escapeHtml(err.message)}).</td></tr>`;
+  }
+}
+
+async function loadWatchlist() {
+  const tbody = document.getElementById("cpWatchlistBody");
+  if (!tbody) return;
+
+  try {
+    const list = await fetchJson("/api/capital/universe/watchlist");
+    latestWatchlist = list;
+
+    if (!Array.isArray(list) || list.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">Watchlist is empty.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = list.map(item => `
+      <tr>
+        <td><strong>${escapeHtml(item.symbol)}</strong></td>
+        <td><code>${escapeHtml(item.yahoo)}</code></td>
+        <td><span class="cp-class-badge">${escapeHtml((item.class || "").toUpperCase())}</span></td>
+        <td>${escapeHtml(item.currency)}</td>
+        <td>${escapeHtml(item.name)}</td>
+        <td class="num">
+          <button type="button" class="cp-button cp-button-sm cp-watch-remove-btn" data-symbol="${escapeHtml(item.symbol)}">Remove</button>
+        </td>
+      </tr>
+    `).join("");
+
+    tbody.querySelectorAll(".cp-watch-remove-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const symbol = btn.getAttribute("data-symbol");
+        btn.disabled = true;
+        btn.textContent = "Removing…";
+        try {
+          await fetchJson("/api/capital/universe/watchlist", {
+            method: "POST",
+            body: JSON.stringify({ op: "remove", symbol }),
+          });
+          showBanner(`Removed ${symbol} from watchlist.`);
+          await loadWatchlist();
+        } catch (err) {
+          showBanner(`Failed to remove ${symbol}: ${err.message}`, true);
+          btn.disabled = false;
+          btn.textContent = "Remove";
+        }
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">Watchlist unavailable (${escapeHtml(err.message)}).</td></tr>`;
+  }
+}
+
+function setupWatchlistControls() {
+  const form = document.getElementById("cpWatchlistAddForm");
+  const errBox = document.getElementById("cpWatchlistError");
+  if (!form) return;
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (errBox) {
+      errBox.hidden = true;
+      errBox.textContent = "";
+    }
+
+    const symbol = (document.getElementById("cpWatchSymbol")?.value || "").trim().toUpperCase();
+    const yahoo = (document.getElementById("cpWatchYahoo")?.value || "").trim();
+    const assetClass = (document.getElementById("cpWatchClass")?.value || "stock").toLowerCase();
+    const currency = (document.getElementById("cpWatchCurrency")?.value || "").trim().toUpperCase();
+    const name = (document.getElementById("cpWatchName")?.value || "").trim();
+
+    // Client-side validation per universe/mod.rs
+    const symbolRegex = /^[A-Za-z0-9._-]+$/;
+    const yahooRegex = /^[A-Za-z0-9._\-=^]+$/;
+
+    if (!symbol || symbol.length > 24 || !symbolRegex.test(symbol)) {
+      if (errBox) {
+        errBox.hidden = false;
+        errBox.textContent = "The XTB symbol may use letters, digits and . _ - only (max 24 chars).";
+      }
+      return;
+    }
+
+    if (!yahoo || yahoo.length > 24 || !yahooRegex.test(yahoo)) {
+      if (errBox) {
+        errBox.hidden = false;
+        errBox.textContent = "The Yahoo symbol may use letters, digits and . _ - = ^ only (max 24 chars).";
+      }
+      return;
+    }
+
+    if (!currency || currency.length !== 3 || !/^[A-Za-z]{3}$/.test(currency)) {
+      if (errBox) {
+        errBox.hidden = false;
+        errBox.textContent = "The currency must be a three-letter code.";
+      }
+      return;
+    }
+
+    if (name.length > 80) {
+      if (errBox) {
+        errBox.hidden = false;
+        errBox.textContent = "The name is too long (max 80 chars).";
+      }
+      return;
+    }
+
+    const addBtn = document.getElementById("cpWatchAddBtn");
+    if (addBtn) {
+      addBtn.disabled = true;
+      addBtn.textContent = "Adding…";
+    }
+
+    try {
+      await fetchJson("/api/capital/universe/watchlist", {
+        method: "POST",
+        body: JSON.stringify({
+          op: "add",
+          item: {
+            symbol,
+            yahoo,
+            class: assetClass,
+            currency,
+            name: name || symbol,
+          },
+        }),
+      });
+
+      showBanner(`Added ${symbol} to watchlist.`);
+      form.reset();
+      await loadWatchlist();
+    } catch (err) {
+      if (errBox) {
+        errBox.hidden = false;
+        errBox.textContent = err.message || "Failed to add watchlist item.";
+      } else {
+        showBanner(`Watchlist error: ${err.message}`, true);
+      }
+    } finally {
+      if (addBtn) {
+        addBtn.disabled = false;
+        addBtn.textContent = "Add to Watchlist";
+      }
+    }
+  });
+}
+
+function setupSignalsControls() {
+  const runBtn = document.getElementById("cpSignalsRunBtn");
+  if (runBtn) {
+    runBtn.addEventListener("click", async () => {
+      runBtn.disabled = true;
+      runBtn.textContent = "Computing signals…";
+      setState("busy", "Running daily trade signals…");
+      try {
+        const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+        const res = await fetchJson(`/api/capital/signals/trade/run${query}`, { method: "POST" });
+        showBanner(`Signals computed for session ${res.session || "today"}.`);
+        await loadTradeSignals();
+        await loadTradeRecord();
+        await loadHoldingGuards();
+      } catch (err) {
+        showBanner(`Signals run failed: ${err.message}`, true);
+      } finally {
+        runBtn.disabled = false;
+        runBtn.textContent = "Run now";
+        setState("idle", "Ready");
+      }
+    });
+  }
+
+  const toggle = document.getElementById("cpScoreboardToggle");
+  const content = document.getElementById("cpScoreboardContent");
+  const chevron = document.getElementById("cpScoreboardChevron");
+  if (toggle && content) {
+    const handleToggle = () => {
+      const isExpanded = !content.hidden;
+      content.hidden = isExpanded;
+      toggle.setAttribute("aria-expanded", String(!isExpanded));
+      if (chevron) chevron.textContent = isExpanded ? "▼" : "▲";
+    };
+    toggle.addEventListener("click", handleToggle);
+    toggle.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        handleToggle();
+      }
+    });
+  }
+}
+
 async function loadAll() {
   await loadPortfolio();
   await loadToday();
   await loadPolicy();
+  await loadTradeSignals();
+  await loadTradeRecord();
+  await loadHoldingGuards();
+  await loadWatchlist();
   await loadSignals();
   await loadInsights();
   await loadGrants();
@@ -3176,6 +3845,8 @@ async function loadAll() {
 document.addEventListener("DOMContentLoaded", () => {
   setupTabs();
   setupCollapsibles();
+  setupSignalsControls();
+  setupWatchlistControls();
   setupUploadDialog();
   setupGrantDialog();
   setupPriceControls();
