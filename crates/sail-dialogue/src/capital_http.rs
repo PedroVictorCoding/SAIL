@@ -878,6 +878,7 @@ struct ProjectionQuery {
     years: Option<u32>,
     reinvest_pct: Option<f64>,
     allocation: Option<sail_capital::dividends::Allocation>,
+    top_n: Option<u32>,
     reserve_pt_tax: Option<bool>,
 }
 
@@ -889,12 +890,13 @@ async fn dividend_projection(
     authorize(&s, &h)?;
     let outlook = blocking(&s, move |svc| {
         let account = svc.resolve_account(q.account.as_deref())?;
-        svc.dividend_projection(
+        svc.dividend_projection_with(
             &account,
             q.years.unwrap_or(10),
             q.reinvest_pct.unwrap_or(100.0),
             q.allocation
                 .unwrap_or(sail_capital::dividends::Allocation::Proportional),
+            q.top_n.unwrap_or(sail_capital::dividends::DEFAULT_TOP_N),
             q.reserve_pt_tax.unwrap_or(false),
         )
     })
@@ -916,4 +918,24 @@ async fn dividend_refresh(
         .await
         .map_err(failure)?;
     Ok(no_store(to_json(&result)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProjectionQuery;
+    use sail_capital::dividends::Allocation;
+
+    #[test]
+    fn projection_query_parses_the_new_allocations_and_top_n() {
+        let query: ProjectionQuery =
+            serde_json::from_value(serde_json::json!({"allocation": "top_value", "top_n": 7}))
+                .unwrap();
+        assert_eq!(query.allocation, Some(Allocation::TopValue));
+        assert_eq!(query.top_n, Some(7));
+
+        let query: ProjectionQuery =
+            serde_json::from_value(serde_json::json!({"allocation": "underweight"})).unwrap();
+        assert_eq!(query.allocation, Some(Allocation::Underweight));
+        assert_eq!(query.top_n, None);
+    }
 }
