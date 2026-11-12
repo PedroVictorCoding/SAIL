@@ -48,6 +48,7 @@ fn holding(symbol: &str, units: f64, price: f64, history: Vec<Payment>) -> Holdi
         history,
         withholding: 0.0,
         withholding_source: "default".to_string(),
+        price_growth: None,
     }
 }
 
@@ -343,5 +344,49 @@ fn notes_state_the_assumptions_and_any_cut() {
         cut.notes
             .iter()
             .any(|note| note.contains("no payment after a paying year"))
+    );
+}
+
+#[test]
+fn a_high_yield_fund_with_a_falling_price_cannot_compound_at_its_headline_yield() {
+    // 90% yield on today's price, paid once a year; the price trends down 40% a year.
+    let mut fund = annual_payer("HIGH", 100.0, 10.0, 9.0);
+    fund.price_growth = Some(-0.4);
+    let outlook = project(
+        &[fund],
+        &settings(10, 100.0, Allocation::SameHolding, false),
+        None,
+    );
+    let base = scenario(&outlook, Scenario::Base);
+    // Total return is capped at 8%: the price falls at least 90% − 8% = 82% a year, so
+    // units grow ×1.9 while the payout per unit falls ×0.18, and income shrinks.
+    let ratio = base.years[9].net / base.years[0].net;
+    assert!(ratio < 1.0, "{ratio}");
+    // Its value after ten years can't exceed an 8% a year total return.
+    assert!(
+        base.years[9].value <= 1000.0 * 1.08f64.powi(10) * 1.01,
+        "{}",
+        base.years[9].value
+    );
+    assert!(outlook.notes.iter().any(|n| n.contains("HIGH yields 90%")));
+
+    // A normal payer with a measured price trend keeps growing its payout on its own.
+    let mut normal = annual_payer("NORM", 100.0, 10.0, 0.5);
+    normal.price_growth = Some(0.05);
+    let outlook = project(
+        &[normal],
+        &settings(5, 0.0, Allocation::SameHolding, false),
+        None,
+    );
+    let base = scenario(&outlook, Scenario::Base);
+    assert_close(
+        base.years[4].net,
+        base.years[0].net,
+        "flat payout at 0% growth",
+    );
+    assert_close(
+        base.years[4].value,
+        100.0 * 10.0 * 1.05f64.powf(5.0),
+        "value follows the price trend",
     );
 }

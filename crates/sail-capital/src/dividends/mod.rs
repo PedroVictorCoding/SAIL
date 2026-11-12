@@ -25,8 +25,10 @@
 //! scenarios use `g − σ`, `g` and `g + σ` (per holding, with the same caps). They are
 //! scenarios, not a probability band, and the page says so.
 //!
-//! **Prices.** The share price grows at the holding's dividend growth, so its yield stays
-//! where it is now. The reinvestment price for month `m` is
+//! **Prices.** When the service measured a price trend (`Holding::price_growth`), the
+//! price follows it; otherwise it grows at the holding's dividend growth, so its yield
+//! stays where it is now. A holding yielding more than [`HIGH_YIELD`] pays a constant
+//! share of its *current* price, so its payout falls when its price falls. The reinvestment price for month `m` is
 //! `price₀ · (1 + g)^(m/12)`. Prices are the instrument's trading currency, converted
 //! with today's FX rate, held constant.
 //!
@@ -108,7 +110,21 @@ pub struct Holding {
     pub withholding: f64,
     /// Where `withholding` came from: "observed" or "default".
     pub withholding_source: String,
+    /// Annual price trend measured from stored prices (shrunk and capped by the
+    /// service), or `None` to keep the yield constant (the price grows with dividends).
+    #[serde(default)]
+    pub price_growth: Option<f64>,
 }
+
+/// Trailing yield above which a holding is treated as paying out of its price (option-
+/// income and similar funds): its payout per share follows its price instead of growing
+/// on its own, so reinvesting it can't compound at its headline yield.
+pub const HIGH_YIELD: f64 = 0.12;
+
+/// The most total return (price trend plus yield) a high-yield holding is assumed to
+/// earn a year. Its price is assumed to fall at least by `yield − this` a year, so a
+/// fund paying out of its capital can't compound at its headline yield.
+pub const HIGH_YIELD_TOTAL_RETURN: f64 = 0.08;
 
 /// Growth estimate for one holding.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

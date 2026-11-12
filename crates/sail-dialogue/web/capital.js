@@ -4278,7 +4278,7 @@ function renderProjHoldingsTable(data) {
       return `
         <tr>
           <td><strong>${escapeHtml(h.symbol)}</strong></td>
-          <td class="num">${formatProjMoney(growth.ttm_per_share)}</td>
+          <td class="num" title="Per share, in the listing's own currency">${Number(growth.ttm_per_share || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
           <td class="num">${gPct} ${growthSub}</td>
           <td>${withStr}</td>
           <td class="num">${formatProjMoney(h.first_year_net)}</td>

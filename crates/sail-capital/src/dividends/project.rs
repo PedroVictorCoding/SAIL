@@ -193,10 +193,7 @@ fn simulate(
     for month_index in 0..months_total {
         let elapsed = month_index as f64 / 12.0;
         let month_of_year = (settings.start.month0() + month_index) % 12 + 1;
-        let prices: Vec<f64> = sims
-            .iter()
-            .map(|sim| sim.holding.price * (1.0 + sim.g).powf(elapsed))
-            .collect();
+        let prices: Vec<f64> = sims.iter().map(|sim| price_at(sim, elapsed)).collect();
 
         let mut month = Totals::default();
         let mut reinvested: Vec<f64> = vec![0.0; sims.len()];
@@ -206,7 +203,12 @@ fn simulate(
                 continue;
             }
             let per_share = sim.growth.ttm_per_share / sim.growth.months.len() as f64
-                * (1.0 + sim.g).powf(elapsed);
+                * if high_yield(sim) {
+                    // Pays a constant share of its current price.
+                    price_at(sim, elapsed) / sim.holding.price
+                } else {
+                    (1.0 + sim.g).powf(elapsed)
+                };
             let gross = sim.units * per_share * sim.holding.fx;
             let withheld = gross * sim.holding.withholding.clamp(0.0, 1.0);
             let pt_tax = if settings.reserve_pt_tax {
@@ -224,7 +226,7 @@ fn simulate(
             month.pt_tax += pt_tax;
             month.net += net;
             month.reinvested += amount;
-            month.cash += net - amount;
+            month.cash += (net - amount).max(0.0);
         }
 
         if pct > 0.0 {
@@ -253,10 +255,7 @@ fn simulate(
             let value: f64 = sims
                 .iter()
                 .filter(|sim| sim.scheduled)
-                .map(|sim| {
-                    let price = sim.holding.price * (1.0 + sim.g).powf(end_elapsed);
-                    sim.units * price * sim.holding.fx
-                })
+                .map(|sim| sim.units * price_at(sim, end_elapsed) * sim.holding.fx)
                 .sum();
             let yield_on_cost = config
                 .original_cost
@@ -307,6 +306,24 @@ fn simulate(
         },
         stats,
     )
+}
+
+/// The price after `elapsed` years: the measured trend when known, else the dividend
+/// growth (constant yield).
+fn price_at(sim: &SimHolding<'_>, elapsed: f64) -> f64 {
+    let mut g = sim.holding.price_growth.unwrap_or(sim.g);
+    if high_yield(sim) {
+        let ttm_yield = sim.growth.ttm_per_share / sim.holding.price;
+        g = g
+            .min(-(ttm_yield - super::HIGH_YIELD_TOTAL_RETURN))
+            .max(-0.9);
+    }
+    sim.holding.price * (1.0 + g).powf(elapsed)
+}
+
+/// Yields more than [`super::HIGH_YIELD`] on today's price.
+fn high_yield(sim: &SimHolding<'_>) -> bool {
+    sim.holding.price > 0.0 && sim.growth.ttm_per_share / sim.holding.price > super::HIGH_YIELD
 }
 
 /// Buys units with the month's reinvestment.
@@ -384,7 +401,7 @@ fn notes(holdings: &[Holding], growths: &[Growth], settings: &Settings) -> Vec<S
             .to_string(),
         "Scenarios are not probabilities: the low and high cases shift each holding's growth by its own payout volatility."
             .to_string(),
-        "Prices grow with each holding's projected dividend growth, so the starting yield is held constant."
+        "Prices follow each holding's own price trend over the last three years (shrunk toward zero); without one, they grow with its dividends so the yield stays constant."
             .to_string(),
         "FX is held at today's rate for the whole projection.".to_string(),
         "Withholding is the rate observed in the ledger over the last 24 months where available, otherwise a default by listing country."
@@ -406,6 +423,15 @@ fn notes(holdings: &[Holding], growths: &[Growth], settings: &Settings) -> Vec<S
         );
     }
     for (holding, growth) in holdings.iter().zip(growths) {
+        if holding.price > 0.0 && growth.ttm_per_share / holding.price > super::HIGH_YIELD {
+            notes.push(format!(
+                "{} yields {:.0}% on today's price, so its payout is assumed to follow its price, and its price to fall by at least {:.0}% a year (total return capped at {:.0}%).",
+                holding.symbol,
+                growth.ttm_per_share / holding.price * 100.0,
+                (growth.ttm_per_share / holding.price - super::HIGH_YIELD_TOTAL_RETURN) * 100.0,
+                super::HIGH_YIELD_TOTAL_RETURN * 100.0
+            ));
+        }
         if cut(growth) {
             notes.push(format!(
                 "{} had a year with no payment after a paying year, so its base growth is capped at {:.0}%.",

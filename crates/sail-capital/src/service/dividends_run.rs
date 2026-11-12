@@ -233,8 +233,31 @@ impl CapitalService {
                 )
             };
 
-            // Calibration: compare the history's trailing year with what was received.
-            let history = calibrate(&symbol, &history, &mine, units, fx, now, &mut notes);
+            // Calibration: each receipt against the payment it came from, using the units
+            // held on the payment date (positions change through the year).
+            let mut receipts = Vec::new();
+            for d in &mine {
+                let as_of = AsOf {
+                    occurred_by: d.paid.at,
+                    known_by: now,
+                };
+                let held_then = self
+                    .portfolio(account, as_of)?
+                    .positions
+                    .iter()
+                    .find(|p| p.instrument.key() == key)
+                    .and_then(|p| p.quantity.to_f64())
+                    .unwrap_or(0.0);
+                if let Some(g) = d.gross.amount.to_f64() {
+                    receipts.push(Receipt {
+                        paid: d.paid.at.date_naive(),
+                        gross: g,
+                        units: held_then,
+                    });
+                }
+            }
+            let history = calibrate(&symbol, &history, &receipts, fx, &mut notes);
+            let price_growth = price_trend(&observations);
 
             match position.cost_basis.as_ref().and_then(|m| m.amount.to_f64()) {
                 Some(c) => cost += c.abs(),
@@ -249,6 +272,7 @@ impl CapitalService {
                 history,
                 withholding,
                 withholding_source: source,
+                price_growth,
             });
         }
         Ok((holdings, (cost_known && cost > 0.0).then_some(cost), notes))
@@ -277,49 +301,84 @@ impl CapitalService {
     }
 }
 
-/// Scales a per-share history to what the ledger received in the last 365 days when the
-/// two disagree by more than [`CALIBRATION_TOLERANCE`] (e.g. Yahoo quoting a fund's
-/// payout in its base currency rather than the listing's). Holdings bought during the
-/// year make the ledger lower, so only a gross mismatch triggers it.
+/// One dividend the ledger received, with the units held when it was paid.
+struct Receipt {
+    paid: NaiveDate,
+    gross: f64,
+    units: f64,
+}
+
+/// Scales a per-share history when it disagrees with what was actually received, e.g.
+/// Yahoo quoting a fund's payout in its base currency rather than the listing's. Each
+/// receipt is matched to the latest published payment with an ex-date in the 75 days
+/// before it, and compared using the units held on the payment date. The history is
+/// scaled by the median ratio only when that median is outside
+/// [`CALIBRATION_TOLERANCE`] and the ratios agree with each other (all within a factor
+/// of 1.5 of the median), so a one-off special payment doesn't trigger it.
 fn calibrate(
     symbol: &str,
     history: &[Payment],
-    received: &[&crate::ledger::DividendView],
-    units: f64,
+    receipts: &[Receipt],
     fx: f64,
-    now: DateTime<Utc>,
     notes: &mut Vec<String>,
 ) -> Vec<Payment> {
-    let year_ago = now.date_naive() - Duration::days(365);
-    let history_ttm: f64 = history
-        .iter()
-        .filter(|p| p.ex_date > year_ago)
-        .map(|p| p.per_share)
-        .sum();
-    let ledger_ttm: f64 = received
-        .iter()
-        .filter(|d| d.paid.at.date_naive() > year_ago)
-        .filter_map(|d| d.gross.amount.to_f64())
-        .sum();
-    if history_ttm <= 0.0 || ledger_ttm <= 0.0 || units <= 0.0 || fx <= 0.0 {
+    if fx <= 0.0 {
         return history.to_vec();
     }
-    let implied = history_ttm * units * fx;
-    let ratio = ledger_ttm / implied;
-    if (1.0 / CALIBRATION_TOLERANCE..=CALIBRATION_TOLERANCE).contains(&ratio) {
+    let mut ratios: Vec<f64> = receipts
+        .iter()
+        .filter(|r| r.units > 0.0 && r.gross > 0.0)
+        .filter_map(|r| {
+            let matched = history
+                .iter()
+                .filter(|p| p.ex_date <= r.paid && (r.paid - p.ex_date).num_days() <= 75)
+                .max_by_key(|p| p.ex_date)?;
+            let expected = r.units * matched.per_share * fx;
+            (expected > 0.0).then(|| r.gross / expected)
+        })
+        .collect();
+    if ratios.len() < 2 {
+        return history.to_vec();
+    }
+    ratios.sort_by(f64::total_cmp);
+    let median = ratios[ratios.len() / 2];
+    let consistent = ratios
+        .iter()
+        .all(|r| (median / 1.5..=median * 1.5).contains(r));
+    if (1.0 / CALIBRATION_TOLERANCE..=CALIBRATION_TOLERANCE).contains(&median) || !consistent {
         return history.to_vec();
     }
     notes.push(format!(
-        "{symbol}: the published per-share payouts imply {:.0}% of what you actually received over the last year, so the history was scaled to your receipts.",
-        100.0 / ratio
+        "{symbol}: the published per-share payouts were {:.0}% of what you actually received per unit, so the history was scaled to your receipts.",
+        100.0 / median
     ));
     history
         .iter()
         .map(|p| Payment {
             ex_date: p.ex_date,
-            per_share: p.per_share * ratio,
+            per_share: p.per_share * median,
         })
         .collect()
+}
+
+/// The annual price trend over up to the last three years of stored closes: the
+/// compound rate, shrunk toward zero by `n/(n+3)` (`n` = years of data) and capped to
+/// −50%..+15%. `None` with less than a year.
+fn price_trend(observations: &[crate::market::MarketObservation]) -> Option<f64> {
+    let last = observations.last()?;
+    let from = last.session - Duration::days(3 * 365);
+    let first = observations.iter().find(|o| o.session >= from)?;
+    let days = (last.session - first.session).num_days();
+    if days < 365 {
+        return None;
+    }
+    let (p0, p1) = (first.close.to_f64()?, last.close.to_f64()?);
+    if p0 <= 0.0 || p1 <= 0.0 {
+        return None;
+    }
+    let years = days as f64 / 365.25;
+    let raw = (p1 / p0).powf(1.0 / years) - 1.0;
+    Some((raw * years / (years + 3.0)).clamp(-0.5, 0.15))
 }
 
 fn first_of_next_month(day: NaiveDate) -> NaiveDate {
@@ -336,51 +395,65 @@ mod tests {
     use super::*;
 
     #[test]
-    fn calibration_scales_only_a_gross_mismatch() {
-        let now = Utc::now();
-        let day = |d: i64| (now - Duration::days(d)).date_naive();
+    fn calibration_uses_units_held_on_each_payment() {
+        let d = |m: u32, day: u32| NaiveDate::from_ymd_opt(2026, m, day).unwrap();
         let history = vec![
             Payment {
-                ex_date: day(300),
+                ex_date: d(3, 1),
                 per_share: 0.5,
             },
             Payment {
-                ex_date: day(120),
+                ex_date: d(6, 1),
                 per_share: 0.5,
             },
         ];
-        // 10 units, fx 1: the history implies 10 a year.
         let mut notes = Vec::new();
-        assert_eq!(
-            calibrate("A", &history, &[], 10.0, 1.0, now, &mut notes),
-            history
-        );
-        let view = |amount: i64| crate::ledger::DividendView {
-            instrument: None,
-            paid: crate::contracts::EventTime {
-                at: now - Duration::days(100),
-                precision: crate::contracts::TimePrecision::DateOnly,
+        // 10 units then 40 units: receipts match the history, nothing changes even though
+        // today's holding is larger.
+        let fine = [
+            Receipt {
+                paid: d(3, 20),
+                gross: 5.0,
+                units: 10.0,
             },
-            gross: crate::contracts::Money {
-                amount: rust_decimal::Decimal::from(amount),
-                currency: crate::contracts::Currency::eur(),
+            Receipt {
+                paid: d(6, 20),
+                gross: 20.0,
+                units: 40.0,
             },
-            withheld: None,
-            net: None,
-            record_ids: Vec::new(),
-        };
-        // Received 8: within tolerance, unchanged.
-        let close = view(8);
-        assert_eq!(
-            calibrate("A", &history, &[&close], 10.0, 1.0, now, &mut notes),
-            history
-        );
+        ];
+        assert_eq!(calibrate("A", &history, &fine, 1.0, &mut notes), history);
         assert!(notes.is_empty());
-        // Received 25: 2.5 times the history, scaled to it.
-        let far = view(25);
-        let scaled = calibrate("A", &history, &[&far], 10.0, 1.0, now, &mut notes);
-        assert!((scaled[0].per_share - 1.25).abs() < 1e-12);
+        // Every receipt is a hundredth of the published amount (pence vs pounds).
+        let pence = [
+            Receipt {
+                paid: d(3, 20),
+                gross: 0.05,
+                units: 10.0,
+            },
+            Receipt {
+                paid: d(6, 20),
+                gross: 0.20,
+                units: 40.0,
+            },
+        ];
+        let scaled = calibrate("A", &history, &pence, 1.0, &mut notes);
+        assert!((scaled[0].per_share - 0.005).abs() < 1e-12);
         assert_eq!(notes.len(), 1);
+        // Inconsistent ratios (a one-off) leave it alone.
+        let mixed = [
+            Receipt {
+                paid: d(3, 20),
+                gross: 0.05,
+                units: 10.0,
+            },
+            Receipt {
+                paid: d(6, 20),
+                gross: 20.0,
+                units: 40.0,
+            },
+        ];
+        assert_eq!(calibrate("A", &history, &mixed, 1.0, &mut notes), history);
     }
 
     #[test]
