@@ -239,7 +239,7 @@ fn school_change(
         SchoolChangeKind::AnnouncementPosted => ("announcement", 0.35, 0.7),
         SchoolChangeKind::AssignmentAdded => ("assignment", 0.4, 0.8),
         SchoolChangeKind::EventAdded => ("event", 0.3, 0.6),
-        SchoolChangeKind::FileAdded => ("file", 0.1, 0.5),
+        SchoolChangeKind::FileAdded => ("file", 0.1, 0.4),
     };
     vec![Signal {
         source: Source::Moodle,
@@ -249,7 +249,8 @@ fn school_change(
         body: String::new(),
         urgency,
         relevance,
-        novelty: 1.0,
+        // A new file is routine; other changes are news.
+        novelty: if kind == SchoolChangeKind::FileAdded { 0.5 } else { 1.0 },
         confidence: 0.9,
         deadline: None,
         provenance: Provenance::Observation,

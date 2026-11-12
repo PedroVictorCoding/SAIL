@@ -43,7 +43,9 @@
 //! 2. `novelty < settings.min_novelty` and no deadline → `Drop { NotNovel }`.
 //! 3. `score - cost ≥ settings.interrupt_threshold` and the hourly interrupt budget is not
 //!    spent and autonomy ≥ Balanced → `Interrupt`. Quiet hours block this unless
-//!    `urgency ≥ 0.95` *and* provenance is `UserCommitment` (a trusted override).
+//!    `urgency' ≥ 0.95` *and* provenance is `UserCommitment` (the trusted override). The
+//!    override also ignores focus and quiet costs: its test is `score − 0.2 ≥ threshold`.
+//!    It still respects the hourly interrupt budget and `Autonomy`.
 //! 4. `score ≥ settings.suggest_threshold` and the daily suggestion budget is not spent
 //!    and autonomy ≥ Balanced → `Suggest`.
 //! 5. `score ≥ settings.digest_threshold` → `Digest`.
