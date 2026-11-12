@@ -510,13 +510,21 @@ month (`dividends/`).
 - the withholding actually observed in the ledger over 24 months, else a default by
   listing country.
 
-**Reinvestment.** A share of each net payment buys more units the same month:
-- **proportionally** across paying holdings by current value (the default, keeping the
+**Reinvestment.** A share of each net payment buys more units the same month. The
+allocation can be:
+- **proportional** across paying holdings by current value (the default, keeping the
   mix);
-- or back into the **same holding** (a DRIP).
+- back into the **same holding** (a DRIP);
+- **top value** (N largest paying holdings, by value; default N = 5);
+- **equal weight** (every paying holding gets the same cash, moving toward equal
+  weights);
+- **top yield** (N highest-yielding paying holdings, by value);
+- **underweight** (the paying holdings furthest below their equal-weight target get
+  the pool, a partial rebalance).
 
-The rest stays as cash. A comparison line shows the same projection without
-reinvesting.
+The top-value and top-yield counts are 1–10 (`top_n`, default 5); top-yield and
+top-value spread the month's pool by current value among the selected holdings. The
+rest stays as cash. A comparison line shows the same projection without reinvesting.
 
 **Growth.** Past payout growth over up to five complete years, shrunk toward zero by
 `n/(n+3)` and capped at ±15%. A year without payment after a paying year counts as a
@@ -608,7 +616,7 @@ scoreboard.
 | `GET /signals/trade/record?account=` | Every published card with its grade, and totals |
 | `GET /signals/trade/guards?account=` | Trailing stops and trend for each holding |
 | `GET /universe/watchlist` / `POST /universe/watchlist` | The watchlist, and a change: `{"op": "add", "item": {...}}` or `{"op": "remove", "symbol": "..."}` |
-| `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting, per-holding inputs and notes |
+| `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&top_n=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting, per-holding inputs and notes; allocation is `proportional`, `same_holding`, `top_value`, `equal_weight`, `top_yield` or `underweight` |
 | `POST /dividends/refresh?account=` | Fetches per-share payout histories for the holdings |
 | `GET /outlook/track-record?account=&horizon=` | Coverage, average percentile, skill and direction over monthly replays |
 

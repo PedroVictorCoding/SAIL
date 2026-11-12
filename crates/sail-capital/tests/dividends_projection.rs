@@ -3,7 +3,8 @@
 
 use chrono::NaiveDate;
 use sail_capital::dividends::{
-    Allocation, DividendOutlook, Holding, Payment, Projection, Scenario, Settings, project,
+    Allocation, DEFAULT_TOP_N, DividendOutlook, Holding, Payment, Projection, Scenario, Settings,
+    project,
 };
 
 const TOLERANCE: f64 = 1e-9;
@@ -18,10 +19,27 @@ fn settings(
     allocation: Allocation,
     reserve_pt_tax: bool,
 ) -> Settings {
+    settings_top(
+        years,
+        reinvest_pct,
+        allocation,
+        DEFAULT_TOP_N,
+        reserve_pt_tax,
+    )
+}
+
+fn settings_top(
+    years: u32,
+    reinvest_pct: f64,
+    allocation: Allocation,
+    top_n: u32,
+    reserve_pt_tax: bool,
+) -> Settings {
     Settings {
         years,
         reinvest_pct,
         allocation,
+        top_n,
         reserve_pt_tax,
         start: date(2027, 1, 1),
     }
@@ -157,6 +175,104 @@ fn proportional_reinvestment_keeps_value_shares_at_equal_growth() {
     assert_close(aaa.end_units / bbb.end_units, 2.0, "value share ratio");
     assert_close(aaa.first_year_net, 100.0, "AAA year-1 net");
     assert_close(bbb.first_year_net, 50.0, "BBB year-1 net");
+}
+
+fn three_payers() -> Vec<Holding> {
+    vec![
+        annual_payer("AAA", 100.0, 10.0, 1.0),
+        annual_payer("BBB", 50.0, 10.0, 1.0),
+        annual_payer("CCC", 25.0, 10.0, 1.0),
+    ]
+}
+
+#[test]
+fn top_value_reinvestment_buys_only_the_largest_holdings() {
+    let outlook = project(
+        &three_payers(),
+        &settings_top(1, 100.0, Allocation::TopValue, 1, false),
+        None,
+    );
+
+    // Year 1 pays 100 + 50 + 25; the largest holding takes the whole 175.
+    assert_close(holding_row(&outlook, "AAA").end_units, 117.5, "AAA units");
+    assert_close(holding_row(&outlook, "BBB").end_units, 50.0, "BBB units");
+    assert_close(holding_row(&outlook, "CCC").end_units, 25.0, "CCC units");
+
+    let two = project(
+        &three_payers(),
+        &settings_top(1, 100.0, Allocation::TopValue, 2, false),
+        None,
+    );
+    assert_close(
+        holding_row(&two, "AAA").end_units,
+        111.666_666_666_7,
+        "AAA units",
+    );
+    assert_close(
+        holding_row(&two, "BBB").end_units,
+        55.833_333_333_3,
+        "BBB units",
+    );
+    assert_close(holding_row(&two, "CCC").end_units, 25.0, "CCC units");
+}
+
+#[test]
+fn equal_weight_reinvestment_splits_the_pool_evenly() {
+    let outlook = project(
+        &three_payers(),
+        &settings_top(1, 100.0, Allocation::EqualWeight, 5, false),
+        None,
+    );
+
+    let each_units = 175.0 / 3.0 / 10.0;
+    assert_close(
+        holding_row(&outlook, "AAA").end_units,
+        100.0 + each_units,
+        "AAA units",
+    );
+    assert_close(
+        holding_row(&outlook, "BBB").end_units,
+        50.0 + each_units,
+        "BBB units",
+    );
+    assert_close(
+        holding_row(&outlook, "CCC").end_units,
+        25.0 + each_units,
+        "CCC units",
+    );
+}
+
+#[test]
+fn top_yield_reinvestment_picks_the_highest_yielders() {
+    let outlook = project(
+        &[
+            annual_payer("AAA", 100.0, 10.0, 1.0),
+            annual_payer("BBB", 50.0, 10.0, 1.1),
+            annual_payer("CCC", 25.0, 10.0, 0.5),
+        ],
+        &settings_top(1, 100.0, Allocation::TopYield, 1, false),
+        None,
+    );
+
+    // BBB pays 55 and yields 11%; it takes the whole 167.5 pool.
+    assert_close(holding_row(&outlook, "AAA").end_units, 100.0, "AAA units");
+    assert_close(holding_row(&outlook, "BBB").end_units, 66.75, "BBB units");
+    assert_close(holding_row(&outlook, "CCC").end_units, 25.0, "CCC units");
+}
+
+#[test]
+fn underweight_reinvestment_moves_toward_equal_weight() {
+    let outlook = project(
+        &three_payers(),
+        &settings_top(1, 100.0, Allocation::Underweight, 5, false),
+        None,
+    );
+
+    // 175 is split by the shortfall below the 583.33 equal-weight target: 35 to BBB
+    // and 140 to CCC.
+    assert_close(holding_row(&outlook, "AAA").end_units, 100.0, "AAA units");
+    assert_close(holding_row(&outlook, "BBB").end_units, 53.5, "BBB units");
+    assert_close(holding_row(&outlook, "CCC").end_units, 39.0, "CCC units");
 }
 
 #[test]

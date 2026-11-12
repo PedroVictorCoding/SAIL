@@ -1438,6 +1438,7 @@ main {
 
 .cp-horizon-pills {
   display: flex;
+  flex-wrap: wrap;
   background: var(--sail-surface-raised);
   border: 1px solid var(--sail-glass-border);
   border-radius: var(--sail-radius-control);
@@ -3444,6 +3445,10 @@ main {
   padding: 14px 20px;
   border-bottom: 1px solid var(--sail-glass-border);
   background: var(--sail-surface);
+}
+
+#cpProjTopNGroup[hidden] {
+  display: none;
 }
 
 .cp-range {

@@ -57,6 +57,12 @@ pub const MAX_GROWTH: f64 = 0.15;
 /// Portuguese flat rate on dividends (taxa liberatória / autónoma).
 pub const PT_TAX: f64 = 0.28;
 
+/// Most holdings a top-value or top-yield strategy may select.
+pub const MAX_TOP_N: u32 = 10;
+
+/// Default count for the top-value and top-yield strategies.
+pub const DEFAULT_TOP_N: u32 = 5;
+
 /// Where reinvested dividends go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +71,18 @@ pub enum Allocation {
     Proportional,
     /// Back into the holding that paid it.
     SameHolding,
+    /// Across the largest paying holdings by current value, in proportion to value.
+    TopValue,
+    /// Equally across every paying holding, regardless of current weight.
+    EqualWeight,
+    /// Across the highest-yielding paying holdings, in proportion to value.
+    TopYield,
+    /// Toward the paying holdings furthest below their equal-weight target.
+    Underweight,
+}
+
+fn default_top_n() -> u32 {
+    DEFAULT_TOP_N
 }
 
 /// The owner's choices.
@@ -76,6 +94,9 @@ pub struct Settings {
     pub reinvest_pct: f64,
     /// Where it goes.
     pub allocation: Allocation,
+    /// How many holdings top-value or top-yield may select, 1..=[`MAX_TOP_N`].
+    #[serde(default = "default_top_n")]
+    pub top_n: u32,
     /// Set aside Portuguese tax before reinvesting.
     pub reserve_pt_tax: bool,
     /// First month of the projection (the month after the latest data).

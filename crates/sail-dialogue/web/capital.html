@@ -354,7 +354,7 @@
       <header class="cp-panel-head">
         <div class="cp-title-group">
           <h2 id="cpProjectionTitle">Dividend Projection</h2>
-          <span class="cp-sub-notice">Expected scaling with proportional or holding reinvestment</span>
+          <span class="cp-sub-notice">Expected scaling with proportional, top-N, equal-weight, underweight or holding reinvestment</span>
         </div>
         <div class="cp-actions-group">
           <button type="button" class="cp-btn cp-btn-sm" id="cpProjRefreshBtn">Refresh payout history</button>
@@ -384,7 +384,16 @@
           <div class="cp-horizon-pills cp-proj-alloc-pills" role="radiogroup" aria-labelledby="cpProjAllocLabel">
             <button type="button" class="cp-horizon-btn cp-active" data-allocation="proportional" aria-checked="true">Proportional</button>
             <button type="button" class="cp-horizon-btn" data-allocation="same_holding" aria-checked="false">Same holding</button>
+            <button type="button" class="cp-horizon-btn" data-allocation="top_value" aria-checked="false">Top value</button>
+            <button type="button" class="cp-horizon-btn" data-allocation="equal_weight" aria-checked="false">Equal weight</button>
+            <button type="button" class="cp-horizon-btn" data-allocation="top_yield" aria-checked="false">Top yield</button>
+            <button type="button" class="cp-horizon-btn" data-allocation="underweight" aria-checked="false">Underweight</button>
           </div>
+        </div>
+
+        <div class="cp-control-group" id="cpProjTopNGroup" hidden>
+          <label for="cpProjTopN" class="cp-control-label">Top holdings: <strong id="cpProjTopNVal">5</strong></label>
+          <input type="range" class="cp-range" id="cpProjTopN" min="1" max="10" value="5" step="1" aria-label="Number of holdings for top-value or top-yield reinvestment">
         </div>
 
         <div class="cp-control-group cp-control-checkbox">
