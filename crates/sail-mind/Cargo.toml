@@ -9,6 +9,10 @@ publish.workspace = true
 [dependencies]
 sail-common.workspace = true
 sail-protocol.workspace = true
+sail-guardian.workspace = true
+chrono.workspace = true
+sha2 = "0.11"
+rusqlite = { version = "0.37", features = ["bundled"] }
 tokio-util.workspace = true
 tokio.workspace = true
 async-trait.workspace = true

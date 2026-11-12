@@ -1,3 +1,14 @@
+//! SAIL Discovery: noticing what deserves attention.
+//!
+//! - [`detect`]: deterministic detectors that turn observations into attention signals;
+//! - [`agenda`]: the durable agenda of topics, investigations, commitments and open questions;
+//! - [`initiative`]: the loop that ties them to Pulse's attention inbox.
+//!
+//! See `docs/SAIL_PROACTIVE.md`.
+pub mod agenda;
+pub mod detect;
+pub mod initiative;
+
 use async_trait::async_trait;
 use tracing::info;
 
@@ -84,4 +95,21 @@ impl Subsystem for DiscoverySubsystem {
         info!("SAIL Discovery subsystem shutting down");
         Ok(())
     }
+}
+
+static GLOBAL: std::sync::OnceLock<std::sync::Arc<initiative::Initiative>> =
+    std::sync::OnceLock::new();
+
+/// Make one initiative engine available to Dialogue. The first installation wins.
+pub fn install_global(initiative: std::sync::Arc<initiative::Initiative>) -> bool {
+    GLOBAL.set(initiative).is_ok()
+}
+
+pub fn global() -> Option<std::sync::Arc<initiative::Initiative>> {
+    GLOBAL.get().cloned()
+}
+
+/// `$SAIL_DATA/discovery/agenda.db`.
+pub fn default_agenda_path() -> std::path::PathBuf {
+    sail_common::storage::data_path("discovery").join("agenda.db")
 }
