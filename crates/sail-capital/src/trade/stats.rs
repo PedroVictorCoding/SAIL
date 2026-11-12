@@ -74,6 +74,9 @@ pub(super) fn evidence(setup: SetupId, side: Side, trades: &[Trade]) -> Evidence
     }
 }
 
+/// z for a two-sided 1 − 0.05/36 bound (36 setup, side and group tests).
+const BONFERRONI_Z: f64 = 3.197;
+
 pub(super) fn verdict(
     group: &str,
     setup: SetupId,
@@ -101,8 +104,15 @@ pub(super) fn verdict(
         .collect();
     let selection = evidence(setup, side, &selection_trades);
     let holdout = evidence(setup, side, &holdout_trades);
+    // 6 setups × 2 sides × 3 groups are tested at once, so about two would clear a 95%
+    // bar by luck. The publish bar is Bonferroni-corrected: the mean must clear zero by
+    // `BONFERRONI_Z` standard errors (1 − 0.05/36 two-sided, z ≈ 3.2). Cards still show
+    // the familiar 95% interval.
+    let se = (selection.expectancy_ci.1 - selection.expectancy_ci.0) / (2.0 * 1.959_964);
+    let corrected_lower = selection.expectancy_r - BONFERRONI_Z * se;
     let publishes = selection.trades >= MIN_TRADES
         && selection.expectancy_ci.0 > 0.0
+        && corrected_lower > 0.0
         && holdout.trades >= MIN_HOLDOUT_TRADES
         && holdout.expectancy_r > 0.0;
     let reason = if publishes {
@@ -123,6 +133,11 @@ pub(super) fn verdict(
         format!(
             "Doesn't publish: the lower bound is {:+.2}R over {} trades",
             selection.expectancy_ci.0, selection.trades
+        )
+    } else if corrected_lower <= 0.0 {
+        format!(
+            "Doesn't publish: +{:.2}R a trade over {} trades isn't clear of luck once 36 setups are tested together (corrected bound {:+.2}R)",
+            selection.expectancy_r, selection.trades, corrected_lower
         )
     } else if holdout.trades < MIN_HOLDOUT_TRADES {
         format!(
