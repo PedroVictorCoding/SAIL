@@ -37,6 +37,12 @@
 //!
 //! **Purity.** No I/O and no clock. Money here is `f64` in the account currency, because
 //! it is a projection and not ledger money.
+mod growth;
+mod project;
+
+pub use self::growth::growth;
+pub use self::project::project;
+
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -202,50 +208,6 @@ pub struct DividendOutlook {
     pub without_reinvestment: Projection,
     /// Plain notes on the assumptions and limits.
     pub notes: Vec<String>,
-}
-
-/// Growth from a payment history, with the latest data at `as_of` (only complete
-/// calendar years before `as_of`'s year are used).
-pub fn growth(history: &[Payment], as_of: NaiveDate) -> Growth {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = (history, as_of);
-    Growth {
-        annual: Vec::new(),
-        raw: None,
-        g: 0.0,
-        sigma: 0.10,
-        months: Vec::new(),
-        ttm_per_share: 0.0,
-    }
-}
-
-/// Projects every scenario. `original_cost` is what the starting holdings cost in the
-/// account currency, for yield on cost.
-pub fn project(
-    holdings: &[Holding],
-    settings: &Settings,
-    original_cost: Option<f64>,
-) -> DividendOutlook {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = (holdings, original_cost);
-    let empty = |scenario| Projection {
-        scenario,
-        years: Vec::new(),
-        monthly_net: Vec::new(),
-        doubling_year: None,
-    };
-    DividendOutlook {
-        settings: settings.clone(),
-        scenarios: vec![
-            empty(Scenario::Low),
-            empty(Scenario::Base),
-            empty(Scenario::High),
-        ],
-        holdings: Vec::new(),
-        non_paying: Vec::new(),
-        without_reinvestment: empty(Scenario::Base),
-        notes: Vec::new(),
-    }
 }
 
 /// Withholding by the listing's country when nothing is observed, from the XTB suffix:
