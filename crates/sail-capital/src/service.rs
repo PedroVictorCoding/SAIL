@@ -12,6 +12,11 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+mod trade_run;
+pub use trade_run::{
+    FxCloses, RecordTotals, TradeRecord, TradeView, fx_rate, next_run_after, watch_key,
+};
+
 /// Most import batches `/sync/status` returns.
 pub const MAX_BATCHES_REPLY: u32 = 100;
 
@@ -95,6 +100,8 @@ pub struct CapitalService {
     prices_configured: bool,
     price_status: std::sync::Mutex<PriceStatus>,
     price_refreshing: tokio::sync::Mutex<()>,
+    /// One trade-signal run at a time.
+    trade_running: tokio::sync::Mutex<()>,
     /// Model signals the owner turned on (`SAIL_MODEL_SIGNALS`).
     model_specs: Vec<crate::models::ModelSpec>,
     /// Outlook models the owner turned on (`SAIL_MODEL_SIGNALS`).
@@ -184,6 +191,7 @@ impl CapitalService {
             prices_configured: false,
             price_status: std::sync::Mutex::new(PriceStatus::default()),
             price_refreshing: tokio::sync::Mutex::new(()),
+            trade_running: tokio::sync::Mutex::new(()),
             model_specs: Vec::new(),
             outlook_specs: Vec::new(),
             helper_paths: (
@@ -649,6 +657,7 @@ impl CapitalService {
     /// Starts the background SEC refresh when SEC is configured: every
     /// `$SAIL_SEC_REFRESH_HOURS` (1–168, default 12), first run a minute after start.
     pub fn start(self: &std::sync::Arc<Self>) {
+        self.start_trade_schedule();
         if !self.sec_configured {
             tracing::info!("SEC refresh off: SAIL_SEC_USER_AGENT is not set");
             return;

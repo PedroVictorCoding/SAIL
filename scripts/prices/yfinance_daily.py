@@ -15,7 +15,7 @@ import re
 import sys
 
 MAX_BARS = 10_000
-SYMBOL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-^=]{0,24}$")
+SYMBOL = re.compile(r"^[A-Za-z0-9^][A-Za-z0-9.\-^=]{0,24}$")
 # Yahoo quotes some listings in minor units; keep them distinct from the major currency.
 MINOR_UNITS = {"GBp": "GBX", "ZAc": "ZAX", "ILA": "ILA"}
 

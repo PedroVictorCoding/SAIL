@@ -54,6 +54,14 @@ pub struct RiskLimits {
     /// cautious. 1 is bold, 4 moderate, 10 very cautious.
     #[serde(with = "rust_decimal::serde::str")]
     pub risk_aversion: Decimal,
+    /// Share of the account lost if a trade signal's stop is hit, percent (round 13).
+    /// Signal cards are sized from it.
+    #[serde(default = "default_risk_per_trade", with = "rust_decimal::serde::str")]
+    pub risk_per_trade_pct: Decimal,
+}
+
+fn default_risk_per_trade() -> Decimal {
+    Decimal::new(5, 1)
 }
 
 impl RiskLimits {
@@ -70,6 +78,7 @@ impl RiskLimits {
             trade_cost_bps: Decimal::from(10),
             fx_cost_bps: Decimal::from(50),
             risk_aversion: Decimal::from(4),
+            risk_per_trade_pct: default_risk_per_trade(),
         }
     }
 
@@ -110,6 +119,9 @@ impl RiskLimits {
         }
         if self.risk_aversion <= Decimal::ZERO || self.risk_aversion > Decimal::from(100) {
             return Err("Caution must be between 0 and 100".into());
+        }
+        if self.risk_per_trade_pct <= Decimal::ZERO || self.risk_per_trade_pct > Decimal::from(5) {
+            return Err("Risk per trade must be above 0% and at most 5%".into());
         }
         Ok(())
     }

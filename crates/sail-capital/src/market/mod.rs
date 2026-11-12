@@ -274,6 +274,18 @@ pub trait PriceSource: Send + Sync {
     fn source_id(&self) -> &str;
     /// The full daily history for a broker symbol.
     async fn daily(&self, symbol: &str) -> Result<PriceSeries, PriceSourceError>;
+
+    /// The full daily history for `symbol`, using `source_symbol` as the source's own
+    /// name when the source understands it (watchlist entries such as `EURAUD=X`).
+    /// Sources that can't take an explicit name use [`PriceSource::daily`].
+    async fn daily_as(
+        &self,
+        symbol: &str,
+        source_symbol: &str,
+    ) -> Result<PriceSeries, PriceSourceError> {
+        let _ = source_symbol;
+        self.daily(symbol).await
+    }
 }
 
 pub mod file;

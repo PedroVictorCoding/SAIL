@@ -276,6 +276,24 @@ impl PriceSource for YahooSource {
         "yfinance"
     }
 
+    async fn daily_as(
+        &self,
+        symbol: &str,
+        source_symbol: &str,
+    ) -> Result<PriceSeries, PriceSourceError> {
+        let valid = !source_symbol.is_empty()
+            && source_symbol.len() <= 24
+            && source_symbol
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-=^".contains(&b));
+        if !valid {
+            return Err(PriceSourceError::UnknownSymbol(symbol.to_string()));
+        }
+        self.wait_for_slot().await;
+        let body = self.run(source_symbol).await?;
+        parse_yfinance_json(&body, symbol, source_symbol)
+    }
+
     async fn daily(&self, symbol: &str) -> Result<PriceSeries, PriceSourceError> {
         let yahoo = yahoo_symbol(symbol)
             .ok_or_else(|| PriceSourceError::UnknownSymbol(symbol.to_string()))?;
