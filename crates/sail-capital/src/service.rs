@@ -12,7 +12,9 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+mod dividends_run;
 mod trade_run;
+pub use dividends_run::DividendRefresh;
 pub use trade_run::{
     FxCloses, RecordTotals, TradeRecord, TradeView, fx_rate, next_run_after, watch_key,
 };
