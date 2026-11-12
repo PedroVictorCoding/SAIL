@@ -2755,6 +2755,162 @@ main {
   margin-bottom: 20px;
 }
 
+/* Asset search & one-off signal check */
+.cp-signal-search {
+  margin-bottom: 20px;
+}
+
+.cp-signal-search-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.cp-signal-search-form .cp-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cp-signal-search-status {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
+.cp-signal-search-status:empty {
+  display: none;
+}
+
+.cp-signal-search-results {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cp-signal-search-results[hidden],
+.cp-signal-check[hidden] {
+  display: none;
+}
+
+.cp-signal-search-result {
+  margin: 0;
+}
+
+.cp-signal-search-pick {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control, 8px);
+  color: var(--sail-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.cp-signal-search-pick:hover,
+.cp-signal-search-pick:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(100, 160, 240, 0.45);
+}
+
+.cp-signal-search-symbol {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #f8fafc;
+}
+
+.cp-signal-search-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--sail-text-muted);
+}
+
+.cp-signal-search-meta {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+  white-space: nowrap;
+}
+
+.cp-signal-check {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--sail-glass-border);
+}
+
+.cp-signal-check-loading {
+  margin: 0;
+  font-size: 13px;
+  color: var(--sail-text-muted);
+}
+
+.cp-signal-check-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cp-signal-check-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cp-signal-check-title strong {
+  font-size: 16px;
+  color: var(--sail-text);
+}
+
+.cp-signal-check-meta {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-signal-check-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cp-signal-check-result {
+  margin: 12px 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sail-text);
+}
+
+.cp-signal-check-yes {
+  color: #4ade80;
+}
+
+.cp-signal-check-sub {
+  margin: -4px 0 12px;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
+.cp-signal-check-suppressed {
+  margin-top: 12px;
+}
+
+.cp-signal-check-evidence {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
 /* Cards Grid */
 .cp-signals-cards-section {
   margin-bottom: 24px;
@@ -3242,6 +3398,25 @@ main {
   .cp-signals-actions .cp-button {
     width: 100%;
     justify-content: center;
+  }
+
+  .cp-signal-search-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cp-signal-search-form .cp-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .cp-signal-search-pick {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .cp-signal-search-meta {
+    white-space: normal;
   }
 
   .cp-record-totals {

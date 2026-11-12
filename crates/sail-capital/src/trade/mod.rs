@@ -358,6 +358,28 @@ pub struct SignalDay {
     pub notes: Vec<String>,
 }
 
+/// A setup that fired on a checked instrument but could not publish, and why.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SuppressedSignal {
+    /// Setup.
+    pub setup: SetupId,
+    /// Side.
+    pub side: Side,
+    /// Plain reason it didn't publish (verdict or earnings window).
+    pub reason: String,
+}
+
+/// One instrument checked against an existing scoreboard, for a one-off asset search.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InstrumentCheck {
+    /// Session of the instrument's latest bar.
+    pub session: NaiveDate,
+    /// Cards that publish for this instrument on its latest bar.
+    pub cards: Vec<SignalCard>,
+    /// Setups that fired but didn't publish.
+    pub suppressed: Vec<SuppressedSignal>,
+}
+
 /// A protective stop and view for one held position.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HoldingGuard {
@@ -476,103 +498,24 @@ pub fn signal_day(
         }
     }
 
-    let find_verdict = |group: &str, setup: SetupId, side: Side| {
-        scoreboard
-            .iter()
-            .find(|verdict| verdict.group == group && verdict.selection.setup == setup)
-            .filter(|verdict| verdict.selection.side == side)
-            .cloned()
-    };
-
     let mut cards = Vec::new();
     let mut suppressed = Vec::new();
     for instrument in universe {
-        let Some(index) = instrument.bars.len().checked_sub(1) else {
-            continue;
-        };
-        let atr = indicators::atr(&instrument.bars, 14);
-        let Some(atr) = atr[index] else {
-            continue;
-        };
-        if !(atr.is_finite() && atr > 0.0) {
-            continue;
-        }
-        let close = instrument.bars[index].close;
-        let session_date = instrument.bars[index].session;
-        for setup in SetupId::ALL {
-            for (fired, side) in fire(setup, &instrument.bars) {
-                if fired != index {
-                    continue;
-                }
-                let Some(verdict) = find_verdict(group_of(instrument.class), setup, side) else {
-                    continue;
-                };
-                if !verdict.publishes {
-                    suppressed.push((instrument.symbol.clone(), setup, side));
-                    continue;
-                }
-                let (stop_atr, max_sessions) = setup.plan();
-                if earnings_in_window(instrument, session_date, max_sessions).is_some() {
-                    suppressed.push((instrument.symbol.clone(), setup, side));
-                    continue;
-                }
-                let zone = (close - 0.25 * atr, close + 0.25 * atr);
-                let risk = stop_atr * atr;
-                if !(risk.is_finite() && risk > 0.0) {
-                    continue;
-                }
-                let mid = close;
-                let (stop, targets) = match side {
-                    Side::Long => (mid - risk, [mid + risk, mid + 2.0 * risk, mid + 3.0 * risk]),
-                    Side::Short => (mid + risk, [mid - risk, mid - 2.0 * risk, mid - 3.0 * risk]),
-                };
-                let size = account_value.and_then(|value| {
-                    fx_to_account(instrument).and_then(|fx| {
-                        if fx > 0.0 && value > 0.0 && risk > 0.0 {
-                            let units = risk_pct / 100.0 * value / (risk * fx);
-                            Some((units, units * mid * fx))
-                        } else {
-                            None
-                        }
-                    })
-                });
-                let relation = held(&instrument.key).map(|description| match side {
-                    Side::Long if description.trim().is_empty() => {
-                        "you hold this; a long adds to it".to_string()
-                    }
-                    Side::Long => {
-                        format!("you hold this ({}); a long adds to it", description.trim())
-                    }
-                    Side::Short if description.trim().is_empty() => {
-                        "you hold this; a short works as a hedge on a CFD".to_string()
-                    }
-                    Side::Short => format!(
-                        "you hold this ({}); a short works as a hedge on a CFD",
-                        description.trim()
-                    ),
-                });
-                cards.push(SignalCard {
-                    id: card_id(&instrument.key, setup, side, session_date),
-                    key: instrument.key.clone(),
-                    symbol: instrument.symbol.clone(),
-                    class: instrument.class,
-                    side,
-                    setup,
-                    signal_session: session_date,
-                    entry_zone: zone,
-                    stop,
-                    targets,
-                    max_sessions,
-                    size,
-                    risk_pct,
-                    needs_cfd: instrument.needs_cfd(side),
-                    score: verdict.selection.expectancy_ci.0,
-                    verdict,
-                    relation,
-                    warnings: Vec::new(),
-                });
-            }
-        }
+        let signals = instrument_signals(
+            instrument,
+            &scoreboard,
+            account_value,
+            risk_pct,
+            fx_to_account,
+            held,
+        );
+        cards.extend(signals.cards);
+        suppressed.extend(
+            signals
+                .suppressed
+                .into_iter()
+                .map(|(setup, side, _)| (instrument.symbol.clone(), setup, side)),
+        );
     }
 
     cards.sort_by(|left, right| right.score.total_cmp(&left.score));
@@ -586,6 +529,172 @@ pub fn signal_day(
         scoreboard,
         suppressed,
         notes,
+    }
+}
+
+/// One instrument's cards and non-publishing firings against an existing scoreboard.
+struct InstrumentSignals {
+    session: NaiveDate,
+    cards: Vec<SignalCard>,
+    suppressed: Vec<(SetupId, Side, String)>,
+}
+
+/// Builds the cards for one instrument. `session` is taken from its latest bar, which lets
+/// a one-off check use fresh data even when the daily run is older.
+fn instrument_signals(
+    instrument: &Instrument,
+    scoreboard: &[Verdict],
+    account_value: Option<f64>,
+    risk_pct: f64,
+    fx_to_account: &dyn Fn(&Instrument) -> Option<f64>,
+    held: &dyn Fn(&str) -> Option<String>,
+) -> InstrumentSignals {
+    let Some(index) = instrument.bars.len().checked_sub(1) else {
+        return InstrumentSignals {
+            session: NaiveDate::MIN,
+            cards: Vec::new(),
+            suppressed: Vec::new(),
+        };
+    };
+    let session_date = instrument.bars[index].session;
+    let mut out = InstrumentSignals {
+        session: session_date,
+        cards: Vec::new(),
+        suppressed: Vec::new(),
+    };
+    let atr = indicators::atr(&instrument.bars, 14);
+    let Some(atr) = atr[index] else {
+        return out;
+    };
+    if !(atr.is_finite() && atr > 0.0) {
+        return out;
+    }
+    let close = instrument.bars[index].close;
+    let group = group_of(instrument.class);
+    for setup in SetupId::ALL {
+        for (fired, side) in fire(setup, &instrument.bars) {
+            if fired != index {
+                continue;
+            }
+            let Some(verdict) = verdict_for(scoreboard, group, setup, side) else {
+                continue;
+            };
+            if !verdict.publishes {
+                out.suppressed.push((setup, side, verdict.reason.clone()));
+                continue;
+            }
+            if let Some(date) = earnings_in_window(instrument, session_date, setup.plan().1) {
+                out.suppressed.push((
+                    setup,
+                    side,
+                    format!("earnings on {date} falls inside the trade window"),
+                ));
+                continue;
+            }
+            let (stop_atr, max_sessions) = setup.plan();
+            let zone = (close - 0.25 * atr, close + 0.25 * atr);
+            let risk = stop_atr * atr;
+            if !(risk.is_finite() && risk > 0.0) {
+                continue;
+            }
+            let mid = close;
+            let (stop, targets) = match side {
+                Side::Long => (mid - risk, [mid + risk, mid + 2.0 * risk, mid + 3.0 * risk]),
+                Side::Short => (mid + risk, [mid - risk, mid - 2.0 * risk, mid - 3.0 * risk]),
+            };
+            let size = account_value.and_then(|value| {
+                fx_to_account(instrument).and_then(|fx| {
+                    if fx > 0.0 && value > 0.0 && risk > 0.0 {
+                        let units = risk_pct / 100.0 * value / (risk * fx);
+                        Some((units, units * mid * fx))
+                    } else {
+                        None
+                    }
+                })
+            });
+            let relation = held(&instrument.key).map(|description| match side {
+                Side::Long if description.trim().is_empty() => {
+                    "you hold this; a long adds to it".to_string()
+                }
+                Side::Long => {
+                    format!("you hold this ({}); a long adds to it", description.trim())
+                }
+                Side::Short if description.trim().is_empty() => {
+                    "you hold this; a short works as a hedge on a CFD".to_string()
+                }
+                Side::Short => format!(
+                    "you hold this ({}); a short works as a hedge on a CFD",
+                    description.trim()
+                ),
+            });
+            out.cards.push(SignalCard {
+                id: card_id(&instrument.key, setup, side, session_date),
+                key: instrument.key.clone(),
+                symbol: instrument.symbol.clone(),
+                class: instrument.class,
+                side,
+                setup,
+                signal_session: session_date,
+                entry_zone: zone,
+                stop,
+                targets,
+                max_sessions,
+                size,
+                risk_pct,
+                needs_cfd: instrument.needs_cfd(side),
+                score: verdict.selection.expectancy_ci.0,
+                verdict,
+                relation,
+                warnings: Vec::new(),
+            });
+        }
+    }
+    out
+}
+
+fn verdict_for(scoreboard: &[Verdict], group: &str, setup: SetupId, side: Side) -> Option<Verdict> {
+    scoreboard
+        .iter()
+        .find(|verdict| {
+            verdict.group == group
+                && verdict.selection.setup == setup
+                && verdict.selection.side == side
+        })
+        .cloned()
+}
+
+/// Checks one instrument against an existing scoreboard, without the daily cap and
+/// without adding it to the universe. Used for searching an asset outside the watchlist.
+pub fn check_instrument(
+    instrument: &Instrument,
+    scoreboard: &[Verdict],
+    account_value: Option<f64>,
+    risk_pct: f64,
+    fx_to_account: &dyn Fn(&Instrument) -> Option<f64>,
+    held: &dyn Fn(&str) -> Option<String>,
+) -> InstrumentCheck {
+    let signals = instrument_signals(
+        instrument,
+        scoreboard,
+        account_value,
+        risk_pct,
+        fx_to_account,
+        held,
+    );
+    let mut cards = signals.cards;
+    cards.sort_by(|left, right| right.score.total_cmp(&left.score));
+    InstrumentCheck {
+        session: signals.session,
+        cards,
+        suppressed: signals
+            .suppressed
+            .into_iter()
+            .map(|(setup, side, reason)| SuppressedSignal {
+                setup,
+                side,
+                reason,
+            })
+            .collect(),
     }
 }
 

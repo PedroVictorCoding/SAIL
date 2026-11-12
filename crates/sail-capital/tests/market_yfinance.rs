@@ -2,7 +2,7 @@
 //! (with a fake helper, never the network).
 use sail_capital::market::{
     Adjustment, MAX_PRICE_RESPONSE_BYTES, PriceSource, PriceSourceError, YahooSource,
-    parse_yfinance_json, yahoo_symbol,
+    parse_search_json, parse_yfinance_json, yahoo_symbol,
 };
 use std::io::Write;
 
@@ -75,6 +75,61 @@ fn helper_errors_map_to_price_errors() {
         parse(br#"{"symbol":"ZZZ","bars":[]}"#),
         PriceSourceError::UnknownSymbol("ZZZ.US".into())
     );
+}
+
+#[test]
+fn search_json_drops_duplicates_and_bad_symbols() {
+    let body = br#"{"results":[
+        {"symbol":"AAPL","name":"Apple Inc.","exchange":"NASDAQ","quote_type":"EQUITY"},
+        {"symbol":"AAPL","name":"Apple again","exchange":"NASDAQ","quote_type":"EQUITY"},
+        {"symbol":"BAD SYMBOL","name":"Bad","exchange":"X","quote_type":"EQUITY"},
+        {"symbol":"-AAPL","name":"Bad start","exchange":"X","quote_type":"EQUITY"},
+        {"symbol":"VUSA.L","name":"","exchange":"LSE","quote_type":"etf"},
+        {"symbol":"^GSPC","name":"S&P 500","exchange":"SNP","quote_type":"INDEX"}
+    ]}"#;
+    let matches = parse_search_json(body).unwrap();
+    assert_eq!(matches.len(), 3);
+    assert_eq!(matches[0].symbol, "AAPL");
+    assert_eq!(matches[0].quote_type, "EQUITY");
+    assert_eq!(matches[1].symbol, "VUSA.L");
+    assert_eq!(matches[1].name, "VUSA.L");
+    assert_eq!(matches[1].quote_type, "ETF");
+    assert_eq!(matches[2].symbol, "^GSPC");
+}
+
+#[test]
+fn search_json_maps_errors_and_garbage() {
+    assert!(matches!(
+        parse_search_json(br#"{"error":"rate_limited"}"#).unwrap_err(),
+        PriceSourceError::Refused(429)
+    ));
+    assert!(matches!(
+        parse_search_json(b"not json").unwrap_err(),
+        PriceSourceError::Malformed(_)
+    ));
+    assert!(matches!(
+        parse_search_json(br#"{"error":"failed","detail":"x"}"#).unwrap_err(),
+        PriceSourceError::Network(_)
+    ));
+    assert_eq!(parse_search_json(br#"{"results":[]}"#).unwrap(), Vec::new());
+}
+
+#[tokio::test]
+async fn search_uses_the_helper_and_rejects_an_empty_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = fake_helper(
+        &dir,
+        r#"import json, sys
+json.dump({"results": [{"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NASDAQ", "quote_type": "EQUITY"}]}, sys.stdout)"#,
+    );
+    let source = YahooSource::with_command("python3", script);
+    let found = source.search("apple").await.unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].symbol, "AAPL");
+    assert!(matches!(
+        source.search("   ").await.unwrap_err(),
+        PriceSourceError::Malformed(_)
+    ));
 }
 
 fn fake_helper(dir: &tempfile::TempDir, body: &str) -> String {

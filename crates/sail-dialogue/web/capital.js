@@ -3334,6 +3334,77 @@ function renderMiniSvgChart(card, closes) {
   return svg;
 }
 
+function renderSignalCardMarkup(c, idPrefix = "") {
+  const entryLow = Math.min(c.entry_zone[0], c.entry_zone[1]);
+  const entryHigh = Math.max(c.entry_zone[0], c.entry_zone[1]);
+  const entryMid = (entryLow + entryHigh) / 2;
+  const sideClass = c.side === "long" ? "cp-side-long" : "cp-side-short";
+  const sideLabel = c.side === "long" ? "BUY / LONG" : "SELL / SHORT";
+
+  return `
+    <article class="cp-signal-card" id="${idPrefix}card-${c.id}">
+      <header class="cp-card-head">
+        <div class="cp-card-symbol-line">
+          <span class="cp-card-symbol">${escapeHtml(c.symbol)}</span>
+          <span class="cp-side-badge ${sideClass}">${sideLabel}</span>
+          ${c.needs_cfd ? '<span class="cp-badge cp-badge-cfd" title="Trades as CFD with leverage & overnight financing">Needs CFD</span>' : ''}
+        </div>
+        <div class="cp-card-meta-line">
+          <span class="cp-setup-badge">${escapeHtml(formatSetupName(c.setup))}</span>
+          <span class="cp-class-badge">${escapeHtml((c.class || "").toUpperCase())}</span>
+          <span class="cp-sessions-badge">Max ${c.max_sessions} sessions</span>
+        </div>
+      </header>
+
+      <div class="cp-card-levels">
+        <div class="cp-level-row cp-level-entry">
+          <span class="cp-level-label">Entry zone</span>
+          <span class="cp-level-val">${formatTradePrice(entryLow)} – ${formatTradePrice(entryHigh)}</span>
+        </div>
+        <div class="cp-level-row cp-level-stop">
+          <span class="cp-level-label">Stop loss</span>
+          <span class="cp-level-val">${formatTradePrice(c.stop)} <span class="cp-level-dist">(${formatDistPct(c.stop, entryMid)}%)</span></span>
+        </div>
+        <div class="cp-level-targets">
+          <div class="cp-level-row cp-level-target">
+            <span class="cp-level-label">Target 1 (1R)</span>
+            <span class="cp-level-val">${formatTradePrice(c.targets[0])} <span class="cp-level-dist">(${formatDistPct(c.targets[0], entryMid)}%)</span></span>
+          </div>
+          <div class="cp-level-row cp-level-target">
+            <span class="cp-level-label">Target 2 (2R)</span>
+            <span class="cp-level-val">${formatTradePrice(c.targets[1])} <span class="cp-level-dist">(${formatDistPct(c.targets[1], entryMid)}%)</span></span>
+          </div>
+          <div class="cp-level-row cp-level-target">
+            <span class="cp-level-label">Target 3 (3R)</span>
+            <span class="cp-level-val">${formatTradePrice(c.targets[2])} <span class="cp-level-dist">(${formatDistPct(c.targets[2], entryMid)}%)</span></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="cp-card-size">
+        <span class="cp-size-label">Suggested size:</span>
+        <span class="cp-size-val">${formatCardSize(c.size, c.risk_pct)}</span>
+      </div>
+
+      <div class="cp-card-evidence">
+        <span class="cp-evidence-tag">Verified Record</span>
+        <p class="cp-evidence-line">${escapeHtml(formatEvidenceLine(c.verdict))}</p>
+      </div>
+
+      ${c.relation ? `<div class="cp-card-relation"><span class="cp-info-icon" aria-hidden="true">ℹ</span> ${escapeHtml(c.relation)}</div>` : ''}
+
+      ${c.warnings && c.warnings.length > 0 ? `
+        <div class="cp-card-warnings">
+          ${c.warnings.map(w => `<span class="cp-warning-pill">⚠ ${escapeHtml(w)}</span>`).join("")}
+        </div>` : ''}
+
+      <div class="cp-card-chart" id="chart-wrap-${idPrefix}${c.id}">
+        ${renderMiniSvgChart(c, null)}
+      </div>
+    </article>
+  `;
+}
+
 async function loadTradeSignals() {
   const cardsGrid = document.getElementById("cpSignalsCardsGrid");
   const emptyWrap = document.getElementById("cpSignalsEmpty");
@@ -3378,76 +3449,7 @@ async function loadTradeSignals() {
       }
     } else {
       if (emptyWrap) emptyWrap.hidden = true;
-      cardsGrid.innerHTML = cards.map(c => {
-        const entryLow = Math.min(c.entry_zone[0], c.entry_zone[1]);
-        const entryHigh = Math.max(c.entry_zone[0], c.entry_zone[1]);
-        const entryMid = (entryLow + entryHigh) / 2;
-        const sideClass = c.side === "long" ? "cp-side-long" : "cp-side-short";
-        const sideLabel = c.side === "long" ? "BUY / LONG" : "SELL / SHORT";
-
-        return `
-          <article class="cp-signal-card" id="card-${c.id}">
-            <header class="cp-card-head">
-              <div class="cp-card-symbol-line">
-                <span class="cp-card-symbol">${escapeHtml(c.symbol)}</span>
-                <span class="cp-side-badge ${sideClass}">${sideLabel}</span>
-                ${c.needs_cfd ? '<span class="cp-badge cp-badge-cfd" title="Trades as CFD with leverage & overnight financing">Needs CFD</span>' : ''}
-              </div>
-              <div class="cp-card-meta-line">
-                <span class="cp-setup-badge">${escapeHtml(formatSetupName(c.setup))}</span>
-                <span class="cp-class-badge">${escapeHtml((c.class || "").toUpperCase())}</span>
-                <span class="cp-sessions-badge">Max ${c.max_sessions} sessions</span>
-              </div>
-            </header>
-
-            <div class="cp-card-levels">
-              <div class="cp-level-row cp-level-entry">
-                <span class="cp-level-label">Entry zone</span>
-                <span class="cp-level-val">${formatTradePrice(entryLow)} – ${formatTradePrice(entryHigh)}</span>
-              </div>
-              <div class="cp-level-row cp-level-stop">
-                <span class="cp-level-label">Stop loss</span>
-                <span class="cp-level-val">${formatTradePrice(c.stop)} <span class="cp-level-dist">(${formatDistPct(c.stop, entryMid)}%)</span></span>
-              </div>
-              <div class="cp-level-targets">
-                <div class="cp-level-row cp-level-target">
-                  <span class="cp-level-label">Target 1 (1R)</span>
-                  <span class="cp-level-val">${formatTradePrice(c.targets[0])} <span class="cp-level-dist">(${formatDistPct(c.targets[0], entryMid)}%)</span></span>
-                </div>
-                <div class="cp-level-row cp-level-target">
-                  <span class="cp-level-label">Target 2 (2R)</span>
-                  <span class="cp-level-val">${formatTradePrice(c.targets[1])} <span class="cp-level-dist">(${formatDistPct(c.targets[1], entryMid)}%)</span></span>
-                </div>
-                <div class="cp-level-row cp-level-target">
-                  <span class="cp-level-label">Target 3 (3R)</span>
-                  <span class="cp-level-val">${formatTradePrice(c.targets[2])} <span class="cp-level-dist">(${formatDistPct(c.targets[2], entryMid)}%)</span></span>
-                </div>
-              </div>
-            </div>
-
-            <div class="cp-card-size">
-              <span class="cp-size-label">Suggested size:</span>
-              <span class="cp-size-val">${formatCardSize(c.size, c.risk_pct)}</span>
-            </div>
-
-            <div class="cp-card-evidence">
-              <span class="cp-evidence-tag">Verified Record</span>
-              <p class="cp-evidence-line">${escapeHtml(formatEvidenceLine(c.verdict))}</p>
-            </div>
-
-            ${c.relation ? `<div class="cp-card-relation"><span class="cp-info-icon" aria-hidden="true">ℹ</span> ${escapeHtml(c.relation)}</div>` : ''}
-
-            ${c.warnings && c.warnings.length > 0 ? `
-              <div class="cp-card-warnings">
-                ${c.warnings.map(w => `<span class="cp-warning-pill">⚠ ${escapeHtml(w)}</span>`).join("")}
-              </div>` : ''}
-
-            <div class="cp-card-chart" id="chart-wrap-${c.id}">
-              ${renderMiniSvgChart(c, null)}
-            </div>
-          </article>
-        `;
-      }).join("");
+      cardsGrid.innerHTML = cards.map(c => renderSignalCardMarkup(c)).join("");
 
       // Asynchronously fetch price history to update each mini SVG chart
       cards.forEach(c => {
@@ -3506,6 +3508,235 @@ async function loadTradeSignals() {
       cardsGrid.innerHTML = `<p class="cp-empty">Signals data unavailable (${escapeHtml(err.message)}).</p>`;
     }
   }
+}
+
+// -----------------------------------------------------------------------------
+// Asset search & one-off signal check (Signals tab)
+// -----------------------------------------------------------------------------
+let signalSearchRows = [];
+let signalSearchController = null;
+let signalCheckController = null;
+
+function setupSignalSearchControls() {
+  const form = document.getElementById("cpSignalSearchForm");
+  const input = document.getElementById("cpSignalSearchInput");
+  if (!form || !input) return;
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    runSignalSearch(input.value);
+  });
+
+  let timer = null;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const query = input.value.trim();
+    if (query.length < 2) {
+      clearSignalSearchResults();
+      return;
+    }
+    timer = setTimeout(() => runSignalSearch(query), 350);
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      clearSignalSearchResults();
+      input.blur();
+    }
+  });
+}
+
+function clearSignalSearchResults() {
+  const status = document.getElementById("cpSignalSearchStatus");
+  const results = document.getElementById("cpSignalSearchResults");
+  const check = document.getElementById("cpSignalCheck");
+  if (signalSearchController) signalSearchController.abort();
+  if (signalCheckController) signalCheckController.abort();
+  signalSearchRows = [];
+  if (status) status.textContent = "";
+  if (results) {
+    results.hidden = true;
+    results.innerHTML = "";
+  }
+  if (check) {
+    check.hidden = true;
+    check.innerHTML = "";
+  }
+}
+
+async function runSignalSearch(rawQuery) {
+  const status = document.getElementById("cpSignalSearchStatus");
+  const results = document.getElementById("cpSignalSearchResults");
+  const check = document.getElementById("cpSignalCheck");
+  if (!status || !results) return;
+
+  const query = (rawQuery || "").trim();
+  if (query.length < 2) {
+    clearSignalSearchResults();
+    return;
+  }
+  if (signalSearchController) signalSearchController.abort();
+  signalSearchController = new AbortController();
+  if (signalCheckController) {
+    signalCheckController.abort();
+    signalCheckController = null;
+  }
+  if (check) {
+    check.hidden = true;
+    check.innerHTML = "";
+  }
+  status.textContent = "Searching Yahoo Finance…";
+  status.hidden = false;
+
+  try {
+    const rows = await fetchJson(
+      `/api/capital/signals/trade/search?q=${encodeURIComponent(query)}`,
+      { signal: signalSearchController.signal }
+    );
+    signalSearchRows = Array.isArray(rows) ? rows : [];
+    renderSignalSearchResults();
+    status.textContent = signalSearchRows.length
+      ? "Pick an asset to check its setups."
+      : "No matching asset found.";
+  } catch (err) {
+    if (err && err.name === "AbortError") return;
+    signalSearchRows = [];
+    results.hidden = true;
+    results.innerHTML = "";
+    status.textContent = `Search failed: ${err.message}`;
+  }
+}
+
+function renderSignalSearchResults() {
+  const results = document.getElementById("cpSignalSearchResults");
+  if (!results) return;
+  if (signalSearchRows.length === 0) {
+    results.hidden = true;
+    results.innerHTML = "";
+    return;
+  }
+  results.hidden = false;
+  results.innerHTML = signalSearchRows.map((row, index) => `
+    <li class="cp-signal-search-result">
+      <button type="button" class="cp-signal-search-pick" data-index="${index}">
+        <span class="cp-signal-search-symbol">${escapeHtml(row.symbol)}</span>
+        <span class="cp-signal-search-name">${escapeHtml(row.name || row.symbol)}</span>
+        <span class="cp-signal-search-meta">${escapeHtml(row.exchange || "")} · ${escapeHtml((row.class || "").toUpperCase())}</span>
+      </button>
+    </li>
+  `).join("");
+  results.querySelectorAll(".cp-signal-search-pick").forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = signalSearchRows[Number(button.dataset.index)];
+      if (row) checkSignalFor(row);
+    });
+  });
+}
+
+async function checkSignalFor(row) {
+  const status = document.getElementById("cpSignalSearchStatus");
+  const results = document.getElementById("cpSignalSearchResults");
+  const check = document.getElementById("cpSignalCheck");
+  if (!check) return;
+
+  if (signalCheckController) signalCheckController.abort();
+  signalCheckController = new AbortController();
+  if (signalSearchController) {
+    signalSearchController.abort();
+    signalSearchController = null;
+  }
+  if (results) results.hidden = true;
+  if (status) status.textContent = "";
+  check.hidden = false;
+  check.innerHTML = `<p class="cp-signal-check-loading" role="status">Fetching daily bars and checking ${escapeHtml(row.symbol)} against the verified setups…</p>`;
+
+  const params = new URLSearchParams({
+    symbol: row.symbol,
+    yahoo: row.symbol,
+    name: row.name || row.symbol,
+    exchange: row.exchange || "",
+    class: row.class || "stock",
+  });
+  if (currentAccount) params.set("account", currentAccount);
+
+  try {
+    const result = await fetchJson(`/api/capital/signals/trade/check?${params.toString()}`, {
+      signal: signalCheckController.signal,
+    });
+    renderSignalCheck(result);
+  } catch (err) {
+    if (err && err.name === "AbortError") return;
+    check.innerHTML = `<p class="cp-form-error">The check failed: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderSignalCheck(check) {
+  const wrap = document.getElementById("cpSignalCheck");
+  if (!wrap) return;
+  const cards = Array.isArray(check.cards) ? check.cards : [];
+  const suppressed = Array.isArray(check.suppressed) ? check.suppressed : [];
+  const verdicts = Array.isArray(check.verdicts) ? check.verdicts : [];
+  const closes = (check.recent_closes || []).map((pair) => pair[1]);
+  const publishing = verdicts.filter((verdict) => verdict.publishes).length;
+  const heading = check.name && check.name !== check.symbol
+    ? `${escapeHtml(check.symbol)} · ${escapeHtml(check.name)}`
+    : escapeHtml(check.symbol);
+  const session = check.session ? formatDay(check.session) : "—";
+
+  let html = `
+    <div class="cp-signal-check-head">
+      <div class="cp-signal-check-title">
+        <strong>${heading}</strong>
+        <span class="cp-signal-check-meta">${escapeHtml(check.exchange || "")}${check.currency ? ` · ${escapeHtml(check.currency)}` : ""} · ${escapeHtml((check.class || "").toUpperCase())} · ${check.bars_used || 0} bars · latest ${session} · close ${formatTradePrice(check.close)}</span>
+      </div>
+      <div class="cp-signal-check-badges">
+        ${check.held ? '<span class="cp-badge cp-badge-confirmed">Held</span>' : ''}
+        ${check.on_watchlist ? '<span class="cp-badge">On watchlist</span>' : ''}
+      </div>
+    </div>`;
+
+  if (cards.length > 0) {
+    html += `<p class="cp-signal-check-result cp-signal-check-yes">Potential verified signal on ${escapeHtml(check.symbol)}.</p>`;
+    html += `<div class="cp-signals-cards-grid">${cards.map((card) => renderSignalCardMarkup(card, "check-")).join("")}</div>`;
+  } else {
+    html += `<p class="cp-signal-check-result">No verified setup fires today for ${escapeHtml(check.symbol)}.</p>`;
+    if (suppressed.length === 0) {
+      html += `<p class="cp-signal-check-sub">None of the six setups fired on its latest session.</p>`;
+    }
+  }
+
+  if (suppressed.length > 0) {
+    html += `
+      <div class="cp-table-wrap cp-signal-check-suppressed">
+        <table class="cp-table">
+          <thead><tr><th scope="col">Setup</th><th scope="col">Side</th><th scope="col">Why it didn't publish</th></tr></thead>
+          <tbody>
+            ${suppressed.map((item) => `
+              <tr>
+                <td>${escapeHtml(formatSetupName(item.setup))}</td>
+                <td>${escapeHtml((item.side || "").toUpperCase())}</td>
+                <td>${escapeHtml(item.reason || "—")}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  html += `<p class="cp-signal-check-evidence">${verdicts.length === 0
+    ? `The latest run has no evidence for ${escapeHtml(check.class || "")} assets. Run the signals again.`
+    : publishing > 0
+      ? `${publishing} of ${verdicts.length} ${escapeHtml(check.class || "")} setups have passed validation.`
+      : `No ${escapeHtml(check.class || "")} setup has passed validation yet.`}</p>`;
+
+  if (check.notes && check.notes.length > 0) {
+    html += `<div class="cp-scorecard-notes">${check.notes.map((note) => `<div class="cp-scorecard-note">${escapeHtml(note)}</div>`).join("")}</div>`;
+  }
+
+  wrap.innerHTML = html;
+  cards.forEach((card) => {
+    const chart = document.getElementById(`chart-wrap-check-${card.id}`);
+    if (chart) chart.innerHTML = renderMiniSvgChart(card, closes.length ? closes : null);
+  });
 }
 
 async function loadTradeRecord() {
@@ -4363,6 +4594,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupCollapsibles();
   setupDividendProjectionControls();
   setupSignalsControls();
+  setupSignalSearchControls();
   setupWatchlistControls();
   setupUploadDialog();
   setupGrantDialog();

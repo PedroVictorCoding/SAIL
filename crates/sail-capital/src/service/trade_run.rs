@@ -57,6 +57,54 @@ pub struct RecordTotals {
     pub cumulative_r: f64,
 }
 
+/// One instrument matched by an asset search.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SymbolSearchResult {
+    /// The Yahoo symbol, e.g. `AAPL` or `^GSPC`.
+    pub symbol: String,
+    /// Display name.
+    pub name: String,
+    /// Exchange, as Yahoo labels it.
+    pub exchange: String,
+    /// Asset class used by the setup costs and correlation group.
+    pub class: AssetClass,
+}
+
+/// A one-off signal check for an asset outside the daily universe.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TradeSignalCheck {
+    /// The Yahoo symbol checked.
+    pub symbol: String,
+    /// Display name.
+    pub name: String,
+    /// Exchange, when the search supplied one.
+    pub exchange: Option<String>,
+    /// Asset class used.
+    pub class: AssetClass,
+    /// Trading currency from the price series, when known.
+    pub currency: Option<String>,
+    /// Session of the latest bar used.
+    pub session: Option<NaiveDate>,
+    /// Latest close used.
+    pub close: f64,
+    /// Daily bars with open, high and low.
+    pub bars_used: usize,
+    /// Cards that publish for this instrument today.
+    pub cards: Vec<crate::trade::SignalCard>,
+    /// Setups that fired but did not publish, with the reason.
+    pub suppressed: Vec<crate::trade::SuppressedSignal>,
+    /// Verdicts for the instrument's asset group.
+    pub verdicts: Vec<crate::trade::Verdict>,
+    /// The owner already holds this symbol.
+    pub held: bool,
+    /// The symbol is already on the daily watchlist.
+    pub on_watchlist: bool,
+    /// The last closes, oldest first, for the mini chart.
+    pub recent_closes: Vec<(NaiveDate, f64)>,
+    /// Plain notes on the evidence and the limits of a one-off check.
+    pub notes: Vec<String>,
+}
+
 /// The next scheduled run after `now`: the next weekday at [`RUN_AT_UTC`].
 pub fn next_run_after(now: DateTime<Utc>) -> DateTime<Utc> {
     let mut day = now.date_naive();
@@ -75,6 +123,52 @@ pub fn next_run_after(now: DateTime<Utc>) -> DateTime<Utc> {
 /// Instrument key for a watchlist entry.
 pub fn watch_key(symbol: &str) -> String {
     format!("watch:{}", symbol.to_ascii_uppercase())
+}
+
+/// Whether a Yahoo symbol is safe to send to the helpers.
+fn validate_search_symbol(symbol: &str) -> Result<(), ServiceError> {
+    let valid = !symbol.is_empty()
+        && symbol.len() <= 24
+        && symbol
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-=^".contains(&byte))
+        && (symbol.as_bytes()[0].is_ascii_alphanumeric() || symbol.as_bytes()[0] == b'^');
+    if valid {
+        Ok(())
+    } else {
+        Err(ServiceError::BadRequest(format!(
+            "{symbol:?} isn't a valid Yahoo symbol."
+        )))
+    }
+}
+
+/// Parses the optional asset class from the check request; stock by default.
+fn parse_class(class: Option<&str>) -> Result<AssetClass, ServiceError> {
+    match class.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(AssetClass::Stock),
+        Some(value) => match value.to_ascii_lowercase().as_str() {
+            "stock" => Ok(AssetClass::Stock),
+            "etf" => Ok(AssetClass::Etf),
+            "fx" => Ok(AssetClass::Fx),
+            "index" => Ok(AssetClass::Index),
+            "commodity" => Ok(AssetClass::Commodity),
+            _ => Err(ServiceError::BadRequest(format!(
+                "Unknown asset class {value}."
+            ))),
+        },
+    }
+}
+
+/// Maps a Yahoo quote type to the class whose costs and evidence group apply.
+fn asset_class_for(quote_type: &str) -> Option<AssetClass> {
+    match quote_type.to_ascii_uppercase().as_str() {
+        "EQUITY" => Some(AssetClass::Stock),
+        "ETF" | "MUTUALFUND" => Some(AssetClass::Etf),
+        "INDEX" => Some(AssetClass::Index),
+        "CURRENCY" => Some(AssetClass::Fx),
+        "FUTURE" | "CRYPTOCURRENCY" => Some(AssetClass::Commodity),
+        _ => None,
+    }
 }
 
 impl CapitalService {
@@ -132,6 +226,273 @@ impl CapitalService {
             running: self.trade_running.try_lock().is_err(),
             last_error: self.trade_last_error.lock().ok().and_then(|e| e.clone()),
         })
+    }
+
+    /// Searches Yahoo for instruments the owner can check for a potential signal.
+    pub async fn search_trade_symbols(
+        &self,
+        query: &str,
+    ) -> Result<Vec<SymbolSearchResult>, ServiceError> {
+        self.ensure_asset_search()?;
+        let query = query.trim();
+        if query.is_empty() || query.chars().count() > 64 {
+            return Err(ServiceError::BadRequest(
+                "Search needs between 1 and 64 characters.".into(),
+            ));
+        }
+        let matches = self
+            .prices
+            .search(query)
+            .await
+            .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
+        let mut results = Vec::new();
+        for item in matches {
+            let Some(class) = asset_class_for(&item.quote_type) else {
+                continue;
+            };
+            results.push(SymbolSearchResult {
+                symbol: item.symbol,
+                name: item.name,
+                exchange: item.exchange,
+                class,
+            });
+            if results.len() >= 10 {
+                break;
+            }
+        }
+        Ok(results)
+    }
+
+    /// Checks one asset against the latest published scoreboard, even when it isn't held
+    /// or on the watchlist. The price history is fetched for this look only and isn't
+    /// stored; adding the asset to the watchlist includes it in later runs.
+    pub async fn check_trade_signal(
+        &self,
+        account: &AccountId,
+        symbol: &str,
+        yahoo: Option<&str>,
+        name: Option<&str>,
+        exchange: Option<&str>,
+        class: Option<&str>,
+    ) -> Result<TradeSignalCheck, ServiceError> {
+        self.ensure_asset_search()?;
+        let symbol = symbol.trim();
+        let yahoo = yahoo.unwrap_or(symbol).trim();
+        validate_search_symbol(symbol)?;
+        validate_search_symbol(yahoo)?;
+        let class = parse_class(class)?;
+        let now = Utc::now();
+        let (run_at, day) = self.store.latest_trade_run(account)?.ok_or_else(|| {
+            ServiceError::BadRequest(
+                "Run the signals once before checking an asset: the scoreboard supplies the evidence."
+                    .into(),
+            )
+        })?;
+        let series = self
+            .prices
+            .daily_as(symbol, yahoo)
+            .await
+            .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
+        let bars: Vec<Bar> = series
+            .bars
+            .iter()
+            .filter_map(|bar| {
+                Some(Bar {
+                    session: bar.session,
+                    open: bar.open?.to_f64()?,
+                    high: bar.high?.to_f64()?,
+                    low: bar.low?.to_f64()?,
+                    close: bar.close.to_f64()?,
+                })
+            })
+            .filter(|bar| bar.open > 0.0 && bar.high >= bar.low && bar.close > 0.0)
+            .collect();
+        if bars.len() < MIN_OHL_BARS {
+            return Err(ServiceError::BadRequest(format!(
+                "{symbol} has only {} daily bars with open/high/low; at least {MIN_OHL_BARS} are needed to check its setups.",
+                bars.len()
+            )));
+        }
+
+        let yahoo_owned = yahoo.to_string();
+        let mut earnings = Vec::new();
+        if matches!(class, AssetClass::Stock | AssetClass::Etf) {
+            let _ = self
+                .refresh_earnings_with_timeout(
+                    std::slice::from_ref(&yahoo_owned),
+                    std::time::Duration::from_secs(20),
+                )
+                .await;
+            earnings = self.earnings_for(Some(&yahoo_owned))?;
+        }
+
+        let insights = self.insights(account, AsOf::now(), now)?;
+        let account_value = insights
+            .account
+            .as_ref()
+            .and_then(|account| account.account_value.amount.to_f64());
+        let risk_pct = self
+            .policy(account)?
+            .current
+            .limits
+            .risk_per_trade_pct
+            .to_f64()
+            .unwrap_or(0.5);
+        let account_currency = self.account_currency(account)?;
+        let watch = self.watchlist()?;
+        let mut fx_closes = FxCloses::new();
+        for item in &watch {
+            if item.class != AssetClass::Fx {
+                continue;
+            }
+            let key = watch_key(&item.symbol);
+            if let Some(stored) = self.bars_for(&key, now)?
+                && let Some(last) = stored.last()
+            {
+                fx_closes.insert(item.symbol.to_ascii_uppercase(), last.close);
+            }
+        }
+
+        let checked_key = format!("check:{}", symbol.to_ascii_uppercase());
+        let checked_currency = series
+            .currency
+            .as_ref()
+            .map(|currency| currency.as_str().to_string());
+        let earnings_known = !earnings.is_empty();
+        let checked = Instrument {
+            key: checked_key.clone(),
+            symbol: symbol.to_string(),
+            class,
+            foreign_currency: checked_currency
+                .as_deref()
+                .is_some_and(|currency| currency != account_currency),
+            bars,
+            earnings,
+        };
+        let fx = |instrument: &Instrument| -> Option<f64> {
+            if instrument.key != checked_key {
+                return None;
+            }
+            let currency = checked_currency.as_deref()?;
+            fx_rate(currency, &account_currency, &fx_closes)
+        };
+        let held = self
+            .held_instruments(account)?
+            .iter()
+            .any(|(_, held_symbol)| held_symbol.eq_ignore_ascii_case(symbol));
+        let held_fn = |key: &str| -> Option<String> {
+            if key == checked_key && held {
+                Some(String::new())
+            } else {
+                None
+            }
+        };
+        let check = crate::trade::check_instrument(
+            &checked,
+            &day.scoreboard,
+            account_value,
+            risk_pct,
+            &fx,
+            &held_fn,
+        );
+
+        let group = crate::trade::group_of(class);
+        let verdicts: Vec<crate::trade::Verdict> = day
+            .scoreboard
+            .iter()
+            .filter(|verdict| verdict.group == group)
+            .cloned()
+            .collect();
+        let on_watchlist = watch.iter().any(|item| {
+            item.symbol.eq_ignore_ascii_case(symbol) || item.yahoo.eq_ignore_ascii_case(yahoo)
+        });
+        let last = checked
+            .bars
+            .last()
+            .expect("the checked instrument has at least one bar");
+        let recent_closes: Vec<(NaiveDate, f64)> = checked
+            .bars
+            .iter()
+            .rev()
+            .take(60)
+            .rev()
+            .map(|bar| (bar.session, bar.close))
+            .collect();
+
+        let mut notes = vec![format!(
+            "Checked against the scoreboard from the run at {} (session {}). This one-off look does not add {} to the daily universe.",
+            run_at.format("%Y-%m-%d %H:%M UTC"),
+            day.session,
+            symbol
+        )];
+        if verdicts.is_empty() {
+            notes.push(format!(
+                "The latest run has no {group} verdicts; run the signals again before relying on this check."
+            ));
+        } else if !verdicts.iter().any(|verdict| verdict.publishes) {
+            notes.push(format!(
+                "No {group} setup has passed validation, so a card cannot publish for {symbol} yet."
+            ));
+        }
+        if !on_watchlist {
+            notes.push(format!(
+                "Add {symbol} to the watchlist to include it in the next daily run."
+            ));
+        }
+        if class == AssetClass::Stock && !earnings_known {
+            notes.push(format!(
+                "No earnings dates were available for {symbol}, so the earnings filter could not be applied."
+            ));
+        }
+        if check.session < day.session {
+            notes.push(format!(
+                "{symbol}'s latest bar is {} and older than the run session {}; treat any plan as historical.",
+                check.session, day.session
+            ));
+        }
+        notes.push(
+            "Prices are Yahoo daily bars; a stop and a target in the same session count as the stop, and costs are assumptions."
+                .to_string(),
+        );
+
+        Ok(TradeSignalCheck {
+            symbol: symbol.to_string(),
+            name: name
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(symbol)
+                .to_string(),
+            exchange: exchange
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.chars().take(80).collect()),
+            class,
+            currency: checked_currency,
+            session: Some(last.session),
+            close: last.close,
+            bars_used: checked.bars.len(),
+            cards: check.cards,
+            suppressed: check.suppressed,
+            verdicts,
+            held,
+            on_watchlist,
+            recent_closes,
+            notes,
+        })
+    }
+
+    fn ensure_asset_search(&self) -> Result<(), ServiceError> {
+        if !self.prices_configured {
+            return Err(ServiceError::BadRequest(
+                crate::market::PriceSourceError::NotConfigured.to_string(),
+            ));
+        }
+        if self.prices.source_id() != "yfinance" {
+            return Err(ServiceError::BadRequest(
+                "Asset search needs Yahoo price fetching (SAIL_PRICES_SOURCE=yfinance).".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Published cards with their grades and totals.
@@ -301,6 +662,15 @@ impl CapitalService {
 
     /// Refetches earnings dates for stocks whose snapshot is missing or older than a week.
     async fn refresh_earnings(&self, yahoo: &[String]) -> Result<(), ServiceError> {
+        self.refresh_earnings_with_timeout(yahoo, std::time::Duration::from_secs(600))
+            .await
+    }
+
+    async fn refresh_earnings_with_timeout(
+        &self,
+        yahoo: &[String],
+        timeout: std::time::Duration,
+    ) -> Result<(), ServiceError> {
         let now = Utc::now();
         let mut stale = Vec::new();
         for symbol in yahoo {
@@ -343,9 +713,7 @@ impl CapitalService {
                 }
             }
             command.env("XDG_CACHE_HOME", crate::market::yahoo::DEFAULT_CACHE);
-            let Ok(Ok(output)) =
-                tokio::time::timeout(std::time::Duration::from_secs(600), command.output()).await
-            else {
+            let Ok(Ok(output)) = tokio::time::timeout(timeout, command.output()).await else {
                 tracing::warn!("earnings helper did not finish");
                 continue;
             };
@@ -646,5 +1014,33 @@ mod tests {
             next_run_after(mon),
             Utc.with_ymd_and_hms(2026, 11, 16, 22, 30, 0).unwrap()
         );
+    }
+
+    #[test]
+    fn yahoo_quote_types_map_to_the_signal_groups() {
+        assert_eq!(asset_class_for("EQUITY"), Some(AssetClass::Stock));
+        assert_eq!(asset_class_for("etf"), Some(AssetClass::Etf));
+        assert_eq!(asset_class_for("MUTUALFUND"), Some(AssetClass::Etf));
+        assert_eq!(asset_class_for("INDEX"), Some(AssetClass::Index));
+        assert_eq!(asset_class_for("CURRENCY"), Some(AssetClass::Fx));
+        assert_eq!(asset_class_for("FUTURE"), Some(AssetClass::Commodity));
+        assert_eq!(
+            asset_class_for("CRYPTOCURRENCY"),
+            Some(AssetClass::Commodity)
+        );
+        assert_eq!(asset_class_for("BOND"), None);
+    }
+
+    #[test]
+    fn search_symbols_and_classes_are_validated() {
+        assert!(validate_search_symbol("AAPL").is_ok());
+        assert!(validate_search_symbol("^GSPC").is_ok());
+        assert!(validate_search_symbol("BRK-B").is_ok());
+        assert!(validate_search_symbol("").is_err());
+        assert!(validate_search_symbol("A B").is_err());
+        assert!(validate_search_symbol("-AAPL").is_err());
+        assert_eq!(parse_class(None).unwrap(), AssetClass::Stock);
+        assert_eq!(parse_class(Some("etf")).unwrap(), AssetClass::Etf);
+        assert!(parse_class(Some("bond")).is_err());
     }
 }

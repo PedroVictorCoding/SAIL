@@ -132,6 +132,24 @@
       </p>
     </div>
 
+    <!-- Asset search & one-off signal check -->
+    <section class="cp-panel cp-signal-search" aria-labelledby="cpSignalSearchTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h3 id="cpSignalSearchTitle">Check another asset</h3>
+          <span class="cp-sub-notice">Search a listed asset outside your portfolio or watchlist and see whether a verified setup fires today.</span>
+        </div>
+      </header>
+      <form class="cp-signal-search-form" id="cpSignalSearchForm" role="search">
+        <label class="cp-sr-only" for="cpSignalSearchInput">Search by asset name or symbol</label>
+        <input class="cp-input" id="cpSignalSearchInput" type="search" placeholder="Search by name or symbol, e.g. NVDA, SAP, gold" autocomplete="off" spellcheck="false" />
+        <button class="cp-button cp-primary" id="cpSignalSearchBtn" type="submit">Check asset</button>
+      </form>
+      <p class="cp-signal-search-status" id="cpSignalSearchStatus" role="status" aria-live="polite"></p>
+      <ul class="cp-signal-search-results" id="cpSignalSearchResults" hidden></ul>
+      <div class="cp-signal-check" id="cpSignalCheck" hidden></div>
+    </section>
+
     <!-- Active Cards List -->
     <section class="cp-signals-cards-section" aria-label="Published trade signals">
       <div class="cp-signals-cards-grid" id="cpSignalsCardsGrid">
@@ -758,7 +776,7 @@
       </header>
 
       <div class="cp-watchlist-intro">
-        <p>The signal universe includes your holdings plus this watchlist of liquid instruments. Price fetching queries only these symbols through Yahoo Finance.</p>
+        <p>The signal universe includes your holdings plus this watchlist of liquid instruments. Use <strong>Check another asset</strong> on Signals to look up anything else without adding it. Price fetching queries only these symbols through Yahoo Finance.</p>
       </div>
 
       <div class="cp-table-wrap">

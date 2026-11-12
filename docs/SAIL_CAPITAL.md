@@ -225,8 +225,9 @@ do."
   or the owner's name. SAIL runs `scripts/prices/yfinance_daily.py` once per symbol with a
   cleared environment, at most one per second, 100 per refresh, 8 MB of output and
   90 seconds each. Fetching only happens when the owner presses **Fetch prices**.
-  `SAIL_YFINANCE_PYTHON`, `SAIL_YFINANCE_SCRIPT` and `SAIL_YFINANCE_CACHE` override the
-  defaults.
+  `SAIL_YFINANCE_PYTHON`, `SAIL_YFINANCE_SCRIPT`, `SAIL_YFINANCE_SEARCH_SCRIPT` and
+  `SAIL_YFINANCE_CACHE` override the defaults. Symbol search uses
+  `scripts/prices/search.py`; it sends only the typed query.
 
 XTB suffixes map to Yahoo's: `.US` has none (`BRK.B.US` becomes `BRK-B`), `.PT` becomes
 `.LS`, `.NL` `.AS`, `.UK` `.L`, `.FR` `.PA`, `.ES` `.MC`, `.IT` `.MI` and `.DE` stays
@@ -441,6 +442,15 @@ SAIL never places orders.
 Each entry maps the XTB symbol to the Yahoo symbol. The owner edits the list in Data,
 and each change is stored append-only. Fetching sends only these symbols to Yahoo.
 
+**Checking any other asset.** The Signals tab has **Check another asset**: a symbol or
+name search over Yahoo's listed instruments. Choosing a result fetches that symbol's
+daily bars (and earnings dates, for stocks and ETFs) for the look and replays the six
+setups against the latest published scoreboard. It shows the same card when a setup fires and its group has passed
+validation, or the setups that fired with the reason each did not publish. The one-off
+check does not store the bars or add the symbol to the universe; adding it to the
+watchlist includes it in later daily runs. A search needs
+`SAIL_PRICES_SOURCE=yfinance`, because it is a Yahoo query.
+
 **Setups** (`trade/`). Six fixed rules on daily bars, each with a long and a short mirror:
 - trend pullback (RSI(2) against the 50/200 trend);
 - volatility-squeeze breakout;
@@ -562,6 +572,8 @@ currency), and a note says so.
 | `POST /signals/refresh?account=` | Starts the model helpers in the background |
 | `GET /outlook?account=&symbol=&horizon=&cutoff=` | The blended fan for one holding (a replay when `cutoff` is given), with the closes before it and every session date |
 | `GET /signals/trade?account=` | The latest run (cards, scoreboard, suppressed firings, notes), when it ran and the next run |
+| `GET /signals/trade/search?q=` | Yahoo instrument matches: symbol, name, exchange and asset class (at most 10) |
+| `GET /signals/trade/check?account=&symbol=&yahoo=&name=&exchange=&class=` | One asset checked against the latest scoreboard: cards, suppressed firings, group verdicts, recent closes and notes |
 | `POST /signals/trade/run?account=` | Fetches prices and earnings, computes, publishes and grades now |
 | `GET /signals/trade/record?account=` | Every published card with its grade, and totals |
 | `GET /signals/trade/guards?account=` | Trailing stops and trend for each holding |

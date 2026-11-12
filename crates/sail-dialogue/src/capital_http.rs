@@ -62,6 +62,8 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/signals/refresh", post(signal_refresh))
         .route("/outlook", get(outlook))
         .route("/signals/trade", get(trade_view))
+        .route("/signals/trade/search", get(trade_search))
+        .route("/signals/trade/check", get(trade_check))
         .route("/signals/trade/run", post(trade_run))
         .route("/signals/trade/record", get(trade_record))
         .route("/signals/trade/guards", get(trade_guards))
@@ -731,6 +733,62 @@ async fn track_record(
     })
     .await?;
     Ok(no_store(to_json(&record)?))
+}
+
+#[derive(Deserialize)]
+struct TradeSearchQuery {
+    q: String,
+}
+
+async fn trade_search(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<TradeSearchQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let results = s
+        .service
+        .search_trade_symbols(&q.q)
+        .await
+        .map_err(failure)?;
+    Ok(no_store(to_json(&results)?))
+}
+
+#[derive(Deserialize)]
+struct TradeCheckQuery {
+    account: Option<String>,
+    symbol: String,
+    #[serde(default)]
+    yahoo: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    exchange: Option<String>,
+    #[serde(default)]
+    class: Option<String>,
+}
+
+async fn trade_check(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<TradeCheckQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let id = q.account.clone();
+    let account = blocking(&s, move |svc| svc.resolve_account(id.as_deref())).await?;
+    let check = s
+        .service
+        .check_trade_signal(
+            &account,
+            &q.symbol,
+            q.yahoo.as_deref(),
+            q.name.as_deref(),
+            q.exchange.as_deref(),
+            q.class.as_deref(),
+        )
+        .await
+        .map_err(failure)?;
+    Ok(no_store(to_json(&check)?))
 }
 
 async fn trade_view(
