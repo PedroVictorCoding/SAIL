@@ -286,6 +286,7 @@ fn capital_routes(
         Ok(service) => {
             let service = Arc::new(service);
             service.start();
+            sail_capital::service::set_global(service.clone());
             Some(crate::capital_http::router(service, authority))
         }
         Err(error) => {

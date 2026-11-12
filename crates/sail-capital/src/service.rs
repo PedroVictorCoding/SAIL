@@ -11,6 +11,7 @@ use crate::store::{
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 mod dividends_run;
 mod trade_run;
@@ -122,6 +123,19 @@ pub struct CapitalService {
     evaluation_cache: std::sync::Mutex<Option<(String, crate::forecast::EvalReport)>>,
     /// The signal report, cached like the evaluation.
     signals_cache: std::sync::Mutex<Option<(String, crate::signals::SignalReport)>>,
+}
+
+/// The daemon's Capital service, set once when Dialogue mounts the owner API.
+static GLOBAL: OnceLock<Arc<CapitalService>> = OnceLock::new();
+
+/// Publishes the daemon's service to in-process tools (the voice assistant).
+pub fn set_global(service: Arc<CapitalService>) {
+    let _ = GLOBAL.set(service);
+}
+
+/// The daemon's service, when Capital started.
+pub fn global() -> Option<Arc<CapitalService>> {
+    GLOBAL.get().cloned()
 }
 
 /// Where the ledger lives: `$SAIL_CAPITAL_DIR`, or else SAIL's data dir `capital/`.
