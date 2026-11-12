@@ -31,8 +31,16 @@
 //! starts at `i + 1`. Selection at date `d` uses trades whose exit is on or before `d`.
 //!
 //! **Purity.** No I/O and no clock. Prices are `f64` here (statistics, not ledger money).
-use chrono::NaiveDate;
+mod indicators;
+mod setups;
+mod sim;
+mod stats;
+
+use std::collections::{HashMap, HashSet};
+
+use chrono::{Datelike, Days, NaiveDate, Weekday};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Fewest closed trades before a setup and side can be judged.
 pub const MIN_TRADES: u32 = 100;
@@ -375,35 +383,18 @@ pub struct HoldingGuard {
 /// Every firing of `setup` on the instrument's bars: `(session index, side)`, using only
 /// bars up to that index.
 pub fn fire(setup: SetupId, bars: &[Bar]) -> Vec<(usize, Side)> {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = (setup, bars);
-    Vec::new()
+    setups::fire(setup, bars)
 }
 
 /// Replays every firing of every setup on `instrument` as trades with `costs`. Trades
 /// still open at the last bar are left out.
 pub fn replay(instrument: &Instrument, costs: Costs) -> Vec<Trade> {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = (instrument, costs);
-    Vec::new()
+    sim::replay(instrument, costs)
 }
 
 /// Evidence over `trades` (any mix of instruments) for one setup and side.
 pub fn evidence(setup: SetupId, side: Side, trades: &[Trade]) -> Evidence {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = trades;
-    Evidence {
-        setup,
-        side,
-        trades: 0,
-        hit_target1: 0.0,
-        hit_target1_ci: (0.0, 0.0),
-        expectancy_r: 0.0,
-        expectancy_ci: (0.0, 0.0),
-        profit_factor: 0.0,
-        max_drawdown_r: 0.0,
-        mean_sessions: 0.0,
-    }
+    stats::evidence(setup, side, trades)
 }
 
 /// The group an asset class pools with (see [`Verdict::group`]).
@@ -424,15 +415,7 @@ pub fn verdict(
     trades: &[Trade],
     as_of: NaiveDate,
 ) -> Verdict {
-    let _ = as_of;
-    let e = evidence(setup, side, trades);
-    Verdict {
-        group: group.into(),
-        selection: e.clone(),
-        holdout: e,
-        publishes: false,
-        reason: "not implemented".into(),
-    }
+    stats::verdict(group, setup, side, trades, as_of)
 }
 
 /// Today's signals.
@@ -454,28 +437,208 @@ pub fn signal_day(
     fx_to_account: &dyn Fn(&Instrument) -> Option<f64>,
     held: &dyn Fn(&str) -> Option<String>,
 ) -> SignalDay {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = (universe, account_value, risk_pct, fx_to_account, held);
+    let notes = vec![
+        "History covers the current watchlist only; names that disappeared are not included."
+            .to_string(),
+        "Daily bars only; a stop and a target in the same session count as the stop.".to_string(),
+        "Costs are assumptions: spread, FX conversion and CFD overnight financing.".to_string(),
+    ];
+    let Some(session) = universe
+        .iter()
+        .filter_map(|instrument| instrument.bars.last().map(|bar| bar.session))
+        .max()
+    else {
+        return SignalDay {
+            session: NaiveDate::MIN,
+            cards: Vec::new(),
+            scoreboard: Vec::new(),
+            suppressed: Vec::new(),
+            notes,
+        };
+    };
+
+    let mut pooled: HashMap<&'static str, Vec<Trade>> = HashMap::new();
+    for instrument in universe {
+        let trades = sim::replay(instrument, Costs::default_for(instrument.class));
+        pooled
+            .entry(group_of(instrument.class))
+            .or_default()
+            .extend(trades);
+    }
+
+    let mut scoreboard = Vec::new();
+    for group in ["fx", "stocks", "indices"] {
+        let trades = pooled.get(group).map(Vec::as_slice).unwrap_or(&[]);
+        for setup in SetupId::ALL {
+            for side in [Side::Long, Side::Short] {
+                scoreboard.push(stats::verdict(group, setup, side, trades, session));
+            }
+        }
+    }
+
+    let find_verdict = |group: &str, setup: SetupId, side: Side| {
+        scoreboard
+            .iter()
+            .find(|verdict| verdict.group == group && verdict.selection.setup == setup)
+            .filter(|verdict| verdict.selection.side == side)
+            .cloned()
+    };
+
+    let mut cards = Vec::new();
+    let mut suppressed = Vec::new();
+    for instrument in universe {
+        let Some(index) = instrument.bars.len().checked_sub(1) else {
+            continue;
+        };
+        let atr = indicators::atr(&instrument.bars, 14);
+        let Some(atr) = atr[index] else {
+            continue;
+        };
+        if !(atr.is_finite() && atr > 0.0) {
+            continue;
+        }
+        let close = instrument.bars[index].close;
+        let session_date = instrument.bars[index].session;
+        for setup in SetupId::ALL {
+            for (fired, side) in fire(setup, &instrument.bars) {
+                if fired != index {
+                    continue;
+                }
+                let Some(verdict) = find_verdict(group_of(instrument.class), setup, side) else {
+                    continue;
+                };
+                if !verdict.publishes {
+                    suppressed.push((instrument.symbol.clone(), setup, side));
+                    continue;
+                }
+                let (stop_atr, max_sessions) = setup.plan();
+                if earnings_in_window(instrument, session_date, max_sessions).is_some() {
+                    suppressed.push((instrument.symbol.clone(), setup, side));
+                    continue;
+                }
+                let zone = (close - 0.25 * atr, close + 0.25 * atr);
+                let risk = stop_atr * atr;
+                if !(risk.is_finite() && risk > 0.0) {
+                    continue;
+                }
+                let mid = close;
+                let (stop, targets) = match side {
+                    Side::Long => (mid - risk, [mid + risk, mid + 2.0 * risk, mid + 3.0 * risk]),
+                    Side::Short => (mid + risk, [mid - risk, mid - 2.0 * risk, mid - 3.0 * risk]),
+                };
+                let size = account_value.and_then(|value| {
+                    fx_to_account(instrument).and_then(|fx| {
+                        if fx > 0.0 && value > 0.0 && risk > 0.0 {
+                            let units = risk_pct / 100.0 * value / (risk * fx);
+                            Some((units, units * mid * fx))
+                        } else {
+                            None
+                        }
+                    })
+                });
+                let relation = held(&instrument.key).map(|description| match side {
+                    Side::Long if description.trim().is_empty() => {
+                        "you hold this; a long adds to it".to_string()
+                    }
+                    Side::Long => {
+                        format!("you hold this ({}); a long adds to it", description.trim())
+                    }
+                    Side::Short if description.trim().is_empty() => {
+                        "you hold this; a short works as a hedge on a CFD".to_string()
+                    }
+                    Side::Short => format!(
+                        "you hold this ({}); a short works as a hedge on a CFD",
+                        description.trim()
+                    ),
+                });
+                cards.push(SignalCard {
+                    id: card_id(&instrument.key, setup, side, session_date),
+                    key: instrument.key.clone(),
+                    symbol: instrument.symbol.clone(),
+                    class: instrument.class,
+                    side,
+                    setup,
+                    signal_session: session_date,
+                    entry_zone: zone,
+                    stop,
+                    targets,
+                    max_sessions,
+                    size,
+                    risk_pct,
+                    needs_cfd: instrument.needs_cfd(side),
+                    score: verdict.selection.expectancy_ci.0,
+                    verdict,
+                    relation,
+                    warnings: Vec::new(),
+                });
+            }
+        }
+    }
+
+    cards.sort_by(|left, right| right.score.total_cmp(&left.score));
+    let mut seen = HashSet::new();
+    cards.retain(|card| seen.insert(card.key.clone()));
+    cards.truncate(MAX_SIGNALS_PER_DAY);
+
     SignalDay {
-        session: NaiveDate::MIN,
-        cards: Vec::new(),
-        scoreboard: Vec::new(),
-        suppressed: Vec::new(),
-        notes: Vec::new(),
+        session,
+        cards,
+        scoreboard,
+        suppressed,
+        notes,
     }
 }
 
 /// A protective trailing stop for a held instrument.
 pub fn guard(instrument: &Instrument) -> Option<HoldingGuard> {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = instrument;
-    None
+    sim::guard(instrument)
 }
 
 /// Grades a published card against the bars after it: the same rules as `replay`.
 /// `None` while the trade is still open or never filled.
 pub fn grade(card: &SignalCard, bars_after: &[Bar], costs: Costs) -> Option<Trade> {
-    // Kilo implements this; the stub keeps the crate building.
-    let _ = (card, bars_after, costs);
-    None
+    sim::grade(card, bars_after, costs)
+}
+
+fn card_id(key: &str, setup: SetupId, side: Side, session: NaiveDate) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    hasher.update(b"|");
+    hasher.update(format!("{setup:?}").as_bytes());
+    hasher.update(b"|");
+    hasher.update(format!("{side:?}").as_bytes());
+    hasher.update(b"|");
+    hasher.update(session.to_string().as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn earnings_in_window(
+    instrument: &Instrument,
+    session: NaiveDate,
+    max_sessions: u32,
+) -> Option<NaiveDate> {
+    if !matches!(instrument.class, AssetClass::Stock | AssetClass::Etf) {
+        return None;
+    }
+    let end = add_weekdays(session, max_sessions as i64);
+    instrument
+        .earnings
+        .iter()
+        .copied()
+        .filter(|date| *date > session && *date <= end)
+        .min()
+}
+
+fn add_weekdays(mut date: NaiveDate, mut count: i64) -> NaiveDate {
+    while count > 0 {
+        date = date + Days::new(1);
+        if !matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+            count -= 1;
+        }
+    }
+    date
 }
