@@ -19,7 +19,7 @@ pub mod knowledge;
 pub mod store;
 
 pub use compaction::{Breadcrumb, ContextBudget, Recall, WorkingContext};
-pub use store::{MemoryStore, NewRecord, SearchHit, StoreStats, StoredRecord};
+pub use store::{MemoryStore, NewRecord, NewToolLog, SearchHit, StoreStats, StoredRecord, ToolLogEntry};
 
 /// Scope for records that belong to live voice/text conversations.
 const VOICE_SCOPE: &str = "voice";
@@ -546,6 +546,35 @@ impl ArenaSubsystem {
             });
         }
         out
+    }
+
+    /// Archive one tool execution into the durable Arena SQLite store (`/srv/sail-data/arena/arena.db`).
+    pub fn record_tool_log(&self, entry: &NewToolLog<'_>) -> Option<i64> {
+        match self.store.record_tool_log(entry) {
+            Ok(id) => Some(id),
+            Err(error) => {
+                warn!(%error, tool = entry.tool, "SAIL Arena could not record tool log");
+                None
+            }
+        }
+    }
+
+    /// List persisted tool execution logs in reverse chronological order.
+    pub fn list_tool_logs(
+        &self,
+        tool_filter: Option<&str>,
+        query: Option<&str>,
+        success_filter: Option<bool>,
+        limit: usize,
+        before_id: Option<i64>,
+    ) -> store::StoreResult<Vec<ToolLogEntry>> {
+        self.store
+            .list_tool_logs(tool_filter, query, success_filter, limit, before_id)
+    }
+
+    /// Clear all persisted tool execution logs.
+    pub fn clear_tool_logs(&self) -> store::StoreResult<usize> {
+        self.store.clear_tool_logs()
     }
 
     /// The user's most recent prompt in the hot window.

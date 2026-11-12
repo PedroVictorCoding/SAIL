@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 /// Bodies shorter than this are stored raw; compression does not pay off below it.
 const COMPRESS_MIN_BYTES: usize = 512;
 const CODEC_RAW: i64 = 0;
@@ -85,6 +85,34 @@ pub struct StoreStats {
     pub body_chars_original: i64,
     pub page_size: i64,
     pub journal_mode: String,
+}
+
+/// One tool execution to persist in `tool_logs`.
+#[derive(Debug, Clone)]
+pub struct NewToolLog<'a> {
+    pub tool: &'a str,
+    pub channel: &'a str,
+    pub session: &'a str,
+    pub success: bool,
+    pub duration_ms: Option<u64>,
+    pub summary: &'a str,
+    pub params_json: Option<&'a str>,
+    pub output_json: Option<&'a str>,
+}
+
+/// A persisted tool execution entry returned from `tool_logs`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolLogEntry {
+    pub id: i64,
+    pub created_at_ms: i64,
+    pub tool: String,
+    pub channel: String,
+    pub session: String,
+    pub success: bool,
+    pub duration_ms: Option<u64>,
+    pub summary: String,
+    pub params_json: Option<String>,
+    pub output_json: Option<String>,
 }
 
 pub struct MemoryStore {
@@ -363,6 +391,89 @@ impl MemoryStore {
             })
         })
     }
+
+    /// Persist a tool execution record into `tool_logs` inside the Arena SQLite store.
+    pub fn record_tool_log(&self, entry: &NewToolLog<'_>) -> StoreResult<i64> {
+        let created_at = now_ms();
+        self.with_writer(|conn| {
+            conn.execute(
+                "INSERT INTO tool_logs(created_at,tool,channel,session,success,duration_ms,summary,params_json,output_json)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                params![
+                    created_at,
+                    entry.tool,
+                    entry.channel,
+                    entry.session,
+                    i64::from(entry.success),
+                    entry.duration_ms.map(|d| d as i64),
+                    entry.summary,
+                    entry.params_json,
+                    entry.output_json,
+                ],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+    }
+
+    /// List persisted tool logs in reverse chronological order, with optional filters.
+    pub fn list_tool_logs(
+        &self,
+        tool_filter: Option<&str>,
+        query: Option<&str>,
+        success_filter: Option<bool>,
+        limit: usize,
+        before_id: Option<i64>,
+    ) -> StoreResult<Vec<ToolLogEntry>> {
+        let limit = limit.clamp(1, 500) as i64;
+        let tool_pat = tool_filter
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("%{s}%"));
+        let query_pat = query
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("%{s}%"));
+        let success_val = success_filter.map(i64::from);
+        self.with_reader(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT id,created_at,tool,channel,session,success,duration_ms,summary,params_json,output_json
+                 FROM tool_logs
+                 WHERE (?1 IS NULL OR id < ?1)
+                   AND (?2 IS NULL OR success = ?2)
+                   AND (?3 IS NULL OR tool LIKE ?3)
+                   AND (?4 IS NULL OR tool LIKE ?4 OR channel LIKE ?4 OR summary LIKE ?4 OR coalesce(params_json,'') LIKE ?4 OR coalesce(output_json,'') LIKE ?4)
+                 ORDER BY id DESC
+                 LIMIT ?5",
+            )?;
+            let rows = stmt.query_map(
+                params![before_id, success_val, tool_pat, query_pat, limit],
+                |row| {
+                    Ok(ToolLogEntry {
+                        id: row.get(0)?,
+                        created_at_ms: row.get(1)?,
+                        tool: row.get(2)?,
+                        channel: row.get(3)?,
+                        session: row.get(4)?,
+                        success: row.get::<_, i64>(5)? != 0,
+                        duration_ms: row.get::<_, Option<i64>>(6)?.map(|d| d.max(0) as u64),
+                        summary: row.get(7)?,
+                        params_json: row.get(8)?,
+                        output_json: row.get(9)?,
+                    })
+                },
+            )?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            Ok(out)
+        })
+    }
+
+    /// Delete all persisted tool log entries. Returns the number of deleted rows.
+    pub fn clear_tool_logs(&self) -> StoreResult<usize> {
+        self.with_writer(|conn| Ok(conn.execute("DELETE FROM tool_logs", [])?))
+    }
 }
 
 fn configure(conn: &Connection, writer: bool) -> StoreResult<()> {
@@ -414,6 +525,20 @@ const MIGRATIONS: &[&str] = &[
     crate::knowledge::schema::V4,
     crate::knowledge::schema::V5,
     crate::knowledge::schema::V6,
+    "CREATE TABLE IF NOT EXISTS tool_logs(
+         id INTEGER PRIMARY KEY,
+         created_at INTEGER NOT NULL,
+         tool TEXT NOT NULL,
+         channel TEXT NOT NULL,
+         session TEXT NOT NULL,
+         success INTEGER NOT NULL CHECK(success IN (0, 1)),
+         duration_ms INTEGER,
+         summary TEXT NOT NULL,
+         params_json TEXT,
+         output_json TEXT
+     ) STRICT;
+     CREATE INDEX IF NOT EXISTS tool_logs_by_time ON tool_logs(created_at DESC, id DESC);
+     CREATE INDEX IF NOT EXISTS tool_logs_by_tool ON tool_logs(tool, id DESC);",
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> StoreResult<()> {
@@ -782,5 +907,68 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(query_terms(&long).len(), MAX_QUERY_TERMS);
+    }
+
+    #[test]
+    fn tool_logs_persist_filter_paginate_and_clear() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        let id1 = store
+            .record_tool_log(&NewToolLog {
+                tool: "os:status",
+                channel: "voice:vlm",
+                session: "s1",
+                success: true,
+                duration_ms: Some(12),
+                summary: "CPU 14%",
+                params_json: Some("{}"),
+                output_json: Some("{\"cpu\":14}"),
+            })
+            .unwrap();
+        let id2 = store
+            .record_tool_log(&NewToolLog {
+                tool: "fs:read",
+                channel: "kernel_tool",
+                session: "s1",
+                success: false,
+                duration_ms: Some(3),
+                summary: "outside_workspace",
+                params_json: Some("{\"path\":\"/etc/shadow\"}"),
+                output_json: Some("{\"error\":\"outside_workspace\"}"),
+            })
+            .unwrap();
+        assert!(id2 > id1);
+
+        let all = store.list_tool_logs(None, None, None, 50, None).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].tool, "fs:read");
+        assert!(!all[0].success);
+        assert_eq!(all[1].tool, "os:status");
+        assert!(all[1].success);
+
+        let only_ok = store
+            .list_tool_logs(None, None, Some(true), 50, None)
+            .unwrap();
+        assert_eq!(only_ok.len(), 1);
+        assert_eq!(only_ok[0].id, id1);
+
+        let searched = store
+            .list_tool_logs(None, Some("outside_workspace"), None, 50, None)
+            .unwrap();
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0].id, id2);
+
+        let older = store
+            .list_tool_logs(None, None, None, 50, Some(id2))
+            .unwrap();
+        assert_eq!(older.len(), 1);
+        assert_eq!(older[0].id, id1);
+
+        assert_eq!(store.clear_tool_logs().unwrap(), 2);
+        assert!(
+            store
+                .list_tool_logs(None, None, None, 50, None)
+                .unwrap()
+                .is_empty()
+        );
     }
 }
