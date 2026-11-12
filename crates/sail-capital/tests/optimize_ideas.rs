@@ -34,6 +34,7 @@ fn permissive_limits() -> RiskLimits {
         trade_cost_bps: decimal(0.0),
         fx_cost_bps: decimal(0.0),
         risk_aversion: decimal(4.0),
+        risk_per_trade_pct: decimal(0.5),
     }
 }
 

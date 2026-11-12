@@ -16,7 +16,7 @@ Round 7 (2026-11-10) builds the **portfolio foundation**:
 
 Round 8 adds the first research source, **SEC EDGAR filings** for the US companies the
 owner holds (see below). Round 9 adds splits, received shares and portfolio insights.
-Round 12 adds **model signals (YOLO, Chronos) and a blended per-holding outlook with replay**. Round 11 added the **Today view, risk limits and suggestions**. Round 10 added **daily prices and baseline forecasts** with an honest out-of-sample score
+Round 13 adds **trade signals with a verified record** (entry, stop, targets, sizing). Round 12 added **model signals (YOLO, Chronos) and a blended per-holding outlook with replay**. Round 11 added the **Today view, risk limits and suggestions**. Round 10 added **daily prices and baseline forecasts** with an honest out-of-sample score
 (see below). House/Senate, FRED/ECB and Polymarket adapters, the risk engine and any neural
 or `.sea` model come in later rounds.
 
@@ -424,6 +424,69 @@ weekly charts, which can take an hour. Later runs only add new weeks.
 `SAIL_SIGNALS_PYTHON`, `SAIL_SIGNALS_SCRIPTS` and `SAIL_SIGNALS_CACHE` override the
 defaults. Helpers receive instrument keys and prices only, never amounts or names.
 
+## Trade signals with a verified record (round 13)
+
+The **Signals** tab gives near-daily long and short signals like a signals channel:
+symbol, side, entry zone, stop loss and three targets, sized to the owner's risk per
+trade. Each one carries **its own verified record**, which signal channels don't show.
+SAIL never places orders.
+
+**Universe.** The owner's holdings plus a watchlist. The 44 defaults are:
+- FX majors and crosses;
+- the S&P 500, Nasdaq 100, Dow, DAX, FTSE 100, Euro Stoxx 50 and Nikkei;
+- gold, silver, WTI and natural gas;
+- large US and EU stocks;
+- SPY, QQQ, IWM, TLT and GLD.
+
+Each entry maps the XTB symbol to the Yahoo symbol. The owner edits the list in Data,
+and each change is stored append-only. Fetching sends only these symbols to Yahoo.
+
+**Setups** (`trade/`). Six fixed rules on daily bars, each with a long and a short mirror:
+- trend pullback (RSI(2) against the 50/200 trend);
+- volatility-squeeze breakout;
+- 55-day Donchian breakout;
+- Bollinger reversion with the 200-day trend;
+- inside-bar break;
+- three-day reversal.
+
+**Plan.**
+- Enter at the next open, only inside `close ± 0.25·ATR`.
+- Stop at `k·ATR`. Targets at 1R, 2R and 3R. Close a third at each target, and move the
+  stop to breakeven after the first.
+- Time stop per setup.
+- If a bar reaches both the stop and a target, the stop counts. A gap through the stop
+  fills at the open.
+
+**Costs** are subtracted in R: spread and commission, XTB's FX conversion on foreign
+shares, and overnight financing on CFD positions (every short, and all FX, indices and
+commodities).
+
+**Who publishes.** Every past firing over about eight years is replayed as a trade, and
+trades are pooled per group (FX; stocks and ETFs; indices and commodities). A setup and
+side publish only with:
+- at least 100 trades;
+- a **lower 95% bound of expectancy above 0R after costs**, with the standard error
+  widened for autocorrelated trades;
+- a positive mean in a separately judged **two-year holdout**.
+
+Cards are ranked by that lower bound, at most eight a day and one per instrument. Stocks
+whose earnings fall inside the trade window are dropped. If nothing qualifies, the page
+says so.
+
+**Record.** Every published card is stored and never changed. After it plays out it is
+graded by the same rules: closed with its R, or unfilled when the next open missed the
+zone. The page shows the totals. That record is the real test of the setups' historical
+evidence.
+
+**Holding view.** For each holding, a chandelier trailing stop (highest close of 22
+sessions minus 3·ATR(22)) with its distance, whether the close is below it, whether
+the price is above the 200-day average, and the next earnings date.
+
+**Schedule.** A run after the US close, at 22:30 UTC on weekdays, when price fetching is
+on, plus **Run now** on the page. A run fetches prices for the holdings and the
+watchlist, refreshes earnings weekly, publishes and grades. Risk per trade is a limit
+(draft 0.5% of the account lost at the stop).
+
 ## API (`/api/capital`, owner token required)
 
 | Route | Returns |
@@ -457,6 +520,11 @@ defaults. Helpers receive instrument keys and prices only, never amounts or name
 | `GET /signals/models` | Each model signal and outlook model: what it is, its licence, whether it is on, the last run and what is stored |
 | `POST /signals/refresh?account=` | Starts the model helpers in the background |
 | `GET /outlook?account=&symbol=&horizon=&cutoff=` | The blended fan for one holding (a replay when `cutoff` is given), with the closes before it and every session date |
+| `GET /signals/trade?account=` | The latest run (cards, scoreboard, suppressed firings, notes), when it ran and the next run |
+| `POST /signals/trade/run?account=` | Fetches prices and earnings, computes, publishes and grades now |
+| `GET /signals/trade/record?account=` | Every published card with its grade, and totals |
+| `GET /signals/trade/guards?account=` | Trailing stops and trend for each holding |
+| `GET /universe/watchlist` / `POST /universe/watchlist` | The watchlist, and a change: `{"op": "add", "item": {...}}` or `{"op": "remove", "symbol": "..."}` |
 | `GET /outlook/track-record?account=&horizon=` | Coverage, average percentile, skill and direction over monthly replays |
 
 All amounts are decimal strings. Errors are `{"error": "..."}`, with these status codes:

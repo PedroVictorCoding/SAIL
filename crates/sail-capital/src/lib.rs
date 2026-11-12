@@ -22,5 +22,7 @@ pub mod service;
 pub mod signals;
 pub mod store;
 pub mod suggest;
+pub mod trade;
+pub mod universe;
 
 pub use contracts::*;

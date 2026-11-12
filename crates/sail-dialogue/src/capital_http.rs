@@ -61,6 +61,11 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/signals/models", get(signal_models))
         .route("/signals/refresh", post(signal_refresh))
         .route("/outlook", get(outlook))
+        .route("/signals/trade", get(trade_view))
+        .route("/signals/trade/run", post(trade_run))
+        .route("/signals/trade/record", get(trade_record))
+        .route("/signals/trade/guards", get(trade_guards))
+        .route("/universe/watchlist", get(watchlist).post(change_watchlist))
         .route("/outlook/track-record", get(track_record))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
         .with_state(Arc::new(CapitalState { service, authority }))
@@ -724,4 +729,85 @@ async fn track_record(
     })
     .await?;
     Ok(no_store(to_json(&record)?))
+}
+
+async fn trade_view(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let view = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.trade_view(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&view)?))
+}
+
+async fn trade_run(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let id = q.account.clone();
+    let account = blocking(&s, move |svc| svc.resolve_account(id.as_deref())).await?;
+    let view = s
+        .service
+        .run_trade_signals(&account)
+        .await
+        .map_err(failure)?;
+    Ok(no_store(to_json(&view)?))
+}
+
+async fn trade_record(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let record = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.trade_record(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&record)?))
+}
+
+async fn trade_guards(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let guards = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.trade_guards(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&guards)?))
+}
+
+async fn watchlist(State(s): State<Arc<CapitalState>>, h: HeaderMap) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let list = blocking(&s, move |svc| svc.watchlist()).await?;
+    Ok(no_store(to_json(&list)?))
+}
+
+async fn change_watchlist(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let change: sail_capital::universe::WatchChange =
+        serde_json::from_slice(&body).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("The change couldn't be read: {e}")})),
+            )
+        })?;
+    let list = blocking(&s, move |svc| svc.change_watchlist(change, Utc::now())).await?;
+    Ok(no_store(to_json(&list)?))
 }
