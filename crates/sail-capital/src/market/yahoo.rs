@@ -9,9 +9,11 @@
 //! - `SAIL_YFINANCE_SCRIPT`: the helper (default [`DEFAULT_SCRIPT`], relative to SAIL's
 //!   working directory, like the voice worker).
 //! - `SAIL_YFINANCE_CACHE`: yfinance's small cache directory (default [`DEFAULT_CACHE`]).
+//! - `SAIL_YFINANCE_SEARCH_SCRIPT`: the symbol-search helper (default
+//!   [`DEFAULT_SEARCH_SCRIPT`]).
 use super::{
     Adjustment, MAX_BARS_PER_SERIES, MAX_PRICE_RESPONSE_BYTES, PRICE_MAX_REQUESTS_PER_SECOND,
-    PriceBar, PriceSeries, PriceSource, PriceSourceError,
+    PriceBar, PriceSeries, PriceSource, PriceSourceError, SymbolMatch,
 };
 use crate::contracts::Currency;
 use chrono::NaiveDate;
@@ -30,6 +32,15 @@ pub const DEFAULT_PYTHON: &str = "/srv/sail-data/venvs/prices/bin/python";
 
 /// Default helper script, relative to SAIL's working directory.
 pub const DEFAULT_SCRIPT: &str = "scripts/prices/yfinance_daily.py";
+
+/// Default symbol-search helper script, relative to SAIL's working directory.
+pub const DEFAULT_SEARCH_SCRIPT: &str = "scripts/prices/search.py";
+
+/// Most search results kept from one helper run.
+const MAX_SEARCH_RESULTS: usize = 10;
+
+/// Longest owner query sent to the search helper.
+const MAX_SEARCH_QUERY_CHARS: usize = 64;
 
 /// Default cache directory for yfinance.
 pub const DEFAULT_CACHE: &str = "/srv/sail-data/capital/yfinance-cache";
@@ -169,17 +180,92 @@ pub fn parse_yfinance_json(
     })
 }
 
+/// Whether a symbol is safe to pass to a Yahoo helper.
+fn plausible_symbol(symbol: &str) -> bool {
+    !symbol.is_empty()
+        && symbol.len() <= 24
+        && symbol
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-=^".contains(&b))
+        && (symbol.as_bytes()[0].is_ascii_alphanumeric() || symbol.as_bytes()[0] == b'^')
+}
+
+#[derive(Deserialize)]
+struct SearchOutput {
+    error: Option<String>,
+    detail: Option<String>,
+    #[serde(default)]
+    results: Vec<SearchQuote>,
+}
+
+#[derive(Deserialize)]
+struct SearchQuote {
+    symbol: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    exchange: String,
+    #[serde(default)]
+    quote_type: String,
+}
+
+/// Reads the search helper's JSON into usable matches. Entries with a symbol the daily
+/// helper couldn't fetch are dropped, as are duplicates.
+pub fn parse_search_json(body: &[u8]) -> Result<Vec<SymbolMatch>, PriceSourceError> {
+    let out: SearchOutput = serde_json::from_slice(body).map_err(|_| {
+        PriceSourceError::Malformed("the search helper's output wasn't JSON".into())
+    })?;
+    if let Some(error) = out.error.as_deref() {
+        return Err(match error {
+            "bad_query" => {
+                PriceSourceError::Malformed("the search query was not valid".to_string())
+            }
+            "rate_limited" => PriceSourceError::Refused(429),
+            _ => PriceSourceError::Network(format!(
+                "the search helper failed ({})",
+                out.detail.as_deref().unwrap_or("no detail")
+            )),
+        });
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut results = Vec::new();
+    for quote in out.results {
+        if !plausible_symbol(&quote.symbol) || !seen.insert(quote.symbol.clone()) {
+            continue;
+        }
+        let name = quote.name.trim();
+        let name = if name.is_empty() {
+            quote.symbol.clone()
+        } else {
+            name.chars().take(120).collect()
+        };
+        results.push(SymbolMatch {
+            symbol: quote.symbol,
+            name,
+            exchange: quote.exchange.trim().chars().take(80).collect(),
+            quote_type: quote.quote_type.trim().to_ascii_uppercase(),
+        });
+        if results.len() >= MAX_SEARCH_RESULTS {
+            break;
+        }
+    }
+    Ok(results)
+}
+
 /// Runs the yfinance helper.
 #[derive(Clone)]
 pub struct YahooSource {
     python: String,
     script: String,
+    search_script: String,
     cache: Option<String>,
     gate: Arc<Mutex<Option<Instant>>>,
 }
 
 impl YahooSource {
-    /// Reads `SAIL_YFINANCE_PYTHON`, `SAIL_YFINANCE_SCRIPT` and `SAIL_YFINANCE_CACHE`.
+    /// Reads `SAIL_YFINANCE_PYTHON`, `SAIL_YFINANCE_SCRIPT`, `SAIL_YFINANCE_SEARCH_SCRIPT`
+    /// and `SAIL_YFINANCE_CACHE`.
     pub fn from_env() -> Self {
         let var = |name: &str, default: &str| {
             std::env::var(name)
@@ -190,16 +276,20 @@ impl YahooSource {
         Self {
             python: var("SAIL_YFINANCE_PYTHON", DEFAULT_PYTHON),
             script: var("SAIL_YFINANCE_SCRIPT", DEFAULT_SCRIPT),
+            search_script: var("SAIL_YFINANCE_SEARCH_SCRIPT", DEFAULT_SEARCH_SCRIPT),
             cache: Some(var("SAIL_YFINANCE_CACHE", DEFAULT_CACHE)),
             gate: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// An explicit interpreter and script, for tests.
+    /// An explicit interpreter and script, for tests. The script also serves symbol
+    /// search, so a fake helper can answer both.
     pub fn with_command(python: impl Into<String>, script: impl Into<String>) -> Self {
+        let script = script.into();
         Self {
             python: python.into(),
-            script: script.into(),
+            script: script.clone(),
+            search_script: script,
             cache: None,
             gate: Arc::new(Mutex::new(None)),
         }
@@ -219,11 +309,19 @@ impl YahooSource {
     }
 
     async fn run(&self, yahoo: &str) -> Result<Vec<u8>, PriceSourceError> {
+        self.run_helper(&self.script, yahoo).await
+    }
+
+    async fn search_helper(&self, query: &str) -> Result<Vec<u8>, PriceSourceError> {
+        self.run_helper(&self.search_script, query).await
+    }
+
+    async fn run_helper(&self, script: &str, argument: &str) -> Result<Vec<u8>, PriceSourceError> {
         let mut command = tokio::process::Command::new(&self.python);
         command
             .arg("-I")
-            .arg(&self.script)
-            .arg(yahoo)
+            .arg(script)
+            .arg(argument)
             .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -281,12 +379,7 @@ impl PriceSource for YahooSource {
         symbol: &str,
         source_symbol: &str,
     ) -> Result<PriceSeries, PriceSourceError> {
-        let valid = !source_symbol.is_empty()
-            && source_symbol.len() <= 24
-            && source_symbol
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._-=^".contains(&b));
-        if !valid {
+        if !plausible_symbol(source_symbol) {
             return Err(PriceSourceError::UnknownSymbol(symbol.to_string()));
         }
         self.wait_for_slot().await;
@@ -300,5 +393,20 @@ impl PriceSource for YahooSource {
         self.wait_for_slot().await;
         let body = self.run(&yahoo).await?;
         parse_yfinance_json(&body, symbol, &yahoo)
+    }
+
+    async fn search(&self, query: &str) -> Result<Vec<SymbolMatch>, PriceSourceError> {
+        let query = query.trim();
+        if query.is_empty()
+            || query.chars().count() > MAX_SEARCH_QUERY_CHARS
+            || query.chars().any(char::is_control)
+        {
+            return Err(PriceSourceError::Malformed(
+                "the search query is empty or too long".into(),
+            ));
+        }
+        self.wait_for_slot().await;
+        let body = self.search_helper(query).await?;
+        parse_search_json(&body)
     }
 }

@@ -220,6 +220,19 @@ pub struct MarketObservation {
     pub ingested_at: DateTime<Utc>,
 }
 
+/// One instrument returned by a source's symbol search.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolMatch {
+    /// The source's symbol, e.g. `AAPL` or `^GSPC`.
+    pub symbol: String,
+    /// Display name.
+    pub name: String,
+    /// Exchange, as the source labels it.
+    pub exchange: String,
+    /// The source's instrument type, e.g. `EQUITY`, `ETF`, `INDEX`.
+    pub quote_type: String,
+}
+
 /// Why a price request failed. Messages are safe to show the owner.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PriceSourceError {
@@ -231,6 +244,9 @@ pub enum PriceSourceError {
     /// The source has no such symbol, or SAIL can't map the broker symbol to it.
     #[error("the price source has no data for {0}")]
     UnknownSymbol(String),
+    /// The source doesn't offer this capability.
+    #[error("the price source doesn't support {0}")]
+    Unsupported(&'static str),
     /// HTTP 429 or 403.
     #[error("the price source refused the request (HTTP {0}); SAIL will back off")]
     Refused(u16),
@@ -286,6 +302,12 @@ pub trait PriceSource: Send + Sync {
         let _ = source_symbol;
         self.daily(symbol).await
     }
+
+    /// Instruments matching a free-text query, when the source supports symbol search.
+    /// The default is unsupported, so a price-only source keeps working unchanged.
+    async fn search(&self, _query: &str) -> Result<Vec<SymbolMatch>, PriceSourceError> {
+        Err(PriceSourceError::Unsupported("symbol search"))
+    }
 }
 
 pub mod file;
@@ -294,7 +316,7 @@ pub mod yahoo;
 
 pub use file::parse_price_file;
 pub use stooq::{StooqClient, parse_stooq_csv, stooq_symbol};
-pub use yahoo::{YahooSource, parse_yfinance_json, yahoo_symbol};
+pub use yahoo::{YahooSource, parse_search_json, parse_yfinance_json, yahoo_symbol};
 
 /// A source that never fetches: what SAIL uses until the owner opts in.
 pub struct DisabledSource;

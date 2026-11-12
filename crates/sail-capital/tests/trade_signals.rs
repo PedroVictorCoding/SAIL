@@ -5,7 +5,9 @@ mod trade_support;
 use std::time::Instant;
 
 use chrono::Days;
-use sail_capital::trade::{AssetClass, Instrument, SetupId, Side, guard, signal_day};
+use sail_capital::trade::{
+    AssetClass, Instrument, SetupId, Side, check_instrument, guard, signal_day,
+};
 use trade_support::{
     bars_from_closes, bars_with_prior_open, date_at, instrument, planted_closes, random_walk,
 };
@@ -194,4 +196,69 @@ fn dates_are_the_latest_sessions() {
     let universe = planted_universe(2, 300);
     let day = day(&universe);
     assert_eq!(day.session, date_at(299));
+}
+
+#[test]
+fn a_check_reproduces_the_daily_card_for_the_same_instrument() {
+    let universe = planted_universe(20, 1999);
+    let day = day(&universe);
+    let card = day.cards.first().expect("a card");
+    let instrument = universe
+        .iter()
+        .find(|instrument| instrument.key == card.key)
+        .expect("the card's instrument");
+    let check = check_instrument(
+        instrument,
+        &day.scoreboard,
+        Some(100_000.0),
+        0.5,
+        &|_| Some(1.0),
+        &|_| None,
+    );
+    assert_eq!(check.session, instrument.bars.last().unwrap().session);
+    assert!(
+        check.cards.iter().any(|checked| checked.id == card.id),
+        "the check should reproduce the daily card"
+    );
+    assert!(!check.suppressed.is_empty() || !check.cards.is_empty());
+}
+
+#[test]
+fn a_check_explains_a_firing_that_did_not_publish() {
+    let quiet: Vec<Instrument> = (0..20)
+        .map(|index| {
+            let (closes, _) = random_walk(2000, 0.0, 0.01, 1000 + index as u64);
+            instrument(
+                &format!("key{index}"),
+                &format!("SYM{index}"),
+                AssetClass::Stock,
+                false,
+                bars_with_prior_open(&closes, 0.5),
+            )
+        })
+        .collect();
+    let quiet_day = day(&quiet);
+    assert!(quiet_day.cards.is_empty());
+    assert!(
+        quiet_day
+            .scoreboard
+            .iter()
+            .all(|verdict| !verdict.publishes)
+    );
+
+    let planted = planted_universe(1, 1999);
+    let check = check_instrument(
+        &planted[0],
+        &quiet_day.scoreboard,
+        Some(100_000.0),
+        0.5,
+        &|_| Some(1.0),
+        &|_| None,
+    );
+    assert!(check.cards.is_empty());
+    assert!(
+        !check.suppressed.is_empty(),
+        "the planted setup should fire and be explained"
+    );
+    assert!(check.suppressed.iter().all(|item| !item.reason.is_empty()));
 }
