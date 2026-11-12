@@ -35,6 +35,7 @@ fn build_router(
         .route("/learning", post(learning))
         .route("/read", post(read))
         .route("/change", post(change))
+        .route("/tool-logs/clear", post(clear_tool_logs))
         .layer(axum::extract::DefaultBodyLimit::max(64000))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
@@ -87,6 +88,18 @@ enum Read {
         id: i64,
     },
     Export,
+    ToolLogs {
+        #[serde(default)]
+        tool: Option<String>,
+        #[serde(default)]
+        query: Option<String>,
+        #[serde(default)]
+        success: Option<bool>,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        before_id: Option<i64>,
+    },
 }
 async fn read(
     State(s): State<Arc<MemoryState>>,
@@ -118,6 +131,25 @@ async fn read(
                 json!({"entity":entity,"claims":claims,"why":why,"graph":k.neighbors(id,&access,true)?,"procedures":k.procedure_versions(id,&access)?,"project_items":k.project_items(id,&access)?,"generation":k.deletion_generation()?})
             }
             Read::Export => k.export(&access)?,
+            Read::ToolLogs {
+                tool,
+                query,
+                success,
+                limit,
+                before_id,
+            } => {
+                let entries = s
+                    .store
+                    .list_tool_logs(
+                        tool.as_deref(),
+                        query.as_deref(),
+                        success,
+                        limit.unwrap_or(100),
+                        before_id,
+                    )
+                    .map_err(|e| KnowledgeError::Invalid(e.to_string()))?;
+                json!({"entries": entries})
+            }
         })
     })();
     result.map(Json).map_err(error)
@@ -243,4 +275,17 @@ async fn learning(
     Ok(Json(
         json!({"session":request.session,"enabled":request.enabled}),
     ))
+}
+
+async fn clear_tool_logs(
+    State(s): State<Arc<MemoryState>>,
+    h: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    authorize(&s, &h)
+        .map_err(|code| (code, Json(json!({"error":"Owner authentication required"}))))?;
+    let deleted = s
+        .store
+        .clear_tool_logs()
+        .map_err(|e| error(KnowledgeError::Invalid(e.to_string())))?;
+    Ok(Json(json!({"ok": true, "deleted": deleted})))
 }

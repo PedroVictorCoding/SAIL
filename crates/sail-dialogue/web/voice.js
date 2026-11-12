@@ -229,7 +229,7 @@ function handleVoiceMessage(data) {
         break;
       case 'tool_started': updateToolActivity(data.tool, true); break;
       case 'tool_completed': updateToolActivity(data.tool, false); break;
-      case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); logToolActivity(data.result); break;
+      case 'tool_result': updateToolActivity(data.result?.tool, false); renderToolResult(data.result); logToolActivity(data.result, data.channel); break;
       case 'canvas': renderArtifact(data.artifact); break;
       case 'plan': window.renderPlanCard?.(data.plan); break;
       case 'approval_required':
@@ -581,7 +581,10 @@ function updateSystemCard(output) {
   }
 }
 
-function logToolActivity(result) {
+function logToolActivity(result, channel) {
+  if (result) {
+    window.sailToolLog?.appendLive(result, channel);
+  }
   const list = document.getElementById('toolsActivityList');
   if (!list || !result) return;
   document.getElementById('toolsActivityEmpty')?.remove();

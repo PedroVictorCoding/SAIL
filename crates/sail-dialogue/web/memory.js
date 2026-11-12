@@ -530,4 +530,233 @@
 
   restoreTranscriptState();
   syncLiveTranscript();
+
+  // Tool Log (Memory > Tool Log tab, persisted in /srv/sail-data)
+  const tlTab = document.getElementById('toolLogTab');
+  const tlPanel = document.getElementById('memoryPanelToolLog');
+  const tlStatus = document.getElementById('toolLogStatus');
+  const tlList = document.getElementById('toolLogList');
+  const tlEmpty = document.getElementById('toolLogEmpty');
+  const tlRefresh = document.getElementById('toolLogRefresh');
+  const tlExport = document.getElementById('toolLogExport');
+  const tlClear = document.getElementById('toolLogClear');
+  const tlSearchForm = document.getElementById('toolLogSearchForm');
+  const tlSearchInput = document.getElementById('toolLogSearch');
+  const tlFilterBtns = [...document.querySelectorAll('[data-tl-filter]')];
+  const tlFooter = document.getElementById('toolLogFooter');
+  const tlLoadMore = document.getElementById('toolLogLoadMore');
+
+  const TL_PAGE_SIZE = 100;
+  let tlEntries = [];
+  let tlFilter = 'all'; // 'all' | 'ok' | 'err'
+  let tlSerial = 0;
+  let tlLoaded = false;
+
+  function formatPrettyJson(raw) {
+    if (!raw) return '';
+    if (typeof raw !== 'string') {
+      try { return JSON.stringify(raw, null, 2); } catch (_) { return String(raw); }
+    }
+    try {
+      return JSON.stringify(JSON.parse(raw), null, 2);
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  function buildToolSummary(output) {
+    if (!output) return '';
+    if (typeof output === 'string') return output.slice(0, 240);
+    if (typeof output.error === 'string' && output.error) return output.error.slice(0, 240);
+    for (const key of ['message', 'summary', 'status', 'title', 'text']) {
+      if (typeof output[key] === 'string' && output[key].trim()) return output[key].trim().slice(0, 240);
+    }
+    try { return JSON.stringify(output).slice(0, 240); } catch (_) { return ''; }
+  }
+
+  function renderToolLogEntry(entry) {
+    const row = node('article', undefined, 'tl-entry');
+    row.dataset.success = entry.success ? 'true' : 'false';
+
+    const head = node('div', undefined, 'tl-entry-head');
+    const left = node('div', undefined, 'tl-entry-left');
+    left.append(node('strong', entry.tool || 'tool', 'tl-tool-name'));
+
+    const statusPill = node('span', entry.success ? 'OK' : 'ERR', `tl-status-pill ${entry.success ? 'ok' : 'err'}`);
+    left.append(statusPill);
+
+    if (entry.channel) left.append(node('span', entry.channel, 'tl-channel'));
+    if (typeof entry.duration_ms === 'number') left.append(node('span', `${entry.duration_ms} ms`, 'tl-duration'));
+
+    const createdMs = typeof entry.created_at_ms === 'number' ? entry.created_at_ms : Date.now();
+    const dt = new Date(createdMs);
+    const timeEl = node('time', dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }), 'tl-time');
+    timeEl.dateTime = dt.toISOString();
+    timeEl.title = dt.toLocaleString();
+
+    head.append(left, timeEl);
+    row.append(head);
+
+    if (entry.summary) row.append(node('p', entry.summary, 'tl-summary'));
+
+    if (entry.params_json || entry.output_json) {
+      const details = node('details', undefined, 'tl-details');
+      details.append(node('summary', 'Parameters & Output'));
+      if (entry.params_json) {
+        details.append(node('div', 'Parameters', 'tl-detail-label'));
+        details.append(node('pre', formatPrettyJson(entry.params_json), 'tl-pre'));
+      }
+      if (entry.output_json) {
+        details.append(node('div', 'Output', 'tl-detail-label'));
+        details.append(node('pre', formatPrettyJson(entry.output_json), 'tl-pre'));
+      }
+      row.append(details);
+    }
+    return row;
+  }
+
+  function renderToolLogList() {
+    if (!tlList) return;
+    tlList.replaceChildren();
+    if (!tlEntries.length) {
+      if (tlEmpty) {
+        tlEmpty.hidden = false;
+        tlList.append(tlEmpty);
+      } else {
+        tlList.append(node('p', 'No tool executions recorded yet.', 'tl-empty'));
+      }
+      return;
+    }
+    for (const entry of tlEntries) {
+      tlList.append(renderToolLogEntry(entry));
+    }
+  }
+
+  function matchesCurrentFilter(entry) {
+    if (tlFilter === 'ok' && !entry.success) return false;
+    if (tlFilter === 'err' && entry.success) return false;
+    const q = (tlSearchInput?.value || '').trim().toLowerCase();
+    if (!q) return true;
+    const hay = [entry.tool, entry.channel, entry.summary, entry.params_json, entry.output_json]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(q);
+  }
+
+  async function loadToolLogs(append = false) {
+    if (!tlList) return;
+    const ticket = ++tlSerial;
+    if (tlStatus) tlStatus.textContent = append ? 'Loading older tool logs…' : 'Loading tool logs…';
+    const beforeId = append && tlEntries.length ? tlEntries[tlEntries.length - 1].id : null;
+    const query = (tlSearchInput?.value || '').trim() || null;
+    const success = tlFilter === 'ok' ? true : (tlFilter === 'err' ? false : null);
+    try {
+      const data = await request('read', {
+        action: 'tool_logs',
+        query,
+        success,
+        limit: TL_PAGE_SIZE,
+        before_id: beforeId,
+      });
+      if (ticket !== tlSerial) return;
+      const incoming = Array.isArray(data.entries) ? data.entries : [];
+      tlEntries = append ? tlEntries.concat(incoming) : incoming;
+      tlLoaded = true;
+      renderToolLogList();
+      if (tlFooter) tlFooter.hidden = incoming.length < TL_PAGE_SIZE;
+      if (tlStatus) {
+        tlStatus.textContent = tlEntries.length
+          ? `${tlEntries.length} tool execution${tlEntries.length === 1 ? '' : 's'} shown (persisted in /srv/sail-data).`
+          : 'No matching tool executions in /srv/sail-data.';
+      }
+    } catch (err) {
+      if (ticket !== tlSerial) return;
+      if (tlStatus) tlStatus.textContent = err.message || String(err);
+    }
+  }
+
+  tlTab?.addEventListener('click', () => { loadToolLogs(false); });
+  tlRefresh?.addEventListener('click', () => { loadToolLogs(false); });
+  tlLoadMore?.addEventListener('click', () => { loadToolLogs(true); });
+
+  tlSearchForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    loadToolLogs(false);
+  });
+
+  for (const btn of tlFilterBtns) {
+    btn.addEventListener('click', () => {
+      tlFilter = btn.dataset.tlFilter || 'all';
+      for (const other of tlFilterBtns) {
+        const active = other === btn;
+        other.classList.toggle('active', active);
+        other.setAttribute('aria-pressed', active ? 'true' : 'false');
+      }
+      loadToolLogs(false);
+    });
+  }
+
+  tlExport?.addEventListener('click', () => {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(tlEntries, null, 2)], { type: 'application/json' }));
+    const a = node('a');
+    a.href = url;
+    a.download = 'sail-tool-log.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  tlClear?.addEventListener('click', async () => {
+    if (!confirm('Clear all persisted tool logs?')) return;
+    try {
+      const token = await getOrFetchOwnerToken();
+      const r = await fetch('/api/memory/tool-logs/clear', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: '{}',
+      });
+      if (!r.ok) throw new Error('Could not clear tool logs.');
+      tlEntries = [];
+      renderToolLogList();
+      if (tlFooter) tlFooter.hidden = true;
+      if (tlStatus) tlStatus.textContent = 'Tool log cleared.';
+    } catch (err) {
+      if (tlStatus) tlStatus.textContent = err.message || String(err);
+    }
+  });
+
+  window.addEventListener('sail:page', (event) => {
+    if (event.detail === 'memory' && tlPanel && !tlPanel.hidden) {
+      loadToolLogs(false);
+    }
+  });
+
+  window.sailToolLog = Object.freeze({
+    refresh: () => loadToolLogs(false),
+    appendLive(result, channel) {
+      if (!result || !tlList) return;
+      const entry = {
+        id: Date.now(),
+        created_at_ms: Date.now(),
+        tool: result.tool || 'tool',
+        channel: channel || 'dialogue',
+        session: '',
+        success: Boolean(result.success),
+        duration_ms: typeof result.duration_ms === 'number' ? result.duration_ms : null,
+        summary: buildToolSummary(result.output),
+        params_json: result.params ? JSON.stringify(result.params) : null,
+        output_json: result.output !== undefined ? JSON.stringify(result.output) : null,
+      };
+      if (!matchesCurrentFilter(entry)) return;
+      if (!tlLoaded) return;
+      tlEntries.unshift(entry);
+      if (tlEntries.length > 500) tlEntries.length = 500;
+      tlEmpty?.remove();
+      tlList.prepend(renderToolLogEntry(entry));
+      if (tlStatus) {
+        tlStatus.textContent = `${tlEntries.length} tool execution${tlEntries.length === 1 ? '' : 's'} shown (persisted in /srv/sail-data).`;
+      }
+    },
+  });
 })();
