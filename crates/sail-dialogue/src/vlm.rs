@@ -1456,6 +1456,144 @@ fn file_extensions(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Words and phrases that make the owner's investments relevant. Kept to finance
+/// vocabulary: generic "check" or "think" must not displace process, file or web tools.
+fn mentions_capital(query: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "portfolio",
+        "invest",
+        "investing",
+        "investment",
+        "investments",
+        "stock",
+        "stocks",
+        "share",
+        "shares",
+        "etf",
+        "etfs",
+        "fund",
+        "funds",
+        "trade",
+        "trades",
+        "trading",
+        "signal",
+        "signals",
+        "position",
+        "positions",
+        "dividend",
+        "dividends",
+        "income",
+        "market",
+        "markets",
+        "price",
+        "prices",
+        "watchlist",
+        "index",
+        "indices",
+        "indexes",
+        "commodity",
+        "commodities",
+        "forecast",
+        "outlook",
+        "risk",
+        "allocation",
+        "broker",
+        "xtb",
+        "asset",
+        "assets",
+        "ticker",
+        "tickers",
+        "cash",
+        "buy",
+        "buying",
+        "sell",
+        "selling",
+        "short",
+        "shorting",
+        "holding",
+        "holdings",
+        "crypto",
+        "bitcoin",
+        "bond",
+        "bonds",
+        "tax",
+        "fees",
+        "returns",
+        "diversified",
+        "diversification",
+        "rebalance",
+        "filing",
+        "filings",
+        "fundamental",
+        "fundamentals",
+        "earnings",
+        "search",
+        "lookup",
+        "carteira",
+        "investimento",
+        "investimentos",
+        "acao",
+        "acoes",
+        "ação",
+        "ações",
+        "mercado",
+        "mercados",
+        "sinal",
+        "sinais",
+        "dividendo",
+        "dividendos",
+        "posicao",
+        "posicoes",
+        "posição",
+        "posições",
+        "risco",
+        "preco",
+        "precos",
+        "preço",
+        "preços",
+        "corretora",
+        "ativo",
+        "ativos",
+        "fundo",
+        "fundos",
+        "comprar",
+        "vender",
+        "curto",
+        "obrigacao",
+        "obrigações",
+        "obrigacoes",
+    ];
+    let lower = query.to_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    if tokens.iter().any(|token| WORDS.contains(token)) {
+        return true;
+    }
+    [
+        "should i buy",
+        "should i sell",
+        "should i hold",
+        "my account",
+        "my portfolio",
+        "my signals",
+        "my stop",
+        "stop loss",
+        "devo comprar",
+        "devo vender",
+        "a minha carteira",
+        "os meus sinais",
+        "o meu stop",
+        "search for",
+        "look up",
+        "procurar",
+        "pesquisar",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+}
+
 /// Words that make an earlier photo relevant. Kept narrow so the archive tool does not
 /// displace tools that the current request needs.
 fn mentions_visual_context(query: &str) -> bool {
@@ -1561,8 +1699,16 @@ fn prefers_web_read(text: &str) -> bool {
 /// Tools that act on what the request points at, ranked above word matches: a URL needs
 /// a web tool and a file name a file tool (an audio file, Studio's analyzer first),
 /// whatever other words the request shares.
-fn structural_boost(query: &str, tool: &str) -> usize {
+fn structural_boost(query: &str, tool: &str, capital_context: bool) -> usize {
     const BOOST: usize = 10;
+    if tool.starts_with("capital_") && capital_context {
+        let capital_boost = 8;
+        return if tool == "capital_overview" {
+            capital_boost - 1
+        } else {
+            capital_boost
+        };
+    }
     let extensions = file_extensions(query);
     let audio = extensions
         .iter()
@@ -1631,24 +1777,28 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
         m.to_string()
             .contains(crate::vision_archive::ARCHIVE_CONTEXT_NOTE)
     });
+    let text_of = |message: &serde_json::Value| -> String {
+        let content = &message["content"];
+        content.as_str().map(str::to_string).unwrap_or_else(|| {
+            content
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+    };
     let query = messages
         .iter()
         .rev()
         .find(|m| m["role"] == "user")
-        .map(|m| {
-            let content = &m["content"];
-            let text = content.as_str().map(str::to_string).unwrap_or_else(|| {
-                content
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|p| p["text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            });
-            without_memory_context(&text).to_lowercase()
-        })
+        .map(|m| without_memory_context(&text_of(m)).to_lowercase())
         .unwrap_or_default();
+    // Keep the pack available for follow-ups ("what about Nvidia?") after a finance turn.
+    let capital_context = messages
+        .iter()
+        .any(|m| m["role"] == "user" && mentions_capital(without_memory_context(&text_of(m))));
     let tokens = |text: &str| -> Vec<String> {
         text.to_lowercase()
             .split(|c: char| !c.is_alphanumeric())
@@ -1672,7 +1822,11 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
                 .iter()
                 .filter(|word| tool_words.iter().any(|t| word_matches(word, t)))
                 .count();
-            (hits + structural_boost(&query, name), i, tool.clone())
+            (
+                hits + structural_boost(&query, name, capital_context),
+                i,
+                tool.clone(),
+            )
         })
         .collect();
     ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -1761,32 +1915,22 @@ pub fn selected_tool_definitions(messages: &[serde_json::Value]) -> serde_json::
         let item = ranked.remove(pos);
         ranked.insert(fixed_count.min(ranked.len()), item);
     }
-    // Keep web_read within the first 8 when a URL is mentioned, and prefer it over web_speak
-    // unless the user asked to hear it aloud.
+    // A URL needs both web tools first, even when the request says not to read it
+    // aloud: the text is still inspected and the model can choose to speak it later.
     if mentions_url(&query) {
-        if let Some(pos) = position(&ranked, "web_read")
-            && pos >= 8
-        {
-            let item = ranked.remove(pos);
-            ranked.insert(fixed_count.min(ranked.len()), item);
+        let order = if wants_web_speak(&query) {
+            ["web_speak", "web_read"]
+        } else {
+            ["web_read", "web_speak"]
+        };
+        let mut picked = Vec::new();
+        for name in order {
+            if let Some(pos) = position(&ranked, name) {
+                picked.push(ranked.remove(pos));
+            }
         }
-        if wants_web_speak(&query)
-            && let Some(pos) = position(&ranked, "web_speak")
-            && pos >= 8
-        {
-            let item = ranked.remove(pos);
-            ranked.insert(fixed_count.min(ranked.len()), item);
-        }
-        if prefers_web_read(&query)
-            && let (Some(read_pos), Some(speak_pos)) = (
-                position(&ranked, "web_read"),
-                position(&ranked, "web_speak"),
-            )
-            && speak_pos < read_pos
-            && speak_pos >= fixed_count
-        {
-            let read = ranked.remove(read_pos);
-            ranked.insert(speak_pos, read);
+        for (offset, item) in picked.into_iter().enumerate() {
+            ranked.insert((fixed_count + offset).min(ranked.len()), item);
         }
     }
     let mut bytes = 2;
@@ -1896,6 +2040,53 @@ mod schema_selection_tests {
     }
 
     #[test]
+    fn finance_prompts_offer_capital_tools() {
+        let cases: [(&str, &str); 7] = [
+            ("What are my signals today?", "capital_signals"),
+            ("How is my portfolio doing?", "capital_portfolio"),
+            ("Check Apple for a signal", "capital_check"),
+            ("What dividend income will I get?", "capital_dividends"),
+            ("What is the outlook for my holdings?", "capital_forecast"),
+            ("Should I buy Nvidia?", "capital_check"),
+            ("What do you think about Nvidia?", "capital_check"),
+        ];
+        for (prompt, expected) in cases {
+            let tools = super::selected_tool_definitions(&[
+                serde_json::json!({"role":"user","content":prompt}),
+            ]);
+            let names: Vec<_> = tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+                .collect();
+            assert!(
+                names.iter().any(|name| name == expected),
+                "{prompt}: expected {expected} in {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_finance_follow_up_keeps_capital_tools_offered() {
+        let tools = super::selected_tool_definitions(&[
+            serde_json::json!({"role":"user","content":"How is my portfolio doing?"}),
+            serde_json::json!({"role":"assistant","content":"Your largest position is X."}),
+            serde_json::json!({"role":"user","content":"What about Nvidia?"}),
+        ]);
+        let names: Vec<_> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            names.iter().any(|name| name == "capital_check"),
+            "the follow-up should keep the capital pack: {names:?}"
+        );
+    }
+
+    #[test]
     fn selection_keeps_forge_tools_within_mind_limits() {
         let tools = super::selected_tool_definitions(&[
             serde_json::json!({"role":"user","content":"Enqueue Forge to solve GitHub issue 90"}),
@@ -1915,7 +2106,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 33);
+        assert_eq!(tools.len(), 46);
 
         let names: Vec<_> = tools
             .iter()
@@ -2065,6 +2256,12 @@ mod schema_selection_tests {
 
     #[test]
     fn a_url_offers_both_web_tools_first() {
+        assert!(
+            !super::mentions_capital(
+                "Check https://docs.rs/tokio and tell me the latest version. No need to read it aloud."
+            ),
+            "the URL prompt must not look financial"
+        );
         let offered = offered_for(
             "Check https://docs.rs/tokio and tell me the latest version. No need to read it aloud.",
         );

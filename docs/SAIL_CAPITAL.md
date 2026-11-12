@@ -538,6 +538,36 @@ came from, using the units held on the payment date. A history is scaled only wh
 receipts consistently differ by more than 1.6× (for example a fund quoted in its base
 currency), and a note says so.
 
+## Talking to SAIL about it (voice tools)
+
+The voice assistant can discuss the owner's investments through read-only Capital
+tools over the same service the page uses. They are offered for finance prompts and
+stay available for follow-ups after a finance turn, so "what about Nvidia?" can still
+search and check it.
+
+| Tool | Answers |
+|---|---|
+| `capital:overview` | Value, cash, top positions, stance, top suggestions, latest signals and risk |
+| `capital:today` | Stance, active suggestions with reasons and evidence, and sized changes |
+| `capital:portfolio` | Every position, cash, allocation, concentration, return, income and warnings |
+| `capital:signals` | Published cards, the six-by-two scoreboard and suppressed firings |
+| `capital:check` | One-off check of any Yahoo asset against the latest scoreboard |
+| `capital:search` | Yahoo symbol and name search for assets outside the universe |
+| `capital:watchlist` | The daily signal universe and its symbol mappings |
+| `capital:record` | The live graded record: closed count, hit rate, mean and cumulative R |
+| `capital:guards` | Trailing stops, trend and next earnings for the holdings |
+| `capital:dividends` | Low, base and high dividend income projections |
+| `capital:forecast` | Model price distributions at 5, 20 or 60 sessions |
+| `capital:policy` | Position, cash, volatility, turnover and risk-per-trade limits |
+| `capital:filings` | Recent SEC filings for the holdings and why each matters |
+
+The assistant may suggest ideas freely, including ideas that are not published signals.
+It must say which are verified cards and which are its own view, give the main risk,
+respect the saved policy, and never imply a guaranteed return. SAIL never places
+orders. `capital:search` and `capital:check` need Yahoo prices
+(`SAIL_PRICES_SOURCE=yfinance`), and the check needs a recent signal run for the
+scoreboard.
+
 ## API (`/api/capital`, owner token required)
 
 | Route | Returns |

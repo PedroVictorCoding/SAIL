@@ -95,6 +95,25 @@ impl Tool for MoodleTool {
             })
     }
 }
+/// Read-only Capital tools over the daemon's service (`sail-capital`). They answer from
+/// the owner's ledger, signals and projections and never change the ledger.
+struct CapitalTool(&'static str);
+#[async_trait]
+impl Tool for CapitalTool {
+    async fn execute(&self, _context: ToolContext, input: Value) -> Result<Value, ToolFailure> {
+        let service = sail_capital::service::global().ok_or_else(|| ToolFailure {
+            message: "Capital is not available in this session".into(),
+            retryable: false,
+        })?;
+        crate::capital_tools::execute(&service, self.0, &input)
+            .await
+            .map(|value| Value::String(value.to_string()))
+            .map_err(|message| ToolFailure {
+                message,
+                retryable: false,
+            })
+    }
+}
 /// How many offered alternatives the model sees besides the best match.
 const SPOTIFY_ALTERNATIVES: usize = 4;
 pub(crate) async fn execute_spotify_tool(
@@ -248,7 +267,7 @@ impl Tool for Canvas {
 /// Dialogue's tools as the model sees them, in the order the voice tool list offers them
 /// (ties in tool selection keep this order). `vision_frame` and `memory_recall` are not
 /// here: they act on the current turn's image and archive, not through the scheduler.
-pub(crate) const MODEL_TOOL_ORDER: [&str; 28] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 41] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -272,6 +291,19 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 28] = [
     "moodle:changes",
     "moodle:course",
     "moodle:search",
+    "capital:overview",
+    "capital:today",
+    "capital:portfolio",
+    "capital:signals",
+    "capital:check",
+    "capital:search",
+    "capital:watchlist",
+    "capital:record",
+    "capital:guards",
+    "capital:dividends",
+    "capital:forecast",
+    "capital:policy",
+    "capital:filings",
     "forge:enqueue",
     "forge:status",
     "forge:list",
@@ -658,6 +690,162 @@ pub fn registry() -> Arc<ToolRegistry> {
             .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
     }
 
+    let capital_account = || {
+        string(
+            64,
+            "Optional account id or name; defaults to the primary account",
+        )
+    };
+    let capital_tools: [KernelTool; 13] = [
+        (
+            "capital:overview",
+            "Start here for questions about the owner's investments, portfolio, stocks, ETFs, funds, trades, signals, market positions, dividends, risk, or what to buy or sell. Returns account value, cash, largest positions, today's stance and top suggestions, the latest verified signals, watchlist size and risk per trade. Read-only.",
+            json!({"account": capital_account()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:today",
+            "Today's plan for the owner's investments: stance, active suggestions with reasons, evidence and sized changes that respect the saved risk policy. Use for 'what should I do today?', 'any ideas?', 'what changed?'. Suggestions are ideas, not orders. Read-only.",
+            json!({"account": capital_account()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:portfolio",
+            "Detailed holdings: every open stock, ETF, fund and CFD position with units, cost, market value and cash, plus allocation, concentration, total return, income, freshness and reconciliation warnings. Use for 'what do I own?', 'how much is X?', 'am I diversified?'. Read-only.",
+            json!({"account": capital_account()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:signals",
+            "The latest verified trade signals: run date and session, published cards with symbol, side, setup, entry zone, stop, targets, size and why; the full six-setup scoreboard; and setups that fired but were suppressed. Use for 'any signals?', 'what should I trade?', 'is there a buy or sell setup?'. Read-only.",
+            json!({"account": capital_account()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:check",
+            "Check one asset for a potential signal right now, even if it is not held or on the watchlist. Fetches its daily bars and earnings, replays the verified setups against the latest scoreboard, and returns a card if one publishes or each firing with the reason it did not. Use for 'check Apple', 'does Nvidia have a signal?', 'what about gold?'. Needs a recent signal run and Yahoo prices. Read-only; it does not add the asset to the universe.",
+            json!({
+                "account": capital_account(),
+                "symbol": string(24, "Yahoo symbol to check, e.g. AAPL, SAP, ^GSPC, EURUSD=X or GC=F"),
+                "class": {"type":"string","maxLength":16,"enum":["stock","etf","fx","index","commodity"],"description":"Asset class; defaults to stock"},
+                "name": string(120, "Optional display name from capital_search"),
+                "exchange": string(80, "Optional exchange from capital_search"),
+                "yahoo": string(24, "Optional Yahoo symbol if it differs from symbol")
+            }),
+            &["symbol"],
+            ToolEffect::ReadOnly,
+            1,
+        ),
+        (
+            "capital:search",
+            "Search Yahoo Finance for any listed stock, ETF, fund, index, FX pair or commodity by name or symbol when the owner asks about an asset outside the portfolio or watchlist. Returns symbol, name, exchange and asset class; then call capital_check. Needs Yahoo price fetching. Read-only.",
+            json!({"query": string(64, "Asset name or symbol, e.g. Nvidia, SAP, gold, AAPL")}),
+            &["query"],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:watchlist",
+            "The instruments checked in the daily signal universe, with XTB symbol, Yahoo symbol, class, currency and name. Use to explain what is covered or to choose a symbol. Read-only.",
+            json!({}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:record",
+            "The live graded record of published signals: closed count, target hit rate, mean and cumulative R, and recent cards with status, result and exit. Use to judge whether the signals are working. Read-only.",
+            json!({"account": capital_account()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:guards",
+            "Protective trailing stops and trend state for the owner's holdings: chandelier stop, distance, whether the stop is hit, the 200-day trend and next earnings. Use for 'should I hold X?', 'where is my stop?', 'is the trend broken?'. Read-only.",
+            json!({"account": capital_account()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:dividends",
+            "Project dividend income from the holdings' payment histories: low, base and high yearly income, reinvestment, withholding and the optional Portuguese tax reserve. Use for 'how much dividend income?', 'when will I get paid?', 'what if I reinvest?'. A projection, not a promise. Read-only.",
+            json!({
+                "account": capital_account(),
+                "years": {"type":"integer","minimum":1,"maximum":30,"description":"Years to project; default 5"},
+                "reinvest_pct": {"type":"number","minimum":0,"maximum":100,"description":"Share of net dividends reinvested; default 100"},
+                "allocation": {"type":"string","maxLength":16,"enum":["same_holding","proportional"],"description":"Where reinvestment goes; default proportional"},
+                "reserve_pt_tax": {"type":"boolean","description":"Apply the simplified 28% Portuguese tax reserve"}
+            }),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:forecast",
+            "Model-based price distributions for the holdings at a 5, 20 or 60-session horizon, with quantiles and expected return. Use for 'what is the outlook?', 'expected range?', 'how volatile?'. Probabilities only when calibrated. Read-only.",
+            json!({
+                "account": capital_account(),
+                "horizon": {"type":"integer","enum":[5,20,60],"description":"Sessions ahead; default 20"},
+                "model": {"type":"string","maxLength":24,"enum":["no_change","trailing_drift","ewma_volatility","empirical_horizon"],"description":"Baseline model; default no_change"}
+            }),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:policy",
+            "The saved risk policy: position size, cash band, volatility and turnover limits, trading costs and risk per trade. Use before suggesting position sizes or checking whether an idea fits the owner's rules. Read-only.",
+            json!({"account": capital_account()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:filings",
+            "Recent SEC filings for the owner's US-listed holdings: form, filed date, issuer, 8-K items, description, link and why it matters. Use for company events, reports, risk and fundamental context before suggesting an idea. Read-only.",
+            json!({"account": capital_account()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+    ];
+    for (id, description, properties, required, effect, concurrency_limit) in capital_tools {
+        let timeout_ms = match id {
+            "capital:check" | "capital:forecast" => 120_000,
+            "capital:search" => 35_000,
+            "capital:overview" | "capital:today" | "capital:dividends" => 60_000,
+            "capital:policy" | "capital:watchlist" => 15_000,
+            _ => 30_000,
+        };
+        registry
+            .register(
+                ToolDescriptor {
+                    id: id.into(),
+                    version: 1,
+                    description: description.into(),
+                    input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+                    output_schema: json!({"type":"string","maxLength":if id == "capital:check" {131072} else {65536}}),
+                    security_effect: effect,
+                    required_capabilities: vec![id.into()],
+                    timeout_ms,
+                    resource_class: "io".into(),
+                    concurrency_limit,
+                },
+                Arc::new(CapitalTool(id)),
+            )
+            .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
+    }
+
     registry.register(ToolDescriptor {
         id:"command:execute".into(),version:1,description:"Execute a command in the isolated no-network runner after exact owner approval. Never host shell execution. Runner may be unavailable.".into(),
         input_schema:json!({"type":"object","properties":{"executable":{"type":"string","maxLength":4096},"argv":{"type":"array","maxItems":128,"items":{"type":"string","maxLength":8192}}},"required":["executable","argv"],"additionalProperties":false}),
@@ -994,6 +1182,16 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn capital_tools_are_registered_read_only_and_ordered() {
+        let registry = registry();
+        for id in crate::capital_tools::TOOL_IDS {
+            let descriptor = registry.descriptor(id).unwrap();
+            assert_eq!(descriptor.security_effect, ToolEffect::ReadOnly, "{id}");
+            assert!(MODEL_TOOL_ORDER.contains(&id), "{id}");
+        }
+    }
+
     #[tokio::test]
     async fn actual_clock_and_canvas_use_registered_bounded_tools() {
         let broker = Arc::new(GuardianExecutionBroker::new(

@@ -1,0 +1,541 @@
+//! Read-only Capital tools for the voice assistant. They answer from the owner's ledger,
+//! the latest signal run and the same projections the Capital page uses; the model may
+//! suggest freely but these tools never place an order or change the ledger.
+
+use chrono::Utc;
+use sail_capital::AsOf;
+use sail_capital::contracts::AccountId;
+use sail_capital::dividends::Allocation;
+use sail_capital::forecast::ModelId;
+use sail_capital::service::CapitalService;
+use sail_capital::trade::SignalCard;
+use serde_json::{Value, json};
+
+/// Every Capital tool this module answers, checked by the registry tests.
+#[cfg(test)]
+pub const TOOL_IDS: [&str; 13] = [
+    "capital:overview",
+    "capital:today",
+    "capital:portfolio",
+    "capital:signals",
+    "capital:check",
+    "capital:search",
+    "capital:watchlist",
+    "capital:record",
+    "capital:guards",
+    "capital:dividends",
+    "capital:forecast",
+    "capital:policy",
+    "capital:filings",
+];
+
+/// Runs one tool. Arguments are untrusted input from the model; the service validates
+/// symbols, accounts and ranges.
+pub async fn execute(service: &CapitalService, tool: &str, input: &Value) -> Result<Value, String> {
+    match tool {
+        "capital:overview" => overview(service, input),
+        "capital:today" => today(service, input),
+        "capital:portfolio" => portfolio(service, input),
+        "capital:signals" => signals(service, input),
+        "capital:watchlist" => watchlist(service),
+        "capital:record" => record(service, input),
+        "capital:guards" => guards(service, input),
+        "capital:dividends" => dividends(service, input),
+        "capital:forecast" => forecast(service, input),
+        "capital:policy" => policy(service, input),
+        "capital:filings" => filings(service, input),
+        "capital:search" => search(service, input).await,
+        "capital:check" => check(service, input).await,
+        other => Err(format!("Unknown Capital tool: {other}")),
+    }
+}
+
+fn account(service: &CapitalService, input: &Value) -> Result<AccountId, String> {
+    service
+        .resolve_account(input.get("account").and_then(Value::as_str))
+        .map_err(|error| error.to_string())
+}
+
+fn value<T: serde::Serialize>(item: T) -> Result<Value, String> {
+    serde_json::to_value(item).map_err(|error| error.to_string())
+}
+
+fn overview(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let now = Utc::now();
+    let insights = service
+        .insights(&account, AsOf::now(), now)
+        .map_err(|error| error.to_string())?;
+    let today = service
+        .today(&account, now)
+        .map_err(|error| error.to_string())?;
+    let trade = service
+        .trade_view(&account)
+        .map_err(|error| error.to_string())?;
+    let watch = service.watchlist().map_err(|error| error.to_string())?;
+    let policy = service
+        .policy(&account)
+        .map_err(|error| error.to_string())?;
+    let accounts = service.accounts().map_err(|error| error.to_string())?;
+
+    let suggestions: Vec<Value> = today
+        .suggestions
+        .iter()
+        .take(3)
+        .map(|suggestion| {
+            json!({
+                "title": &suggestion.title,
+                "why": &suggestion.why,
+                "severity": suggestion.severity,
+                "kind": suggestion.kind,
+                "confidence": &suggestion.confidence,
+            })
+        })
+        .collect();
+    let cards: Vec<Value> = trade
+        .day
+        .as_ref()
+        .map(|day| day.cards.iter().take(3).map(compact_card).collect())
+        .unwrap_or_default();
+    let mut notes = trade.notes;
+    if let Some(day) = trade.day.as_ref() {
+        notes.extend(day.notes.iter().cloned());
+    }
+
+    Ok(json!({
+        "as_of": now,
+        "account": account.as_str(),
+        "accounts": accounts,
+        "currency": &insights.currency,
+        "owned_value": &insights.owned_value,
+        "account_view": &insights.account,
+        "concentration": &insights.concentration,
+        "freshness": &insights.freshness,
+        "warnings": &insights.warnings,
+        "stance": &today.stance,
+        "top_suggestions": suggestions,
+        "signals": {
+            "run_at": trade.run_at,
+            "session": trade.day.as_ref().map(|day| day.session),
+            "card_count": trade.day.as_ref().map(|day| day.cards.len()).unwrap_or(0),
+            "top": cards,
+            "next_run_at": trade.next_run_at,
+            "running": trade.running,
+            "last_error": &trade.last_error,
+            "notes": notes,
+        },
+        "watchlist_count": watch.len(),
+        "risk_per_trade_pct": policy.current.limits.risk_per_trade_pct,
+    }))
+}
+
+fn today(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let today = service
+        .today(&account, Utc::now())
+        .map_err(|error| error.to_string())?;
+    let suggestions: Vec<Value> = today
+        .suggestions
+        .iter()
+        .map(|suggestion| {
+            json!({
+                "id": &suggestion.id,
+                "kind": suggestion.kind,
+                "severity": suggestion.severity,
+                "title": &suggestion.title,
+                "why": &suggestion.why,
+                "if_nothing": &suggestion.if_nothing,
+                "confidence": &suggestion.confidence,
+                "changes": &suggestion.changes,
+                "rules": &suggestion.rules,
+                "evidence": &suggestion.evidence,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "as_of": today.as_of,
+        "account": &today.account,
+        "policy": &today.policy,
+        "stance": &today.stance,
+        "suggestions": suggestions,
+        "hidden": today.hidden,
+    }))
+}
+
+fn portfolio(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let now = Utc::now();
+    let insights = service
+        .insights(&account, AsOf::now(), now)
+        .map_err(|error| error.to_string())?;
+    let projection = service
+        .portfolio(&account, AsOf::now())
+        .map_err(|error| error.to_string())?;
+    let position = |position: &sail_capital::ledger::Position| {
+        json!({
+            "symbol": &position.instrument.symbol,
+            "name": &position.instrument.name,
+            "kind": position.instrument.kind,
+            "currency": &position.instrument.currency,
+            "quantity": position.quantity,
+            "cost_basis": &position.cost_basis,
+            "market_value": &position.broker_market_value,
+        })
+    };
+    let positions: Vec<Value> = projection.positions.iter().map(position).collect();
+    let cfd_positions: Vec<Value> = projection.cfd_positions.iter().map(position).collect();
+
+    Ok(json!({
+        "account": account.as_str(),
+        "currency": &insights.currency,
+        "owned_value": &insights.owned_value,
+        "account_view": &insights.account,
+        "allocation": &insights.allocation,
+        "by_kind": &insights.by_kind,
+        "concentration": &insights.concentration,
+        "total_return": &insights.total_return,
+        "income": &insights.income,
+        "freshness": &insights.freshness,
+        "warnings": &insights.warnings,
+        "positions": positions,
+        "cfd_positions": cfd_positions,
+        "cash": &projection.cash,
+        "reconciliation": &projection.reconciliation,
+        "ledger_warnings": &projection.warnings,
+        "records_used": projection.records_used,
+    }))
+}
+
+fn signals(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let trade = service
+        .trade_view(&account)
+        .map_err(|error| error.to_string())?;
+    let mut notes = trade.notes;
+    let (session, cards, scoreboard, suppressed) = match trade.day.as_ref() {
+        Some(day) => {
+            notes.extend(day.notes.iter().cloned());
+            let cards: Vec<Value> = day.cards.iter().map(compact_card).collect();
+            let scoreboard: Vec<Value> = day
+                .scoreboard
+                .iter()
+                .map(|verdict| {
+                    json!({
+                        "group": &verdict.group,
+                        "setup": verdict.selection.setup,
+                        "side": verdict.selection.side,
+                        "publishes": verdict.publishes,
+                        "reason": &verdict.reason,
+                        "selection": {
+                            "trades": verdict.selection.trades,
+                            "hit_target1": verdict.selection.hit_target1,
+                            "expectancy_r": verdict.selection.expectancy_r,
+                            "expectancy_ci": verdict.selection.expectancy_ci,
+                        },
+                        "holdout": {
+                            "trades": verdict.holdout.trades,
+                            "expectancy_r": verdict.holdout.expectancy_r,
+                        },
+                    })
+                })
+                .collect();
+            let suppressed: Vec<Value> = day
+                .suppressed
+                .iter()
+                .map(
+                    |(symbol, setup, side)| json!({"symbol": symbol, "setup": setup, "side": side}),
+                )
+                .collect();
+            (Some(day.session), cards, scoreboard, suppressed)
+        }
+        None => (None, Vec::new(), Vec::new(), Vec::new()),
+    };
+
+    Ok(json!({
+        "run_at": trade.run_at,
+        "session": session,
+        "cards": cards,
+        "scoreboard": scoreboard,
+        "suppressed": suppressed,
+        "notes": notes,
+        "running": trade.running,
+        "next_run_at": trade.next_run_at,
+        "last_error": &trade.last_error,
+    }))
+}
+
+fn watchlist(service: &CapitalService) -> Result<Value, String> {
+    let items = service.watchlist().map_err(|error| error.to_string())?;
+    Ok(json!({"count": items.len(), "instruments": items}))
+}
+
+fn record(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let record = service
+        .trade_record(&account)
+        .map_err(|error| error.to_string())?;
+    let recent: Vec<Value> = record
+        .cards
+        .iter()
+        .take(20)
+        .map(|graded| {
+            json!({
+                "symbol": &graded.card.symbol,
+                "setup": graded.card.setup,
+                "side": graded.card.side,
+                "published_at": graded.published_at,
+                "status": &graded.status,
+                "signal_session": graded.card.signal_session,
+                "r_multiple": graded.graded.as_ref().map(|trade| trade.r_multiple),
+                "exit": graded.graded.as_ref().map(|trade| trade.exit),
+            })
+        })
+        .collect();
+    Ok(json!({"totals": record.totals, "recent": recent}))
+}
+
+fn guards(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let guards = service
+        .trade_guards(&account)
+        .map_err(|error| error.to_string())?;
+    value(guards)
+}
+
+fn dividends(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let years = input["years"].as_u64().unwrap_or(5) as u32;
+    let reinvest_pct = input["reinvest_pct"].as_f64().unwrap_or(100.0);
+    let allocation = match input["allocation"].as_str().unwrap_or("proportional") {
+        "same_holding" => Allocation::SameHolding,
+        _ => Allocation::Proportional,
+    };
+    let reserve = input["reserve_pt_tax"].as_bool().unwrap_or(false);
+    let outlook = service
+        .dividend_projection(&account, years, reinvest_pct, allocation, reserve)
+        .map_err(|error| error.to_string())?;
+    let mut payload = value(outlook)?;
+    if let Some(scenarios) = payload.get_mut("scenarios").and_then(Value::as_array_mut) {
+        for scenario in scenarios {
+            if let Some(object) = scenario.as_object_mut() {
+                object.remove("monthly_net");
+            }
+        }
+    }
+    if let Some(without) = payload
+        .get_mut("without_reinvestment")
+        .and_then(Value::as_object_mut)
+    {
+        without.remove("monthly_net");
+    }
+    Ok(payload)
+}
+
+fn forecast(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let horizon = input["horizon"].as_u64().unwrap_or(20) as u32;
+    let model = match input["model"].as_str().unwrap_or("no_change") {
+        "trailing_drift" => ModelId::TrailingDrift,
+        "ewma_volatility" => ModelId::EwmaVolatility,
+        "empirical_horizon" => ModelId::EmpiricalHorizon,
+        _ => ModelId::NoChange,
+    };
+    let view = service
+        .forecasts(&account, horizon, model)
+        .map_err(|error| error.to_string())?;
+    let forecasts: Vec<Value> = view
+        .forecasts
+        .iter()
+        .map(|forecast| {
+            json!({
+                "symbol": &forecast.symbol,
+                "as_of_session": forecast.as_of_session,
+                "reference_close": forecast.reference_close,
+                "status": forecast.status,
+                "expected_log_return": forecast.expected_log_return,
+                "median_terminal_price": forecast.median_terminal_price,
+                "quantiles": &forecast.quantiles,
+                "probability_positive": forecast.probability_positive,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "as_of": view.as_of,
+        "horizon_sessions": view.horizon_sessions,
+        "model": view.model,
+        "forecasts": forecasts,
+        "without_prices": view.without_prices,
+    }))
+}
+
+fn filings(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let view = service
+        .filings(&account, AsOf::now())
+        .map_err(|error| error.to_string())?;
+    let items: Vec<Value> = view
+        .items
+        .iter()
+        .take(30)
+        .map(|item| {
+            json!({
+                "issuer": &item.issuer_name,
+                "form": &item.filing.form,
+                "filed": item.filing.filing_date,
+                "published_at": item.published_at,
+                "report_date": item.filing.report_date,
+                "items": &item.filing.items,
+                "description": &item.filing.description,
+                "url": &item.filing.url,
+                "reason": &item.reason,
+                "action": item.action,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "as_of": view.as_of,
+        "items": items,
+        "matches": view.matches,
+    }))
+}
+
+fn policy(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let policy = service
+        .policy(&account)
+        .map_err(|error| error.to_string())?;
+    Ok(json!({
+        "current": policy.current,
+        "versions": policy.history.len(),
+    }))
+}
+
+async fn search(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let query = input["query"].as_str().unwrap_or_default().trim();
+    if query.is_empty() {
+        return Err("query is required".into());
+    }
+    let results = service
+        .search_trade_symbols(query)
+        .await
+        .map_err(|error| error.to_string())?;
+    value(results)
+}
+
+async fn check(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let symbol = input["symbol"].as_str().unwrap_or_default().trim();
+    if symbol.is_empty() {
+        return Err("symbol is required".into());
+    }
+    let check = service
+        .check_trade_signal(
+            &account,
+            symbol,
+            input["yahoo"].as_str(),
+            input["name"].as_str(),
+            input["exchange"].as_str(),
+            input["class"].as_str(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut payload = value(check)?;
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("recent_closes");
+    }
+    Ok(payload)
+}
+
+fn compact_card(card: &SignalCard) -> Value {
+    json!({
+        "symbol": &card.symbol,
+        "side": card.side,
+        "setup": card.setup,
+        "class": card.class,
+        "score": card.score,
+        "entry_zone": card.entry_zone,
+        "stop": card.stop,
+        "targets": card.targets,
+        "max_sessions": card.max_sessions,
+        "size": &card.size,
+        "risk_pct": card.risk_pct,
+        "needs_cfd": card.needs_cfd,
+        "relation": &card.relation,
+        "why": &card.verdict.reason,
+        "signal_session": card.signal_session,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use sail_capital::market::{PriceSeries, PriceSource, PriceSourceError, SymbolMatch};
+    use std::sync::Arc;
+
+    struct FakeSearch;
+
+    #[async_trait]
+    impl PriceSource for FakeSearch {
+        fn source_id(&self) -> &str {
+            "yfinance"
+        }
+
+        async fn daily(&self, symbol: &str) -> Result<PriceSeries, PriceSourceError> {
+            Err(PriceSourceError::UnknownSymbol(symbol.to_string()))
+        }
+
+        async fn search(&self, query: &str) -> Result<Vec<SymbolMatch>, PriceSourceError> {
+            assert_eq!(query, "apple");
+            Ok(vec![SymbolMatch {
+                symbol: "AAPL".into(),
+                name: "Apple Inc.".into(),
+                exchange: "NASDAQ".into(),
+                quote_type: "EQUITY".into(),
+            }])
+        }
+    }
+
+    fn service() -> CapitalService {
+        let dir = std::env::temp_dir().join(format!("sail-capital-tools-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        CapitalService::open(&dir).unwrap()
+    }
+
+    #[test]
+    fn the_tool_names_survive_the_voice_name_mapping() {
+        for id in TOOL_IDS {
+            let (prefix, action) = id.split_once(':').expect("capital:action");
+            assert_eq!(prefix, "capital");
+            assert!(!action.contains('_'), "{id} would be split twice");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_watchlist_tool_answers_without_an_account() {
+        let service = service();
+        let payload = execute(&service, "capital:watchlist", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(payload["count"].as_u64(), Some(44));
+    }
+
+    #[tokio::test]
+    async fn the_search_tool_returns_the_source_matches() {
+        let service = service().with_prices(Arc::new(FakeSearch), true);
+        let payload = execute(&service, "capital:search", &json!({"query": "apple"}))
+            .await
+            .unwrap();
+        assert_eq!(payload[0]["symbol"], "AAPL");
+        assert_eq!(payload[0]["class"], "stock");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_tool_is_a_plain_error() {
+        let service = service();
+        let error = execute(&service, "capital:nope", &json!({}))
+            .await
+            .unwrap_err();
+        assert!(error.contains("Unknown Capital tool"));
+    }
+}

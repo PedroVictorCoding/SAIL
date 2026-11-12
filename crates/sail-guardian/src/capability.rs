@@ -120,6 +120,19 @@ impl Capability {
                         || tool == "moodle:changes"
                         || tool == "moodle:course"
                         || tool == "moodle:search"
+                        || tool == "capital:overview"
+                        || tool == "capital:today"
+                        || tool == "capital:portfolio"
+                        || tool == "capital:signals"
+                        || tool == "capital:check"
+                        || tool == "capital:search"
+                        || tool == "capital:watchlist"
+                        || tool == "capital:record"
+                        || tool == "capital:guards"
+                        || tool == "capital:dividends"
+                        || tool == "capital:forecast"
+                        || tool == "capital:policy"
+                        || tool == "capital:filings"
                         || tool == "studio:audio_analyze" =>
                 {
                     RiskLevel::Low
