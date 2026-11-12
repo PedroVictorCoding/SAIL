@@ -2936,6 +2936,7 @@ dependencies = [
  "sail-capital",
  "sail-common",
  "sail-continuity",
+ "sail-discovery",
  "sail-flow",
  "sail-forge",
  "sail-guardian",

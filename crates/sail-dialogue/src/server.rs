@@ -388,6 +388,14 @@ pub async fn run_dialogue_server_with_plans(
     let pulse_routes = pulse
         .clone()
         .map(|pulse| crate::pulse_http::router(pulse, authority()));
+    // Proactive initiative and reasoning escalation (deterministic loop; no model calls).
+    let proactive = crate::proactive::start(pulse.clone());
+    let initiative_routes = proactive
+        .clone()
+        .map(|p| crate::proactive_http::initiative_router(p, authority()));
+    let escalation_routes = proactive
+        .clone()
+        .map(|p| crate::proactive_http::escalation_router(p, authority()));
     let dictation_routes = crate::dictation_http::router(services.clone(), authority());
     let approval_routes = crate::approval_http::router_with_token(
         owner_authority,
@@ -430,6 +438,12 @@ pub async fn run_dialogue_server_with_plans(
     }
     if let Some(routes) = pulse_routes {
         app = app.nest_service("/api/pulse", routes);
+    }
+    if let Some(routes) = initiative_routes {
+        app = app.nest_service("/api/initiative", routes);
+    }
+    if let Some(routes) = escalation_routes {
+        app = app.nest_service("/api/mind/escalation", routes);
     }
     if let Some(routes) = learn_routes {
         app = app.nest_service("/api/learn", routes);
@@ -1682,6 +1696,9 @@ async fn run_turn(
         && let Some(knowledge) = owner_knowledge_context(&state.arena, query)
     {
         memory_block.push_str(&knowledge);
+    }
+    if let Some(brief) = crate::proactive::conversation_brief(conversation.hot.len()) {
+        memory_block.push_str(&brief);
     }
     debug!(
         retrieval = conversation.query.is_some(),

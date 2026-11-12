@@ -27,6 +27,7 @@ sail-agents.workspace = true
 sail-arena-learn.workspace = true
 sail-continuity.workspace = true
 sail-pulse.workspace = true
+sail-discovery.workspace = true
 sail-tracker.workspace = true
 sail-moodle.workspace = true
 sail-capital.workspace = true

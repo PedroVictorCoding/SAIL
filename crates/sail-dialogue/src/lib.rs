@@ -28,6 +28,8 @@ pub mod pipeline;
 pub mod plans;
 pub mod prompt;
 pub mod proxy_guard;
+pub mod proactive;
+pub mod proactive_http;
 pub mod pulse_http;
 pub mod reader_http;
 pub mod server;
