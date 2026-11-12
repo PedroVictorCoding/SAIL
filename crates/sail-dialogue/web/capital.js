@@ -3215,8 +3215,9 @@ function formatCardSize(size, riskPct) {
   const rPct = (riskPct !== undefined && riskPct !== null ? Number(riskPct) : 0.5).toFixed(1);
   if (size && Array.isArray(size) && size.length >= 2) {
     const units = Number(size[0]).toLocaleString(undefined, { maximumFractionDigits: 2 });
-    const value = formatMoney(size[1]);
-    return `${units} units (${value}) at ${rPct}% risk`;
+    // The value is a plain number in the account currency, not a Money object.
+    const value = Number(size[1]).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return `${units} units (worth ≈ ${value}) at ${rPct}% risk`;
   }
   return `At ${rPct}% risk to stop (account size pending)`;
 }
@@ -3336,10 +3337,17 @@ async function loadTradeSignals() {
 
   try {
     const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
-    const res = await fetchJson(`/api/capital/signals/trade${query}`);
+    const raw = await fetchJson(`/api/capital/signals/trade${query}`);
+    // The route returns {day: SignalDay | null, run_at, next_run_at, notes}; the rest of
+    // this view reads the day's fields directly.
+    const res = Object.assign({}, (raw && raw.day) || {}, {
+      run_at: raw && raw.run_at,
+      next_run_at: raw && raw.next_run_at,
+      view_notes: (raw && raw.notes) || [],
+    });
     latestTradeSignals = res;
 
-    const sessionDate = res.session && res.session !== "1970-01-01" ? formatDate(res.session) : "—";
+    const sessionDate = res.session && res.session !== "1970-01-01" && !res.session.startsWith("-") ? formatDay(res.session) : "—";
     const lastRun = res.run_at ? formatDate(res.run_at) : (res.session ? formatDate(res.session) : "—");
     if (metaSpan) {
       metaSpan.textContent = `Session: ${sessionDate} · Last run: ${lastRun}`;
@@ -3588,7 +3596,7 @@ async function loadHoldingGuards() {
         trendStr = `<span class="cp-trend-below">Below 200d</span>`;
       }
 
-      const earningsStr = g.next_earnings ? formatDate(g.next_earnings) : "—";
+      const earningsStr = g.next_earnings ? formatDay(g.next_earnings) : "—";
 
       let activeSignalLink = "—";
       if (latestTradeSignals && Array.isArray(latestTradeSignals.cards)) {
@@ -3786,7 +3794,7 @@ function setupSignalsControls() {
       try {
         const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
         const res = await fetchJson(`/api/capital/signals/trade/run${query}`, { method: "POST" });
-        showBanner(`Signals computed for session ${res.session || "today"}.`);
+        showBanner(`Signals computed for session ${(res.day && res.day.session) || "today"}.`);
         await loadTradeSignals();
         await loadTradeRecord();
         await loadHoldingGuards();
