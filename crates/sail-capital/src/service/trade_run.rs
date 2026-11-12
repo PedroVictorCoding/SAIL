@@ -27,6 +27,12 @@ pub struct TradeView {
     pub next_run_at: DateTime<Utc>,
     /// Why there's no run yet, or why the last one fell short.
     pub notes: Vec<String>,
+    /// A run is in progress now (started from the page or the schedule).
+    #[serde(default)]
+    pub running: bool,
+    /// Why the last run failed, if it did (cleared by the next successful run).
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 /// `GET /signals/trade/record`.
@@ -123,6 +129,8 @@ impl CapitalService {
             day: latest.map(|(_, day)| day),
             next_run_at: next_run_after(now),
             notes,
+            running: self.trade_running.try_lock().is_err(),
+            last_error: self.trade_last_error.lock().ok().and_then(|e| e.clone()),
         })
     }
 
@@ -357,12 +365,40 @@ impl CapitalService {
         Ok(())
     }
 
+    /// Starts a run in the background and returns at once. A run takes minutes (one
+    /// price request a second), longer than proxies such as a Cloudflare tunnel keep a
+    /// request open, so the page polls [`CapitalService::trade_view`] while `running`.
+    /// Returns false when a run is already in progress.
+    pub fn start_trade_run(self: &std::sync::Arc<Self>, account: AccountId) -> bool {
+        if self.trade_running.try_lock().is_err() {
+            return false;
+        }
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service.run_trade_signals(&account).await {
+                tracing::warn!(error = %e, "trade signals run failed");
+            }
+        });
+        true
+    }
+
     /// Runs the whole signal pipeline now: prices for holdings and watchlist, earnings,
-    /// signals, and grading of earlier cards. Only one run at a time.
+    /// signals, and grading of earlier cards. Only one run at a time. Its outcome is kept
+    /// for [`TradeView::last_error`].
     pub async fn run_trade_signals(&self, account: &AccountId) -> Result<TradeView, ServiceError> {
-        let _running = self.trade_running.lock().await;
+        let result = {
+            let _running = self.trade_running.lock().await;
+            self.run_trade_signals_locked(account).await
+        };
+        if let Ok(mut last) = self.trade_last_error.lock() {
+            *last = result.as_ref().err().map(|e| e.to_string());
+        }
+        result.and_then(|_| self.trade_view(account))
+    }
+
+    async fn run_trade_signals_locked(&self, account: &AccountId) -> Result<(), ServiceError> {
         if !self.prices_configured {
-            return self.trade_view(account);
+            return Ok(());
         }
         let watch = self.watchlist()?;
         let held = self.held_instruments(account)?;
@@ -464,7 +500,7 @@ impl CapitalService {
         }
         self.store.record_trade_run(account, &day, now)?;
         self.grade_open_cards(account, now)?;
-        self.trade_view(account)
+        Ok(())
     }
 
     /// Grades published cards that are still open, against bars after their session.

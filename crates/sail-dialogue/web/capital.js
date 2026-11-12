@@ -3353,6 +3353,8 @@ async function loadTradeSignals() {
       run_at: raw && raw.run_at,
       next_run_at: raw && raw.next_run_at,
       view_notes: (raw && raw.notes) || [],
+      running: !!(raw && raw.running),
+      last_error: raw && raw.last_error,
     });
     latestTradeSignals = res;
 
@@ -3799,11 +3801,27 @@ function setupSignalsControls() {
     runBtn.addEventListener("click", async () => {
       runBtn.disabled = true;
       runBtn.textContent = "Computing signals…";
-      setState("busy", "Running daily trade signals…");
+      setState("busy", "Running trade signals (a few minutes)…");
+      const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
       try {
-        const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
-        const res = await fetchJson(`/api/capital/signals/trade/run${query}`, { method: "POST" });
-        showBanner(`Signals computed for session ${(res.day && res.day.session) || "today"}.`);
+        // The run takes minutes, longer than the tunnel keeps a request open, so the
+        // server runs it in the background and we poll until it's done.
+        let view = await fetchJson(`/api/capital/signals/trade/run${query}`, { method: "POST" });
+        const started = Date.now();
+        while (view && view.running && Date.now() - started < 20 * 60 * 1000) {
+          const mins = Math.floor((Date.now() - started) / 60000);
+          runBtn.textContent = `Computing signals… ${mins} min`;
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          view = await fetchJson(`/api/capital/signals/trade${query}`);
+        }
+        if (view && view.last_error) {
+          showBanner(`Signals run failed: ${view.last_error}`, true);
+        } else if (view && view.running) {
+          showBanner("Signals are still computing; they'll show when the run finishes.");
+        } else {
+          const n = view && view.day && view.day.cards ? view.day.cards.length : 0;
+          showBanner(`Signals computed for session ${(view && view.day && view.day.session) || "today"}: ${n} signal${n === 1 ? "" : "s"}.`);
+        }
         await loadTradeSignals();
         await loadTradeRecord();
         await loadHoldingGuards();

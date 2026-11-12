@@ -755,11 +755,11 @@ async fn trade_run(
     authorize(&s, &h)?;
     let id = q.account.clone();
     let account = blocking(&s, move |svc| svc.resolve_account(id.as_deref())).await?;
-    let view = s
-        .service
-        .run_trade_signals(&account)
-        .await
-        .map_err(failure)?;
+    // A run takes minutes, longer than a tunnel keeps the request open, so it runs in
+    // the background and the page polls GET /signals/trade while `running`.
+    s.service.start_trade_run(account.clone());
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let view = blocking(&s, move |svc| svc.trade_view(&account)).await?;
     Ok(no_store(to_json(&view)?))
 }
 
