@@ -155,3 +155,50 @@ async fn stored_bars_gain_open_high_low_once_and_keep_their_first_time() {
     svc.refresh_prices(Some(&account)).await.unwrap();
     assert_eq!(store.price_version().unwrap(), version);
 }
+
+/// Answers every symbol after a pause, so a run is still in progress when checked.
+struct Slow;
+
+#[async_trait]
+impl PriceSource for Slow {
+    fn source_id(&self) -> &str {
+        "slow"
+    }
+
+    async fn daily(&self, symbol: &str) -> Result<PriceSeries, PriceSourceError> {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        Err(PriceSourceError::UnknownSymbol(symbol.into()))
+    }
+}
+
+#[tokio::test]
+async fn a_run_starts_in_the_background_and_reports_running_until_done() {
+    let dir = tempfile::tempdir().unwrap();
+    let svc = Arc::new(
+        CapitalService::open(dir.path())
+            .unwrap()
+            .with_prices(Arc::new(Slow), true),
+    );
+    let account = svc
+        .import_xtb(None, "export.xlsx", FILE, None, None, Utc::now())
+        .unwrap()
+        .account;
+    assert!(svc.start_trade_run(account.clone()));
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(svc.trade_view(&account).unwrap().running);
+    // A second start while one runs is refused.
+    assert!(!svc.start_trade_run(account.clone()));
+    // It finishes (44 watchlist symbols at 20 ms each) and clears the flag.
+    let mut done = false;
+    for _ in 0..200 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let view = svc.trade_view(&account).unwrap();
+        if !view.running {
+            assert_eq!(view.last_error, None);
+            assert!(view.day.is_some());
+            done = true;
+            break;
+        }
+    }
+    assert!(done, "the run never finished");
+}

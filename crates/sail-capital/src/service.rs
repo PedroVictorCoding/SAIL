@@ -104,6 +104,8 @@ pub struct CapitalService {
     price_refreshing: tokio::sync::Mutex<()>,
     /// One trade-signal run at a time.
     trade_running: tokio::sync::Mutex<()>,
+    /// Why the last trade-signal run failed, if it did.
+    trade_last_error: std::sync::Mutex<Option<String>>,
     /// Model signals the owner turned on (`SAIL_MODEL_SIGNALS`).
     model_specs: Vec<crate::models::ModelSpec>,
     /// Outlook models the owner turned on (`SAIL_MODEL_SIGNALS`).
@@ -194,6 +196,7 @@ impl CapitalService {
             price_status: std::sync::Mutex::new(PriceStatus::default()),
             price_refreshing: tokio::sync::Mutex::new(()),
             trade_running: tokio::sync::Mutex::new(()),
+            trade_last_error: std::sync::Mutex::new(None),
             model_specs: Vec::new(),
             outlook_specs: Vec::new(),
             helper_paths: (
