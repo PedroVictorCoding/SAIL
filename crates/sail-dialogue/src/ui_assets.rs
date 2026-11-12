@@ -69,6 +69,8 @@ assets![
     ("/moodle", "web/moodle.html", HTML),
     ("/moodle.js", "web/moodle.js", JS),
     ("/moodle.css", "web/moodle.css", CSS),
+    ("/initiative.js", "web/initiative.js", JS),
+    ("/initiative.css", "web/initiative.css", CSS),
     ("/capital", "web/capital.html", HTML),
     ("/capital.js", "web/capital.js", JS),
     ("/capital.css", "web/capital.css", CSS),
