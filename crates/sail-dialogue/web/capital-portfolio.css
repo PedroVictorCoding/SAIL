@@ -1,0 +1,144 @@
+/* SAIL Capital — portfolio tab. Shared components live in capital.css. */
+
+.cp-section-subhead {
+  padding: 12px 20px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sail-text-muted);
+  margin: 0;
+  border-top: 1px solid var(--sail-glass-border);
+}
+
+.cp-pos-name {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-pos-isin {
+  font-size: 11px;
+  color: var(--sail-text-muted);
+}
+
+.cp-pos-dist {
+  font-size: 12px;
+  color: var(--sail-text-muted);
+  margin-left: 6px;
+}
+
+.cp-pos-guard-meta {
+  font-size: 12px;
+  color: var(--sail-text-muted);
+  margin-bottom: 8px;
+}
+
+.cp-allocation-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.cp-alloc-bars {
+  padding: 10px 20px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cp-alloc-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cp-alloc-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.cp-alloc-symbol {
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--sail-text);
+  min-width: 80px;
+}
+
+.cp-alloc-name {
+  color: var(--sail-text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.cp-alloc-val {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--sail-text);
+}
+
+.cp-alloc-share {
+  min-width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--sail-text-muted);
+}
+
+.cp-bar-track {
+  width: 100%;
+  height: 5px;
+  background: var(--sail-surface-raised);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.cp-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #345c8c, #4a84be);
+  border-radius: 3px;
+  transition: width var(--sail-transition-fast) var(--sail-ease);
+}
+
+.cp-filing-link {
+  color: #7bb4eb;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.cp-filing-link:hover {
+  text-decoration: underline;
+  color: #a4cefa;
+}
+
+.cp-filing-link:focus-visible {
+  outline: 2px solid var(--sail-focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (max-width: 480px) {
+  .cp-alloc-info {
+    flex-wrap: wrap;
+  }
+
+  .cp-alloc-name {
+    width: 100%;
+    max-width: 100%;
+    order: 3;
+  }
+}
+
+#cpPositionsBody .cp-inst {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cp-pos-chg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}

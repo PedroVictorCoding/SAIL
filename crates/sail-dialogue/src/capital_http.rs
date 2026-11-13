@@ -71,6 +71,8 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/dividends/projection", get(dividend_projection))
         .route("/dividends/refresh", post(dividend_refresh))
         .route("/outlook/track-record", get(track_record))
+        .route("/scorecard", get(scorecard))
+        .route("/markets", get(markets))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
         .with_state(Arc::new(CapitalState { service, authority }))
 }
@@ -661,6 +663,34 @@ async fn signals(
     })
     .await?;
     Ok(no_store(to_json(&report)?))
+}
+
+async fn markets(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let board = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.markets(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&board)?))
+}
+
+async fn scorecard(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let card = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.scorecard(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&card)?))
 }
 
 async fn signal_models(

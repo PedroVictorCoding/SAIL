@@ -1,0 +1,268 @@
+/* SAIL Capital — income tab. Shared components live in capital.css. */
+
+/* Insights Summary */
+.cp-insights-body {
+  padding: 14px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cp-insights-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cp-insights-subtitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sail-text);
+  margin: 0;
+}
+
+.cp-insights-line {
+  font-size: 13px;
+  color: var(--sail-text-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.cp-income-months {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.cp-income-month-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.cp-month-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  min-width: 65px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-month-bar-wrap {
+  flex: 1;
+  height: 5px;
+  background: var(--sail-surface-raised);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.cp-month-bar-fill {
+  height: 100%;
+  background: #5ccda4;
+  border-radius: 3px;
+}
+
+.cp-month-net {
+  min-width: 80px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: #7fd6a4;
+}
+
+/* Dividend Projection (Income Tab) */
+.cp-proj-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 24px;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--sail-glass-border);
+  background: var(--sail-surface);
+}
+
+#cpProjTopNGroup[hidden] {
+  display: none;
+}
+
+.cp-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 140px;
+  height: 6px;
+  background: var(--sail-surface-raised, #1d232c);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: 4px;
+  outline: none;
+  accent-color: var(--sail-focus-ring, #ffd69f);
+  cursor: pointer;
+  transition: border-color var(--sail-transition-fast, 140ms);
+}
+
+.cp-range:focus-visible {
+  outline: 2px solid var(--sail-focus-ring, #ffd69f);
+  outline-offset: 2px;
+}
+
+.cp-control-checkbox {
+  cursor: pointer;
+}
+
+.cp-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sail-text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.cp-checkbox-label input[type="checkbox"] {
+  accent-color: var(--sail-focus-ring, #ffd69f);
+  cursor: pointer;
+}
+
+.cp-checkbox-label input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--sail-focus-ring, #ffd69f);
+  outline-offset: 2px;
+}
+
+.cp-proj-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 20px 14px;
+}
+
+.cp-proj-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--sail-glass-border);
+}
+
+.cp-proj-tile-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sail-text-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cp-proj-tile-val {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--sail-text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.cp-proj-tile-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--sail-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-proj-chart-wrap {
+  position: relative;
+  width: calc(100% - 40px);
+  margin: 0 20px 8px;
+  min-height: 280px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control, 14px);
+  padding: 10px;
+  overflow: hidden;
+}
+
+.cp-proj-chart-wrap svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 400px;
+}
+
+.cp-proj-axis-label {
+  font-size: 10px;
+  fill: var(--sail-text-subtle);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.cp-proj-legend-text {
+  font-size: 11px;
+  fill: var(--sail-text-muted);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  dominant-baseline: central;
+}
+
+.cp-proj-section {
+  padding: 10px 20px 14px;
+}
+
+.cp-proj-table-head {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.cp-proj-growth-raw {
+  display: block;
+  font-size: 10px;
+  color: var(--sail-text-muted);
+}
+
+.cp-proj-assumptions {
+  padding: 8px 20px 16px;
+}
+
+.cp-proj-notes-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  .cp-proj-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .cp-proj-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .cp-proj-controls .cp-control-group {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .cp-proj-tiles {
+    grid-template-columns: 1fr;
+    margin: 14px 12px 12px;
+  }
+
+  .cp-proj-chart-wrap {
+    width: calc(100% - 24px);
+    margin: 0 12px 8px;
+    padding: 6px;
+  }
+
+  .cp-proj-section {
+    padding: 10px 12px 14px;
+  }
+}

@@ -1,0 +1,641 @@
+/* SAIL Capital — outlook tab. Shared components live in capital.css. */
+
+/* Blended Outlook & Fan Chart */
+.cp-outlook-panel {
+  position: relative;
+}
+
+.cp-outlook-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 22px;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--sail-glass-border);
+  background: var(--sail-surface);
+}
+
+.cp-control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cp-control-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sail-text-subtle);
+  white-space: nowrap;
+}
+
+.cp-outlook-chart-wrap {
+  position: relative;
+  margin: 12px 20px;
+  overflow: hidden;
+}
+
+.cp-outlook-chart-wrap:has(svg) {
+  min-height: 280px;
+}
+
+.cp-outlook-chart-wrap > .cp-empty {
+  padding: 4px 0;
+  text-align: left;
+}
+
+.cp-outlook-chart-wrap svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 440px;
+}
+
+.cp-chart-axis-text {
+  font-size: 11px;
+  fill: var(--sail-text-subtle);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.cp-chart-label {
+  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-weight: 600;
+  dominant-baseline: central;
+}
+
+.cp-label-high {
+  fill: #5ccda4;
+}
+
+.cp-label-med {
+  fill: #ffd69f;
+}
+
+.cp-label-low {
+  fill: #e17055;
+}
+
+.cp-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Three numbers under the chart; the detailed breakdown is disclosed below. */
+.cp-outlook-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 20px 14px;
+}
+
+.cp-outlook-stats[hidden] {
+  display: none !important;
+}
+
+.cp-outlook-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--sail-surface-raised);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control, 8px);
+}
+
+.cp-outlook-stat-label {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-outlook-stat-val {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sail-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-outlook-stat-delta {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sail-text-muted);
+}
+
+.cp-outlook-stat-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-outlook-replay-summary {
+  margin: 0 20px 14px;
+  padding: 12px 16px;
+  background: rgba(255, 214, 159, 0.08);
+  border: 1px solid rgba(255, 214, 159, 0.25);
+  border-radius: var(--sail-radius-control, 8px);
+  font-size: 13px;
+  color: #ffd69f;
+  font-weight: 500;
+}
+
+.cp-outlook-details {
+  margin: 0 20px 20px;
+  border-top: 1px solid var(--sail-glass-border);
+}
+
+.cp-outlook-details[hidden] {
+  display: none !important;
+}
+
+.cp-outlook-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sail-text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.cp-outlook-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cp-outlook-details > summary::before {
+  content: "+";
+  width: 14px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-outlook-details[open] > summary::before {
+  content: "−";
+}
+
+.cp-outlook-details > summary:hover {
+  color: var(--sail-text);
+}
+
+.cp-outlook-details > summary:focus-visible {
+  outline: 2px solid var(--sail-focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.cp-outlook-meta-grid {
+  margin-top: 4px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 768px) {
+  .cp-outlook-meta-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .cp-outlook-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 16px;
+  }
+
+  .cp-chart-axis-text {
+    font-size: 15px;
+  }
+
+  .cp-chart-label {
+    font-size: 14px;
+  }
+
+  .cp-outlook-controls .cp-control-group {
+    flex-wrap: wrap;
+  }
+
+  .cp-outlook-controls .cp-horizon-pills {
+    flex: 1;
+  }
+
+  .cp-outlook-controls .cp-horizon-btn {
+    flex: 1;
+    text-align: center;
+  }
+
+  .cp-outlook-chart-wrap {
+    width: calc(100% - 24px);
+    margin: 12px;
+  }
+
+  .cp-outlook-stats {
+    grid-template-columns: 1fr;
+    margin: 0 12px 12px;
+  }
+
+  .cp-outlook-replay-summary {
+    margin: 0 12px 12px;
+  }
+
+  .cp-outlook-details {
+    margin: 0 12px 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .cp-outlook-chart-wrap:has(svg) {
+    min-height: 220px;
+  }
+
+  .cp-outlook-chart-wrap svg {
+    max-height: 320px;
+  }
+}
+
+.cp-outlook-subheading {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sail-text-subtle);
+  margin-bottom: 12px;
+}
+
+.cp-outlook-weights-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cp-weight-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.cp-weight-name {
+  width: 140px;
+  flex-shrink: 0;
+  font-weight: 500;
+  color: var(--sail-text);
+}
+
+.cp-weight-pct {
+  width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--sail-text-muted);
+}
+
+.cp-weight-dimmed {
+  opacity: 0.4;
+}
+
+.cp-weight-bar-wrap {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.cp-weight-bar-fill {
+  height: 100%;
+  background: #7dd3fc;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.cp-outlook-tilt-note {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
+.cp-tilt-line strong {
+  color: #7dd3fc;
+}
+
+.cp-tilt-none {
+  color: var(--sail-text-subtle);
+  font-style: italic;
+}
+
+.cp-track-record-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 10px;
+}
+
+.cp-track-card {
+  background: var(--sail-surface-raised);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control, 8px);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cp-track-val {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--sail-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-track-label {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-track-aim {
+  font-size: 10px;
+  color: var(--sail-text-muted);
+}
+
+/* Asset search & one-off signal check */
+.cp-signal-search {
+  margin-bottom: 20px;
+}
+
+.cp-signal-search-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.cp-signal-search-form .cp-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cp-signal-search-status {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
+.cp-signal-search-status:empty {
+  display: none;
+}
+
+.cp-signal-search-results {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cp-signal-search-results[hidden],
+.cp-signal-check[hidden] {
+  display: none;
+}
+
+.cp-signal-search-result {
+  margin: 0;
+}
+
+.cp-signal-search-pick {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control, 8px);
+  color: var(--sail-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.cp-signal-search-pick:hover,
+.cp-signal-search-pick:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(100, 160, 240, 0.45);
+}
+
+.cp-signal-search-symbol {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #f8fafc;
+}
+
+.cp-signal-search-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--sail-text-muted);
+}
+
+.cp-signal-search-meta {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+  white-space: nowrap;
+}
+
+.cp-signal-check {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--sail-glass-border);
+}
+
+.cp-signal-check-loading {
+  margin: 0;
+  font-size: 13px;
+  color: var(--sail-text-muted);
+}
+
+.cp-signal-check-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cp-signal-check-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cp-signal-check-title strong {
+  font-size: 16px;
+  color: var(--sail-text);
+}
+
+.cp-signal-check-meta {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-signal-check-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cp-signal-check-result {
+  margin: 12px 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sail-text);
+}
+
+.cp-signal-check-yes {
+  color: #4ade80;
+}
+
+.cp-signal-check-sub {
+  margin: -4px 0 12px;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
+.cp-signal-check-suppressed {
+  margin-top: 12px;
+}
+
+.cp-signal-check-evidence {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
+/* The small price chart inside a signal row */
+.cp-sig-chart {
+  width: 100%;
+  height: 120px;
+  background: #090d16;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.cp-sparkline-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Trade signals: one quiet row per published signal, detail on open. */
+.cp-sig {
+  border-top: 1px solid var(--sail-glass-border);
+}
+
+.cp-sig:first-child {
+  border-top: 0;
+}
+
+.cp-sig summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 11px 20px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.cp-sig summary::-webkit-details-marker {
+  display: none;
+}
+
+.cp-sig summary:hover {
+  background: rgb(255 255 255 / .025);
+}
+
+.cp-sig summary:focus-visible {
+  outline: 2px solid var(--sail-focus-ring);
+  outline-offset: -2px;
+}
+
+.cp-sig-title {
+  font-weight: 500;
+  color: var(--sail-text);
+}
+
+.cp-sig-entry {
+  margin-left: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sail-text-muted);
+}
+
+.cp-sig-meta {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-sig-body {
+  padding: 0 20px 14px;
+  font-size: 13px;
+  color: var(--sail-text-muted);
+}
+
+.cp-sig-levels {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px 16px;
+  margin: 0 0 10px;
+}
+
+.cp-sig-level dt {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-sig-level dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--sail-text);
+}
+
+.cp-sig-dist {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-sig-line {
+  margin: 0 0 6px;
+  line-height: 1.45;
+}
+
+.cp-sig-chart {
+  max-width: 420px;
+  margin-top: 8px;
+}
+
+.cp-signals-empty {
+  padding: 14px 20px;
+}
+
+.cp-signal-search .cp-signal-search-form,
+.cp-signal-search .cp-signal-search-status,
+.cp-signal-search .cp-signal-search-results,
+.cp-signal-search .cp-signal-check {
+  margin-left: 20px;
+  margin-right: 20px;
+}

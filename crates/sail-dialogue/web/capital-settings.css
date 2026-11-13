@@ -1,0 +1,61 @@
+/* SAIL Capital — settings tab. Shared components live in capital.css. */
+
+.cp-limits-form {
+  padding: 14px 20px 20px;
+}
+
+.cp-limits-intro {
+  font-size: 13px;
+  color: var(--sail-text-muted);
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.cp-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .cp-field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cp-limits-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.cp-form-error {
+  padding: 10px 14px;
+  border-radius: var(--sail-radius-control, 8px);
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #f87171;
+  font-size: 13px;
+  margin-top: 14px;
+}
+
+.cp-watchlist-form {
+  padding: 10px 20px 20px;
+}
+
+.cp-watchlist-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cp-batch-sha {
+  color: var(--sail-text-subtle);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.cp-row-details {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+}

@@ -137,7 +137,7 @@ fn today_on_a_fresh_import_asks_to_review_limits_and_holds() {
         .find(|s| s.title == "Your limits are a draft")
         .expect("draft notice");
     assert_eq!(draft.kind, Kind::Attention);
-    assert_eq!(draft.tab, Tab::Data);
+    assert_eq!(draft.tab, Tab::Settings);
     // Nothing is sized against a draft, and there are no ideas without a signal.
     assert!(today.suggestions.iter().all(|s| s.changes.is_empty()));
     assert!(today.suggestions.iter().all(|s| s.kind != Kind::Idea));
@@ -175,7 +175,7 @@ fn a_breach_under_a_draft_is_unsized_and_points_to_the_limits() {
         .find(|s| s.kind == Kind::Policy)
         .unwrap();
     assert!(s.changes.is_empty());
-    assert_eq!(s.tab, Tab::Data);
+    assert_eq!(s.tab, Tab::Settings);
     assert!(s.title.contains("30.0%") && s.title.contains("draft limit is 15%"));
     // 15 points of a 20,000 account sit idle above the limit.
     assert_eq!(
