@@ -16,10 +16,12 @@ async function loadSyncStatus() {
       return;
     }
 
-    list.innerHTML = "";
+    const ul = document.createElement("ul");
+    ul.className = "cp-rows";
+
     for (const b of batches) {
-      const card = document.createElement("div");
-      card.className = "cp-batch-card";
+      const li = document.createElement("li");
+      li.className = "cp-row";
 
       const shaShort = b.file_sha256 ? b.file_sha256.substring(0, 10) : "";
       const issues = b.issues || [];
@@ -27,52 +29,47 @@ async function loadSyncStatus() {
 
       let issuesHtml = "";
       if (issueCount > 0) {
-        const items = issues.map(iss =>
-          `<li class="cp-issue-item" data-severity="${escapeHtml(iss.severity)}">
-            [${escapeHtml(iss.severity.toUpperCase())}] ${escapeHtml(iss.code)}: ${escapeHtml(iss.message)}
-          </li>`
-        ).join("");
+        const items = issues.map(iss => {
+          const sev = String(iss.severity || "info").toLowerCase();
+          const sevClass = sev === "error" ? "cp-word-bad" : sev === "warning" ? "cp-word-warn" : "cp-word-wait";
+          return `
+            <li class="cp-row">
+              <span class="cp-row-title"><span class="${sevClass}">[${escapeHtml(sev.toUpperCase())}]</span> ${escapeHtml(iss.code)}: ${escapeHtml(iss.message)}</span>
+            </li>
+          `;
+        }).join("");
         issuesHtml = `
-          <details class="cp-issues-details">
+          <details class="cp-more cp-row-details">
             <summary>${issueCount} issue(s) recorded ${b.issues_dropped ? `(${b.issues_dropped} dropped)` : ""}</summary>
-            <ul class="cp-issues-list">${items}</ul>
+            <ul class="cp-rows">${items}</ul>
           </details>
         `;
       }
 
-      card.innerHTML = `
-        <div class="cp-batch-header">
-          <span>${escapeHtml(b.file_name || "Statement export")}</span>
-          <span style="color:var(--sail-text-subtle);font-family:monospace;font-size:11px">${shaShort}…</span>
-        </div>
-        <div class="cp-batch-meta">
-          <span>Imported ${formatDate(b.imported_at)}</span>
-          <span>Added: <strong>${b.added || 0}</strong></span>
-          <span>Duplicates: <strong>${b.duplicates || 0}</strong></span>
-          <span>Conflicts: <strong>${b.conflicts || 0}</strong></span>
-        </div>
+      li.innerHTML = `
+        <span class="cp-row-title">${escapeHtml(b.file_name || "Statement export")}</span>
+        <span class="cp-row-value cp-batch-sha">${shaShort}…</span>
+        <span class="cp-row-meta">Imported ${formatDate(b.imported_at)} · Added: ${b.added || 0} · Duplicates: ${b.duplicates || 0} · Conflicts: ${b.conflicts || 0}</span>
         ${issuesHtml}
       `;
-      list.appendChild(card);
+      ul.appendChild(li);
     }
+
+    list.innerHTML = "";
+    list.appendChild(ul);
   } catch (err) {
-    list.innerHTML = `<p class="cp-empty" style="color:#e17055">Failed to load import status: ${escapeHtml(err.message)}</p>`;
+    list.innerHTML = `<p class="cp-empty cp-word-bad">Failed to load import status: ${escapeHtml(err.message)}</p>`;
   }
 }
 
 async function loadPriceStatus() {
   try {
     const status = await fetchJson("/api/capital/prices/status");
-    const optInNote = document.getElementById("cpPriceOptInNote");
-    if (optInNote) {
-      optInNote.hidden = Boolean(status.configured);
-    }
     const dataOptInNote = document.getElementById("cpDataPriceOptInNote");
     if (dataOptInNote) {
       dataOptInNote.hidden = Boolean(status.configured);
     }
 
-    const statusLine = document.getElementById("cpPriceStatusLine");
     const dataStatusLine = document.getElementById("cpDataPriceStatusLine");
     let statusText = "";
     if (!status.configured) {
@@ -86,32 +83,14 @@ async function loadPriceStatus() {
         statusText += ` · Last error: ${status.last_error}`;
       }
     }
-    if (statusLine) statusLine.textContent = statusText;
     if (dataStatusLine) dataStatusLine.textContent = statusText;
 
-    const badge = document.getElementById("cpPriceBadge");
-    if (badge) {
-      badge.textContent = status.configured ? ({ yfinance: "Yahoo", stooq: "Stooq" }[status.source] || status.source || "Active") : "Unconfigured";
-    }
-
-    const unmappedNote = document.getElementById("cpPriceUnmappedNote");
     const dataUnmappedNote = document.getElementById("cpDataPriceUnmappedNote");
-    if (status.unmapped && status.unmapped.length > 0) {
-      const unmappedHtml = `<p>Unmapped instruments (CFD or unrecognised suffix): <strong>${status.unmapped.map(escapeHtml).join(", ")}</strong>. Track prices by uploading a price file.</p>`;
-      if (unmappedNote) {
-        unmappedNote.hidden = false;
-        unmappedNote.innerHTML = unmappedHtml;
-      }
-      if (dataUnmappedNote) {
+    if (dataUnmappedNote) {
+      if (status.unmapped && status.unmapped.length > 0) {
         dataUnmappedNote.hidden = false;
-        dataUnmappedNote.innerHTML = unmappedHtml;
-      }
-    } else {
-      if (unmappedNote) {
-        unmappedNote.hidden = true;
-        unmappedNote.innerHTML = "";
-      }
-      if (dataUnmappedNote) {
+        dataUnmappedNote.innerHTML = `<p>Unmapped instruments (CFD or unrecognised suffix): <strong>${status.unmapped.map(escapeHtml).join(", ")}</strong>. Track prices by uploading a price file.</p>`;
+      } else {
         dataUnmappedNote.hidden = true;
         dataUnmappedNote.innerHTML = "";
       }
@@ -122,61 +101,34 @@ async function loadPriceStatus() {
 }
 
 function setupPriceControls() {
-  // Only the baseline-forecast pills: the outlook's horizon and replay pills share the
-  // button class and have their own handlers.
-  const horizonBtns = document.querySelectorAll(
-    '.cp-horizon-pills[aria-label="Forecast horizon"] .cp-horizon-btn'
-  );
-  horizonBtns.forEach(btn => {
-    btn.addEventListener("click", () => {
-      horizonBtns.forEach(b => {
-        b.classList.remove("cp-active");
-        b.removeAttribute("aria-checked");
-      });
-      btn.classList.add("cp-active");
-      btn.setAttribute("aria-checked", "true");
-      currentHorizon = parseInt(btn.getAttribute("data-horizon"), 10) || 20;
-      loadForecasts();
-    });
-  });
+  const refreshBtn = document.getElementById("cpDataPriceRefreshBtn");
+  if (!refreshBtn) return;
 
-  const modelSelect = document.getElementById("cpForecastModelSelect");
-  if (modelSelect) {
-    modelSelect.addEventListener("change", (e) => {
-      currentModel = e.target.value;
-      loadForecasts();
-    });
-  }
-
-  const refreshBtn = document.getElementById("cpPriceRefreshBtn");
-  if (refreshBtn) {
-    refreshBtn.addEventListener("click", async () => {
-      refreshBtn.disabled = true;
-      refreshBtn.textContent = "Fetching prices...";
-      try {
-        const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
-        const res = await fetchJson(`/api/capital/prices/refresh${query}`, { method: "POST" });
-        await loadPriceStatus();
-        await loadForecasts();
-        await loadEvaluation();
-        if (res.last_error) {
-          showBanner(`Price fetch stopped: ${res.last_error}`, true);
-        } else {
-          showBanner(`Prices refreshed: ${res.instruments || 0} instruments priced (${res.observations || 0} bars).`);
-        }
-      } catch (err) {
-        showBanner(`Price refresh failed: ${err.message}`, true);
-      } finally {
-        refreshBtn.disabled = false;
-        refreshBtn.textContent = "Fetch prices";
+  refreshBtn.addEventListener("click", async () => {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = "Fetching prices…";
+    try {
+      const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+      const res = await fetchJson(`/api/capital/prices/refresh${query}`, { method: "POST" });
+      await loadPriceStatus();
+      if (typeof invalidateTabs === "function") invalidateTabs("outlook", "record");
+      if (res.last_error) {
+        showBanner(`Price fetch stopped: ${res.last_error}`, true);
+      } else {
+        showBanner(`Prices refreshed: ${res.instruments || 0} instruments priced (${res.observations || 0} bars).`);
       }
-    });
-  }
+    } catch (err) {
+      showBanner(`Price refresh failed: ${err.message}`, true);
+    } finally {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = "Fetch prices";
+    }
+  });
 }
 
 function setupPriceFileDialog() {
   const dialog = document.getElementById("cpPriceFileDialog");
-  const openBtn = document.getElementById("cpPriceUploadBtn");
+  const openBtn = document.getElementById("cpDataPriceUploadBtn");
   const cancelBtn = document.getElementById("cpPriceFileCancel");
   const submitBtn = document.getElementById("cpPriceFileSubmit");
   const symInput = document.getElementById("cpPriceFileSymbol");
@@ -234,8 +186,7 @@ function setupPriceFileDialog() {
         showBanner(`Imported ${res.added || 0} daily closes for ${res.symbol || symbol} (${res.sessions_seen || 0} seen, ${res.revisions || 0} revisions).`);
         setState("idle", "Ready");
         await loadPriceStatus();
-        await loadForecasts();
-        await loadEvaluation();
+        if (typeof invalidateTabs === "function") invalidateTabs("outlook", "record");
       } catch (err) {
         setState("error", "Error");
         showBanner(`Price import failed: ${err.message}`, true);
@@ -248,9 +199,9 @@ function setupPriceFileDialog() {
 }
 
 async function loadPolicy() {
-  const badge = document.getElementById("cpPolicyBadge");
+  const statusWord = document.getElementById("cpPolicyStatusWord");
   const historyList = document.getElementById("cpPolicyHistoryList");
-  if (!badge) return;
+  if (!statusWord && !historyList) return;
 
   try {
     const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
@@ -276,8 +227,10 @@ async function loadPolicy() {
       setVal("cpLimitRiskPerTrade", l.risk_per_trade_pct !== undefined ? l.risk_per_trade_pct : "0.5");
 
       const isConfirmed = current.status === "confirmed";
-      badge.textContent = isConfirmed ? "Confirmed" : "Draft";
-      badge.className = isConfirmed ? "cp-badge cp-badge-confirmed" : "cp-badge cp-badge-draft";
+      if (statusWord) {
+        statusWord.textContent = isConfirmed ? "Confirmed" : "Draft";
+        statusWord.className = isConfirmed ? "cp-word-good" : "cp-word-warn";
+      }
     }
 
     if (historyList) {
@@ -289,12 +242,9 @@ async function loadPolicy() {
           const isConfirmed = p.status === "confirmed";
           const dateStr = p.saved_at ? formatDate(p.saved_at) : "Built-in draft";
           return `
-            <li class="cp-history-item">
-              <div class="cp-history-item-left">
-                <span class="cp-history-version">v${p.version}</span>
-                <span class="cp-badge ${isConfirmed ? "cp-badge-confirmed" : "cp-badge-draft"}">${isConfirmed ? "Confirmed" : "Draft"}</span>
-              </div>
-              <span class="cp-history-time">${escapeHtml(dateStr)}</span>
+            <li class="cp-row">
+              <span class="cp-row-title">v${p.version} · <span class="${isConfirmed ? "cp-word-good" : "cp-word-warn"}">${isConfirmed ? "Confirmed" : "Draft"}</span></span>
+              <span class="cp-row-value">${escapeHtml(dateStr)}</span>
             </li>
           `;
         }).join("");
@@ -359,7 +309,7 @@ function setupPolicyControls() {
   }
 }
 
-function setupDataTabControls() {
+function setupUploadButton() {
   const dataUploadBtn = document.getElementById("cpDataUploadBtn");
   if (dataUploadBtn) {
     dataUploadBtn.addEventListener("click", () => {
@@ -367,29 +317,13 @@ function setupDataTabControls() {
       if (fileInput) fileInput.click();
     });
   }
-
-  const dataRefreshBtn = document.getElementById("cpDataPriceRefreshBtn");
-  if (dataRefreshBtn) {
-    dataRefreshBtn.addEventListener("click", () => {
-      const mainPriceRefresh = document.getElementById("cpPriceRefreshBtn");
-      if (mainPriceRefresh) mainPriceRefresh.click();
-    });
-  }
-
-  const dataPriceUploadBtn = document.getElementById("cpDataPriceUploadBtn");
-  if (dataPriceUploadBtn) {
-    dataPriceUploadBtn.addEventListener("click", () => {
-      const mainPriceUpload = document.getElementById("cpPriceUploadBtn");
-      if (mainPriceUpload) mainPriceUpload.click();
-    });
-  }
 }
 
-
 function renderModelsStatus(data) {
-  const tbody = document.getElementById("cpModelsBody");
+  const list = document.getElementById("cpModelsList");
+  const licencesList = document.getElementById("cpModelsLicences");
   const runBtn = document.getElementById("cpRunModelsBtn");
-  if (!tbody) return;
+  if (!list) return;
 
   if (runBtn) {
     if (data && data.running) {
@@ -401,8 +335,7 @@ function renderModelsStatus(data) {
     }
   }
 
-  // Signal models store values; outlook models (round 12) store quantile paths. Show
-  // both in one table, with the outlook rows labelled.
+  // Signal models store values; outlook models (round 12) store quantile paths.
   const outlookRows = ((data && data.outlook) || []).map(m => ({
     spec: { ...(m.spec || {}), name: `${(m.spec && m.spec.name) || "model"} · outlook` },
     enabled: m.enabled,
@@ -413,19 +346,19 @@ function renderModelsStatus(data) {
   }));
   const models = ((data && data.models) || []).concat(outlookRows);
   if (models.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">No models configured.</td></tr>`;
+    list.innerHTML = `<li class="cp-empty">No models configured.</li>`;
+    if (licencesList) licencesList.innerHTML = "";
     return;
   }
 
-  tbody.innerHTML = models.map(m => {
+  list.innerHTML = models.map(m => {
     const spec = m.spec || {};
     const name = escapeHtml(spec.name || "Unknown");
     const model = escapeHtml(spec.model || "");
     const summary = escapeHtml(spec.summary || "");
-    const license = escapeHtml(spec.license || "not stated");
-    const enabledBadge = m.enabled
-      ? `<span class="cp-badge cp-badge-enabled">Enabled</span>`
-      : `<span class="cp-badge cp-badge-off">Disabled</span>`;
+    const statusWord = m.enabled
+      ? `<span class="cp-word-good">Enabled</span>`
+      : `<span class="cp-word-wait">Disabled</span>`;
 
     let storedStr = "None";
     if (m.stored && m.stored.values > 0) {
@@ -439,21 +372,32 @@ function renderModelsStatus(data) {
       const at = formatDate(m.last_run.at);
       const added = m.last_run.added ?? 0;
       const skipped = m.last_run.skipped ?? 0;
-      const err = m.last_run.error ? `<br><span class="cp-loss">Error: ${escapeHtml(m.last_run.error)}</span>` : "";
+      const err = m.last_run.error ? ` · <span class="cp-word-bad">Error: ${escapeHtml(m.last_run.error)}</span>` : "";
       runStr = `${at}: +${added} added, ${skipped} skipped${err}`;
     }
 
     return `
-      <tr>
-        <td><strong>${name}</strong><br><small class="cp-text-muted">${model}</small></td>
-        <td>${summary}</td>
-        <td><small class="cp-text-muted">${license}</small></td>
-        <td>${enabledBadge}</td>
-        <td class="num">${storedStr}</td>
-        <td>${runStr}</td>
-      </tr>
+      <li class="cp-row">
+        <span class="cp-row-title">${name} · ${statusWord}</span>
+        <span class="cp-row-value">${storedStr}</span>
+        <span class="cp-row-meta">${summary}${model ? ` · ${model}` : ""} · Last run: ${runStr}</span>
+      </li>
     `;
   }).join("");
+
+  if (licencesList) {
+    licencesList.innerHTML = models.map(m => {
+      const spec = m.spec || {};
+      const name = escapeHtml(spec.name || "Unknown");
+      const license = escapeHtml(spec.license || "not stated");
+      return `
+        <li class="cp-row">
+          <span class="cp-row-title">${name}</span>
+          <span class="cp-row-value cp-word-wait">${license}</span>
+        </li>
+      `;
+    }).join("");
+  }
 }
 
 function startModelsPolling() {
@@ -489,9 +433,9 @@ async function loadModelsStatus() {
     }
     return data;
   } catch (err) {
-    const tbody = document.getElementById("cpModelsBody");
-    if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">Models status unavailable: ${escapeHtml(err.message)}</td></tr>`;
+    const list = document.getElementById("cpModelsList");
+    if (list) {
+      list.innerHTML = `<li class="cp-empty">Models status unavailable: ${escapeHtml(err.message)}</li>`;
     }
     return null;
   }
@@ -521,33 +465,62 @@ function setupModelsControls() {
 
 let latestWatchlist = null;
 
+const WATCHLIST_CLASS_LABELS = {
+  fx: "FX",
+  index: "Indices",
+  stock: "Stocks",
+  etf: "ETFs",
+  commodity: "Commodities",
+};
+
 async function loadWatchlist() {
-  const tbody = document.getElementById("cpWatchlistBody");
-  if (!tbody) return;
+  const container = document.getElementById("cpWatchlistGroups");
+  if (!container) return;
 
   try {
     const list = await fetchJson("/api/capital/universe/watchlist");
     latestWatchlist = list;
 
     if (!Array.isArray(list) || list.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">Watchlist is empty.</td></tr>`;
+      container.innerHTML = `<p class="cp-empty">Watchlist is empty.</p>`;
       return;
     }
 
-    tbody.innerHTML = list.map(item => `
-      <tr>
-        <td><strong>${escapeHtml(item.symbol)}</strong></td>
-        <td><code>${escapeHtml(item.yahoo)}</code></td>
-        <td><span class="cp-class-badge">${escapeHtml((item.class || "").toUpperCase())}</span></td>
-        <td>${escapeHtml(item.currency)}</td>
-        <td>${escapeHtml(item.name)}</td>
-        <td class="num">
-          <button type="button" class="cp-button cp-button-sm cp-watch-remove-btn" data-symbol="${escapeHtml(item.symbol)}">Remove</button>
-        </td>
-      </tr>
-    `).join("");
+    const groups = new Map();
+    for (const key of Object.keys(WATCHLIST_CLASS_LABELS)) {
+      groups.set(key, []);
+    }
+    for (const item of list) {
+      const cls = String(item.class || "other").toLowerCase();
+      if (!groups.has(cls)) groups.set(cls, []);
+      groups.get(cls).push(item);
+    }
 
-    tbody.querySelectorAll(".cp-watch-remove-btn").forEach(btn => {
+    container.innerHTML = "";
+    for (const [cls, items] of groups.entries()) {
+      if (items.length === 0) continue;
+      const label = WATCHLIST_CLASS_LABELS[cls] || (cls.charAt(0).toUpperCase() + cls.slice(1));
+      const details = document.createElement("details");
+      details.className = "cp-more";
+
+      const rowsHtml = items.map(item => `
+        <li class="cp-row">
+          <span class="cp-row-title">${escapeHtml(item.symbol)}${item.name ? ` · ${escapeHtml(item.name)}` : ""}</span>
+          <span class="cp-row-value">
+            <button type="button" class="cp-button cp-btn-sm cp-watch-remove-btn" data-symbol="${escapeHtml(item.symbol)}">Remove</button>
+          </span>
+          <span class="cp-row-meta">${escapeHtml(item.yahoo)} · ${escapeHtml(item.currency)}</span>
+        </li>
+      `).join("");
+
+      details.innerHTML = `
+        <summary>${escapeHtml(label)} · ${items.length}</summary>
+        <ul class="cp-rows">${rowsHtml}</ul>
+      `;
+      container.appendChild(details);
+    }
+
+    container.querySelectorAll(".cp-watch-remove-btn").forEach(btn => {
       btn.addEventListener("click", async () => {
         const symbol = btn.getAttribute("data-symbol");
         btn.disabled = true;
@@ -567,7 +540,7 @@ async function loadWatchlist() {
       });
     });
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">Watchlist unavailable (${escapeHtml(err.message)}).</td></tr>`;
+    container.innerHTML = `<p class="cp-empty">Watchlist unavailable (${escapeHtml(err.message)}).</p>`;
   }
 }
 
@@ -659,7 +632,7 @@ function setupWatchlistControls() {
     } finally {
       if (addBtn) {
         addBtn.disabled = false;
-        addBtn.textContent = "Add to Watchlist";
+        addBtn.textContent = "Add to watchlist";
       }
     }
   });
@@ -671,7 +644,7 @@ registerTab("settings", {
     setupWatchlistControls();
     setupPriceControls();
     setupPriceFileDialog();
-    setupDataTabControls();
+    setupUploadButton();
     setupModelsControls();
   },
   load: () =>

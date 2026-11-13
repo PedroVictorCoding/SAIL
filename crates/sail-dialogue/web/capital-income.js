@@ -17,6 +17,10 @@ let currentProjectionData = null;
 
 let showAllProjYears = false;
 
+let latestInsights = null;
+let latestInsightsAccount = null;
+let insightsInFlight = null;
+
 function renderDividendsTable(dividends) {
   const tbody = document.getElementById("cpDividendsBody");
   if (!tbody) return;
@@ -34,132 +38,131 @@ function renderDividendsTable(dividends) {
       <td class="cp-nowrap">${formatDate(d.paid ? d.paid.at : null)}</td>
       <td><strong>${escapeHtml(inst)}</strong></td>
       <td class="num">${formatMoney(d.gross)}</td>
-      <td class="num" style="color:#f3b05a">${d.withheld ? formatMoney(d.withheld) : "—"}</td>
-      <td class="num" style="color:#5ccda4"><strong>${d.net ? formatMoney(d.net) : "not stated"}</strong></td>
+      <td class="num cp-word-warn">${d.withheld ? formatMoney(d.withheld) : "—"}</td>
+      <td class="num cp-word-good"><strong>${d.net ? formatMoney(d.net) : "not stated"}</strong></td>
     `;
     tbody.appendChild(tr);
   }
 }
 
-async function loadInsights() {
-  const body = document.getElementById("cpInsightsBody");
-  const freshnessSpan = document.getElementById("cpInsightsFreshness");
-  if (!body) return;
+async function loadInsights(force = false) {
+  const incomeBody = document.getElementById("cpInsightsBody");
+  const allocBody = document.getElementById("cpAllocationBody");
+  const incomeFreshness = document.getElementById("cpInsightsFreshness");
+  const allocFreshness = document.getElementById("cpAllocationFreshness");
 
   if (accountList.length === 0) {
-    body.innerHTML = `<p class="cp-empty">Import a report to see insights</p>`;
-    if (freshnessSpan) freshnessSpan.textContent = "Deterministic calculation from ledger";
+    latestInsights = null;
+    latestInsightsAccount = null;
+    if (incomeBody) incomeBody.innerHTML = `<p class="cp-empty">Import a report to see income details.</p>`;
+    if (allocBody) allocBody.innerHTML = `<p class="cp-empty">Import a report to see allocation details.</p>`;
+    if (incomeFreshness) incomeFreshness.textContent = "Deterministic calculation from ledger";
+    if (allocFreshness) allocFreshness.textContent = "Deterministic calculation from ledger";
     return;
   }
 
-  try {
-    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
-    const ins = await fetchJson(`/api/capital/insights${query}`);
-    if (!hasTodayAccount && ins.account) {
-      updateAccountHeaderTiles(ins.account);
-    }
-    renderInsights(ins);
-  } catch (err) {
-    // 404 means no portfolio yet — show empty state, not an error
-    if (String(err.message).includes("404") || String(err.message).toLowerCase().includes("not found")) {
-      body.innerHTML = `<p class="cp-empty">Import a report to see insights</p>`;
-      if (freshnessSpan) freshnessSpan.textContent = "Deterministic calculation from ledger";
-    } else {
-      body.innerHTML = `<p class="cp-empty" style="color:var(--sail-text-subtle)">Insights unavailable: ${escapeHtml(err.message)}</p>`;
-    }
+  if (!force && latestInsights && latestInsightsAccount === currentAccount) {
+    renderInsights(latestInsights);
+    return;
   }
+
+  if (!force && insightsInFlight && latestInsightsAccount === currentAccount) {
+    await insightsInFlight;
+    return;
+  }
+
+  const acctKey = currentAccount;
+  latestInsightsAccount = acctKey;
+
+  insightsInFlight = (async () => {
+    try {
+      const query = acctKey ? `?account=${encodeURIComponent(acctKey)}` : "";
+      const ins = await fetchJson(`/api/capital/insights${query}`);
+      if (!hasTodayAccount && ins.account) {
+        updateAccountHeaderTiles(ins.account);
+      }
+      latestInsights = ins;
+      renderInsights(ins);
+    } catch (err) {
+      latestInsights = null;
+      const isNotFound = String(err.message).includes("404") || String(err.message).toLowerCase().includes("not found");
+      if (isNotFound) {
+        if (incomeBody) incomeBody.innerHTML = `<p class="cp-empty">Import a report to see income details.</p>`;
+        if (allocBody) allocBody.innerHTML = `<p class="cp-empty">Import a report to see allocation details.</p>`;
+        if (incomeFreshness) incomeFreshness.textContent = "Deterministic calculation from ledger";
+        if (allocFreshness) allocFreshness.textContent = "Deterministic calculation from ledger";
+      } else {
+        if (incomeBody) incomeBody.innerHTML = `<p class="cp-empty">Income summary unavailable: ${escapeHtml(err.message)}</p>`;
+        if (allocBody) allocBody.innerHTML = `<p class="cp-empty">Allocation unavailable: ${escapeHtml(err.message)}</p>`;
+      }
+    } finally {
+      insightsInFlight = null;
+    }
+  })();
+
+  await insightsInFlight;
 }
 
-function renderInsights(ins) {
-  const body = document.getElementById("cpInsightsBody");
-  const freshnessSpan = document.getElementById("cpInsightsFreshness");
-  if (!body) return;
-
-  // 1. Freshness
-  const f = ins.freshness || {};
-  let freshnessHtml = "";
-  if (f.snapshot_as_of) {
+function formatInsightsFreshness(f) {
+  if (f && f.snapshot_as_of) {
     const age = f.snapshot_age_hours !== null && f.snapshot_age_hours !== undefined
       ? ` (${formatAge(f.snapshot_age_hours)})`
       : "";
-    const label = `Data as of ${formatDate(f.snapshot_as_of)}${age}`;
-    if (freshnessSpan) {
-      freshnessSpan.textContent = label;
-      freshnessSpan.className = f.stale ? "cp-sub-notice cp-freshness-stale" : "cp-sub-notice";
-    }
-    freshnessHtml = `
-      <div class="cp-insights-freshness-line">
-        <span class="cp-freshness ${f.stale ? "cp-freshness-stale" : ""}">Data as of ${formatDate(f.snapshot_as_of)}${age}</span>
-        ${f.stale ? `<span style="font-size:11px;color:#f3b05a">Snapshot older than 72h</span>` : ""}
-      </div>
-    `;
-  } else {
-    if (freshnessSpan) freshnessSpan.textContent = "No broker snapshot";
+    const staleWord = f.stale ? ` · <span class="cp-word-warn">Snapshot older than 72h</span>` : "";
+    return `Data as of ${formatDate(f.snapshot_as_of)}${age}${staleWord}`;
+  }
+  return "No broker snapshot";
+}
+
+function renderInsights(ins) {
+  renderAllocation(ins);
+  renderIncomeSummary(ins);
+}
+
+function renderAllocation(ins) {
+  const body = document.getElementById("cpAllocationBody");
+  const freshnessSpan = document.getElementById("cpAllocationFreshness");
+  if (!body) return;
+
+  if (freshnessSpan) {
+    freshnessSpan.innerHTML = formatInsightsFreshness(ins.freshness);
   }
 
-  // 2. Return since the first deposit
-  const signClass = (money) =>
-    money && String(money.amount).startsWith("-") ? "negative" : "positive";
-  let returnHtml = "";
-  if (ins.total_return) {
-    const tr = ins.total_return;
-    const ratio = tr.gain_ratio !== null && tr.gain_ratio !== undefined
-      ? ` (${(parseFloat(tr.gain_ratio) * 100).toFixed(2)}%)`
-      : "";
-    returnHtml += `
-      <div class="cp-insights-block">
-        <h3 class="cp-insights-subtitle">Since the first deposit</h3>
-        <p class="cp-insights-line">
-          Deposited ${formatMoney(tr.deposits)}, withdrew ${formatMoney(tr.withdrawals)}:
-          <strong>net ${formatMoney(tr.net_deposits)}</strong> put in.
-          The account is worth ${formatMoney(tr.current_value)} now, so it is
-          <strong class="${signClass(tr.gain)}">${formatMoney(tr.gain)}${escapeHtml(ratio)}</strong>
-          above what was put in. This includes dividends, interest, fees, closed trades and CFD results.
-        </p>
-      </div>
-    `;
-  }
+  let html = "";
 
-  // 3. Concentration
-  let concentrationHtml = "";
+  // Concentration
   if (ins.concentration) {
     const c = ins.concentration;
     const effStr = c.effective_positions ? `${c.effective_positions}` : "—";
     const largestPct = (parseFloat(c.largest_share) * 100).toFixed(1);
     const topNPct = (parseFloat(c.top_n_share) * 100).toFixed(1);
 
-    concentrationHtml = `
-      <div class="cp-insights-block">
-        <h3 class="cp-insights-subtitle">Portfolio Concentration</h3>
-        <div class="cp-concentration-card">
-          <p class="cp-concentration-summary">
-            Portfolio concentration is <strong>as concentrated as ${escapeHtml(effStr)} equal holdings</strong> across ${c.positions} valued position${c.positions === 1 ? "" : "s"}.
-          </p>
-          <div class="cp-concentration-grid">
-            <div class="cp-conc-item">
-              <span class="cp-conc-label">Largest Position</span>
-              <span class="cp-conc-val">${escapeHtml(c.largest_symbol)} (${largestPct}%)</span>
-            </div>
-            <div class="cp-conc-item">
-              <span class="cp-conc-label">Top 5 Holdings</span>
-              <span class="cp-conc-val">${topNPct}% of portfolio</span>
-            </div>
-            <div class="cp-conc-item">
-              <span class="cp-conc-label">Effective Positions</span>
-              <span class="cp-conc-val">${escapeHtml(effStr)} equal holdings</span>
-            </div>
-            <div class="cp-conc-item">
-              <span class="cp-conc-label">HHI Index</span>
-              <span class="cp-conc-val">${escapeHtml(c.hhi)}</span>
-            </div>
-          </div>
-        </div>
-      </div>
+    html += `
+      <p class="cp-note">
+        Portfolio concentration is as concentrated as ${escapeHtml(effStr)} equal holdings across ${c.positions} valued position${c.positions === 1 ? "" : "s"}.
+      </p>
+      <ul class="cp-rows">
+        <li class="cp-row">
+          <span class="cp-row-title">Largest position</span>
+          <span class="cp-row-value">${escapeHtml(c.largest_symbol)} (${largestPct}%)</span>
+        </li>
+        <li class="cp-row">
+          <span class="cp-row-title">Top 5 holdings</span>
+          <span class="cp-row-value">${topNPct}% of portfolio</span>
+        </li>
+        <li class="cp-row">
+          <span class="cp-row-title">Effective positions</span>
+          <span class="cp-row-value">${escapeHtml(effStr)} equal holdings</span>
+        </li>
+        <li class="cp-row">
+          <span class="cp-row-title">HHI index</span>
+          <span class="cp-row-value">${escapeHtml(c.hhi)}</span>
+        </li>
+      </ul>
     `;
   }
 
-  // 4. Allocation by Position & By Kind
-  let allocationHtml = "";
+  // Allocation by position
   if (ins.allocation && ins.allocation.length > 0) {
     const rows = ins.allocation.map(slice => {
       const shareVal = parseFloat(slice.share) || 0;
@@ -180,49 +183,75 @@ function renderInsights(ins) {
       `;
     }).join("");
 
-    let kindCards = "";
-    if (ins.by_kind && ins.by_kind.length > 0) {
-      kindCards = ins.by_kind.map(k => {
-        const shareVal = parseFloat(k.share) || 0;
-        const pct = (shareVal * 100).toFixed(1);
-        const kindLabel = k.kind.charAt(0).toUpperCase() + k.kind.slice(1);
-        return `
-          <div class="cp-kind-card">
-            <div class="cp-kind-top">
-              <strong>${escapeHtml(kindLabel)}</strong>
-              <span class="cp-badge">${k.positions} pos</span>
-            </div>
-            <div class="cp-kind-meta">
-              <span class="cp-kind-val">${formatMoney(k.value)}</span>
-              <span class="cp-kind-share">${pct}%</span>
-            </div>
-            <div class="cp-bar-track">
-              <div class="cp-bar-fill" style="width: ${Math.min(100, Math.max(0, shareVal * 100))}%"></div>
-            </div>
-          </div>
-        `;
-      }).join("");
-    }
-
-    allocationHtml = `
-      <div class="cp-insights-block">
-        <div class="cp-insights-subtitle">
-          <span>Allocation by Position</span>
-          <span style="font-size:11px;color:var(--sail-text-subtle);font-weight:normal">${ins.allocation.length} position${ins.allocation.length === 1 ? "" : "s"}</span>
-        </div>
+    html += `
+      <div class="cp-alloc-section">
+        <h3 class="cp-section-subhead">By position (${ins.allocation.length})</h3>
         <div class="cp-alloc-bars">${rows}</div>
-        ${kindCards ? `
-          <div class="cp-insights-subtitle" style="margin-top:12px">
-            <span>By Instrument Kind</span>
-          </div>
-          <div class="cp-by-kind-grid">${kindCards}</div>
-        ` : ""}
       </div>
     `;
   }
 
-  // 5. Income & Distributions
-  let incomeHtml = "";
+  // By instrument kind
+  if (ins.by_kind && ins.by_kind.length > 0) {
+    const kindRows = ins.by_kind.map(k => {
+      const shareVal = parseFloat(k.share) || 0;
+      const pct = (shareVal * 100).toFixed(1);
+      const kindLabel = k.kind.charAt(0).toUpperCase() + k.kind.slice(1);
+      return `
+        <li class="cp-row">
+          <span class="cp-row-title">${escapeHtml(kindLabel)} · ${k.positions} pos</span>
+          <span class="cp-row-value">${formatMoney(k.value)} (${pct}%)</span>
+        </li>
+      `;
+    }).join("");
+
+    html += `
+      <h3 class="cp-section-subhead">By instrument kind</h3>
+      <ul class="cp-rows">${kindRows}</ul>
+    `;
+  }
+
+  if (ins.unvalued && ins.unvalued.length > 0) {
+    html += `<p class="cp-note">Positions without broker market value (excluded from allocation): ${ins.unvalued.map(escapeHtml).join(", ")}</p>`;
+  }
+
+  body.innerHTML = html || `<p class="cp-empty">No valued positions to show allocation.</p>`;
+}
+
+function renderIncomeSummary(ins) {
+  const body = document.getElementById("cpInsightsBody");
+  const freshnessSpan = document.getElementById("cpInsightsFreshness");
+  if (!body) return;
+
+  if (freshnessSpan) {
+    freshnessSpan.innerHTML = formatInsightsFreshness(ins.freshness);
+  }
+
+  const signClass = (money) =>
+    money && String(money.amount).startsWith("-") ? "cp-word-bad" : "cp-word-good";
+  let html = "";
+
+  // Return since the first deposit
+  if (ins.total_return) {
+    const tr = ins.total_return;
+    const ratio = tr.gain_ratio !== null && tr.gain_ratio !== undefined
+      ? ` (${(parseFloat(tr.gain_ratio) * 100).toFixed(2)}%)`
+      : "";
+    html += `
+      <div class="cp-insights-block">
+        <h3 class="cp-insights-subtitle">Since the first deposit</h3>
+        <p class="cp-insights-line">
+          Deposited ${formatMoney(tr.deposits)}, withdrew ${formatMoney(tr.withdrawals)}:
+          <strong>net ${formatMoney(tr.net_deposits)}</strong> put in.
+          The account is worth ${formatMoney(tr.current_value)} now, so it is
+          <strong class="${signClass(tr.gain)}">${formatMoney(tr.gain)}${escapeHtml(ratio)}</strong>
+          above what was put in. This includes dividends, interest, fees, closed trades and CFD results.
+        </p>
+      </div>
+    `;
+  }
+
+  // Income & Distributions
   if (ins.income) {
     const inc = ins.income;
     const trailing12m = inc.trailing_12m_net && inc.trailing_12m_net.length > 0
@@ -254,49 +283,32 @@ function renderInsights(ins) {
         `;
       }).join("");
     } else {
-      monthRows = `<p class="cp-empty" style="padding:10px">No income recorded in the last 24 months.</p>`;
+      monthRows = `<p class="cp-empty">No income recorded in the last 24 months.</p>`;
     }
 
-    incomeHtml = `
+    html += `
+      <ul class="cp-rows">
+        <li class="cp-row">
+          <span class="cp-row-title">Trailing 12M net</span>
+          <span class="cp-row-value">${trailing12m}</span>
+        </li>
+        <li class="cp-row">
+          <span class="cp-row-title">Trailing yield</span>
+          <span class="cp-row-value">${yieldStr}</span>
+        </li>
+      </ul>
       <div class="cp-insights-block">
-        <h3 class="cp-insights-subtitle">Income & Distributions</h3>
-        <div class="cp-income-meta">
-          <div class="cp-income-stat">Trailing 12M Net: <strong>${trailing12m}</strong></div>
-          <div class="cp-income-stat">Trailing Yield: <strong>${yieldStr}</strong></div>
-        </div>
         <div class="cp-income-months">${monthRows}</div>
       </div>
     `;
   }
 
-  // 6. Warnings and Unvalued Notes
-  let notesHtml = "";
-  const notes = [];
-  if (ins.unvalued && ins.unvalued.length > 0) {
-    notes.push(`Positions without broker market value (excluded from allocation): <strong>${ins.unvalued.map(escapeHtml).join(", ")}</strong>`);
-  }
+  // Warnings
   if (ins.warnings && ins.warnings.length > 0) {
-    for (const w of ins.warnings) {
-      notes.push(escapeHtml(w));
-    }
-  }
-  if (notes.length > 0) {
-    const items = notes.map(n => `<div class="cp-insight-note">${n}</div>`).join("");
-    notesHtml = `
-      <div class="cp-insight-notes">
-        ${items}
-      </div>
-    `;
+    html += ins.warnings.map(w => `<p class="cp-note">${escapeHtml(w)}</p>`).join("");
   }
 
-  body.innerHTML = `
-    ${freshnessHtml}
-    ${returnHtml}
-    ${concentrationHtml}
-    ${allocationHtml}
-    ${incomeHtml}
-    ${notesHtml}
-  `;
+  body.innerHTML = html || `<p class="cp-empty">Import a report to see income details.</p>`;
 }
 
 function formatProjMoney(val, currency = "") {
@@ -742,7 +754,7 @@ function renderProjHoldingsTable(data) {
       const gPct = (growth.g !== undefined) ? `${growth.g >= 0 ? "+" : ""}${(growth.g * 100).toFixed(1)}%` : "0.0%";
       const rawPct = (growth.raw !== null && growth.raw !== undefined) ? `${growth.raw >= 0 ? "+" : ""}${(growth.raw * 100).toFixed(1)}%` : "n/a";
       const yearsCount = growth.annual ? Math.max(0, growth.annual.length - 1) : 0;
-      const growthSub = `<span class="cp-sub-notice" style="display:block;font-size:10px">raw: ${rawPct} (${yearsCount}y)</span>`;
+      const growthSub = `<span class="cp-proj-growth-raw">raw: ${rawPct} (${yearsCount}y)</span>`;
 
       let withRate = 0;
       let withSrc = "default";

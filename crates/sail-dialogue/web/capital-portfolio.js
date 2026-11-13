@@ -1,11 +1,19 @@
 // SAIL Capital — portfolio.
 "use strict";
 
+let latestPortfolio = null;
+let latestHoldingGuards = null;
+
 async function loadPortfolio() {
   setState("loading", "Loading…");
+  if (typeof latestInsights !== "undefined") {
+    latestInsights = null;
+    latestInsightsAccount = null;
+  }
 
   if (accountList.length === 0) {
     // Nothing imported yet: an empty state, not an error.
+    latestPortfolio = null;
     renderEmptyPortfolio();
     setState("idle", "No data yet");
     return;
@@ -20,6 +28,7 @@ async function loadPortfolio() {
   } catch (err) {
     setState("error", "Error");
     showBanner(`Portfolio error: ${err.message}`, true);
+    latestPortfolio = null;
     renderEmptyPortfolio();
   }
 }
@@ -28,24 +37,42 @@ function renderEmptyPortfolio() {
   const freshness = document.getElementById("cpFreshness");
   if (freshness) freshness.textContent = "XTB data as of — · imported —";
 
+  const matchedNote = document.getElementById("cpReconMatchedNote");
+  if (matchedNote) matchedNote.hidden = true;
+
   const reconSection = document.getElementById("cpReconciliation");
   if (reconSection) reconSection.hidden = true;
+
+  const variancesDiv = document.getElementById("cpVariances");
+  if (variancesDiv) variancesDiv.hidden = true;
 
   const grantsContainer = document.getElementById("cpGrants");
   if (grantsContainer) grantsContainer.hidden = true;
 
+  const cfdPanel = document.getElementById("cpCfdPanel");
+  if (cfdPanel) cfdPanel.hidden = true;
+
+  const allocBody = document.getElementById("cpAllocationBody");
+  if (allocBody) allocBody.innerHTML = `<p class="cp-empty">Import a report to see allocation details.</p>`;
+  const allocFreshness = document.getElementById("cpAllocationFreshness");
+  if (allocFreshness) allocFreshness.textContent = "Deterministic calculation from ledger";
+
   const insightsBody = document.getElementById("cpInsightsBody");
-  if (insightsBody) insightsBody.innerHTML = `<p class="cp-empty">Import a report to see insights</p>`;
+  if (insightsBody) insightsBody.innerHTML = `<p class="cp-empty">Import a report to see income details.</p>`;
   const insightsFreshness = document.getElementById("cpInsightsFreshness");
   if (insightsFreshness) insightsFreshness.textContent = "Deterministic calculation from ledger";
 
-  document.getElementById("cpPositionsBody").innerHTML = `<tr><td colspan="5" class="cp-empty">No portfolio data yet. Upload an XTB export to begin.</td></tr>`;
-  document.getElementById("cpCfdBody").innerHTML = `<tr><td colspan="5" class="cp-empty">No open CFD contracts.</td></tr>`;
-  document.getElementById("cpDividendsBody").innerHTML = `<tr><td colspan="5" class="cp-empty">No dividend events recorded.</td></tr>`;
+  const posBody = document.getElementById("cpPositionsBody");
+  if (posBody) posBody.innerHTML = `<tr><td colspan="6" class="cp-empty">No portfolio data yet. Upload an XTB export to begin.</td></tr>`;
+  const cfdBody = document.getElementById("cpCfdBody");
+  if (cfdBody) cfdBody.innerHTML = `<tr><td colspan="5" class="cp-empty">No open CFD contracts.</td></tr>`;
+  if (typeof renderDividendsTable === "function") renderDividendsTable([]);
   updateOutlookHoldings([]);
 }
 
 function renderPortfolio(p) {
+  latestPortfolio = p;
+
   // Freshness bar
   const freshness = document.getElementById("cpFreshness");
   if (freshness) {
@@ -56,78 +83,94 @@ function renderPortfolio(p) {
   }
 
   // Reconciliation
+  const matchedNote = document.getElementById("cpReconMatchedNote");
   const reconSection = document.getElementById("cpReconciliation");
-  const reconBadge = document.getElementById("cpReconBadge");
   const reconSummary = document.getElementById("cpReconSummary");
   const variancesDiv = document.getElementById("cpVariances");
   const variancesList = document.getElementById("cpVariancesList");
+  const grantsContainer = document.getElementById("cpGrants");
 
-  if (reconSection && p.reconciliation) {
-    reconSection.hidden = false;
+  if (p.reconciliation) {
     const status = p.reconciliation.status || "unverified";
-    reconBadge.setAttribute("data-status", status);
-    reconBadge.textContent = status.toUpperCase();
-
     const compared = p.reconciliation.compared || 0;
-    const varCount = (p.reconciliation.variances || []).length;
+    const variances = p.reconciliation.variances || [];
+    const varCount = variances.length;
 
     if (status === "matched") {
-      reconSummary.textContent = `All ${compared} verified broker figures match the deterministic ledger projection exactly.`;
-      variancesDiv.hidden = true;
-    } else if (status === "variance") {
-      reconSummary.textContent = `${varCount} variance(s) found across ${compared} compared figures between the ledger and broker snapshot.`;
-      variancesDiv.hidden = false;
-      variancesList.innerHTML = "";
-      for (const v of p.reconciliation.variances) {
-        const li = document.createElement("li");
-        li.className = "cp-var-item";
+      if (matchedNote) {
+        matchedNote.hidden = false;
+        matchedNote.textContent = `Ledger matches XTB's figures (${compared} checked).`;
+      }
+      if (variancesDiv) variancesDiv.hidden = true;
+      if (variancesList) variancesList.innerHTML = "";
+      if (reconSection) {
+        const hasGrants = grantsContainer && !grantsContainer.hidden;
+        reconSection.hidden = !hasGrants;
+        if (hasGrants && reconSummary) {
+          reconSummary.textContent = "Declared received shares.";
+        }
+      }
+    } else if (status === "variance" && varCount > 0) {
+      if (matchedNote) matchedNote.hidden = true;
+      if (reconSection) reconSection.hidden = false;
+      if (reconSummary) {
+        reconSummary.innerHTML = `<span class="cp-word-warn">${varCount} variance${varCount === 1 ? "" : "s"}</span> across ${compared} compared figures.`;
+      }
+      if (variancesDiv && variancesList) {
+        variancesDiv.hidden = false;
+        variancesList.innerHTML = "";
+        for (const v of variances) {
+          const li = document.createElement("li");
+          li.className = "cp-row";
 
-        // Check if broker has more units than ledger
-        const missingQty = getMissingQuantity(v);
-        let actionBtnHtml = "";
-        if (missingQty !== null) {
-          const sym = resolveVarianceSymbol(v.subject, p);
-          actionBtnHtml = `
-            <div class="cp-var-actions">
-              <button type="button" class="cp-button cp-button-sm cp-record-grant-btn"
-                data-symbol="${escapeHtml(sym)}"
-                data-qty="${escapeHtml(missingQty)}">
-                Record received shares
-              </button>
-            </div>
+          const missingQty = getMissingQuantity(v);
+          let actionBtnHtml = "";
+          if (missingQty !== null) {
+            const sym = resolveVarianceSymbol(v.subject, p);
+            actionBtnHtml = `<button type="button" class="cp-button cp-btn-sm cp-record-grant-btn" data-symbol="${escapeHtml(sym)}" data-qty="${escapeHtml(missingQty)}">Record received shares</button>`;
+          }
+
+          li.innerHTML = `
+            <span class="cp-row-title">${escapeHtml(v.subject)}</span>
+            <span class="cp-row-value">${actionBtnHtml}</span>
+            <span class="cp-row-meta">Ledger: ${escapeHtml(v.ledger || "—")} · Broker: ${escapeHtml(v.broker || "—")}${v.note ? ` · ${escapeHtml(v.note)}` : ""}</span>
           `;
+          variancesList.appendChild(li);
         }
 
-        li.innerHTML = `
-          <div class="cp-var-subject">${escapeHtml(v.subject)}</div>
-          <div class="cp-var-figures">
-            <span>Ledger: <strong>${escapeHtml(v.ledger || "—")}</strong></span>
-            <span>Broker: <strong>${escapeHtml(v.broker || "—")}</strong></span>
-          </div>
-          <div class="cp-var-note">${escapeHtml(v.note || "")}</div>
-          ${actionBtnHtml}
-        `;
-        variancesList.appendChild(li);
-      }
-
-      variancesList.querySelectorAll(".cp-record-grant-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
-          const sym = btn.getAttribute("data-symbol");
-          const qty = btn.getAttribute("data-qty");
-          openGrantDialog(sym, qty, p.snapshot_as_of);
+        variancesList.querySelectorAll(".cp-record-grant-btn").forEach(btn => {
+          btn.addEventListener("click", () => {
+            const sym = btn.getAttribute("data-symbol");
+            const qty = btn.getAttribute("data-qty");
+            openGrantDialog(sym, qty, p.snapshot_as_of);
+          });
         });
-      });
+      }
     } else {
-      reconSummary.textContent = `No snapshot available to verify ledger against broker figures.`;
-      variancesDiv.hidden = true;
+      if (matchedNote) {
+        matchedNote.hidden = false;
+        matchedNote.textContent = "No snapshot available to verify ledger against broker figures.";
+      }
+      if (variancesDiv) variancesDiv.hidden = true;
+      if (variancesList) variancesList.innerHTML = "";
+      if (reconSection) {
+        const hasGrants = grantsContainer && !grantsContainer.hidden;
+        reconSection.hidden = !hasGrants;
+        if (hasGrants && reconSummary) {
+          reconSummary.textContent = "Declared received shares.";
+        }
+      }
     }
   }
 
   // Owned Positions Table
   renderPositionsTable("cpPositionsBody", p.positions || [], false);
 
-  // CFD Positions Table
-  renderPositionsTable("cpCfdBody", p.cfd_positions || [], true);
+  // CFD Positions Table (hidden when empty)
+  const cfds = p.cfd_positions || [];
+  const cfdPanel = document.getElementById("cpCfdPanel");
+  if (cfdPanel) cfdPanel.hidden = cfds.length === 0;
+  renderPositionsTable("cpCfdBody", cfds, true);
 
   // Dividends Table
   renderDividendsTable(p.dividends || []);
@@ -137,12 +180,22 @@ function renderPortfolio(p) {
   updateOutlookHoldings(heldSymbols);
 }
 
+function findGuardForPosition(pos) {
+  if (!Array.isArray(latestHoldingGuards)) return null;
+  const inst = pos.instrument || {};
+  const sym = inst.symbol || pos.symbol;
+  const key = pos.instrument_key;
+  return latestHoldingGuards.find(g => (sym && g.symbol === sym) || (key && g.key === key)) || null;
+}
+
 function renderPositionsTable(tbodyId, positions, isCfd) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
 
+  const colSpan = isCfd ? 5 : 6;
+
   if (positions.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="cp-empty">${isCfd ? "No CFD positions derived from the ledger. Anything the broker lists appears under Reconciliation." : "No owned positions derived from the ledger. Anything the broker lists appears under Reconciliation."}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${colSpan}" class="cp-empty">${isCfd ? "No open CFD contracts." : "No owned positions derived from the ledger."}</td></tr>`;
     return;
   }
 
@@ -151,40 +204,81 @@ function renderPositionsTable(tbodyId, positions, isCfd) {
     const pos = positions[i];
     const inst = pos.instrument || {};
     const tr = document.createElement("tr");
+    const guard = isCfd ? null : findGuardForPosition(pos);
 
     const lotCount = (pos.lots || []).length;
-    const lotsBtn = lotCount > 0
+    const hasDetails = lotCount > 0 || Boolean(guard);
+    const lotsBtn = hasDetails
       ? `<button type="button" class="cp-lots-toggle" data-idx="${i}" data-table="${tbodyId}">${lotCount} lot${lotCount === 1 ? "" : "s"}</button>`
       : "0";
+
+    let stopCellHtml = "";
+    if (!isCfd) {
+      if (guard && guard.trailing_stop !== null && guard.trailing_stop !== undefined) {
+        const dist = Number(guard.stop_distance_pct || 0);
+        const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(1)}%`;
+        const stopPrice = typeof formatTradePrice === "function" ? formatTradePrice(guard.trailing_stop) : escapeHtml(guard.trailing_stop);
+        stopCellHtml = guard.stop_hit
+          ? `<td class="num">${stopPrice} <span class="cp-word-bad">${distStr} · stop hit</span></td>`
+          : `<td class="num">${stopPrice} <span class="cp-pos-dist">${distStr}</span></td>`;
+      } else {
+        stopCellHtml = `<td class="num">—</td>`;
+      }
+    }
 
     tr.innerHTML = `
       <td>
         <strong>${escapeHtml(inst.symbol || "UNKNOWN")}</strong>
-        ${inst.name ? `<br><small style="color:var(--sail-text-subtle)">${escapeHtml(inst.name)}</small>` : ""}
-        ${inst.isin ? `<br><small style="color:var(--sail-text-muted)">${escapeHtml(inst.isin)}</small>` : ""}
+        ${inst.name ? `<br><span class="cp-pos-name">${escapeHtml(inst.name)}</span>` : ""}
+        ${inst.isin ? `<br><span class="cp-pos-isin">${escapeHtml(inst.isin)}</span>` : ""}
       </td>
       <td class="num">${escapeHtml(pos.quantity || "0")}</td>
       <td class="num">${pos.cost_basis ? formatMoney(pos.cost_basis) : "—"}</td>
       <td class="num">${pos.broker_market_value ? formatMoney(pos.broker_market_value) : "—"}</td>
+      ${stopCellHtml}
       <td>${lotsBtn}</td>
     `;
     tbody.appendChild(tr);
 
-    // Expandable lot row
-    if (lotCount > 0) {
+    // Expandable lot + guard detail row
+    if (hasDetails) {
       const lotTr = document.createElement("tr");
       lotTr.id = `${tbodyId}-lots-${i}`;
       lotTr.hidden = true;
-      const lotsHtml = pos.lots.map(l => {
+
+      let guardHtml = "";
+      if (guard) {
+        const parts = [];
+        if (guard.above_200d === true) {
+          parts.push(`<span class="cp-word-good">Above 200d</span>`);
+        } else if (guard.above_200d === false) {
+          parts.push(`<span class="cp-word-bad">Below 200d</span>`);
+        }
+        if (guard.next_earnings) {
+          parts.push(`Next earnings ${formatDay(guard.next_earnings)}`);
+        }
+        if (typeof latestTradeSignals !== "undefined" && latestTradeSignals && Array.isArray(latestTradeSignals.cards)) {
+          const match = latestTradeSignals.cards.find(c => c.symbol === guard.symbol || c.key === guard.key);
+          if (match) {
+            const sideText = typeof signalSideLabel === "function" ? signalSideLabel(match.side) : match.side.toUpperCase();
+            parts.push(`<button type="button" class="cp-link-btn cp-guard-card-link" data-card-id="${escapeHtml(match.id)}">${escapeHtml(sideText)} ${escapeHtml(formatSetupName(match.setup))} →</button>`);
+          }
+        }
+        if (parts.length > 0) {
+          guardHtml = `<div class="cp-pos-guard-meta">${parts.join(" · ")}</div>`;
+        }
+      }
+
+      const lotsHtml = (pos.lots || []).map(l => {
         const isGranted = l.origin === "granted";
-        const originBadge = isGranted
-          ? `<span class="cp-lot-badge cp-lot-badge-granted">granted</span>`
-          : "";
-        return `<li>${formatDate(l.opened ? l.opened.at : null)} · <strong>${escapeHtml(l.quantity)}</strong> units @ ${l.unit_cost ? formatMoney(l.unit_cost) : "not stated"} ${originBadge}</li>`;
+        const originText = isGranted ? ` · <span class="cp-word-wait">granted</span>` : "";
+        return `<li>${formatDate(l.opened ? l.opened.at : null)} · <strong>${escapeHtml(l.quantity)}</strong> units @ ${l.unit_cost ? formatMoney(l.unit_cost) : "not stated"}${originText}</li>`;
       }).join("");
+
       lotTr.innerHTML = `
-        <td colspan="5" class="cp-lots-detail">
-          <ul class="cp-lots-list">${lotsHtml}</ul>
+        <td colspan="${colSpan}" class="cp-lots-detail">
+          ${guardHtml}
+          ${lotsHtml ? `<ul class="cp-lots-list">${lotsHtml}</ul>` : ""}
         </td>
       `;
       tbody.appendChild(lotTr);
@@ -202,6 +296,22 @@ function renderPositionsTable(tbodyId, positions, isCfd) {
       }
     });
   });
+
+  // Hook up active signal links
+  tbody.querySelectorAll(".cp-guard-card-link").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const cardId = btn.getAttribute("data-card-id");
+      switchTab("outlook", true);
+      setTimeout(() => {
+        const cardEl = document.getElementById(`card-${cardId}`);
+        if (cardEl) {
+          const det = cardEl.querySelector("details") || (cardEl.tagName === "DETAILS" ? cardEl : null);
+          if (det) det.open = true;
+          cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 80);
+    });
+  });
 }
 
 async function loadSecStatus() {
@@ -214,18 +324,14 @@ async function loadSecStatus() {
     const metaSpan = document.getElementById("cpSecStatusMeta");
     if (metaSpan) {
       if (!status.configured) {
-        metaSpan.textContent = "SEC access not configured";
+        metaSpan.innerHTML = `<span class="cp-word-wait">Off</span> · SEC access not configured`;
       } else if (status.last_refresh_at && status.last_error) {
-        metaSpan.textContent = `Last check ${formatDate(status.last_refresh_at)} failed: ${status.last_error}`;
+        metaSpan.innerHTML = `<span class="cp-word-bad">Error</span> · Last check ${formatDate(status.last_refresh_at)} failed: ${escapeHtml(status.last_error)}`;
       } else if (status.last_refresh_at) {
-        metaSpan.textContent = `Last check ${formatDate(status.last_refresh_at)} · ${status.new_evidence || 0} new filings`;
+        metaSpan.innerHTML = `<span class="cp-word-good">Active</span> · Last check ${formatDate(status.last_refresh_at)} · ${status.new_evidence || 0} new filings`;
       } else {
-        metaSpan.textContent = "Ready to check SEC EDGAR";
+        metaSpan.innerHTML = `<span class="cp-word-good">Active</span> · Ready to check SEC EDGAR`;
       }
-    }
-    const badge = document.getElementById("cpSecBadge");
-    if (badge) {
-      badge.textContent = status.configured ? "EDGAR Active" : "Unconfigured";
     }
   } catch (err) {
     console.error("Failed to load SEC status:", err);
@@ -235,11 +341,11 @@ async function loadSecStatus() {
 async function loadFilings() {
   const list = document.getElementById("cpFilingsList");
   const unmatchedWrap = document.getElementById("cpUnmatchedWrap");
+  const unmatchedCount = document.getElementById("cpUnmatchedCount");
   const unmatchedList = document.getElementById("cpUnmatchedList");
   if (!list) return;
 
   if (accountList.length === 0) {
-    // Nothing imported yet: an empty state, not an error.
     list.innerHTML = `<p class="cp-empty">Import an XTB report to see filings for your holdings.</p>`;
     if (unmatchedWrap) unmatchedWrap.hidden = true;
     return;
@@ -254,37 +360,34 @@ async function loadFilings() {
     if (items.length === 0) {
       list.innerHTML = `<p class="cp-empty">No filings recorded for owned holdings.</p>`;
     } else {
-      list.innerHTML = "";
+      const ul = document.createElement("ul");
+      ul.className = "cp-rows";
       for (const item of items) {
-        const card = document.createElement("div");
-        card.className = "cp-filing-card";
+        const li = document.createElement("li");
+        li.className = "cp-row";
 
         const isProposal = item.action === "research_proposal";
-        const badgeClass = isProposal ? "cp-badge-proposal" : "cp-badge-watch";
-        const badgeLabel = isProposal ? "Research Proposal" : "Watch";
+        const statusWord = isProposal
+          ? `<span class="cp-word-good">Research proposal</span>`
+          : `<span class="cp-word-wait">Watch</span>`;
 
-        // Find match for symbol/ticker
         const match = matches.find(m => m.instrument_key === (item.exposure && item.exposure.instrument_key));
         const symbol = match ? match.symbol : (item.exposure && item.exposure.instrument_key) || "";
         const ticker = (match && match.match && match.match.ticker)
           ? match.match.ticker
           : symbol.replace(/\.US$/i, "");
 
-        // Exposure info
         const exposure = item.exposure || {};
-        const exposureParts = [];
-        if (exposure.quantity) {
-          exposureParts.push(`<span>Holding: <strong>${escapeHtml(exposure.quantity)}</strong> units</span>`);
-        }
-        if (exposure.broker_market_value) {
-          exposureParts.push(`<span>Value: <strong>${formatMoney(exposure.broker_market_value)}</strong></span>`);
-        }
+        const metaParts = [];
+        if (item.reason) metaParts.push(escapeHtml(item.reason));
+        if (exposure.quantity) metaParts.push(`Holding: ${escapeHtml(exposure.quantity)} units`);
+        if (exposure.broker_market_value) metaParts.push(`Value: ${formatMoney(exposure.broker_market_value)}`);
         if (exposure.share_of_owned_value !== null && exposure.share_of_owned_value !== undefined) {
           const pct = (parseFloat(exposure.share_of_owned_value) * 100).toFixed(2);
-          exposureParts.push(`<span>Share: <strong>${pct}%</strong> of owned value</span>`);
+          metaParts.push(`Share: ${pct}%`);
         }
+        metaParts.push(`Published ${formatDate(item.published_at)} · first seen by SAIL ${formatDate(item.first_observed_at)}`);
 
-        // Link validation: must start with https://www.sec.gov/
         const url = (item.filing && item.filing.url && item.filing.url.startsWith("https://www.sec.gov/"))
           ? item.filing.url
           : null;
@@ -292,38 +395,33 @@ async function loadFilings() {
           ? `<a class="cp-filing-link" href="${escapeHtml(url)}" rel="noopener noreferrer" target="_blank">View on sec.gov ↗</a>`
           : "";
 
-        card.innerHTML = `
-          <div class="cp-filing-top">
-            <div class="cp-filing-title-group">
-              <span class="${badgeClass}">${escapeHtml(badgeLabel)}</span>
-              <span class="cp-filing-form">${escapeHtml((item.filing && item.filing.form) || "")}</span>
-              <span class="cp-filing-issuer">${escapeHtml(item.issuer_name || "")} (${escapeHtml(ticker)})</span>
-            </div>
-            ${linkHtml}
-          </div>
-          <div class="cp-filing-reason">${escapeHtml(item.reason || "")}</div>
-          ${exposureParts.length > 0 ? `<div class="cp-filing-exposure">${exposureParts.join("")}</div>` : ""}
-          <div class="cp-filing-bottom">
-            <span class="cp-filing-time">Published ${formatDate(item.published_at)} · first seen by SAIL ${formatDate(item.first_observed_at)}</span>
-          </div>
+        const form = escapeHtml((item.filing && item.filing.form) || "");
+        const issuer = escapeHtml(item.issuer_name || "");
+
+        li.innerHTML = `
+          <span class="cp-row-title">${statusWord} · ${form} · ${issuer} (${escapeHtml(ticker)})</span>
+          <span class="cp-row-value">${linkHtml}</span>
+          <span class="cp-row-meta">${metaParts.join(" · ")}</span>
         `;
-        list.appendChild(card);
+        ul.appendChild(li);
       }
+      list.innerHTML = "";
+      list.appendChild(ul);
     }
 
-    // Unmatched / non-US holdings
     const uncovered = matches.filter(m => m.match && m.match.status !== "matched");
     if (unmatchedWrap && unmatchedList) {
       if (uncovered.length > 0) {
         unmatchedWrap.hidden = false;
+        if (unmatchedCount) unmatchedCount.textContent = String(uncovered.length);
         unmatchedList.innerHTML = uncovered.map(m => {
           const reason = m.match.status === "not_us_listed"
             ? "Non-US listing (no .US suffix); SEC does not apply"
             : (m.match.reason || "Unresolved");
           return `
-            <li class="cp-unmatched-item">
-              <span class="cp-unmatched-symbol">${escapeHtml(m.symbol)}</span>
-              <span class="cp-unmatched-reason">${escapeHtml(reason)}</span>
+            <li class="cp-row">
+              <span class="cp-row-title">${escapeHtml(m.symbol)}</span>
+              <span class="cp-row-value cp-word-wait">${escapeHtml(reason)}</span>
             </li>
           `;
         }).join("");
@@ -496,18 +594,21 @@ function setupGrantDialog() {
       showBanner(`Recorded received shares: ${grant.quantity} units of ${grant.symbol}.`);
       await loadAccounts();
       await loadPortfolio();
-      await loadInsights();
+      await loadInsights(true);
       await loadGrants();
     } catch (err) {
       showBanner(`Failed to record grant: ${err.message}`, true);
     } finally {
       submitBtn.disabled = false;
-      submitBtn.textContent = "Record Shares";
+      submitBtn.textContent = "Record shares";
     }
   });
 }
 
 async function loadGrants() {
+  const reconSection = document.getElementById("cpReconciliation");
+  const reconSummary = document.getElementById("cpReconSummary");
+  const variancesDiv = document.getElementById("cpVariances");
   const grantsContainer = document.getElementById("cpGrants");
   const grantsList = document.getElementById("cpGrantsList");
   if (!grantsContainer || !grantsList) return;
@@ -524,33 +625,37 @@ async function loadGrants() {
     if (!grants || grants.length === 0) {
       grantsContainer.hidden = true;
       grantsList.innerHTML = "";
+      if (reconSection && variancesDiv && variancesDiv.hidden) {
+        reconSection.hidden = true;
+      }
       return;
     }
 
     grantsContainer.hidden = false;
+    if (reconSection) {
+      reconSection.hidden = false;
+      if (variancesDiv && variancesDiv.hidden && reconSummary) {
+        reconSummary.textContent = "Declared received shares.";
+      }
+    }
     grantsList.innerHTML = "";
     for (const g of grants) {
       const li = document.createElement("li");
-      li.className = "cp-grant-item";
+      li.className = "cp-row";
       const isRetracted = Boolean(g.retracted_at);
       const statusHtml = isRetracted
-        ? `<span class="cp-grant-retracted">Retracted ${formatDate(g.retracted_at)}</span>`
-        : `<button type="button" class="cp-button cp-button-sm cp-retract-grant-btn" data-grant-id="${escapeHtml(g.id)}" data-symbol="${escapeHtml(g.symbol)}">Retract</button>`;
+        ? `<span class="cp-word-wait">Retracted ${formatDate(g.retracted_at)}</span>`
+        : `<button type="button" class="cp-button cp-btn-sm cp-retract-grant-btn" data-grant-id="${escapeHtml(g.id)}" data-symbol="${escapeHtml(g.symbol)}">Retract</button>`;
 
       const costText = g.cost && g.cost.amount && g.cost.amount !== "0"
         ? formatMoney(g.cost)
         : "Free (zero cost)";
+      const kindLabel = (g.kind || "stock").toUpperCase();
 
       li.innerHTML = `
-        <div class="cp-grant-info">
-          <span class="cp-grant-symbol">${escapeHtml(g.symbol)}</span>
-          <span class="cp-badge">${escapeHtml((g.kind || "stock").toUpperCase())}</span>
-          <span class="cp-grant-qty"><strong>${escapeHtml(g.quantity)}</strong> units</span>
-          <span class="cp-grant-date">Received ${formatDay(g.received_at)}</span>
-          <span class="cp-grant-cost">Basis: ${costText}</span>
-          ${g.note ? `<span class="cp-grant-note">${escapeHtml(g.note)}</span>` : ""}
-        </div>
-        <div class="cp-grant-status">${statusHtml}</div>
+        <span class="cp-row-title">${escapeHtml(g.symbol)} · ${escapeHtml(kindLabel)} · ${escapeHtml(g.quantity)} units</span>
+        <span class="cp-row-value">${statusHtml}</span>
+        <span class="cp-row-meta">Received ${formatDay(g.received_at)} · Basis: ${costText}${g.note ? ` · ${escapeHtml(g.note)}` : ""}</span>
       `;
       grantsList.appendChild(li);
     }
@@ -568,7 +673,7 @@ async function loadGrants() {
           });
           showBanner(`Retracted received shares for ${sym}.`);
           await loadPortfolio();
-          await loadInsights();
+          await loadInsights(true);
           await loadGrants();
         } catch (err) {
           showBanner(`Failed to retract grant: ${err.message}`, true);
@@ -582,78 +687,21 @@ async function loadGrants() {
   }
 }
 
-let latestHoldingGuards = null;
-
 async function loadHoldingGuards() {
-  const tbody = document.getElementById("cpGuardsBody");
-  if (!tbody) return;
+  if (accountList.length === 0) {
+    latestHoldingGuards = null;
+    return;
+  }
 
   try {
     const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
     const guards = await fetchJson(`/api/capital/signals/trade/guards${query}`);
-    latestHoldingGuards = guards;
-
-    if (!Array.isArray(guards) || guards.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="8" class="cp-empty">No held positions to guard.</td></tr>`;
-      return;
+    latestHoldingGuards = Array.isArray(guards) ? guards : [];
+    if (latestPortfolio) {
+      renderPositionsTable("cpPositionsBody", latestPortfolio.positions || [], false);
     }
-
-    tbody.innerHTML = guards.map(g => {
-      const dist = Number(g.stop_distance_pct || 0);
-      const distStr = `${dist >= 0 ? "+" : ""}${dist.toFixed(1)}%`;
-
-      const statusBadge = g.stop_hit
-        ? `<span class="cp-badge cp-badge-stop-hit">trend stop hit</span>`
-        : `<span class="cp-badge cp-badge-ok">Holding</span>`;
-
-      let trendStr = "—";
-      if (g.above_200d === true) {
-        trendStr = `<span class="cp-trend-above">Above 200d</span>`;
-      } else if (g.above_200d === false) {
-        trendStr = `<span class="cp-trend-below">Below 200d</span>`;
-      }
-
-      const earningsStr = g.next_earnings ? formatDay(g.next_earnings) : "—";
-
-      let activeSignalLink = "—";
-      if (latestTradeSignals && Array.isArray(latestTradeSignals.cards)) {
-        const match = latestTradeSignals.cards.find(c => c.symbol === g.symbol || c.key === g.key);
-        if (match) {
-          activeSignalLink = `<button type="button" class="cp-link-btn cp-guard-card-link" data-card-id="${escapeHtml(match.id)}">${match.side.toUpperCase()} ${escapeHtml(formatSetupName(match.setup))} →</button>`;
-        }
-      }
-
-      return `
-        <tr>
-          <td><strong>${escapeHtml(g.symbol)}</strong></td>
-          <td class="num">${formatTradePrice(g.close)}</td>
-          <td class="num">${formatTradePrice(g.trailing_stop)}</td>
-          <td class="num ${g.stop_hit ? "cp-dist-alert" : ""}">${distStr}</td>
-          <td>${statusBadge}</td>
-          <td>${trendStr}</td>
-          <td>${earningsStr}</td>
-          <td>${activeSignalLink}</td>
-        </tr>
-      `;
-    }).join("");
-
-    // Hook up active card links
-    tbody.querySelectorAll(".cp-guard-card-link").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const cardId = btn.getAttribute("data-card-id");
-        switchTab("outlook", true);
-        setTimeout(() => {
-          const cardEl = document.getElementById(`card-${cardId}`);
-          if (cardEl) {
-            cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
-            cardEl.classList.add("cp-card-highlight");
-            setTimeout(() => cardEl.classList.remove("cp-card-highlight"), 2500);
-          }
-        }, 80);
-      });
-    });
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="8" class="cp-empty">Holding guards unavailable (${escapeHtml(err.message)}).</td></tr>`;
+    console.error("Failed to load holding guards:", err);
   }
 }
 
@@ -686,5 +734,5 @@ registerTab("portfolio", {
     setupGrantDialog();
     setupSecRefresh();
   },
-  load: () => Promise.all([loadHoldingGuards(), loadGrants(), loadFilings(), loadSecStatus()]),
+  load: () => Promise.all([loadHoldingGuards(), loadGrants(), loadFilings(), loadSecStatus(), loadInsights()]),
 });
