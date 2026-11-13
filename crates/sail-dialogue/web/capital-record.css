@@ -41,3 +41,51 @@
 .cp-row-off td {
   color: var(--sail-text-subtle);
 }
+
+.cp-tally-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.cp-tally {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.cp-tally::after {
+  content: "";
+  position: absolute;
+  inset: auto 18% 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--cp-tone, rgb(255 255 255 / .25));
+  box-shadow: 0 0 18px 2px var(--cp-tone, transparent);
+}
+
+.cp-tally[data-dir="up"] { --cp-tone: rgb(61 220 151 / .7); }
+.cp-tally[data-dir="down"] { --cp-tone: rgb(255 107 107 / .7); }
+
+.cp-tally-num {
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+#cpScorecardRows .cp-row {
+  padding-top: 13px;
+  padding-bottom: 13px;
+}
+
+@media (max-width: 640px) {
+  .cp-tally-row {
+    gap: 10px;
+  }
+
+  .cp-tally-num {
+    font-size: 26px;
+  }
+}

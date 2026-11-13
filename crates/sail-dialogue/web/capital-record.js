@@ -2,9 +2,9 @@
 "use strict";
 
 const STANDING_WORDS = {
-  earned: ["Earned", "cp-word-good"],
-  not_yet: ["Not yet", "cp-word-wait"],
-  failed: ["Failed", "cp-word-bad"],
+  earned: ["Earned", "up"],
+  not_yet: ["Not yet", "flat"],
+  failed: ["Failed", "down"],
 };
 
 function accountQuery(prefix = "?") {
@@ -46,16 +46,17 @@ async function loadScorecard() {
     const card = await fetchJson(`/api/capital/scorecard${accountQuery()}`);
     if (summary) summary.textContent = card.summary || "";
     const rows = Array.isArray(card.rows) ? card.rows : [];
+    renderScoreTally(rows);
     if (rows.length === 0) {
       list.innerHTML = `<li class="cp-empty">Nothing has been evaluated yet. Evaluations need daily prices (Settings → Prices) and a signals run (Outlook).</li>`;
       return;
     }
     list.innerHTML = rows.map((row) => {
-      const [word, cls] = STANDING_WORDS[row.standing] || [row.standing, "cp-word-wait"];
+      const [word, dir] = STANDING_WORDS[row.standing] || [row.standing, "flat"];
       const horizon = row.horizon_sessions ? ` · ${horizonLabel(row.horizon_sessions)}` : "";
       return `<li class="cp-row" data-standing="${escapeHtml(row.standing)}">
           <span class="cp-row-title">${escapeHtml(row.name)}<span class="cp-row-horizon">${escapeHtml(horizon)}</span></span>
-          <span class="cp-row-value ${cls}">${word}</span>
+          <span class="cp-row-value"><span class="cp-chg" data-dir="${dir}">${word}</span></span>
           <span class="cp-row-meta">${escapeHtml(row.headline)}</span>
         </li>`;
     }).join("");
@@ -63,6 +64,16 @@ async function loadScorecard() {
     if (summary) summary.textContent = "The track record is unavailable.";
     list.innerHTML = `<li class="cp-empty">${escapeHtml(err.message)}</li>`;
   }
+}
+
+function renderScoreTally(rows) {
+  const tally = document.getElementById("cpScoreTally");
+  if (!tally) return;
+  const count = (k) => rows.filter((r) => r.standing === k).length;
+  tally.hidden = rows.length === 0;
+  tally.innerHTML = [["earned", "Earned", "up"], ["not_yet", "Not yet", "flat"], ["failed", "Failed", "down"]]
+    .map(([k, label, dir]) => `<div class="cp-card cp-tally" data-dir="${dir}"><span class="cp-card-label">${label}</span><span class="cp-tally-num">${count(k)}</span></div>`)
+    .join("");
 }
 
 // --- Trade setups (from the latest signals run) --------------------------------------
