@@ -100,6 +100,10 @@ pub struct SetupView {
     pub side: crate::trade::Side,
     /// The setup earned a record and the card published.
     pub published: bool,
+    /// Didn't publish, but gave a candidate card (positive in both periods, not yet
+    /// clear of luck).
+    #[serde(default)]
+    pub candidate: bool,
 }
 
 /// One word for the row.

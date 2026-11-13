@@ -27,6 +27,13 @@
 //!
 //! Ranking uses that lower bound, so "most certain" means best worst-case evidence.
 //!
+//! **Candidates.** That bar is strict (it is also corrected for testing 36 setups at
+//! once), so on most days nothing clears it. A setup and side that made money after costs
+//! in the selection years *and* in the holdout, with enough trades of each, gives
+//! [`Tier::Candidate`] cards when it fires: the same entry, stop and targets, sized at
+//! [`CANDIDATE_RISK_SHARE`] of the usual risk, and marked as not yet clear of luck.
+//! Candidates keep their own live record and never count towards the verified one.
+//!
 //! No look-ahead anywhere. A firing on session `i` uses bars `0..=i` only. Its trade
 //! starts at `i + 1`. Selection at date `d` uses trades whose exit is on or before `d`.
 //!
@@ -50,6 +57,38 @@ pub const LOOKBACK_YEARS: i64 = 8;
 
 /// Most signals published per day (best first).
 pub const MAX_SIGNALS_PER_DAY: usize = 8;
+
+/// Fewest closed selection trades before a setup and side can give candidates.
+pub const MIN_CANDIDATE_TRADES: u32 = 40;
+
+/// Fewest closed holdout trades before a setup and side can give candidates.
+pub const MIN_CANDIDATE_HOLDOUT_TRADES: u32 = 10;
+
+/// Most candidates per day (best first), on instruments without a verified signal.
+pub const MAX_CANDIDATES_PER_DAY: usize = 8;
+
+/// Candidates are sized to risk this share of the owner's risk per trade.
+pub const CANDIDATE_RISK_SHARE: f64 = 0.5;
+
+/// How much evidence stands behind a card.
+///
+/// - **Verified** (`Proven`): the full publish bar in the module doc.
+/// - **Candidate:** the setup and side made money after costs in the selection years
+///   *and* in the holdout, with at least [`MIN_CANDIDATE_TRADES`] and
+///   [`MIN_CANDIDATE_HOLDOUT_TRADES`] trades, but isn't yet clear of luck. Candidates are
+///   ideas to watch, kept on their own live record so they can earn the full bar in the
+///   open. They never count towards the verified record.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Tier {
+    /// Passed the full publish bar.
+    #[default]
+    Proven,
+    /// Positive in both periods, not yet clear of luck.
+    Candidate,
+}
 
 /// Long or short.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -295,6 +334,10 @@ pub struct Verdict {
     /// True when both pass: trades ≥ [`MIN_TRADES`] in selection, a selection lower bound
     /// above 0, and a holdout mean above 0.
     pub publishes: bool,
+    /// Doesn't publish, but positive after costs in both periods with enough trades:
+    /// its firings become [`Tier::Candidate`] cards.
+    #[serde(default)]
+    pub candidate: bool,
     /// One plain sentence: why it publishes or not.
     pub reason: String,
 }
@@ -341,6 +384,9 @@ pub struct SignalCard {
     pub relation: Option<String>,
     /// Warnings, e.g. "earnings on 2026-11-20, inside the trade window".
     pub warnings: Vec<String>,
+    /// Verified or candidate. Cards stored before candidates existed are verified.
+    #[serde(default)]
+    pub tier: Tier,
 }
 
 /// The day's signals and the scoreboard behind them.
@@ -352,7 +398,12 @@ pub struct SignalDay {
     pub cards: Vec<SignalCard>,
     /// Every setup and side, with its verdict, publishing or not.
     pub scoreboard: Vec<Verdict>,
-    /// Setups that fired today but don't publish, as `(symbol, setup, side)`.
+    /// Candidate cards, best first, at most [`MAX_CANDIDATES_PER_DAY`], on instruments
+    /// without a verified card.
+    #[serde(default)]
+    pub candidates: Vec<SignalCard>,
+    /// Setups that fired today and give neither a card nor a candidate, as
+    /// `(symbol, setup, side)`.
     pub suppressed: Vec<(String, SetupId, Side)>,
     /// Plain notes on the limits: survivorship, daily bars only, costs assumed.
     pub notes: Vec<String>,
@@ -376,7 +427,10 @@ pub struct InstrumentCheck {
     pub session: NaiveDate,
     /// Cards that publish for this instrument on its latest bar.
     pub cards: Vec<SignalCard>,
-    /// Setups that fired but didn't publish.
+    /// Candidate cards for this instrument on its latest bar.
+    #[serde(default)]
+    pub candidates: Vec<SignalCard>,
+    /// Setups that fired but gave neither.
     pub suppressed: Vec<SuppressedSignal>,
 }
 
@@ -448,6 +502,8 @@ pub fn verdict(
 ///   publishes in that group.
 /// - Drop a card when earnings fall inside its window (stocks and ETFs).
 /// - Rank by score, keep the best [`MAX_SIGNALS_PER_DAY`], and at most one per instrument.
+/// - Candidates the same way, up to [`MAX_CANDIDATES_PER_DAY`], skipping instruments that
+///   already have a verified card.
 ///
 /// `account_value` and `risk_pct` size the cards. `fx_to_account` converts one unit of
 /// an instrument's currency to the account currency (`None` if unknown). `held` maps keys
@@ -473,6 +529,7 @@ pub fn signal_day(
         return SignalDay {
             session: NaiveDate::MIN,
             cards: Vec::new(),
+            candidates: Vec::new(),
             scoreboard: Vec::new(),
             suppressed: Vec::new(),
             notes,
@@ -499,6 +556,7 @@ pub fn signal_day(
     }
 
     let mut cards = Vec::new();
+    let mut candidates = Vec::new();
     let mut suppressed = Vec::new();
     for instrument in universe {
         let signals = instrument_signals(
@@ -510,6 +568,7 @@ pub fn signal_day(
             held,
         );
         cards.extend(signals.cards);
+        candidates.extend(signals.candidates);
         suppressed.extend(
             signals
                 .suppressed
@@ -523,9 +582,16 @@ pub fn signal_day(
     cards.retain(|card| seen.insert(card.key.clone()));
     cards.truncate(MAX_SIGNALS_PER_DAY);
 
+    let verified: HashSet<String> = cards.iter().map(|card| card.key.clone()).collect();
+    candidates.sort_by(|left, right| right.score.total_cmp(&left.score));
+    let mut seen = HashSet::new();
+    candidates.retain(|card| !verified.contains(&card.key) && seen.insert(card.key.clone()));
+    candidates.truncate(MAX_CANDIDATES_PER_DAY);
+
     SignalDay {
         session,
         cards,
+        candidates,
         scoreboard,
         suppressed,
         notes,
@@ -536,6 +602,7 @@ pub fn signal_day(
 struct InstrumentSignals {
     session: NaiveDate,
     cards: Vec<SignalCard>,
+    candidates: Vec<SignalCard>,
     suppressed: Vec<(SetupId, Side, String)>,
 }
 
@@ -553,6 +620,7 @@ fn instrument_signals(
         return InstrumentSignals {
             session: NaiveDate::MIN,
             cards: Vec::new(),
+            candidates: Vec::new(),
             suppressed: Vec::new(),
         };
     };
@@ -560,6 +628,7 @@ fn instrument_signals(
     let mut out = InstrumentSignals {
         session: session_date,
         cards: Vec::new(),
+        candidates: Vec::new(),
         suppressed: Vec::new(),
     };
     let atr = indicators::atr(&instrument.bars, 14);
@@ -579,10 +648,14 @@ fn instrument_signals(
             let Some(verdict) = verdict_for(scoreboard, group, setup, side) else {
                 continue;
             };
-            if !verdict.publishes {
+            let tier = if verdict.publishes {
+                Tier::Proven
+            } else if verdict.candidate {
+                Tier::Candidate
+            } else {
                 out.suppressed.push((setup, side, verdict.reason.clone()));
                 continue;
-            }
+            };
             if let Some(date) = earnings_in_window(instrument, session_date, setup.plan().1) {
                 out.suppressed.push((
                     setup,
@@ -602,10 +675,14 @@ fn instrument_signals(
                 Side::Long => (mid - risk, [mid + risk, mid + 2.0 * risk, mid + 3.0 * risk]),
                 Side::Short => (mid + risk, [mid - risk, mid - 2.0 * risk, mid - 3.0 * risk]),
             };
+            let card_risk_pct = match tier {
+                Tier::Proven => risk_pct,
+                Tier::Candidate => risk_pct * CANDIDATE_RISK_SHARE,
+            };
             let size = account_value.and_then(|value| {
                 fx_to_account(instrument).and_then(|fx| {
                     if fx > 0.0 && value > 0.0 && risk > 0.0 {
-                        let units = risk_pct / 100.0 * value / (risk * fx);
+                        let units = card_risk_pct / 100.0 * value / (risk * fx);
                         Some((units, units * mid * fx))
                     } else {
                         None
@@ -627,7 +704,7 @@ fn instrument_signals(
                     description.trim()
                 ),
             });
-            out.cards.push(SignalCard {
+            let card = SignalCard {
                 id: card_id(&instrument.key, setup, side, session_date),
                 key: instrument.key.clone(),
                 symbol: instrument.symbol.clone(),
@@ -640,13 +717,18 @@ fn instrument_signals(
                 targets,
                 max_sessions,
                 size,
-                risk_pct,
+                risk_pct: card_risk_pct,
                 needs_cfd: instrument.needs_cfd(side),
                 score: verdict.selection.expectancy_ci.0,
                 verdict,
                 relation,
                 warnings: Vec::new(),
-            });
+                tier,
+            };
+            match tier {
+                Tier::Proven => out.cards.push(card),
+                Tier::Candidate => out.candidates.push(card),
+            }
         }
     }
     out
@@ -683,9 +765,12 @@ pub fn check_instrument(
     );
     let mut cards = signals.cards;
     cards.sort_by(|left, right| right.score.total_cmp(&left.score));
+    let mut candidates = signals.candidates;
+    candidates.sort_by(|left, right| right.score.total_cmp(&left.score));
     InstrumentCheck {
         session: signals.session,
         cards,
+        candidates,
         suppressed: signals
             .suppressed
             .into_iter()

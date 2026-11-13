@@ -48,7 +48,11 @@ impl CapitalService {
             None => Vec::new(),
         };
         let record = self.trade_record(account)?;
-        let live = (!record.cards.is_empty()).then_some(&record.totals);
+        let live = record
+            .cards
+            .iter()
+            .any(|c| c.card.tier == crate::trade::Tier::Proven)
+            .then_some(&record.totals);
         let inputs = crate::scorecard::ScorecardInputs {
             forecasts: &forecasts,
             signals: &signals,

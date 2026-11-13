@@ -97,6 +97,11 @@ fn overview(service: &CapitalService, input: &Value) -> Result<Value, String> {
         .as_ref()
         .map(|day| day.cards.iter().take(3).map(compact_card).collect())
         .unwrap_or_default();
+    let candidates: Vec<Value> = trade
+        .day
+        .as_ref()
+        .map(|day| day.candidates.iter().take(3).map(compact_card).collect())
+        .unwrap_or_default();
     let mut notes = trade.notes;
     if let Some(day) = trade.day.as_ref() {
         notes.extend(day.notes.iter().cloned());
@@ -119,6 +124,8 @@ fn overview(service: &CapitalService, input: &Value) -> Result<Value, String> {
             "session": trade.day.as_ref().map(|day| day.session),
             "card_count": trade.day.as_ref().map(|day| day.cards.len()).unwrap_or(0),
             "top": cards,
+            "candidate_count": trade.day.as_ref().map(|day| day.candidates.len()).unwrap_or(0),
+            "top_candidates": candidates,
             "next_run_at": trade.next_run_at,
             "running": trade.running,
             "last_error": &trade.last_error,
@@ -212,10 +219,11 @@ fn signals(service: &CapitalService, input: &Value) -> Result<Value, String> {
         .trade_view(&account)
         .map_err(|error| error.to_string())?;
     let mut notes = trade.notes;
-    let (session, cards, scoreboard, suppressed) = match trade.day.as_ref() {
+    let (session, cards, candidates, scoreboard, suppressed) = match trade.day.as_ref() {
         Some(day) => {
             notes.extend(day.notes.iter().cloned());
             let cards: Vec<Value> = day.cards.iter().map(compact_card).collect();
+            let candidates: Vec<Value> = day.candidates.iter().map(compact_card).collect();
             let scoreboard: Vec<Value> = day
                 .scoreboard
                 .iter()
@@ -225,6 +233,7 @@ fn signals(service: &CapitalService, input: &Value) -> Result<Value, String> {
                         "setup": verdict.selection.setup,
                         "side": verdict.selection.side,
                         "publishes": verdict.publishes,
+                        "candidate": verdict.candidate,
                         "reason": &verdict.reason,
                         "selection": {
                             "trades": verdict.selection.trades,
@@ -246,9 +255,9 @@ fn signals(service: &CapitalService, input: &Value) -> Result<Value, String> {
                     |(symbol, setup, side)| json!({"symbol": symbol, "setup": setup, "side": side}),
                 )
                 .collect();
-            (Some(day.session), cards, scoreboard, suppressed)
+            (Some(day.session), cards, candidates, scoreboard, suppressed)
         }
-        None => (None, Vec::new(), Vec::new(), Vec::new()),
+        None => (None, Vec::new(), Vec::new(), Vec::new(), Vec::new()),
     };
 
     let board = service
@@ -305,6 +314,7 @@ fn signals(service: &CapitalService, input: &Value) -> Result<Value, String> {
         "run_at": trade.run_at,
         "session": session,
         "cards": cards,
+        "candidates": candidates,
         "scoreboard": scoreboard,
         "suppressed": suppressed,
         "notes": notes,
@@ -336,12 +346,17 @@ fn record(service: &CapitalService, input: &Value) -> Result<Value, String> {
                 "published_at": graded.published_at,
                 "status": &graded.status,
                 "signal_session": graded.card.signal_session,
+                "tier": graded.card.tier,
                 "r_multiple": graded.graded.as_ref().map(|trade| trade.r_multiple),
                 "exit": graded.graded.as_ref().map(|trade| trade.exit),
             })
         })
         .collect();
-    Ok(json!({"totals": record.totals, "recent": recent}))
+    Ok(json!({
+        "totals": record.totals,
+        "candidate_totals": record.candidate_totals,
+        "recent": recent,
+    }))
 }
 
 fn guards(service: &CapitalService, input: &Value) -> Result<Value, String> {
@@ -511,6 +526,7 @@ fn compact_card(card: &SignalCard) -> Value {
         "risk_pct": card.risk_pct,
         "needs_cfd": card.needs_cfd,
         "relation": &card.relation,
+        "tier": card.tier,
         "why": &card.verdict.reason,
         "signal_session": card.signal_session,
     })

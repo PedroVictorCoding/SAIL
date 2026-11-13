@@ -634,7 +634,7 @@ function formatDistPct(targetPrice, entryMid) {
 }
 
 function formatCardSize(size, riskPct) {
-  const rPct = (riskPct !== undefined && riskPct !== null ? Number(riskPct) : 0.5).toFixed(1);
+  const rPct = String(Number((riskPct !== undefined && riskPct !== null ? Number(riskPct) : 0.5).toFixed(2)));
   if (size && Array.isArray(size) && size.length >= 2) {
     const units = Number(size[0]).toLocaleString(undefined, { maximumFractionDigits: 2 });
     // The value is a plain number in the account currency, not a Money object.
@@ -766,7 +766,7 @@ function renderSignalCardMarkup(c, idPrefix = "") {
   return `<li class="cp-sig" id="${idPrefix}card-${c.id}">
       <details>
         <summary>
-          <span class="cp-sig-title">${escapeHtml(c.symbol)} <span class="${c.side === "long" ? "cp-word-good" : "cp-word-bad"}">${signalSideLabel(c.side)}</span></span>
+          <span class="cp-sig-title">${escapeHtml(c.symbol)} <span class="${c.side === "long" ? "cp-word-good" : "cp-word-bad"}">${signalSideLabel(c.side)}</span>${c.tier === "candidate" ? ` <span class="cp-sig-tier" title="Positive after costs in both periods, not yet clear of luck">Candidate · unproven</span>` : ""}</span>
           <span class="cp-sig-entry">entry ${formatTradePrice(entryLow)} – ${formatTradePrice(entryHigh)}</span>
           <span class="cp-sig-meta">${escapeHtml(meta.join(" · "))}</span>
         </summary>
@@ -816,10 +816,24 @@ async function loadTradeSignals() {
     }
 
     const cards = Array.isArray(res.cards) ? res.cards : [];
-    if (emptyWrap) emptyWrap.hidden = cards.length > 0;
+    const candidates = Array.isArray(res.candidates) ? res.candidates : [];
+    if (emptyWrap) {
+      emptyWrap.hidden = cards.length > 0;
+      emptyWrap.textContent = candidates.length > 0
+        ? `No setup has earned a verified signal today. ${candidates.length === 1 ? "One candidate is" : `${candidates.length} candidates are`} below: positive after costs, not yet clear of luck.`
+        : "No setup has earned a signal today, and none fired as a candidate. That's the honest answer, not a fault.";
+    }
     cardsGrid.innerHTML = cards.map((c) => renderSignalCardMarkup(c)).join("");
+    const candWrap = document.getElementById("cpSignalsCandidates");
+    const candGrid = document.getElementById("cpSignalsCandidatesGrid");
+    const candCount = document.getElementById("cpSignalsCandidatesCount");
+    if (candWrap && candGrid) {
+      candWrap.hidden = candidates.length === 0;
+      candGrid.innerHTML = candidates.map((c) => renderSignalCardMarkup(c)).join("");
+      if (candCount) candCount.textContent = candidates.length ? `· ${candidates.length}` : "";
+    }
     // Each card's chart gains its recent closes once they arrive.
-    cards.forEach((c) => {
+    cards.concat(candidates).forEach((c) => {
       fetchJson(`/api/capital/prices?symbol=${encodeURIComponent(c.symbol)}`)
         .then((rows) => {
           if (!Array.isArray(rows) || rows.length === 0) return;
@@ -1001,6 +1015,7 @@ function renderSignalCheck(check) {
   const wrap = document.getElementById("cpSignalCheck");
   if (!wrap) return;
   const cards = Array.isArray(check.cards) ? check.cards : [];
+  const candidates = Array.isArray(check.candidates) ? check.candidates : [];
   const suppressed = Array.isArray(check.suppressed) ? check.suppressed : [];
   const verdicts = Array.isArray(check.verdicts) ? check.verdicts : [];
   const closes = (check.recent_closes || []).map((pair) => pair[1]);
@@ -1024,9 +1039,14 @@ function renderSignalCheck(check) {
     html += `<ul class="cp-rows">${cards.map((card) => renderSignalCardMarkup(card, "check-")).join("")}</ul>`;
   } else {
     html += `<p class="cp-signal-check-result">No verified setup fires today for ${escapeHtml(check.symbol)}.</p>`;
-    if (suppressed.length === 0) {
+    if (suppressed.length === 0 && candidates.length === 0) {
       html += `<p class="cp-signal-check-sub">None of the six setups fired on its latest session.</p>`;
     }
+  }
+
+  if (candidates.length > 0) {
+    html += `<p class="cp-signal-check-sub">${candidates.length === 1 ? "A candidate fires" : `${candidates.length} candidates fire`}: positive after costs in both periods, not yet clear of luck.</p>`;
+    html += `<ul class="cp-rows">${candidates.map((card) => renderSignalCardMarkup(card, "check-")).join("")}</ul>`;
   }
 
   if (suppressed.length > 0) {
@@ -1057,7 +1077,7 @@ function renderSignalCheck(check) {
   }
 
   wrap.innerHTML = html;
-  cards.forEach((card) => {
+  cards.concat(candidates).forEach((card) => {
     const chart = document.getElementById(`chart-wrap-check-${card.id}`);
     if (chart) chart.innerHTML = renderMiniSvgChart(card, closes.length ? closes : null);
   });

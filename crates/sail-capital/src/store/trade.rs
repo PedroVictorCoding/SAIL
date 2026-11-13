@@ -136,7 +136,8 @@ impl CapitalStore {
             .transpose()
     }
 
-    /// Stores a run's result and publishes its cards (each card id once per account).
+    /// Stores a run's result and publishes its cards and candidates (each card id once per
+    /// account).
     pub fn record_trade_run(
         &self,
         account: &AccountId,
@@ -149,7 +150,7 @@ impl CapitalStore {
             "INSERT INTO trade_runs (account, run_at, day_json) VALUES (?1, ?2, ?3)",
             params![account.as_str(), now.to_rfc3339(), encode(day)?],
         )?;
-        for card in &day.cards {
+        for card in day.cards.iter().chain(&day.candidates) {
             tx.execute(
                 "INSERT OR IGNORE INTO trade_cards (id, account, published_at, card_json)
                  VALUES (?1, ?2, ?3, ?4)",

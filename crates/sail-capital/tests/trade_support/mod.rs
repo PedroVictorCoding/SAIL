@@ -159,6 +159,7 @@ pub fn dummy_verdict(setup: SetupId, side: Side) -> Verdict {
         selection: dummy_evidence(setup, side),
         holdout: dummy_evidence(setup, side),
         publishes: false,
+        candidate: false,
         reason: String::new(),
     }
 }
@@ -191,5 +192,6 @@ pub fn card(
         score: 0.0,
         relation: None,
         warnings: Vec::new(),
+        tier: Default::default(),
     }
 }

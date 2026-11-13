@@ -40,8 +40,11 @@ pub struct TradeView {
 pub struct TradeRecord {
     /// Published cards with their grades, newest first.
     pub cards: Vec<crate::store::GradedCard>,
-    /// Totals over closed cards.
+    /// Totals over closed verified cards.
     pub totals: RecordTotals,
+    /// Totals over closed candidate cards, kept apart from the verified record.
+    #[serde(default)]
+    pub candidate_totals: RecordTotals,
 }
 
 /// Totals over closed cards.
@@ -498,28 +501,13 @@ impl CapitalService {
     /// Published cards with their grades and totals.
     pub fn trade_record(&self, account: &AccountId) -> Result<TradeRecord, ServiceError> {
         let cards = self.store.trade_record(account)?;
-        let closed: Vec<&crate::trade::Trade> = cards
-            .iter()
-            .filter(|c| c.status == "closed")
-            .filter_map(|c| c.graded.as_ref())
-            .collect();
-        let n = closed.len();
-        let totals = if n == 0 {
-            RecordTotals::default()
-        } else {
-            let sum: f64 = closed.iter().map(|t| t.r_multiple).sum();
-            let hits = closed
-                .iter()
-                .filter(|t| !matches!(t.exit, crate::trade::Exit::Stop | crate::trade::Exit::Time))
-                .count();
-            RecordTotals {
-                closed: n as u32,
-                hit_target1: hits as f64 / n as f64,
-                mean_r: sum / n as f64,
-                cumulative_r: sum,
-            }
-        };
-        Ok(TradeRecord { cards, totals })
+        let totals = record_totals(&cards, crate::trade::Tier::Proven);
+        let candidate_totals = record_totals(&cards, crate::trade::Tier::Candidate);
+        Ok(TradeRecord {
+            cards,
+            totals,
+            candidate_totals,
+        })
     }
 
     /// Protective stops for held instruments with enough bars.
@@ -936,6 +924,30 @@ impl CapitalService {
                 }
             }
         });
+    }
+}
+
+/// Totals over the closed cards of one tier.
+fn record_totals(cards: &[crate::store::GradedCard], tier: crate::trade::Tier) -> RecordTotals {
+    let closed: Vec<&crate::trade::Trade> = cards
+        .iter()
+        .filter(|c| c.status == "closed" && c.card.tier == tier)
+        .filter_map(|c| c.graded.as_ref())
+        .collect();
+    let n = closed.len();
+    if n == 0 {
+        return RecordTotals::default();
+    }
+    let sum: f64 = closed.iter().map(|t| t.r_multiple).sum();
+    let hits = closed
+        .iter()
+        .filter(|t| !matches!(t.exit, crate::trade::Exit::Stop | crate::trade::Exit::Time))
+        .count();
+    RecordTotals {
+        closed: n as u32,
+        hit_target1: hits as f64 / n as f64,
+        mean_r: sum / n as f64,
+        cumulative_r: sum,
     }
 }
 

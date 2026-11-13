@@ -97,6 +97,7 @@ fn verdict(
         selection: evidence(setup, side, trades),
         holdout: evidence(setup, side, trades / 2),
         publishes,
+        candidate: false,
         reason: reason.to_string(),
     }
 }

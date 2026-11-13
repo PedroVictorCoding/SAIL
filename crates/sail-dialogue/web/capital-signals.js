@@ -91,7 +91,13 @@ function sigbLeanPill(read) {
 function sigbSetup(setup) {
   if (!setup) return `<span class="cp-chg-none">—</span>`;
   const side = setup.side === "long" ? "Buy" : "Sell";
-  return `<span class="cp-sigb-setup" data-published="${setup.published ? "yes" : "no"}" title="${setup.published ? "Published: the setup has earned a record" : "Fired, but the setup hasn't earned a record, so it didn't publish"}">${escapeHtml(side)} · ${escapeHtml(formatSetupName(setup.setup))}${setup.published ? "" : " (unproven)"}</span>`;
+  const title = setup.published
+    ? "Published: the setup has earned a record"
+    : setup.candidate
+      ? "A candidate: positive after costs in both periods, not yet clear of luck"
+      : "Fired, but the setup hasn't earned a record, so it didn't publish";
+  const tag = setup.published ? "" : setup.candidate ? " (candidate)" : " (unproven)";
+  return `<span class="cp-sigb-setup" data-published="${setup.published ? "yes" : "no"}" title="${title}">${escapeHtml(side)} · ${escapeHtml(formatSetupName(setup.setup))}${tag}</span>`;
 }
 
 function sigbSortValue(row, key) {
@@ -361,7 +367,9 @@ function renderDrawerStatic(row) {
         <h3>Trade setup</h3>
         <p class="cp-sigb-d-line">${row.setup.published
           ? `A ${row.setup.side === "long" ? "buy" : "sell"} setup (${escapeHtml(formatSetupName(row.setup.setup))}) published on the latest session. Its entry, stop and targets are on Outlook → Trade signals.`
-          : `A ${row.setup.side === "long" ? "buy" : "sell"} setup (${escapeHtml(formatSetupName(row.setup.setup))}) fired on the latest session but hasn't earned a record, so it didn't publish.`}</p>
+          : row.setup.candidate
+            ? `A ${row.setup.side === "long" ? "buy" : "sell"} setup (${escapeHtml(formatSetupName(row.setup.setup))}) fired as a candidate: positive after costs in both periods, not yet clear of luck. Its levels are on Outlook → Trade signals.`
+            : `A ${row.setup.side === "long" ? "buy" : "sell"} setup (${escapeHtml(formatSetupName(row.setup.setup))}) fired on the latest session but hasn't earned a record, so it didn't publish.`}</p>
       </section>`
     : "";
 

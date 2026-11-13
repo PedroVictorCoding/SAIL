@@ -199,6 +199,19 @@ impl CapitalService {
                         setup: card.setup,
                         side: card.side,
                         published: true,
+                        candidate: false,
+                    });
+                }
+                if let Some(card) = day
+                    .candidates
+                    .iter()
+                    .find(|c| c.symbol.eq_ignore_ascii_case(&meta.symbol))
+                {
+                    return Some(SetupView {
+                        setup: card.setup,
+                        side: card.side,
+                        published: false,
+                        candidate: true,
                     });
                 }
                 day.suppressed
@@ -208,6 +221,7 @@ impl CapitalService {
                         setup: *setup,
                         side: *side,
                         published: false,
+                        candidate: false,
                     })
             });
             inputs.push(RowInput {
