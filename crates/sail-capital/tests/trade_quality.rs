@@ -2,7 +2,7 @@
 
 use chrono::{Days, NaiveDate};
 use sail_capital::trade::Bar;
-use sail_capital::trade::quality::{GAP_RATIO, gaps, usable};
+use sail_capital::trade::quality::{gaps, usable};
 
 fn bars(closes: &[f64]) -> Vec<Bar> {
     let start = NaiveDate::from_ymd_opt(2026, 1, 5).expect("a date");
@@ -23,7 +23,6 @@ fn bars(closes: &[f64]) -> Vec<Bar> {
 fn ordinary_moves_are_not_flagged() {
     let series = bars(&[100.0, 103.0, 98.0, 120.0, 90.0]);
     // 120/98 = 1.22 and 120/90 = 1.33 both stay under 1.4.
-    assert!(GAP_RATIO > 1.34);
     assert!(gaps(&series).is_empty());
     assert!(usable(&series));
 }

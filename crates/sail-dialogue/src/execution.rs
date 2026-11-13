@@ -393,7 +393,7 @@ impl Tool for Canvas {
 #[cfg(test)]
 pub(crate) const OWNER_GATED_TOOLS: [&str; 1] = ["escalate:reasoning"];
 
-pub(crate) const MODEL_TOOL_ORDER: [&str; 41] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 42] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -421,6 +421,7 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 41] = [
     "capital:today",
     "capital:portfolio",
     "capital:signals",
+    "capital:health",
     "capital:check",
     "capital:search",
     "capital:watchlist",
@@ -852,7 +853,7 @@ pub fn registry() -> Arc<ToolRegistry> {
             "Optional account id or name; defaults to the primary account",
         )
     };
-    let capital_tools: [KernelTool; 13] = [
+    let capital_tools: [KernelTool; 14] = [
         (
             "capital:overview",
             "Start here for questions about the owner's investments, portfolio, stocks, ETFs, funds, trades, signals, market positions, dividends, risk, or what to buy or sell. Returns account value, cash, largest positions, today's stance and top suggestions, the latest verified signals and candidate ideas, watchlist size and risk per trade. Read-only.",
@@ -880,6 +881,14 @@ pub fn registry() -> Arc<ToolRegistry> {
         (
             "capital:signals",
             "The latest verified trade signals: run date and session, published cards with symbol, side, setup, entry zone, stop, targets, size and why; candidate cards (tier 'candidate': the setup made money after costs in both the selection years and the last two years but isn't yet clear of luck, so always call them unproven ideas, never verified signals); the full six-setup scoreboard; and setups that fired but were suppressed; plus the per-stock signal board: for every holding and watchlist stock or ETF, a read (favoured, disfavoured, mixed), whether it rests on validated signals, each price signal's reading and percentile, and the 3-month outlook (median, 5-95% range, chance up); plus the live record of past reads (how often each kind of read beat the board, and how well the outlook was calibrated). Use for 'any signals?', 'what should I trade?', 'is there a buy or sell setup?', 'what do the signals say about X?', 'which of my stocks look weak?'. Read-only.",
+            json!({"account": capital_account()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:health",
+            "Whether the data behind the trade signals is sound and fresh: the latest run, its timing and cache hits, the last failure, and the watchlist or held instruments with stale, short, missing or split-looking prices, plus the opt-in research-universe coverage. Use for 'are the signals healthy?', 'is my data up to date?', 'why is an instrument left out?'. Read-only.",
             json!({"account": capital_account()}),
             &[],
             ToolEffect::ReadOnly,

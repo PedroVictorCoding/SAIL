@@ -14,7 +14,7 @@ pub const RUN_AT_UTC: (u32, u32) = (22, 30);
 const EARNINGS_MAX_AGE_DAYS: i64 = 7;
 
 /// Fewest bars with open/high/low before an instrument joins the universe.
-const MIN_OHL_BARS: usize = 300;
+pub(super) const MIN_OHL_BARS: usize = 300;
 
 /// `GET /signals/trade`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -780,6 +780,7 @@ impl CapitalService {
         stock_yahoo.sort();
         stock_yahoo.dedup();
         self.refresh_earnings(&stock_yahoo).await?;
+        self.refresh_research(Utc::now()).await;
 
         let now = Utc::now();
         let mut universe = self.held_universe(account, now)?;

@@ -620,20 +620,25 @@ commodities).
 **Who publishes.** Every past firing over about eight years is replayed as a trade, and
 trades are pooled per group (FX; stocks and ETFs; indices and commodities). A setup and
 side publish only with:
-- at least 100 trades;
-- a **lower 95% bound of expectancy above 0R after costs**, with the standard error
-  widened for autocorrelated trades;
-- a positive mean in a separately judged **two-year holdout**;
-- the bound also clears zero after a Bonferroni correction for the 36 setup, side and
-  group tests.
+- a **one-sided p-value** from the selection expectancy, with the standard error widened
+  for autocorrelated trades, surviving Benjamini–Hochberg at q = 0.10 across all 36
+  setup, side and group tests;
+- a **pooled lower 95% bound above 0R after costs**, using partial pooling
+  (DerSimonian–Laird) across the group's 12 cells and then the live trades;
+- a positive mean in the selected out-of-sample folds of a **purged, embargoed
+  walk-forward**: four 12-month folds, a 10-day embargo, at least 20 selected
+  out-of-sample trades and a positive mean.
 
-Cards are ranked by that lower bound, at most eight a day and one per instrument. Stocks
-whose earnings fall inside the trade window are dropped.
+The evidence view keeps the older two-year holdout beside the selection window for
+display, but it does not select. Cards are ranked by the pooled lower bound, at most
+eight a day and one per instrument. Stocks whose earnings fall inside the trade window
+are dropped.
 
 **Candidates.** That bar is strict, and on the owner's data it often leaves the page
-empty. A setup and side that made money after costs in the selection years *and* in the
-holdout (at least 40 and 10 trades) is a **candidate**. When it fires, the page shows
-the same card (entry, stop, three targets) under **Candidates**:
+empty. A setup and side that is not verified, has at least 40 selection trades, a
+positive pooled mean, and at least 10 out-of-sample trades over all folds with a
+positive mean is a **candidate**. When it fires, the page shows the same card (entry,
+stop, three targets) under **Candidates**:
 - each card is tagged *Candidate · unproven*;
 - it is sized at half the owner's risk per trade;
 - its record line says why it isn't verified yet.
@@ -659,6 +664,21 @@ on, plus **Run now** on the page. A run fetches prices for the holdings and the
 watchlist, refreshes earnings weekly, publishes and grades. Risk per trade is a limit
 (draft 0.5% of the account lost at the stop).
 
+**Data health.** `GET /signals/trade/health` reports, for every watchlist and held
+instrument, the latest session, weekdays since it, bars with open/high/low, whether there
+are enough to replay, any likely unadjusted split, whether an earnings date is known,
+and whether the last fetch failed. The latest run's timing and cache counts, any run
+error, and the research coverage are reported beside it. A one-day open or close move
+above 1.4× is flagged; within 3% of a common split ratio it is named and the instrument
+is left out of the evidence. Weekdays are calendar weekdays, not exchange sessions.
+
+**Research universe (opt-in).** `SAIL_TRADE_RESEARCH=sp500,stoxx50` adds current index
+members to the evidence, tagged evidence-only with their membership dates, so they never
+get cards. Membership is refreshed weekly from the public Wikipedia index pages; prices
+are stored under `research:` keys and fetched in a bounded batch per run. Wikipedia lists
+current members only, so former members are absent and the health panel says how much
+survivorship coverage is missing.
+
 ## The track record
 
 Each evaluation used to speak its own language: CRPS skill and calibration for baselines,
@@ -677,7 +697,7 @@ standing:
 | Baseline forecast (not "no change", the benchmark) | ≥ 100 forecasts, calibrated, CRPS skill > 0 | < 100 forecasts |
 | Signal | It kept weight in the combination | Fewer cross-sections than `signals::MIN_ORIGINS` |
 | Holding outlook | ≥ 24 replays, skill > 0, 90% band within 0.80–1.00 | < 24 replays |
-| Trade setup | It publishes (selection lower bound > 0 and holdout mean > 0) | Fewer trades than `trade::MIN_TRADES` |
+| Trade setup | It publishes (FDR pass, pooled lower bound > 0, positive purged out-of-sample folds) | Too little selection or walk-forward evidence |
 | Published signals (live) | ≥ 20 closed and mean R > 0 | < 20 closed |
 
 Each row gets a plain name and one sentence with the number that decided it. The rows
@@ -696,7 +716,8 @@ search and check it.
 | `capital:overview` | Value, cash, top positions, stance, top suggestions, latest signals and risk |
 | `capital:today` | Stance, active suggestions with reasons and evidence, and sized changes |
 | `capital:portfolio` | Every position, cash, allocation, concentration, return, income and warnings |
-| `capital:signals` | Published cards, the six-by-two scoreboard, suppressed firings, and the per-stock signal board (read, readings, 3-month outlook, setup) |
+| `capital:signals` | Published cards, the six-by-two scoreboard with judgement, suppressed firings, and the per-stock signal board (read, readings, 3-month outlook, setup) |
+| `capital:health` | Run health, stale or short prices, likely splits and research-universe coverage |
 | `capital:check` | One-off check of any Yahoo asset against the latest scoreboard |
 | `capital:search` | Yahoo symbol and name search for assets outside the universe |
 | `capital:watchlist` | The daily signal universe and its symbol mappings |
@@ -754,6 +775,7 @@ scoreboard.
 | `POST /signals/trade/run?account=` | Fetches prices and earnings, computes, publishes and grades now |
 | `GET /signals/trade/record?account=` | Every published card with its grade, and totals |
 | `GET /signals/trade/guards?account=` | Trailing stops and trend for each holding |
+| `GET /signals/trade/health?account=` | Run health, per-instrument price freshness and quality, and research coverage |
 | `GET /universe/watchlist` / `POST /universe/watchlist` | The watchlist, and a change: `{"op": "add", "item": {...}}` or `{"op": "remove", "symbol": "..."}` |
 | `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&top_n=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting, per-holding inputs and notes; allocation is `proportional`, `same_holding`, `top_value`, `equal_weight`, `top_yield` or `underweight` |
 | `POST /dividends/refresh?account=` | Fetches per-share payout histories for the holdings |
