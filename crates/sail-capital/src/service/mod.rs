@@ -102,6 +102,8 @@ pub struct CapitalService {
     signals_cache: std::sync::Mutex<Option<(String, crate::signals::SignalReport)>>,
     /// The signal board, cached like the signal report plus the trade run and the day.
     board_cache: std::sync::Mutex<Option<(String, crate::board::SignalBoard)>>,
+    /// The board's graded record, cached until the reads or prices change.
+    board_record_cache: std::sync::Mutex<Option<(String, crate::board_record::BoardRecord)>>,
 }
 
 /// The daemon's Capital service, set once when Dialogue mounts the owner API.
@@ -214,6 +216,7 @@ impl CapitalService {
             evaluation_cache: std::sync::Mutex::new(None),
             signals_cache: std::sync::Mutex::new(None),
             board_cache: std::sync::Mutex::new(None),
+            board_record_cache: std::sync::Mutex::new(None),
         })
     }
 
