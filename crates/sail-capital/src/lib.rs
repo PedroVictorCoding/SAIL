@@ -21,6 +21,7 @@ pub mod models;
 pub mod optimize;
 pub mod outlook;
 pub mod policy;
+pub mod prediction;
 pub mod scorecard;
 pub mod sec;
 pub mod service;

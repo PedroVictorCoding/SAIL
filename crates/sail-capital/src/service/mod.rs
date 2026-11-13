@@ -71,6 +71,7 @@ pub enum ServiceError {
 /// The Capital service: one store, used through the importers, the ledger and the
 /// research sources.
 pub struct CapitalService {
+    prediction: Arc<crate::prediction::Engine>,
     store: std::sync::Arc<CapitalStore>,
     edgar: std::sync::Arc<dyn EdgarApi>,
     sec_configured: bool,
@@ -140,6 +141,11 @@ pub fn default_dir() -> PathBuf {
 }
 
 impl CapitalService {
+    /// Stock forecast job runner, shared by authenticated HTTP requests.
+    pub fn prediction(&self) -> Arc<crate::prediction::Engine> {
+        self.prediction.clone()
+    }
+
     /// `$SAIL_SEC_USER_AGENT`).
     pub fn open(dir: &Path) -> Result<Self, ServiceError> {
         let client = crate::sec::EdgarClient::from_env();
@@ -190,6 +196,7 @@ impl CapitalService {
         sec_configured: bool,
     ) -> Result<Self, ServiceError> {
         Ok(Self {
+            prediction: Arc::new(crate::prediction::Engine::new(dir.join("predictions"))),
             store: std::sync::Arc::new(CapitalStore::open(dir)?),
             edgar,
             sec_configured,

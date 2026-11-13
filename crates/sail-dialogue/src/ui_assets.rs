@@ -80,6 +80,8 @@ assets![
     ("/capital-portfolio.js", "web/capital-portfolio.js", JS),
     ("/capital-income.js", "web/capital-income.js", JS),
     ("/capital-outlook.js", "web/capital-outlook.js", JS),
+    ("/capital-prediction.js", "web/capital-prediction.js", JS),
+    ("/capital-prediction.css", "web/capital-prediction.css", CSS),
     ("/capital-record.js", "web/capital-record.js", JS),
     ("/capital-signals.js", "web/capital-signals.js", JS),
     ("/capital-settings.js", "web/capital-settings.js", JS),

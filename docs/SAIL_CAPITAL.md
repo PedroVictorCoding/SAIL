@@ -826,3 +826,10 @@ Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capit
   dossiers built from research proposals.
 - The XTB browser companion (CAP-27), which waits on a review of XTB's terms.
 - Multi-user or public use.
+
+## Standalone stock forecast
+
+The **Stock forecast** research tab provides the TimesFM 2.5 ticker/interval/horizon
+workflow with Rust-owned data handling and durable jobs, and an optional local
+tensor worker. It stays separate from the baseline scorecard and Outlook blend.
+See [setup, behavior and limitations](CAPITAL_STOCK_FORECAST.md).
