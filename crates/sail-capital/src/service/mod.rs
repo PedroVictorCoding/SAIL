@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 mod board;
+mod board_record;
 mod dividends_run;
 use grants::grant_record;
 mod grants;
