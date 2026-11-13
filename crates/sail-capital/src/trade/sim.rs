@@ -9,12 +9,47 @@ use super::{Bar, Costs, Exit, HoldingGuard, Instrument, SetupId, Side, SignalCar
 const ENTRY_ZONE_ATR: f64 = 0.25;
 
 pub(super) fn replay(instrument: &Instrument, costs: Costs) -> Vec<Trade> {
+    replay_since(instrument, costs, None)
+}
+
+pub(super) fn replay_from(instrument: &Instrument, costs: Costs, from: NaiveDate) -> Vec<Trade> {
+    replay_since(instrument, costs, Some(from))
+}
+
+/// Bars before `from` a setup needs to warm up its indicators.
+fn lookback(setup: SetupId) -> usize {
+    match setup {
+        SetupId::TrendPullback => 200,
+        SetupId::SqueezeBreakout => 80,
+        SetupId::Donchian55 => 200,
+        SetupId::BollingerReversion => 200,
+        SetupId::InsideBarBreak => 20,
+        SetupId::ThreeDayReversal => 200,
+    }
+}
+
+fn replay_since(instrument: &Instrument, costs: Costs, from: Option<NaiveDate>) -> Vec<Trade> {
     let bars = &instrument.bars;
     let atr = atr(bars, 14);
+    let from_index = from.map(|from| bars.partition_point(|bar| bar.session < from));
     let mut trades = Vec::new();
     for setup in SetupId::ALL {
-        let firings = fire(setup, bars);
+        let firings = match (from, from_index) {
+            (Some(_), Some(index)) => {
+                let start = index.saturating_sub(lookback(setup));
+                fire(setup, &bars[start..])
+                    .into_iter()
+                    .map(|(at, side)| (at + start, side))
+                    .collect()
+            }
+            _ => fire(setup, bars),
+        };
         for (index, side) in firings {
+            if let Some(from) = from
+                && bars[index].session < from
+            {
+                continue;
+            }
             let Some(entry_index) = index.checked_add(1) else {
                 continue;
             };

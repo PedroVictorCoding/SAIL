@@ -23,31 +23,83 @@
 //! Pure: no I/O, no clock.
 
 use chrono::NaiveDate;
+use sha2::{Digest, Sha256};
 
-use super::{Bar, Costs, Trade};
+use super::{Bar, Costs, SetupId, Trade};
 
 /// Kilo, round 19.
 pub fn cut_session(bars: &[Bar]) -> Option<NaiveDate> {
-    let _ = bars;
-    None
+    let index = bars.len().checked_sub(super::REPLAY_SAFE_SESSIONS + 1)?;
+    bars.get(index).map(|bar| bar.session)
 }
 
 /// Kilo, round 19.
 pub fn prefix_hash(bars: &[Bar], cut: NaiveDate) -> String {
-    let _ = (bars, cut);
-    String::new()
+    let mut hasher = Sha256::new();
+    for bar in bars.iter().take_while(|bar| bar.session < cut) {
+        hasher.update(
+            format!(
+                "{}|{:016x}|{:016x}|{:016x}|{:016x}\n",
+                bar.session,
+                bar.open.to_bits(),
+                bar.high.to_bits(),
+                bar.low.to_bits(),
+                bar.close.to_bits()
+            )
+            .as_bytes(),
+        );
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// Kilo, round 19.
 pub fn costs_tag(costs: Costs) -> String {
-    let _ = costs;
-    String::new()
+    format!(
+        "{:016x}:{:016x}:{:016x}",
+        costs.round_trip.to_bits(),
+        costs.fx_conversion.to_bits(),
+        costs.cfd_daily_financing.to_bits()
+    )
 }
 
 /// Kilo, round 19.
-pub fn merge(cached: Vec<Trade>, fresh: Vec<Trade>, cut: NaiveDate) -> Vec<Trade> {
-    let _ = cut;
-    let mut out = cached;
-    out.extend(fresh);
+pub fn merge(cached: Vec<Trade>, fresh: Vec<Trade>, _cut: NaiveDate) -> Vec<Trade> {
+    let mut left = cached.into_iter().peekable();
+    let mut right = fresh.into_iter().peekable();
+    let mut out = Vec::with_capacity(left.len() + right.len());
+    loop {
+        let take_left = match (left.peek(), right.peek()) {
+            (Some(left), Some(right)) => order(left) <= order(right),
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => break,
+        };
+        if take_left {
+            if let Some(trade) = left.next() {
+                out.push(trade);
+            }
+        } else if let Some(trade) = right.next() {
+            out.push(trade);
+        }
+    }
     out
+}
+
+fn order(trade: &Trade) -> (usize, NaiveDate) {
+    (setup_rank(trade.setup), trade.signal_session)
+}
+
+fn setup_rank(setup: SetupId) -> usize {
+    match setup {
+        SetupId::TrendPullback => 0,
+        SetupId::SqueezeBreakout => 1,
+        SetupId::Donchian55 => 2,
+        SetupId::BollingerReversion => 3,
+        SetupId::InsideBarBreak => 4,
+        SetupId::ThreeDayReversal => 5,
+    }
 }

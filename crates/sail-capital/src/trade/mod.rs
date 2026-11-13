@@ -539,10 +539,7 @@ pub fn replay(instrument: &Instrument, costs: Costs) -> Vec<Trade> {
 /// [`REPLAY_SAFE_SESSIONS`] sessions before the past replay's last bar. Kilo, round 19:
 /// until then this filters a full replay (correct, not faster).
 pub fn replay_from(instrument: &Instrument, costs: Costs, from: NaiveDate) -> Vec<Trade> {
-    sim::replay(instrument, costs)
-        .into_iter()
-        .filter(|trade| trade.signal_session >= from)
-        .collect()
+    sim::replay_from(instrument, costs, from)
 }
 
 /// Sessions before a replay's last bar from which [`replay_from`] must restart: longer than
