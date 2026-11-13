@@ -685,10 +685,10 @@
       </header>
 
       <details class="cp-more" id="cpScoreboardMore">
-        <summary>Trade setups: replay with a holdout <span class="cp-more-count" id="cpScoreboardCount"></span></summary>
+        <summary>Trade setups: how each earns its place <span class="cp-more-count" id="cpScoreboardCount"></span></summary>
         <div class="cp-table-wrap">
           <table class="cp-table" id="cpScoreboardTable">
-            <thead>
+            <thead id="cpScoreboardHead">
               <tr>
                 <th scope="col">Setup</th>
                 <th scope="col">Side</th>
@@ -705,6 +705,10 @@
             </tbody>
           </table>
         </div>
+        <details class="cp-more" id="cpScoreboardExplainMore">
+          <summary>How a setup earns its place</summary>
+          <p class="cp-note">All 36 setup, side, and asset-group combinations are tested together while controlling the false-discovery rate so lucky spikes do not slip through. Each setup is then pooled with the rest of its asset group, pulling thin samples back toward the group average. We check how the rule would have held up out of sample across four rolling test years, without peeking ahead. Closed live trades update that pooled estimate as real fills arrive. A setup only becomes Verified when it clears the false-discovery test, stays positive after pooling and live updates, and holds up out of sample; promising setups that fall short on one check are marked Candidate · unproven.</p>
+        </details>
       </details>
 
       <details class="cp-more" id="cpRecordMore">
@@ -935,6 +939,26 @@
         <p>Price fetching is off. Turning it on sends ticker symbols you hold to Yahoo Finance through yfinance. To enable, set <code>SAIL_PRICES_SOURCE=yfinance</code>, or upload a CSV file privately.</p>
       </div>
       <div class="cp-unmapped-note" id="cpDataPriceUnmappedNote" hidden></div>
+    </section>
+
+    <section class="cp-panel" id="cpHealthPanel" aria-labelledby="cpHealthTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpHealthTitle">Data health</h2>
+          <span class="cp-sub-notice" id="cpHealthMeta">Loading data health…</span>
+        </div>
+        <div class="cp-panel-actions">
+          <button class="cp-button" id="cpHealthRefreshBtn" type="button">Refresh</button>
+        </div>
+      </header>
+      <p class="cp-note cp-word-bad" id="cpHealthError" hidden></p>
+      <div id="cpHealthProblems"></div>
+      <p class="cp-note" id="cpHealthResearch" hidden></p>
+      <details class="cp-more" id="cpHealthAllMore" hidden>
+        <summary>All instruments <span class="cp-more-count" id="cpHealthAllCount"></span></summary>
+        <ul class="cp-rows" id="cpHealthAllList"></ul>
+      </details>
+      <div id="cpHealthNotes"></div>
     </section>
 
     <section class="cp-panel" id="cpModelsPanel" aria-labelledby="cpModelsTitle">

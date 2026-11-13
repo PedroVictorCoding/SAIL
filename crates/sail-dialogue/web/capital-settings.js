@@ -638,15 +638,163 @@ function setupWatchlistControls() {
   });
 }
 
+function isProblemInstrument(inst) {
+  return Boolean(
+    inst.fetch_failed
+      || inst.excluded
+      || Number(inst.stale_weekdays || 0) > 2
+      || !inst.enough_bars
+      || inst.earnings_known === false
+  );
+}
+
+function describeInstrumentProblems(inst) {
+  const reasons = [];
+  if (inst.fetch_failed) reasons.push("Last price fetch failed");
+  if (inst.excluded) {
+    const splitGap = (inst.gaps || []).find((g) => Array.isArray(g.likely_split) && g.likely_split.length === 2);
+    if (splitGap) {
+      const [n, o] = splitGap.likely_split;
+      reasons.push(`Left out: a ${n}-for-${o} jump on ${formatDay(splitGap.session)} looks like an unadjusted split`);
+    } else {
+      reasons.push("Left out: likely unadjusted split");
+    }
+  }
+  const stale = Number(inst.stale_weekdays || 0);
+  if (stale > 2) reasons.push(`Prices ${stale} weekdays old`);
+  if (!inst.enough_bars) reasons.push(`Not enough bars (${inst.bars || 0})`);
+  if (inst.earnings_known === false) reasons.push("Next earnings date unknown");
+  return reasons;
+}
+
+async function loadTradeHealth() {
+  const meta = document.getElementById("cpHealthMeta");
+  const errorEl = document.getElementById("cpHealthError");
+  const problemsEl = document.getElementById("cpHealthProblems");
+  const researchEl = document.getElementById("cpHealthResearch");
+  const allMore = document.getElementById("cpHealthAllMore");
+  const allCount = document.getElementById("cpHealthAllCount");
+  const allList = document.getElementById("cpHealthAllList");
+  const notesEl = document.getElementById("cpHealthNotes");
+  if (!problemsEl) return;
+
+  try {
+    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+    const health = await fetchJson(`/api/capital/signals/trade/health${query}`);
+
+    if (meta) {
+      if (!health.run_at && !health.run_stats) {
+        meta.textContent = "No signal run recorded yet.";
+      } else {
+        const parts = [health.run_at ? `Last run ${formatDate(health.run_at)}` : "Last run: —"];
+        if (health.run_stats) {
+          const rs = health.run_stats;
+          parts.push(`took ${(Number(rs.run_ms || 0) / 1000).toFixed(1)} s`);
+          parts.push(`replayed ${rs.replay_cache_misses || 0}, reused ${rs.replay_cache_hits || 0} from cache`);
+        }
+        meta.textContent = parts.join(" · ");
+      }
+    }
+
+    if (errorEl) {
+      if (health.last_error) {
+        errorEl.hidden = false;
+        errorEl.textContent = `Last run failed: ${health.last_error}`;
+      } else {
+        errorEl.hidden = true;
+        errorEl.textContent = "";
+      }
+    }
+
+    const instruments = Array.isArray(health.instruments) ? health.instruments : [];
+    const problems = instruments.filter(isProblemInstrument);
+    if (instruments.length === 0) {
+      problemsEl.innerHTML = `<p class="cp-empty">No instruments tracked yet.</p>`;
+    } else if (problems.length === 0) {
+      problemsEl.innerHTML = `<p class="cp-empty">All ${instruments.length} instruments have fresh, usable prices.</p>`;
+    } else {
+      problemsEl.innerHTML = `<ul class="cp-rows">${problems.map((inst) => {
+        const severe = inst.excluded || inst.fetch_failed;
+        const badgeClass = severe ? "cp-word-bad" : "cp-word-warn";
+        const badgeText = inst.excluded ? "Left out" : inst.fetch_failed ? "Fetch failed" : "Attention";
+        return `<li class="cp-row">
+            <span class="cp-row-title">${escapeHtml(inst.symbol || inst.key || "—")}</span>
+            <span class="cp-row-value ${badgeClass}">${badgeText}</span>
+            <span class="cp-row-meta">${escapeHtml(describeInstrumentProblems(inst).join(" · "))}</span>
+          </li>`;
+      }).join("")}</ul>`;
+    }
+
+    if (researchEl) {
+      if (health.research) {
+        const r = health.research;
+        researchEl.hidden = false;
+        researchEl.textContent = `S&P 500 and Euro Stoxx 50: ${r.with_prices || 0} of ${r.members || 0} members have prices; ${r.former_with_prices || 0} of ${r.former || 0} former members (fewer former members means some survivorship bias remains).`;
+      } else {
+        researchEl.hidden = true;
+        researchEl.textContent = "";
+      }
+    }
+
+    if (allMore && allList) {
+      allMore.hidden = instruments.length === 0;
+      if (allCount) allCount.textContent = instruments.length ? `· ${instruments.length}` : "";
+      allList.innerHTML = instruments.map((inst) => {
+        const problem = isProblemInstrument(inst);
+        const severe = inst.excluded || inst.fetch_failed;
+        const statusClass = severe ? "cp-word-bad" : problem ? "cp-word-warn" : "cp-word-good";
+        const statusText = inst.excluded ? "Left out" : inst.fetch_failed ? "Fetch failed" : problem ? "Attention" : "Usable";
+        const stale = Number(inst.stale_weekdays || 0);
+        const staleText = stale === 0 ? "fresh" : `${stale} weekday${stale === 1 ? "" : "s"} old`;
+        const metaParts = [
+          `${inst.bars || 0} bars`,
+          `last ${inst.last_session ? formatDay(inst.last_session) : "—"}`,
+          staleText,
+        ];
+        if (problem) metaParts.push(...describeInstrumentProblems(inst));
+        return `<li class="cp-row">
+            <span class="cp-row-title">${escapeHtml(inst.symbol || inst.key || "—")}</span>
+            <span class="cp-row-value ${statusClass}">${statusText}</span>
+            <span class="cp-row-meta">${escapeHtml(metaParts.join(" · "))}</span>
+          </li>`;
+      }).join("");
+    }
+
+    if (notesEl) {
+      const uniqueNotes = Array.from(new Set((health.notes || []).filter(Boolean)));
+      notesEl.innerHTML = uniqueNotes.map((n) => `<p class="cp-note">${escapeHtml(n)}</p>`).join("");
+    }
+  } catch (err) {
+    if (meta) meta.textContent = "Data health unavailable";
+    problemsEl.innerHTML = `<p class="cp-empty cp-word-bad">Failed to load data health: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function setupHealthControls() {
+  const btn = document.getElementById("cpHealthRefreshBtn");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "Refreshing…";
+    try {
+      await loadTradeHealth();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Refresh";
+    }
+  });
+}
+
 registerTab("settings", {
   setup() {
     setupPolicyControls();
     setupWatchlistControls();
     setupPriceControls();
+    setupHealthControls();
     setupPriceFileDialog();
     setupUploadButton();
     setupModelsControls();
   },
   load: () =>
-    Promise.all([loadPolicy(), loadWatchlist(), loadPriceStatus(), loadModelsStatus(), loadSyncStatus()]),
+    Promise.all([loadPolicy(), loadWatchlist(), loadPriceStatus(), loadTradeHealth(), loadModelsStatus(), loadSyncStatus()]),
 });

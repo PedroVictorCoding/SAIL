@@ -59,3 +59,8 @@
   grid-column: 1 / -1;
   margin-top: 6px;
 }
+
+#cpHealthProblems .cp-empty {
+  padding: 12px 20px;
+  text-align: left;
+}
