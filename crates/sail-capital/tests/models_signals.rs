@@ -168,6 +168,12 @@ async fn a_refresh_stores_new_values_once_and_feeds_the_signal_report() {
         .unwrap();
     let account = batch.account;
     svc.refresh_prices(Some(&account)).await.unwrap();
+    // A watchlist ETF with stored prices is in the signal universe too.
+    let spy = sail_capital::service::watch_key("SPY.US");
+    let store = sail_capital::store::CapitalStore::open(dir.path()).unwrap();
+    store
+        .record_prices(&spy, &LongPrices.daily("SPY").await.unwrap(), Utc::now())
+        .unwrap();
 
     let status = svc.refresh_model_signals(&account).await.unwrap();
     let c = status
@@ -209,6 +215,39 @@ async fn a_refresh_stores_new_values_once_and_feeds_the_signal_report() {
     // The stored values flow into the signal report without error (its scoring is
     // tested with Kilo's slice).
     svc.signals(&account).unwrap();
+
+    // The helper ran over the watchlist ETF as well, and its latest value is a reading
+    // on the board for holdings and the watchlist alike.
+    let board = svc.signal_board(&account).unwrap();
+    let with_model: Vec<&str> = board
+        .rows
+        .iter()
+        .filter(|r| {
+            r.readings
+                .iter()
+                .any(|x| x.signal == SignalId::FoundationForecast)
+        })
+        .map(|r| r.meta.symbol.as_str())
+        .collect();
+    assert!(with_model.contains(&"SPY.US"), "{with_model:?}");
+    assert!(
+        board
+            .rows
+            .iter()
+            .any(|r| r.meta.held && with_model.contains(&r.meta.symbol.as_str())),
+        "{with_model:?}"
+    );
+    let spy_row = board
+        .rows
+        .iter()
+        .find(|r| r.meta.symbol == "SPY.US")
+        .unwrap();
+    let reading = spy_row
+        .readings
+        .iter()
+        .find(|x| x.signal == SignalId::FoundationForecast)
+        .unwrap();
+    assert!(reading.text.starts_with("Chronos's median forecast"));
 }
 
 #[tokio::test]

@@ -463,6 +463,14 @@ through the same out-of-sample IC check as the price signals before it gets any 
 | `yolo_trend` | `foduucom/stockmarket-future-prediction` | Up/Down regions at the right edge of the same chart | not stated; personal use only | 2023-11-01 |
 | `chronos` | `amazon/chronos-bolt-small` | Median 60-session return | Apache-2.0 | 2024-12-01 |
 
+The helpers run over the whole signal universe (holdings plus the watchlist's stocks
+and ETFs), not only the holdings, so their values can be ranked and tested like the
+price signals. Each model's latest value, when at most 10 days older than the
+instrument's last close, is also a **reading** on the signal board: plain text and a
+percentile, counted in the read like the price signals. The first refresh after this
+change scores the watchlist's back history and takes longer; later runs add only new
+weeks.
+
 The "scored from" dates come after each model's weights were published. A pretrained
 model may have seen earlier prices, and scoring it on them would flatter it.
 

@@ -14,8 +14,8 @@
 //! - `chronos`: Chronos-Bolt quantile path, from a Python helper. Only up to 64 steps.
 //! - `gbdt`: gradient-boosted quantile regression (scikit-learn
 //!   `HistGradientBoostingRegressor`, `loss="quantile"`), from a Python helper. It is
-//!   trained only on rows whose outcome was known by the origin, pooled over held
-//!   instruments, with features from past prices: returns over 5/21/63/126/252 sessions,
+//!   trained only on rows whose outcome was known by the origin, pooled over the signal
+//!   universe (holdings plus the watchlist's stocks and ETFs), with features from past prices: returns over 5/21/63/126/252 sessions,
 //!   21- and 63-session volatility, distance from the 50/200 averages, drawdown from the
 //!   252 high, and RSI(14).
 //!
