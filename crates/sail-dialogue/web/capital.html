@@ -102,77 +102,50 @@
   </div>
 
   <div class="cp-tab-pane" id="cpPanel-portfolio" role="tabpanel" aria-labelledby="cpTab-portfolio" hidden>
-    <section class="cp-reconciliation" id="cpReconciliation" aria-labelledby="cpReconTitle" hidden>
-      <div class="cp-recon-header">
-        <h2 id="cpReconTitle">Reconciliation</h2>
-        <span class="cp-recon-badge" id="cpReconBadge">Unverified</span>
-      </div>
-      <p class="cp-recon-summary" id="cpReconSummary"></p>
+    <section class="cp-panel" id="cpReconciliation" aria-labelledby="cpReconTitle" hidden>
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpReconTitle">Reconciliation</h2>
+          <span class="cp-sub-notice" id="cpReconSummary"></span>
+        </div>
+      </header>
       <div class="cp-variances" id="cpVariances" hidden>
-        <h3>Variances</h3>
-        <ul class="cp-var-list" id="cpVariancesList"></ul>
+        <ul class="cp-rows" id="cpVariancesList"></ul>
       </div>
       <div class="cp-grants" id="cpGrants" hidden>
-        <h3>Received Shares (Grants)</h3>
-        <ul class="cp-grants-list" id="cpGrantsList"></ul>
+        <h3 class="cp-section-subhead">Received shares</h3>
+        <ul class="cp-rows" id="cpGrantsList"></ul>
       </div>
     </section>
 
     <section class="cp-panel" id="cpPositionsPanel" aria-labelledby="cpPositionsTitle">
       <header class="cp-panel-head">
-        <h2 id="cpPositionsTitle">Owned Positions</h2>
+        <h2 id="cpPositionsTitle">Owned positions</h2>
       </header>
+      <p class="cp-note" id="cpReconMatchedNote" hidden></p>
       <div class="cp-table-wrap">
         <table class="cp-table" id="cpPositionsTable">
           <thead>
             <tr>
               <th scope="col">Instrument</th>
               <th scope="col" class="num">Quantity</th>
-              <th scope="col" class="num">Cost Basis</th>
-              <th scope="col" class="num">Broker Market Value</th>
+              <th scope="col" class="num">Cost basis</th>
+              <th scope="col" class="num">Market value</th>
+              <th scope="col" class="num">Trailing stop</th>
               <th scope="col">Lots</th>
             </tr>
           </thead>
           <tbody id="cpPositionsBody">
-            <tr><td colspan="5" class="cp-empty">No owned positions recorded.</td></tr>
+            <tr><td colspan="6" class="cp-empty">No owned positions recorded.</td></tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <section class="cp-panel cp-guards-panel" id="cpGuardsPanel" aria-labelledby="cpGuardsTitle">
+    <section class="cp-panel cp-cfd-panel" id="cpCfdPanel" aria-labelledby="cpCfdTitle" hidden>
       <header class="cp-panel-head">
         <div class="cp-title-group">
-          <h2 id="cpGuardsTitle">Holding Guards &amp; Trailing Stops</h2>
-          <span class="cp-sub-notice">Chandelier trailing stop (highest close − 3·ATR) and trend health</span>
-        </div>
-        <span class="cp-badge" id="cpGuardsBadge">Stops</span>
-      </header>
-      <div class="cp-table-wrap">
-        <table class="cp-table" id="cpGuardsTable">
-          <thead>
-            <tr>
-              <th scope="col">Instrument</th>
-              <th scope="col" class="num">Close</th>
-              <th scope="col" class="num">Trailing Stop</th>
-              <th scope="col" class="num">Distance</th>
-              <th scope="col">Status</th>
-              <th scope="col">Trend (200d)</th>
-              <th scope="col">Next Earnings</th>
-              <th scope="col">Active Signal</th>
-            </tr>
-          </thead>
-          <tbody id="cpGuardsBody">
-            <tr><td colspan="8" class="cp-empty">Loading holding guards…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="cp-panel cp-cfd-panel" id="cpCfdPanel" aria-labelledby="cpCfdTitle">
-      <header class="cp-panel-head">
-        <div class="cp-title-group">
-          <h2 id="cpCfdTitle">CFD Positions</h2>
+          <h2 id="cpCfdTitle">CFD positions</h2>
           <span class="cp-sub-notice">Leveraged contracts · not owned shares</span>
         </div>
       </header>
@@ -182,8 +155,8 @@
             <tr>
               <th scope="col">Contract</th>
               <th scope="col" class="num">Volume (Lots)</th>
-              <th scope="col" class="num">Cost Basis</th>
-              <th scope="col" class="num">Broker Market Value</th>
+              <th scope="col" class="num">Cost basis</th>
+              <th scope="col" class="num">Market value</th>
               <th scope="col">Lots</th>
             </tr>
           </thead>
@@ -194,30 +167,41 @@
       </div>
     </section>
 
+    <section class="cp-panel" id="cpAllocationPanel" aria-labelledby="cpAllocationTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpAllocationTitle">Allocation</h2>
+          <span class="cp-sub-notice" id="cpAllocationFreshness">Deterministic calculation from ledger</span>
+        </div>
+      </header>
+      <div class="cp-allocation-body" id="cpAllocationBody">
+        <p class="cp-empty">Import a report to see allocation details.</p>
+      </div>
+    </section>
+
     <section class="cp-panel" id="cpFilingsPanel" aria-labelledby="cpFilingsTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
-          <h2 id="cpFilingsTitle">SEC Filings &amp; Evidence</h2>
+          <h2 id="cpFilingsTitle">SEC filings</h2>
           <span class="cp-sub-notice" id="cpSecStatusMeta">Point-in-time public disclosures</span>
         </div>
         <div class="cp-panel-actions">
           <button class="cp-button" id="cpSecRefreshBtn" type="button" aria-label="Check SEC now">Check SEC now</button>
-          <span class="cp-badge" id="cpSecBadge">EDGAR</span>
         </div>
       </header>
 
-      <div class="cp-sec-note" id="cpSecNotConfiguredNote" hidden>
-        <p>SEC access isn't configured: set <code>SAIL_SEC_USER_AGENT</code> to <code>"&lt;name&gt; &lt;contact email&gt;"</code> to enable automatic filing checks.</p>
-      </div>
+      <p class="cp-note" id="cpSecNotConfiguredNote" hidden>
+        SEC access isn't configured: set <code>SAIL_SEC_USER_AGENT</code> to <code>"&lt;name&gt; &lt;contact email&gt;"</code> to enable automatic filing checks.
+      </p>
 
-      <div class="cp-filings-list" id="cpFilingsList">
+      <div id="cpFilingsList">
         <p class="cp-empty">No filings recorded for owned holdings.</p>
       </div>
 
-      <div class="cp-unmatched-wrap" id="cpUnmatchedWrap" hidden>
-        <h3 class="cp-unmatched-title">Holdings Not Covered by SEC</h3>
-        <ul class="cp-unmatched-list" id="cpUnmatchedList"></ul>
-      </div>
+      <details class="cp-more" id="cpUnmatchedWrap" hidden>
+        <summary>Show holdings not covered by SEC (<span id="cpUnmatchedCount">0</span>)</summary>
+        <ul class="cp-rows" id="cpUnmatchedList"></ul>
+      </details>
     </section>
   </div>
 
@@ -225,18 +209,13 @@
     <section class="cp-panel cp-projection-panel" id="cpProjectionPanel" aria-labelledby="cpProjectionTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
-          <h2 id="cpProjectionTitle">Dividend Projection</h2>
+          <h2 id="cpProjectionTitle">Dividend projection</h2>
           <span class="cp-sub-notice">Expected scaling with proportional, top-N, equal-weight, underweight or holding reinvestment</span>
         </div>
-        <div class="cp-actions-group">
-          <button type="button" class="cp-btn cp-btn-sm" id="cpProjRefreshBtn">Refresh payout history</button>
-          <span class="cp-badge" id="cpProjectionBadge">Projection</span>
+        <div class="cp-panel-actions">
+          <button type="button" class="cp-button cp-btn-sm" id="cpProjRefreshBtn">Refresh payout history</button>
         </div>
       </header>
-
-      <div class="cp-forecast-disclaimer">
-        <p>Projection from past payouts; dividends can be cut. Scenarios, not probabilities.</p>
-      </div>
 
       <div class="cp-proj-controls">
         <div class="cp-control-group">
@@ -278,22 +257,22 @@
 
       <div class="cp-proj-tiles" id="cpProjTiles">
         <div class="cp-proj-tile">
-          <span class="cp-proj-tile-label">Year 1 Net Income</span>
+          <span class="cp-proj-tile-label">Year 1 net income</span>
           <span class="cp-proj-tile-val" id="cpProjTileYear1Net">—</span>
           <span class="cp-proj-tile-sub">Base scenario</span>
         </div>
         <div class="cp-proj-tile">
-          <span class="cp-proj-tile-label" id="cpProjTileFinalNetLabel">Year 10 Net Income</span>
+          <span class="cp-proj-tile-label" id="cpProjTileFinalNetLabel">Year 10 net income</span>
           <span class="cp-proj-tile-val" id="cpProjTileFinalNet">—</span>
           <span class="cp-proj-tile-sub" id="cpProjTileFinalNetRange">Low — · High —</span>
         </div>
         <div class="cp-proj-tile">
-          <span class="cp-proj-tile-label">Total Reinvested</span>
+          <span class="cp-proj-tile-label">Total reinvested</span>
           <span class="cp-proj-tile-val" id="cpProjTileTotalReinvested">—</span>
           <span class="cp-proj-tile-sub" id="cpProjTileTotalReinvestedSub">Over projection period</span>
         </div>
         <div class="cp-proj-tile">
-          <span class="cp-proj-tile-label">Income Doubling</span>
+          <span class="cp-proj-tile-label">Income doubling</span>
           <span class="cp-proj-tile-val" id="cpProjTileDoubling">—</span>
           <span class="cp-proj-tile-sub" id="cpProjTileDoublingSub">Base scenario</span>
         </div>
@@ -303,70 +282,76 @@
         <p class="cp-empty" id="cpProjChartEmpty">Loading dividend projection chart...</p>
       </div>
 
-      <div class="cp-proj-section">
-        <div class="cp-proj-table-head">
-          <h3 class="cp-proj-subheading">Annual Projection Breakdown</h3>
-          <button type="button" class="cp-btn cp-btn-sm" id="cpProjToggleYearsBtn" hidden>Show all 10 years</button>
-        </div>
-        <div class="cp-table-wrap">
-          <table class="cp-table" id="cpProjYearsTable">
-            <thead>
-              <tr>
-                <th scope="col">Year</th>
-                <th scope="col" class="num">Gross</th>
-                <th scope="col" class="num">Withheld</th>
-                <th scope="col" class="num">PT Reserve</th>
-                <th scope="col" class="num">Net</th>
-                <th scope="col" class="num">Reinvested</th>
-                <th scope="col" class="num">Cash</th>
-                <th scope="col" class="num">Portfolio Value</th>
-                <th scope="col" class="num">Yield on Cost</th>
-              </tr>
-            </thead>
-            <tbody id="cpProjYearsBody">
-              <tr><td colspan="9" class="cp-empty">Loading projection...</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <p class="cp-note">Projection from past payouts; dividends can be cut. Scenarios, not probabilities.</p>
 
-      <div class="cp-proj-section">
-        <h3 class="cp-proj-subheading">Per-Holding Inputs &amp; Projections (Base Scenario)</h3>
-        <div class="cp-table-wrap">
-          <table class="cp-table" id="cpProjHoldingsTable">
-            <thead>
-              <tr>
-                <th scope="col">Symbol</th>
-                <th scope="col" class="num" title="Trailing 12 months, per share, in the listing's currency">TTM / share (listing ccy)</th>
-                <th scope="col" class="num">Growth Used</th>
-                <th scope="col">Withholding</th>
-                <th scope="col" class="num">Year 1 Net</th>
-                <th scope="col" class="num">Final Year Net</th>
-                <th scope="col" class="num">End Units</th>
-              </tr>
-            </thead>
-            <tbody id="cpProjHoldingsBody">
-              <tr><td colspan="7" class="cp-empty">No paying holdings.</td></tr>
-            </tbody>
-          </table>
+      <details class="cp-more" id="cpProjYearsDetails">
+        <summary>Show annual projection breakdown</summary>
+        <div class="cp-proj-section">
+          <div class="cp-proj-table-head">
+            <button type="button" class="cp-button cp-btn-sm" id="cpProjToggleYearsBtn" hidden>Show all 10 years</button>
+          </div>
+          <div class="cp-table-wrap">
+            <table class="cp-table" id="cpProjYearsTable">
+              <thead>
+                <tr>
+                  <th scope="col">Year</th>
+                  <th scope="col" class="num">Gross</th>
+                  <th scope="col" class="num">Withheld</th>
+                  <th scope="col" class="num">PT Reserve</th>
+                  <th scope="col" class="num">Net</th>
+                  <th scope="col" class="num">Reinvested</th>
+                  <th scope="col" class="num">Cash</th>
+                  <th scope="col" class="num">Portfolio value</th>
+                  <th scope="col" class="num">Yield on cost</th>
+                </tr>
+              </thead>
+              <tbody id="cpProjYearsBody">
+                <tr><td colspan="9" class="cp-empty">Loading projection...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div class="cp-proj-non-paying" id="cpProjNonPaying" hidden>
-          <span class="cp-proj-non-paying-title">Non-paying holdings:</span>
-          <span id="cpProjNonPayingList" class="cp-proj-non-paying-content"></span>
-        </div>
-      </div>
+      </details>
 
-      <div class="cp-proj-assumptions" id="cpProjAssumptions">
-        <h4 class="cp-proj-assumptions-title">Assumptions &amp; Notes</h4>
-        <p class="cp-proj-assumptions-core">Projection from past payouts; dividends can be cut. Scenarios, not probabilities.</p>
-        <ul class="cp-proj-notes-list" id="cpProjNotesList">
-        </ul>
-      </div>
+      <details class="cp-more" id="cpProjHoldingsDetails">
+        <summary>Show per-holding inputs and projections</summary>
+        <div class="cp-proj-section">
+          <div class="cp-table-wrap">
+            <table class="cp-table" id="cpProjHoldingsTable">
+              <thead>
+                <tr>
+                  <th scope="col">Symbol</th>
+                  <th scope="col" class="num" title="Trailing 12 months, per share, in the listing's currency">TTM / share (listing ccy)</th>
+                  <th scope="col" class="num">Growth used</th>
+                  <th scope="col">Withholding</th>
+                  <th scope="col" class="num">Year 1 net</th>
+                  <th scope="col" class="num">Final year net</th>
+                  <th scope="col" class="num">End units</th>
+                </tr>
+              </thead>
+              <tbody id="cpProjHoldingsBody">
+                <tr><td colspan="7" class="cp-empty">No paying holdings.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="cp-note" id="cpProjNonPaying" hidden>
+            Non-paying holdings: <span id="cpProjNonPayingList"></span>
+          </p>
+        </div>
+      </details>
+
+      <details class="cp-more" id="cpProjAssumptions">
+        <summary>Show assumptions and notes</summary>
+        <div class="cp-proj-assumptions">
+          <ul class="cp-proj-notes-list" id="cpProjNotesList">
+          </ul>
+        </div>
+      </details>
     </section>
 
     <section class="cp-panel" id="cpDividendsPanel" aria-labelledby="cpDividendsTitle">
       <header class="cp-panel-head">
-        <h2 id="cpDividendsTitle">Dividends &amp; Income</h2>
+        <h2 id="cpDividendsTitle">Dividends received</h2>
       </header>
       <div class="cp-table-wrap">
         <table class="cp-table" id="cpDividendsTable">
@@ -389,13 +374,12 @@
     <section class="cp-panel" id="cpInsightsPanel" aria-labelledby="cpInsightsTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
-          <h2 id="cpInsightsTitle">Income &amp; Allocation</h2>
+          <h2 id="cpInsightsTitle">Income summary</h2>
           <span class="cp-sub-notice" id="cpInsightsFreshness">Deterministic calculation from ledger</span>
         </div>
-        <span class="cp-badge" id="cpInsightsBadge">Portfolio</span>
       </header>
       <div class="cp-insights-body" id="cpInsightsBody">
-        <p class="cp-empty">Import a report to see income and allocation details.</p>
+        <p class="cp-empty">Import a report to see income details.</p>
       </div>
     </section>
   </div>
@@ -696,10 +680,9 @@
     <section class="cp-panel" id="cpLimitsSection" aria-labelledby="cpLimitsTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
-          <h2 id="cpLimitsTitle">Risk Limits Policy</h2>
-          <span class="cp-sub-notice">Proposals and ideas are checked and sized against these limits</span>
+          <h2 id="cpLimitsTitle">Risk limits policy</h2>
+          <span class="cp-sub-notice"><span id="cpPolicyStatusWord" class="cp-word-warn">Draft</span> · Proposals and ideas are checked and sized against these limits</span>
         </div>
-        <span class="cp-badge cp-badge-draft" id="cpPolicyBadge">Draft</span>
       </header>
 
       <form class="cp-limits-form" id="cpLimitsForm">
@@ -771,7 +754,7 @@
           <div class="cp-field">
             <label for="cpLimitRiskPerTrade">Risk per trade (%)</label>
             <input type="text" class="cp-input" id="cpLimitRiskPerTrade" required placeholder="0.5">
-            <span class="cp-field-hint">share of the account lost if a signal's stop is hit</span>
+            <span class="cp-field-hint">Share of the account lost if a signal's stop is hit</span>
           </div>
         </div>
 
@@ -783,91 +766,78 @@
         </div>
       </form>
 
-      <div class="cp-policy-history" id="cpPolicyHistory">
-        <h3 class="cp-history-title">Policy Version History</h3>
-        <ul class="cp-history-list" id="cpPolicyHistoryList">
+      <details class="cp-more" id="cpPolicyHistory">
+        <summary>Show policy version history</summary>
+        <ul class="cp-rows" id="cpPolicyHistoryList">
           <li class="cp-empty">No versions recorded yet.</li>
         </ul>
-      </div>
+      </details>
     </section>
 
     <section class="cp-panel" id="cpWatchlistPanel" aria-labelledby="cpWatchlistTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
-          <h2 id="cpWatchlistTitle">Signal Watchlist &amp; Universe</h2>
+          <h2 id="cpWatchlistTitle">Signal watchlist</h2>
           <span class="cp-sub-notice">Instruments evaluated daily for signals · starts from liquid defaults</span>
         </div>
-        <span class="cp-badge" id="cpWatchlistBadge">Universe</span>
       </header>
 
-      <div class="cp-watchlist-intro">
-        <p>The signal universe includes your holdings plus this watchlist of liquid instruments. Use <strong>Check another asset</strong> on Signals to look up anything else without adding it. Price fetching queries only these symbols through Yahoo Finance.</p>
+      <p class="cp-note">
+        The signal universe includes your holdings plus this watchlist of liquid instruments. Use <strong>Check another asset</strong> on Outlook to look up anything else without adding it. Price fetching queries only these symbols through Yahoo Finance.
+      </p>
+
+      <div id="cpWatchlistGroups">
+        <p class="cp-empty">Loading watchlist…</p>
       </div>
 
-      <div class="cp-table-wrap">
-        <table class="cp-table" id="cpWatchlistTable">
-          <thead>
-            <tr>
-              <th scope="col">Symbol</th>
-              <th scope="col">Yahoo</th>
-              <th scope="col">Class</th>
-              <th scope="col">Currency</th>
-              <th scope="col">Name</th>
-              <th scope="col" class="num">Action</th>
-            </tr>
-          </thead>
-          <tbody id="cpWatchlistBody">
-            <tr><td colspan="6" class="cp-empty">Loading watchlist…</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <form class="cp-watchlist-form" id="cpWatchlistAddForm">
-        <h3 class="cp-subheading">Add Watchlist Instrument</h3>
-        <div class="cp-form-error" id="cpWatchlistError" role="alert" hidden></div>
-        <div class="cp-field-grid">
-          <div class="cp-field">
-            <label for="cpWatchSymbol">XTB Symbol</label>
-            <input type="text" class="cp-input" id="cpWatchSymbol" required placeholder="e.g. EURAUD, NVDA.US">
-            <span class="cp-field-hint">Letters, digits, . _ - only</span>
+      <details class="cp-more" id="cpWatchlistAddDetails">
+        <summary>Add an instrument</summary>
+        <form class="cp-watchlist-form" id="cpWatchlistAddForm">
+          <div class="cp-form-error" id="cpWatchlistError" role="alert" hidden></div>
+          <div class="cp-field-grid">
+            <div class="cp-field">
+              <label for="cpWatchSymbol">XTB symbol</label>
+              <input type="text" class="cp-input" id="cpWatchSymbol" required placeholder="e.g. EURAUD, NVDA.US">
+              <span class="cp-field-hint">Letters, digits, . _ - only</span>
+            </div>
+            <div class="cp-field">
+              <label for="cpWatchYahoo">Yahoo symbol</label>
+              <input type="text" class="cp-input" id="cpWatchYahoo" required placeholder="e.g. EURAUD=X, NVDA">
+              <span class="cp-field-hint">Letters, digits, . _ - = ^ only</span>
+            </div>
+            <div class="cp-field">
+              <label for="cpWatchClass">Asset class</label>
+              <select class="cp-select" id="cpWatchClass" required>
+                <option value="stock">Stock</option>
+                <option value="etf">ETF</option>
+                <option value="fx">FX</option>
+                <option value="index">Index</option>
+                <option value="commodity">Commodity</option>
+              </select>
+              <span class="cp-field-hint">Class sets cost model &amp; CFD rule</span>
+            </div>
+            <div class="cp-field">
+              <label for="cpWatchCurrency">Currency</label>
+              <input type="text" class="cp-input" id="cpWatchCurrency" required placeholder="USD" maxlength="3">
+              <span class="cp-field-hint">3-letter ISO code</span>
+            </div>
+            <div class="cp-field">
+              <label for="cpWatchName">Display name</label>
+              <input type="text" class="cp-input" id="cpWatchName" required placeholder="e.g. Euro / Australian dollar">
+              <span class="cp-field-hint">Instrument name (max 80 chars)</span>
+            </div>
           </div>
-          <div class="cp-field">
-            <label for="cpWatchYahoo">Yahoo Symbol</label>
-            <input type="text" class="cp-input" id="cpWatchYahoo" required placeholder="e.g. EURAUD=X, NVDA">
-            <span class="cp-field-hint">Letters, digits, . _ - = ^ only</span>
+          <div class="cp-watchlist-actions">
+            <button class="cp-button cp-primary" id="cpWatchAddBtn" type="submit">Add to watchlist</button>
           </div>
-          <div class="cp-field">
-            <label for="cpWatchClass">Asset Class</label>
-            <select class="cp-select" id="cpWatchClass" required>
-              <option value="stock">Stock</option>
-              <option value="etf">ETF</option>
-              <option value="fx">FX</option>
-              <option value="index">Index</option>
-              <option value="commodity">Commodity</option>
-            </select>
-            <span class="cp-field-hint">Class sets cost model &amp; CFD rule</span>
-          </div>
-          <div class="cp-field">
-            <label for="cpWatchCurrency">Currency</label>
-            <input type="text" class="cp-input" id="cpWatchCurrency" required placeholder="USD" maxlength="3">
-            <span class="cp-field-hint">3-letter ISO code</span>
-          </div>
-          <div class="cp-field">
-            <label for="cpWatchName">Display Name</label>
-            <input type="text" class="cp-input" id="cpWatchName" required placeholder="e.g. Euro / Australian dollar">
-            <span class="cp-field-hint">Instrument name (max 80 chars)</span>
-          </div>
-        </div>
-        <div class="cp-watchlist-actions">
-          <button class="cp-button cp-primary" id="cpWatchAddBtn" type="submit">Add to Watchlist</button>
-        </div>
-      </form>
+        </form>
+      </details>
     </section>
 
     <section class="cp-panel" id="cpDataPricesPanel" aria-labelledby="cpDataPricesTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
-          <h2 id="cpDataPricesTitle">Price Data &amp; Sources</h2>
+          <h2 id="cpDataPricesTitle">Price data and sources</h2>
           <span class="cp-sub-notice" id="cpDataPriceStatusLine">Point-in-time price status</span>
         </div>
         <div class="cp-panel-actions">
@@ -884,49 +854,36 @@
     <section class="cp-panel" id="cpModelsPanel" aria-labelledby="cpModelsTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
-          <h2 id="cpModelsTitle">Predictive Models</h2>
+          <h2 id="cpModelsTitle">Predictive models</h2>
           <span class="cp-sub-notice">Model signals (Chronos, YOLO) run as local Python helpers</span>
         </div>
         <div class="cp-panel-actions">
           <button class="cp-button cp-primary" id="cpRunModelsBtn" type="button">Run models</button>
-          <span class="cp-badge" id="cpModelsBadge">Helpers</span>
         </div>
       </header>
 
-      <div class="cp-models-note">
-        <p>Model runs compute out-of-sample features and forecast paths. The first run downloads weights and scans weekly charts, which may take several minutes.</p>
-      </div>
+      <ul class="cp-rows" id="cpModelsList">
+        <li class="cp-empty">Loading models…</li>
+      </ul>
 
-      <div class="cp-table-wrap">
-        <table class="cp-table" id="cpModelsTable">
-          <thead>
-            <tr>
-              <th scope="col">Model</th>
-              <th scope="col">Summary</th>
-              <th scope="col">Licence</th>
-              <th scope="col">Status</th>
-              <th scope="col" class="num">Stored Values</th>
-              <th scope="col">Last Run</th>
-            </tr>
-          </thead>
-          <tbody id="cpModelsBody">
-            <tr><td colspan="6" class="cp-empty">Loading models…</td></tr>
-          </tbody>
-        </table>
-      </div>
+      <details class="cp-more" id="cpModelsDetails">
+        <summary>Show model notes and licences</summary>
+        <p class="cp-note">Model runs compute out-of-sample features and forecast paths. The first run downloads weights and scans weekly charts, which may take several minutes.</p>
+        <ul class="cp-rows" id="cpModelsLicences"></ul>
+      </details>
     </section>
 
     <section class="cp-panel" id="cpSyncPanel" aria-labelledby="cpSyncTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
-          <h2 id="cpSyncTitle">Import Batches</h2>
+          <h2 id="cpSyncTitle">Import batches</h2>
           <span class="cp-sub-notice">Audit trail of official broker statements</span>
         </div>
         <div class="cp-panel-actions">
           <button class="cp-button cp-primary" id="cpDataUploadBtn" type="button">Upload report</button>
         </div>
       </header>
-      <div class="cp-sync-list" id="cpSyncList">
+      <div id="cpSyncList">
         <p class="cp-empty">No imports recorded yet. Upload an official XTB export above.</p>
       </div>
     </section>
