@@ -1,6 +1,5 @@
 //! Model signals, the blended outlook and the outlook track record.
 
-use super::today::ewma_sigma;
 use super::*;
 
 /// The last run of one model signal.
@@ -91,17 +90,44 @@ impl CapitalService {
     }
 
     /// Stored paths of the enabled outlook models for `key`, from each model's
-    /// `evaluate_from` on.
-    pub(super) fn external_paths(
+    /// `evaluate_from` on, as known at `decision`.
+    pub(super) fn external_paths_as_of(
         &self,
         key: &str,
-    ) -> Result<Vec<crate::outlook::ExternalPath>, ServiceError> {
+        decision: DecisionTime,
+    ) -> Result<
+        (
+            Vec<crate::outlook::ExternalPath>,
+            Vec<crate::replay::ModelOutputInputManifest>,
+        ),
+        ServiceError,
+    > {
         let mut out = Vec::new();
+        let mut manifests = Vec::new();
         for spec in &self.outlook_specs {
-            let (_, paths) = self.store.outlook_paths(spec.component, Some(key))?;
-            out.extend(paths.into_iter().filter(|p| p.origin >= spec.evaluate_from));
+            let (version, paths, prov) =
+                self.store
+                    .outlook_paths_as_of(spec.component, Some(key), decision)?;
+            let filtered: Vec<_> = paths
+                .into_iter()
+                .filter(|p| p.origin >= spec.evaluate_from)
+                .collect();
+            let count = filtered.len() as u32;
+            let hash = crate::replay::hash_external_paths(&filtered);
+            manifests.push(crate::replay::ModelOutputInputManifest {
+                component_or_signal: format!("outlook:{}", spec.name),
+                model_version: version,
+                provenance: if count == 0 {
+                    InputProvenance::Unavailable
+                } else {
+                    prov
+                },
+                count,
+                outputs_sha256: hash,
+            });
+            out.extend(filtered);
         }
-        Ok(out)
+        Ok((out, manifests))
     }
 
     /// The signal horizon a direction tilt at `horizon` is read from, if any. Signals are
@@ -123,14 +149,48 @@ impl CapitalService {
         horizon: u32,
         cutoff: Option<chrono::NaiveDate>,
     ) -> Result<OutlookView, ServiceError> {
+        let (decision, policy) = match cutoff {
+            None => (DecisionTime::now(), VintagePolicy::ObservedOnly),
+            Some(c) => {
+                let at = c
+                    .and_hms_micro_opt(23, 59, 59, 999_999)
+                    .unwrap_or_default()
+                    .and_utc();
+                (DecisionTime::new(at, c), VintagePolicy::AllowReconstructed)
+            }
+        };
+        Ok(self
+            .outlook_as_of(
+                account,
+                symbol,
+                horizon,
+                decision,
+                &crate::calendar::WeekdayCalendar,
+                policy,
+            )?
+            .value)
+    }
+
+    /// Strict point-in-time outlook replay at `decision`, using `calendar` and `policy`.
+    /// Never calls `Utc::now()`, and returns both the [`OutlookView`] and its
+    /// deterministic [`crate::replay::ReplayManifest`].
+    pub fn outlook_as_of(
+        &self,
+        account: &AccountId,
+        symbol: &str,
+        horizon: u32,
+        decision: DecisionTime,
+        calendar: &dyn crate::calendar::ExchangeCalendar,
+        policy: VintagePolicy,
+    ) -> Result<crate::replay::ReplayOutput<OutlookView>, ServiceError> {
         if !crate::outlook::HORIZONS.contains(&horizon) {
             return Err(ServiceError::BadRequest(format!(
                 "The horizon must be one of {:?} sessions.",
                 crate::outlook::HORIZONS
             )));
         }
-        let mut held = self.held_instruments(account)?;
-        held.extend(self.universe_pairs(account)?);
+        let mut held = self.held_instruments_as_of(account, decision)?;
+        held.extend(self.universe_pairs_as_of(account, decision)?);
         let wanted = symbol.trim().to_ascii_uppercase();
         let Some((key, symbol)) = held
             .iter()
@@ -141,7 +201,8 @@ impl CapitalService {
                 "{symbol} isn't a holding or on the watchlist."
             )));
         };
-        let data = self.closes_for(&[(key.clone(), symbol.clone())], Utc::now())?;
+        let (data, bar_manifests) =
+            self.closes_for_as_of(&[(key.clone(), symbol.clone())], decision, policy)?;
         let closes = &data[0].2;
         let series = crate::forecast::CloseSeries {
             instrument_key: &key,
@@ -149,14 +210,19 @@ impl CapitalService {
             closes,
         };
 
-        // The tilt as it was known at the cutoff: signals re-validated on data up to it.
+        let mut model_manifests = Vec::new();
+        let mut membership_manifests = Vec::new();
+        let mut corporate_manifests = Vec::new();
+
+        // The tilt as it was known at `decision`: signals re-validated on data up to `decision`.
         let (tilt, tilt_signals) = match Self::tilt_horizon(horizon) {
             None => (Vec::new(), Vec::new()),
             Some(signal_h) => {
-                let report = match cutoff {
-                    None => self.signals(account)?,
-                    Some(c) => self.signals_at(account, c)?,
-                };
+                let sig_out = self.signals_as_of(account, decision, policy)?;
+                model_manifests.extend(sig_out.manifest.model_outputs);
+                membership_manifests.extend(sig_out.manifest.membership);
+                corporate_manifests.extend(sig_out.manifest.corporate_actions);
+                let report = sig_out.value;
                 let alpha = report
                     .latest
                     .iter()
@@ -179,13 +245,34 @@ impl CapitalService {
                 (vec![(horizon, alpha)], passed)
             }
         };
+        if membership_manifests.is_empty() {
+            let (_, mem) = self.signal_universe_as_of(account, decision)?;
+            membership_manifests.extend(mem);
+            membership_manifests.extend(self.research_membership_manifest_as_of(decision, policy)?);
+        }
+        if corporate_manifests.is_empty() {
+            corporate_manifests = self.corporate_actions_manifest_as_of(
+                &[(key.clone(), symbol.clone())],
+                decision,
+                policy,
+            )?;
+        }
+
+        let (external, ext_manifests) = self.external_paths_as_of(&key, decision)?;
+        model_manifests.extend(ext_manifests);
+
         let instrument = crate::outlook::Instrument {
             series: series.clone(),
-            external: self.external_paths(&key)?,
+            external,
             tilt,
             tilt_signals,
         };
-        let outlook = crate::outlook::outlook(&instrument, horizon, cutoff);
+        let outlook = crate::outlook::outlook_with_calendar(
+            &instrument,
+            horizon,
+            Some(decision.session),
+            calendar,
+        );
         use rust_decimal::prelude::ToPrimitive;
         let up_to: Vec<(chrono::NaiveDate, f64)> = closes
             .iter()
@@ -194,54 +281,27 @@ impl CapitalService {
             .collect();
         let keep = (2 * horizon as usize).max(63);
         let history = up_to[up_to.len().saturating_sub(keep)..].to_vec();
-        Ok(OutlookView {
-            outlook,
-            history,
-            sessions: closes.iter().map(|(d, _)| *d).collect(),
-        })
-    }
 
-    /// The signal report with every input cut at `cutoff` (no look-ahead into a replay).
-    fn signals_at(
-        &self,
-        account: &AccountId,
-        cutoff: chrono::NaiveDate,
-    ) -> Result<crate::signals::SignalReport, ServiceError> {
-        let held = self.universe_pairs(account)?;
-        let data = self.closes_for(&held, Utc::now())?;
-        type Closes = Vec<(chrono::NaiveDate, rust_decimal::Decimal)>;
-        let cut: Vec<(String, String, Closes)> = data
-            .into_iter()
-            .map(|(k, s, c)| (k, s, c.into_iter().filter(|(d, _)| *d <= cutoff).collect()))
-            .collect();
-        let series: Vec<crate::forecast::CloseSeries<'_>> = cut
-            .iter()
-            .filter(|(_, _, c)| !c.is_empty())
-            .map(|(key, symbol, closes)| crate::forecast::CloseSeries {
-                instrument_key: key,
-                symbol,
-                closes,
-            })
-            .collect();
-        let held_keys: Vec<&str> = held.iter().map(|(k, _)| k.as_str()).collect();
-        let external: Vec<crate::signals::ExternalScores> = self
-            .external_scores(&held_keys)?
-            .into_iter()
-            .map(|mut e| {
-                e.values.retain(|(_, d, _)| *d <= cutoff);
-                e
-            })
-            .collect();
-        let sigma = |key: &str, h: u32| -> Option<f64> {
-            let s = series.iter().find(|s| s.instrument_key == key)?;
-            ewma_sigma(s, h)
-        };
-        Ok(crate::signals::evaluate_and_combine(
-            &series,
-            &external,
-            &sigma,
-            &crate::signals::SignalEvalConfig::default(),
-        ))
+        let mut manifest = crate::replay::ReplayManifest::new(
+            decision,
+            calendar.id(),
+            self.cost_policy_version_as_of(account, decision)?,
+            format!("outlook/1|{}", crate::replay::REPLAY_CODE_VERSION),
+        );
+        manifest.instrument_keys = vec![key];
+        manifest.bars = bar_manifests;
+        manifest.membership = membership_manifests;
+        manifest.corporate_actions = corporate_manifests;
+        manifest.model_outputs = model_manifests;
+
+        Ok(crate::replay::ReplayOutput {
+            value: OutlookView {
+                outlook,
+                history,
+                sessions: closes.iter().map(|(d, _)| *d).collect(),
+            },
+            manifest: manifest.finalize(),
+        })
     }
 
     /// The blend's out-of-sample record at `horizon` over the held instruments.
@@ -250,14 +310,14 @@ impl CapitalService {
         account: &AccountId,
         horizon: u32,
     ) -> Result<crate::outlook::TrackRecord, ServiceError> {
+        let decision = DecisionTime::now();
         if !crate::outlook::HORIZONS.contains(&horizon) {
             return Err(ServiceError::BadRequest(format!(
                 "The horizon must be one of {:?} sessions.",
                 crate::outlook::HORIZONS
             )));
         }
-        let held = self.held_instruments(account)?;
-        let today = Utc::now().date_naive();
+        let held = self.held_instruments_as_of(account, decision)?;
         let paths: u64 = self
             .store
             .outlook_path_counts()?
@@ -270,7 +330,7 @@ impl CapitalService {
             self.store.price_version()?,
             paths,
             horizon,
-            today,
+            decision.session,
             held.iter()
                 .map(|(k, _)| k.as_str())
                 .collect::<Vec<_>>()
@@ -281,9 +341,50 @@ impl CapitalService {
         {
             return Ok(record.clone());
         }
-        let data = self.closes_for(&held, Utc::now())?;
+        let record = self
+            .track_record_as_of(
+                account,
+                horizon,
+                decision,
+                &crate::calendar::WeekdayCalendar,
+                VintagePolicy::ObservedOnly,
+            )?
+            .value;
+        if let Ok(mut cache) = self.track_cache.lock() {
+            if cache.len() >= 16 {
+                cache.clear();
+            }
+            cache.insert(version, record.clone());
+        }
+        Ok(record)
+    }
+
+    /// Point-in-time out-of-sample track record at `decision`. Never calls `Utc::now()`.
+    pub fn track_record_as_of(
+        &self,
+        account: &AccountId,
+        horizon: u32,
+        decision: DecisionTime,
+        calendar: &dyn crate::calendar::ExchangeCalendar,
+        policy: VintagePolicy,
+    ) -> Result<crate::replay::ReplayOutput<crate::outlook::TrackRecord>, ServiceError> {
+        if !crate::outlook::HORIZONS.contains(&horizon) {
+            return Err(ServiceError::BadRequest(format!(
+                "The horizon must be one of {:?} sessions.",
+                crate::outlook::HORIZONS
+            )));
+        }
+        let held = self.held_instruments_as_of(account, decision)?;
+        let (data, bar_manifests) = self.closes_for_as_of(&held, decision, policy)?;
         let mut instruments = Vec::new();
-        for (key, symbol, closes) in &data {
+        let mut model_manifests = Vec::new();
+        let mut external_storage = Vec::with_capacity(data.len());
+        for (key, _, _) in &data {
+            let (ext, m) = self.external_paths_as_of(key, decision)?;
+            external_storage.push(ext);
+            model_manifests.extend(m);
+        }
+        for ((key, symbol, closes), external) in data.iter().zip(external_storage) {
             if closes.is_empty() {
                 continue;
             }
@@ -293,19 +394,38 @@ impl CapitalService {
                     symbol,
                     closes,
                 },
-                external: self.external_paths(key)?,
+                external,
                 tilt: Vec::new(),
                 tilt_signals: Vec::new(),
             });
         }
-        let record = crate::outlook::track_record(&instruments, horizon, today);
-        if let Ok(mut cache) = self.track_cache.lock() {
-            if cache.len() >= 16 {
-                cache.clear();
-            }
-            cache.insert(version, record.clone());
-        }
-        Ok(record)
+        let record = crate::outlook::track_record(&instruments, horizon, decision.session);
+        let mut manifest = crate::replay::ReplayManifest::new(
+            decision,
+            calendar.id(),
+            self.cost_policy_version_as_of(account, decision)?,
+            format!("outlook-track/1|{}", crate::replay::REPLAY_CODE_VERSION),
+        );
+        manifest.instrument_keys = held.iter().map(|(k, _)| k.clone()).collect();
+        manifest.bars = bar_manifests;
+        manifest
+            .membership
+            .push(crate::replay::MembershipInputManifest {
+                source: "portfolio".into(),
+                provenance: InputProvenance::Observed,
+                snapshot_at: Some(decision.at),
+                snapshot_sha256: crate::replay::hash_universe_pairs(&held),
+            });
+        manifest
+            .membership
+            .extend(self.research_membership_manifest_as_of(decision, policy)?);
+        manifest.corporate_actions =
+            self.corporate_actions_manifest_as_of(&held, decision, policy)?;
+        manifest.model_outputs = model_manifests;
+        Ok(crate::replay::ReplayOutput {
+            value: record,
+            manifest: manifest.finalize(),
+        })
     }
 
     fn signal_name(signal: crate::signals::SignalId) -> String {
@@ -316,20 +436,42 @@ impl CapitalService {
     }
 
     /// Stored values of the enabled models for `held` instruments, from each model's
-    /// `evaluate_from` on.
-    pub(super) fn external_scores(
+    /// `evaluate_from` on, as known at `decision`.
+    pub(super) fn external_scores_as_of(
         &self,
         held: &[&str],
-    ) -> Result<Vec<crate::signals::ExternalScores>, ServiceError> {
+        decision: DecisionTime,
+    ) -> Result<
+        (
+            Vec<crate::signals::ExternalScores>,
+            Vec<crate::replay::ModelOutputInputManifest>,
+        ),
+        ServiceError,
+    > {
         let mut out = Vec::new();
+        let mut manifests = Vec::new();
         for spec in &self.model_specs {
-            let (_, values) = self.store.signal_values(&Self::signal_name(spec.signal))?;
+            let signal_name = Self::signal_name(spec.signal);
+            let (version, values, prov) = self.store.signal_values_as_of(&signal_name, decision)?;
             let values: Vec<_> = values
                 .into_iter()
                 .filter(|(key, session, _)| {
                     *session >= spec.evaluate_from && held.contains(&key.as_str())
                 })
                 .collect();
+            let count = values.len() as u32;
+            let hash = crate::replay::hash_signal_values(spec.signal, &values);
+            manifests.push(crate::replay::ModelOutputInputManifest {
+                component_or_signal: format!("signal:{}", spec.name),
+                model_version: version,
+                provenance: if count == 0 {
+                    InputProvenance::Unavailable
+                } else {
+                    prov
+                },
+                count,
+                outputs_sha256: hash,
+            });
             if !values.is_empty() {
                 out.push(crate::signals::ExternalScores {
                     signal: spec.signal,
@@ -337,7 +479,7 @@ impl CapitalService {
                 });
             }
         }
-        Ok(out)
+        Ok((out, manifests))
     }
 
     /// What each model signal is, whether it is on, and what is stored.

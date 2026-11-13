@@ -313,10 +313,11 @@ fn insufficient(
     }
 }
 
-pub(crate) fn outlook(
+pub(crate) fn outlook_with_calendar(
     instrument: &Instrument<'_>,
     horizon: u32,
     cutoff: Option<NaiveDate>,
+    calendar: &dyn crate::calendar::ExchangeCalendar,
 ) -> Outlook {
     if instrument.series.closes.is_empty() {
         return insufficient(
@@ -343,11 +344,15 @@ pub(crate) fn outlook(
         );
     }
     let origin_index = match cutoff {
-        Some(date) => instrument
-            .series
-            .closes
-            .iter()
-            .rposition(|(session, _)| *session <= date),
+        Some(date) => {
+            let sessions: Vec<NaiveDate> =
+                instrument.series.closes.iter().map(|(d, _)| *d).collect();
+            calendar.session_on_or_before(date).and_then(|snapped| {
+                sessions
+                    .iter()
+                    .rposition(|s| *s <= snapped && calendar.is_session(*s))
+            })
+        }
         None => Some(instrument.series.closes.len() - 1),
     };
     let Some(origin_index) = origin_index else {

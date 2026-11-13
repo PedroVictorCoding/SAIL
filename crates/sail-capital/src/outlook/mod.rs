@@ -213,7 +213,22 @@ pub fn builtin_paths(
 /// the cutoff is in the past, `actual` and `actual_percentile` are filled from the closes
 /// after it.
 pub fn outlook(instrument: &Instrument<'_>, horizon: u32, cutoff: Option<NaiveDate>) -> Outlook {
-    engine::outlook(instrument, horizon, cutoff)
+    engine::outlook_with_calendar(
+        instrument,
+        horizon,
+        cutoff,
+        &crate::calendar::WeekdayCalendar,
+    )
+}
+
+/// Like [`outlook`], using `calendar` for origin selection and session labels.
+pub fn outlook_with_calendar(
+    instrument: &Instrument<'_>,
+    horizon: u32,
+    cutoff: Option<NaiveDate>,
+    calendar: &dyn crate::calendar::ExchangeCalendar,
+) -> Outlook {
+    engine::outlook_with_calendar(instrument, horizon, cutoff, calendar)
 }
 
 /// The blend's out-of-sample record at `horizon`: replays at the last session of each

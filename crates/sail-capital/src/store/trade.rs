@@ -106,6 +106,24 @@ impl CapitalStore {
         Ok(out)
     }
 
+    /// Watchlist changes known at `known_by`, oldest first.
+    pub fn watch_changes_as_of(
+        &self,
+        known_by: DateTime<Utc>,
+    ) -> Result<Vec<crate::universe::WatchChange>, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let mut stmt = conn.prepare("SELECT at, change_json FROM watchlist_changes ORDER BY id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (at, json) = row?;
+            if parse_ts(&at)? <= known_by {
+                out.push(decode(&json)?);
+            }
+        }
+        Ok(out)
+    }
+
     /// Stores an earnings snapshot for a Yahoo symbol.
     pub fn record_earnings(
         &self,
@@ -134,6 +152,47 @@ impl CapitalStore {
             .optional()?;
         row.map(|(at, json)| Ok((parse_ts(&at)?, decode(&json)?)))
             .transpose()
+    }
+
+    /// The newest earnings snapshot for `yahoo` known at `decision.at`, or (when `policy`
+    /// allows) reconstructed from the earliest later snapshot with dates `<= decision.session`.
+    pub fn earnings_as_of(
+        &self,
+        yahoo: &str,
+        decision: DecisionTime,
+        policy: VintagePolicy,
+    ) -> Result<Option<(EarningsSnapshot, InputProvenance)>, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let mut stmt = conn.prepare(
+            "SELECT fetched_at, dates_json FROM earnings_dates WHERE yahoo = ?1 ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![yahoo], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut observed: Option<(DateTime<Utc>, String)> = None;
+        let mut later: Option<(DateTime<Utc>, String)> = None;
+        for row in rows {
+            let (at_str, json) = row?;
+            let at = parse_ts(&at_str)?;
+            if at <= decision.at {
+                if observed.as_ref().is_none_or(|(prev, _)| at >= *prev) {
+                    observed = Some((at, json));
+                }
+            } else if later.as_ref().is_none_or(|(prev, _)| at < *prev) {
+                later = Some((at, json));
+            }
+        }
+        if let Some((at, json)) = observed {
+            return Ok(Some(((at, decode(&json)?), InputProvenance::Observed)));
+        }
+        if policy == VintagePolicy::AllowReconstructed
+            && let Some((at, json)) = later
+        {
+            let mut dates: Vec<chrono::NaiveDate> = decode(&json)?;
+            dates.retain(|d| *d <= decision.session);
+            return Ok(Some(((at, dates), InputProvenance::Reconstructed)));
+        }
+        Ok(None)
     }
 
     /// Stores a run's result and publishes its cards and candidates (each card id once per

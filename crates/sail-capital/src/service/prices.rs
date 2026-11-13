@@ -1,6 +1,7 @@
 //! Prices, price files, the walk-forward evaluation and baseline forecasts.
 
 use super::*;
+use crate::calendar::ExchangeCalendar;
 
 /// Most observations one `/prices` reply returns.
 pub const MAX_PRICES_REPLY: usize = 10_000;
@@ -66,7 +67,16 @@ impl CapitalService {
         &self,
         account: &AccountId,
     ) -> Result<Vec<(String, String)>, ServiceError> {
-        let projection = self.portfolio(account, AsOf::now())?;
+        self.held_instruments_as_of(account, DecisionTime::now())
+    }
+
+    /// Held owned instruments as known at `decision.at`. CFDs are never forecast.
+    pub(super) fn held_instruments_as_of(
+        &self,
+        account: &AccountId,
+        decision: DecisionTime,
+    ) -> Result<Vec<(String, String)>, ServiceError> {
+        let projection = self.portfolio(account, decision.as_of())?;
         let mut held: Vec<(String, String)> = projection
             .positions
             .iter()
@@ -226,24 +236,6 @@ impl CapitalService {
         Ok(rows)
     }
 
-    /// Closes per held instrument as known at `known_by`: (key, symbol, closes).
-    #[allow(clippy::type_complexity)]
-    fn held_closes(
-        &self,
-        account: &AccountId,
-        known_by: DateTime<Utc>,
-    ) -> Result<
-        Vec<(
-            String,
-            String,
-            Vec<(chrono::NaiveDate, rust_decimal::Decimal)>,
-        )>,
-        ServiceError,
-    > {
-        let held = self.held_instruments(account)?;
-        self.closes_for(&held, known_by)
-    }
-
     /// Closes for an already resolved held set, so callers that need the set for a cache
     /// key don't project the portfolio twice.
     #[allow(clippy::type_complexity)]
@@ -272,13 +264,150 @@ impl CapitalService {
         Ok(out)
     }
 
+    /// Closes and bar input manifests for `held` as of `decision` under `policy`.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn closes_for_as_of(
+        &self,
+        held: &[(String, String)],
+        decision: DecisionTime,
+        policy: VintagePolicy,
+    ) -> Result<
+        (
+            Vec<(
+                String,
+                String,
+                Vec<(chrono::NaiveDate, rust_decimal::Decimal)>,
+            )>,
+            Vec<crate::replay::BarInputManifest>,
+        ),
+        ServiceError,
+    > {
+        let mut out = Vec::with_capacity(held.len());
+        let mut manifests = Vec::with_capacity(held.len());
+        for (key, symbol) in held {
+            let revisions = self.store.prices_with_provenance(key, decision, policy)?;
+            let closes: Vec<_> = revisions
+                .iter()
+                .map(|r| (r.observation.session, r.observation.close))
+                .collect();
+            let hash_input: Vec<_> = revisions
+                .iter()
+                .map(|r| {
+                    (
+                        r.id.clone(),
+                        r.bar_sha256.clone(),
+                        r.observation.clone(),
+                        r.provenance,
+                    )
+                })
+                .collect();
+            let provenance =
+                crate::replay::combine_provenance(revisions.iter().map(|r| r.provenance));
+            manifests.push(crate::replay::BarInputManifest {
+                instrument_key: key.clone(),
+                symbol: symbol.clone(),
+                provenance,
+                bar_count: revisions.len() as u32,
+                first_session: revisions.first().map(|r| r.observation.session),
+                last_session: revisions.last().map(|r| r.observation.session),
+                bars_sha256: crate::replay::hash_bar_revisions(&hash_input),
+            });
+            out.push((key.clone(), symbol.clone(), closes));
+        }
+        Ok((out, manifests))
+    }
+
+    /// Collects corporate-action (dividend and earnings) manifests for `held` at `decision`.
+    pub(super) fn corporate_actions_manifest_as_of(
+        &self,
+        held: &[(String, String)],
+        decision: DecisionTime,
+        policy: VintagePolicy,
+    ) -> Result<Vec<crate::replay::CorporateActionInputManifest>, ServiceError> {
+        let mut out = Vec::new();
+        for (key, symbol) in held {
+            let yahoo = crate::market::yahoo_symbol(symbol).unwrap_or_else(|| symbol.clone());
+            if let Some(((fetched_at, currency, payments), prov)) = self
+                .store
+                .dividend_history_as_of(&yahoo, decision, policy)?
+            {
+                out.push(crate::replay::CorporateActionInputManifest {
+                    key: key.clone(),
+                    kind: "dividends".into(),
+                    provenance: prov,
+                    fetched_at: Some(fetched_at),
+                    version_sha256: crate::replay::hash_dividend_payments(
+                        currency.as_deref(),
+                        &payments,
+                    ),
+                });
+            }
+            if let Some(((fetched_at, dates), prov)) =
+                self.store.earnings_as_of(&yahoo, decision, policy)?
+            {
+                out.push(crate::replay::CorporateActionInputManifest {
+                    key: key.clone(),
+                    kind: "earnings".into(),
+                    provenance: prov,
+                    fetched_at: Some(fetched_at),
+                    version_sha256: crate::replay::hash_earnings_dates(&dates),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Collects research-index membership manifests as of `decision`.
+    pub(super) fn research_membership_manifest_as_of(
+        &self,
+        decision: DecisionTime,
+        policy: VintagePolicy,
+    ) -> Result<Vec<crate::replay::MembershipInputManifest>, ServiceError> {
+        let mut out = Vec::new();
+        for index in ["sp500", "stoxx50"] {
+            if let Some(((fetched_at, members), prov)) =
+                self.store.research_members_as_of(index, decision, policy)?
+            {
+                out.push(crate::replay::MembershipInputManifest {
+                    source: format!("research:{index}"),
+                    provenance: prov,
+                    snapshot_at: Some(fetched_at),
+                    snapshot_sha256: crate::replay::hash_research_members(&members),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Policy / cost version string as known at `decision.at`.
+    pub(super) fn cost_policy_version_as_of(
+        &self,
+        account: &AccountId,
+        decision: DecisionTime,
+    ) -> Result<String, ServiceError> {
+        let policies = self.store.policies(account)?;
+        let active = policies
+            .into_iter()
+            .find(|p| p.saved_at.is_none_or(|ts| ts <= decision.at))
+            .unwrap_or_else(crate::policy::RiskPolicy::builtin_draft);
+        Ok(format!(
+            "policy:v{}:risk={}:costs={}",
+            active.version,
+            crate::replay::canonical_decimal(active.limits.risk_per_trade_pct),
+            crate::trade::cache::costs_tag(crate::trade::Costs::default_for(
+                crate::trade::AssetClass::Stock,
+            ))
+        ))
+    }
+
     /// The walk-forward evaluation over held instruments, cached until prices or the held
     /// set change.
     pub fn evaluation(
         &self,
         account: &AccountId,
     ) -> Result<crate::forecast::EvalReport, ServiceError> {
-        let held = self.held_instruments(account)?;
+        let decision = DecisionTime::now();
+        let held = self.held_instruments_as_of(account, decision)?;
         let mut held_keys: Vec<&str> = held.iter().map(|(key, _)| key.as_str()).collect();
         held_keys.sort_unstable();
         let version = format!(
@@ -293,7 +422,25 @@ impl CapitalService {
         {
             return Ok(report.clone());
         }
-        let data = self.closes_for(&held, Utc::now())?;
+        let report = self
+            .evaluation_as_of(account, decision, VintagePolicy::ObservedOnly)?
+            .value;
+        if let Ok(mut cache) = self.evaluation_cache.lock() {
+            *cache = Some((version, report.clone()));
+        }
+        Ok(report)
+    }
+
+    /// Point-in-time walk-forward evaluation at `decision`, returning the report and its
+    /// deterministic [`crate::replay::ReplayManifest`].
+    pub fn evaluation_as_of(
+        &self,
+        account: &AccountId,
+        decision: DecisionTime,
+        policy: VintagePolicy,
+    ) -> Result<crate::replay::ReplayOutput<crate::forecast::EvalReport>, ServiceError> {
+        let held = self.held_instruments_as_of(account, decision)?;
+        let (data, bar_manifests) = self.closes_for_as_of(&held, decision, policy)?;
         let series: Vec<crate::forecast::CloseSeries<'_>> = data
             .iter()
             .filter(|(_, _, closes)| !closes.is_empty())
@@ -304,10 +451,35 @@ impl CapitalService {
             })
             .collect();
         let report = crate::forecast::evaluate(&series, &crate::forecast::EvalConfig::default());
-        if let Ok(mut cache) = self.evaluation_cache.lock() {
-            *cache = Some((version, report.clone()));
-        }
-        Ok(report)
+        let mut manifest = crate::replay::ReplayManifest::new(
+            decision,
+            crate::calendar::WeekdayCalendar.id(),
+            self.cost_policy_version_as_of(account, decision)?,
+            format!(
+                "{}|{}",
+                crate::forecast::SCHEMA_VERSION,
+                crate::replay::REPLAY_CODE_VERSION
+            ),
+        );
+        manifest.instrument_keys = held.iter().map(|(k, _)| k.clone()).collect();
+        manifest.bars = bar_manifests;
+        manifest
+            .membership
+            .push(crate::replay::MembershipInputManifest {
+                source: "portfolio".into(),
+                provenance: InputProvenance::Observed,
+                snapshot_at: Some(decision.at),
+                snapshot_sha256: crate::replay::hash_universe_pairs(&held),
+            });
+        manifest
+            .membership
+            .extend(self.research_membership_manifest_as_of(decision, policy)?);
+        manifest.corporate_actions =
+            self.corporate_actions_manifest_as_of(&held, decision, policy)?;
+        Ok(crate::replay::ReplayOutput {
+            value: report,
+            manifest: manifest.finalize(),
+        })
     }
 
     /// Forecasts at `horizon` with `model` for every held owned instrument with prices.
@@ -318,13 +490,38 @@ impl CapitalService {
         horizon: u32,
         model: crate::forecast::ModelId,
     ) -> Result<ForecastsView, ServiceError> {
+        let decision = DecisionTime::now();
+        Ok(self
+            .forecasts_as_of(
+                account,
+                horizon,
+                model,
+                decision,
+                &crate::calendar::WeekdayCalendar,
+                VintagePolicy::ObservedOnly,
+            )?
+            .value)
+    }
+
+    /// Point-in-time forecasts at `horizon` with `model` at `decision`, using `calendar`
+    /// and `policy`. Never calls `Utc::now()`.
+    pub fn forecasts_as_of(
+        &self,
+        account: &AccountId,
+        horizon: u32,
+        model: crate::forecast::ModelId,
+        decision: DecisionTime,
+        calendar: &dyn crate::calendar::ExchangeCalendar,
+        policy: VintagePolicy,
+    ) -> Result<crate::replay::ReplayOutput<ForecastsView>, ServiceError> {
         if !crate::forecast::HORIZONS.contains(&horizon) {
             return Err(ServiceError::BadRequest(format!(
                 "The horizon must be one of {:?} sessions.",
                 crate::forecast::HORIZONS
             )));
         }
-        let evaluation = self.evaluation(account)?;
+        let eval_out = self.evaluation_as_of(account, decision, policy)?;
+        let evaluation = eval_out.value;
         let calibration = evaluation
             .scores
             .iter()
@@ -339,9 +536,11 @@ impl CapitalService {
                 verified: false,
                 cohort: None,
             });
+        let held = self.held_instruments_as_of(account, decision)?;
+        let (data, bar_manifests) = self.closes_for_as_of(&held, decision, policy)?;
         let mut forecasts = Vec::new();
         let mut without_prices = Vec::new();
-        for (key, symbol, closes) in self.held_closes(account, Utc::now())? {
+        for (key, symbol, closes) in data {
             if closes.is_empty() {
                 without_prices.push(symbol);
                 continue;
@@ -358,12 +557,29 @@ impl CapitalService {
                 calibration.clone(),
             ));
         }
-        Ok(ForecastsView {
-            as_of: Utc::now(),
-            horizon_sessions: horizon,
-            model,
-            forecasts,
-            without_prices,
+        let mut manifest = crate::replay::ReplayManifest::new(
+            decision,
+            calendar.id(),
+            self.cost_policy_version_as_of(account, decision)?,
+            format!(
+                "{}|{}",
+                crate::forecast::SCHEMA_VERSION,
+                crate::replay::REPLAY_CODE_VERSION
+            ),
+        );
+        manifest.instrument_keys = held.iter().map(|(k, _)| k.clone()).collect();
+        manifest.bars = bar_manifests;
+        manifest.membership = eval_out.manifest.membership;
+        manifest.corporate_actions = eval_out.manifest.corporate_actions;
+        Ok(crate::replay::ReplayOutput {
+            value: ForecastsView {
+                as_of: decision.at,
+                horizon_sessions: horizon,
+                model,
+                forecasts,
+                without_prices,
+            },
+            manifest: manifest.finalize(),
         })
     }
 }
