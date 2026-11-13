@@ -324,8 +324,29 @@ signal universe, holdings first:
 
 The board is cached until prices, model values, the universe, the trade run or the
 day change, and the background warm-up builds it every 5 minutes. A cold build over
-45 instruments takes about 3 seconds; a cached one is instant. Any row opens the
-outlook chart, including for watchlist names.
+45 instruments takes about 3 seconds; a cached one is instant.
+
+**The stock drawer.** Any row (click or Enter) opens a drawer, right-side on a desktop
+and full-screen on a phone, with one stock's whole story: the read and its sentence, a
+compact 3-month fan, every reading (model helpers included), the position and its
+trailing stop, the last two dividends and any setup. "Open full outlook" jumps to the
+Outlook tab, including for watchlist names. Each section loads when the drawer opens,
+is cached until Refresh, and is hidden when it has nothing to show.
+
+**The board's forward record** (`board_record.rs`, `GET /signals/board/record`). Most
+reads on real data are *unproven*, so the board keeps its own record in the open:
+- **Snapshot:** the warm-up stores every row's read once per session (`board_reads`,
+  append-only, first write wins), with its close, percentiles and outlook.
+- **Grade:** 21 and 63 of the instrument's own later sessions on, a read is compared
+  with the median return of the session's other graded reads (at least 5). It beat the
+  board or it didn't; its excess return is kept, and so are whether the outcome fell
+  inside the outlook's 90% range and the chance-up it gave.
+- **Summary:** per lean, proof and horizon, the beat-the-board rate with its count and
+  the mean excess with a 95% interval; per horizon, the outlook's coverage, its
+  chance-up Brier score against the base rate, and its direction hit rate. Reads from
+  one session share outcomes, so the interval is optimistic, and the page says so.
+- **Where it shows:** the "How the reads have done" panel under the board (with a CSV of
+  the 50 newest graded reads), and the `capital:signals` voice tool.
 
 **First run on the owner's holdings (2026-11-11).** No price signal passed at 60
 sessions, so there are no ideas. The draft limits flagged the idle free funds and one
@@ -752,7 +773,8 @@ Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capit
 | 14 | #442, #447 | Dividend projection with reinvestment and allocation modes |
 | 17 | — | One page structure, house style, lazy loading, the track record, backend modules |
 | — | #463 | Fast dividend projection and track records, 30-year monthly dividends |
-| — | — | Signals tab: the signal board, a wider signal universe, per-stock suggestions |
+| — | #464 | Signals tab: the signal board, a wider signal universe, per-stock suggestions |
+| 18 | — | The board's forward record, the stock drawer, model signals over the whole universe |
 
 ## Not built yet
 
