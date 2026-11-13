@@ -250,7 +250,11 @@ fn school_change(
         urgency,
         relevance,
         // A new file is routine; other changes are news.
-        novelty: if kind == SchoolChangeKind::FileAdded { 0.5 } else { 1.0 },
+        novelty: if kind == SchoolChangeKind::FileAdded {
+            0.5
+        } else {
+            1.0
+        },
         confidence: 0.9,
         deadline: None,
         provenance: Provenance::Observation,

@@ -411,8 +411,10 @@ mod tests {
 
     #[test]
     fn digest_across_midnight_and_long_gaps() {
-        let mut settings = AttentionSettings::default();
-        settings.digest_minutes = vec![0];
+        let settings = AttentionSettings {
+            digest_minutes: vec![0],
+            ..AttentionSettings::default()
+        };
         let before = Utc.with_ymd_and_hms(2026, 11, 11, 23, 58, 0).unwrap();
         assert!(digest_due(&settings, 0, before, at(0, 3)));
         // A daemon that slept through 18:00 releases on wake.
