@@ -575,44 +575,43 @@
   }
 
   function renderToolLogEntry(entry) {
-    const row = node('article', undefined, 'tl-entry');
-    row.dataset.success = entry.success ? 'true' : 'false';
+    const details = node('details', undefined, 'tl-entry');
+    details.dataset.success = entry.success ? 'true' : 'false';
 
-    const head = node('div', undefined, 'tl-entry-head');
-    const left = node('div', undefined, 'tl-entry-left');
-    left.append(node('strong', entry.tool || 'tool', 'tl-tool-name'));
-
+    const summary = node('summary', undefined, 'tl-entry-summary');
     const statusPill = node('span', entry.success ? 'OK' : 'ERR', `tl-status-pill ${entry.success ? 'ok' : 'err'}`);
-    left.append(statusPill);
+    const toolName = node('span', entry.tool || 'tool', 'tl-tool-name');
+    const inlinePreview = node('span', entry.summary || '', 'tl-inline-summary');
 
-    if (entry.channel) left.append(node('span', entry.channel, 'tl-channel'));
-    if (typeof entry.duration_ms === 'number') left.append(node('span', `${entry.duration_ms} ms`, 'tl-duration'));
-
+    const meta = node('span', undefined, 'tl-meta');
+    if (typeof entry.duration_ms === 'number') meta.append(node('span', `${entry.duration_ms} ms`, 'tl-duration'));
     const createdMs = typeof entry.created_at_ms === 'number' ? entry.created_at_ms : Date.now();
     const dt = new Date(createdMs);
     const timeEl = node('time', dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }), 'tl-time');
     timeEl.dateTime = dt.toISOString();
     timeEl.title = dt.toLocaleString();
+    meta.append(timeEl);
 
-    head.append(left, timeEl);
-    row.append(head);
+    summary.append(statusPill, toolName, inlinePreview, meta);
+    details.append(summary);
 
-    if (entry.summary) row.append(node('p', entry.summary, 'tl-summary'));
-
-    if (entry.params_json || entry.output_json) {
-      const details = node('details', undefined, 'tl-details');
-      details.append(node('summary', 'Parameters & Output'));
-      if (entry.params_json) {
-        details.append(node('div', 'Parameters', 'tl-detail-label'));
-        details.append(node('pre', formatPrettyJson(entry.params_json), 'tl-pre'));
-      }
-      if (entry.output_json) {
-        details.append(node('div', 'Output', 'tl-detail-label'));
-        details.append(node('pre', formatPrettyJson(entry.output_json), 'tl-pre'));
-      }
-      row.append(details);
+    const body = node('div', undefined, 'tl-entry-body');
+    const infoBits = [];
+    if (entry.channel) infoBits.push(`Channel: ${entry.channel}`);
+    if (entry.session) infoBits.push(`Session: ${entry.session}`);
+    infoBits.push(`At: ${dt.toLocaleString()}`);
+    body.append(node('p', infoBits.join(' · '), 'tl-detail-meta'));
+    if (entry.summary) body.append(node('p', entry.summary, 'tl-full-summary'));
+    if (entry.params_json) {
+      body.append(node('div', 'Parameters', 'tl-detail-label'));
+      body.append(node('pre', formatPrettyJson(entry.params_json), 'tl-pre'));
     }
-    return row;
+    if (entry.output_json) {
+      body.append(node('div', 'Output', 'tl-detail-label'));
+      body.append(node('pre', formatPrettyJson(entry.output_json), 'tl-pre'));
+    }
+    details.append(body);
+    return details;
   }
 
   function renderToolLogList() {
@@ -635,13 +634,22 @@
   function matchesCurrentFilter(entry) {
     if (tlFilter === 'ok' && !entry.success) return false;
     if (tlFilter === 'err' && entry.success) return false;
-    const q = (tlSearchInput?.value || '').trim().toLowerCase();
-    if (!q) return true;
+    const raw = (tlSearchInput?.value || '').trim();
+    if (!raw) return true;
+    const toolLower = (entry.tool || '').toLowerCase();
     const hay = [entry.tool, entry.channel, entry.summary, entry.params_json, entry.output_json]
       .filter(Boolean)
       .join(' ')
       .toLowerCase();
-    return hay.includes(q);
+    for (const token of raw.split(/\s+/).slice(0, 16)) {
+      if (token.startsWith('-')) {
+        const excluded = token.slice(1).toLowerCase();
+        if (excluded && toolLower.includes(excluded)) return false;
+      } else if (!hay.includes(token.toLowerCase())) {
+        return false;
+      }
+    }
+    return true;
   }
 
   async function loadToolLogs(append = false) {
@@ -683,6 +691,12 @@
   tlSearchForm?.addEventListener('submit', (event) => {
     event.preventDefault();
     loadToolLogs(false);
+  });
+
+  let tlSearchTimer = null;
+  tlSearchInput?.addEventListener('input', () => {
+    clearTimeout(tlSearchTimer);
+    tlSearchTimer = setTimeout(() => loadToolLogs(false), 180);
   });
 
   for (const btn of tlFilterBtns) {
