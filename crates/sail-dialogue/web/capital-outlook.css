@@ -254,7 +254,7 @@
 }
 
 @media (max-width: 480px) {
-  .cp-outlook-chart-wrap {
+  .cp-outlook-chart-wrap:has(svg) {
     min-height: 220px;
   }
 

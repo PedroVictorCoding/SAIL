@@ -660,6 +660,10 @@ main {
   display: none;
 }
 
+.cp-tab-narrow {
+  display: none;
+}
+
 .cp-tab-btn {
   flex-shrink: 0;
   background: transparent;
@@ -707,26 +711,8 @@ main {
   color: #e17055;
 }
 
-/* Mobile & Small Screen Adaptations (390px support) */
+/* Narrow screens */
 @media (max-width: 600px) {
-  .cp-signals-cards-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .cp-signals-header {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .cp-signals-actions {
-    width: 100%;
-  }
-
-  .cp-signals-actions .cp-button {
-    width: 100%;
-    justify-content: center;
-  }
-
   .cp-signal-search-form {
     flex-direction: column;
     align-items: stretch;
@@ -746,12 +732,38 @@ main {
     white-space: normal;
   }
 
-  .cp-record-totals {
-    grid-template-columns: repeat(2, 1fr);
+  .cp-tile-val {
+    font-size: 19px;
+    white-space: nowrap;
   }
 
-  .cp-card-chart {
-    height: 100px;
+  .cp-tab-nav {
+    padding: 0 4px;
+  }
+
+  .cp-tab-btn {
+    padding: 11px 6px;
+    font-size: 13px;
+  }
+
+  .cp-tab-wide {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .cp-tab-narrow {
+    display: inline;
+  }
+
+  .cp-row,
+  .cp-note,
+  .cp-more > summary {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 }
 
