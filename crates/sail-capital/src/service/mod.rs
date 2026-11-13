@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+mod board;
 mod dividends_run;
 use grants::grant_record;
 mod grants;
@@ -98,6 +99,8 @@ pub struct CapitalService {
     evaluation_cache: std::sync::Mutex<Option<(String, crate::forecast::EvalReport)>>,
     /// The signal report, cached like the evaluation.
     signals_cache: std::sync::Mutex<Option<(String, crate::signals::SignalReport)>>,
+    /// The signal board, cached like the signal report plus the trade run and the day.
+    board_cache: std::sync::Mutex<Option<(String, crate::board::SignalBoard)>>,
 }
 
 /// The daemon's Capital service, set once when Dialogue mounts the owner API.
@@ -209,6 +212,7 @@ impl CapitalService {
             model_runs: std::sync::Mutex::new(Default::default()),
             evaluation_cache: std::sync::Mutex::new(None),
             signals_cache: std::sync::Mutex::new(None),
+            board_cache: std::sync::Mutex::new(None),
         })
     }
 

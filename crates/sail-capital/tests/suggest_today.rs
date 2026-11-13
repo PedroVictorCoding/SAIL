@@ -1,6 +1,7 @@
 //! Round 11: the risk policy, suggestion actions, and the Today rules.
 use chrono::{Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
+use sail_capital::board::{BoardMeta, BoardRow, Lean, OutlookSummary, Read};
 use sail_capital::contracts::{Currency, Money};
 use sail_capital::insights::AccountView;
 use sail_capital::optimize::{Breach, Change, Mode, Plan, Rule};
@@ -90,6 +91,7 @@ fn facts(policy: RiskPolicy) -> Facts {
         idea_horizon: 60,
         signals_passed: Vec::new(),
         combined_ic: 0.0,
+        board: Vec::new(),
     }
 }
 
@@ -307,4 +309,94 @@ fn money_is_whole_units_with_separators() {
     assert_eq!(format_money(1234567.4, "EUR"), "1,234,567 EUR");
     assert_eq!(format_money(-999.6, "EUR"), "-1,000 EUR");
     assert_eq!(format_money(12.0, ""), "12");
+}
+
+fn board_row(symbol: &str, held: bool, lean: Lean, proven: bool) -> BoardRow {
+    BoardRow {
+        meta: BoardMeta {
+            key: format!("k:{symbol}"),
+            symbol: symbol.into(),
+            name: symbol.into(),
+            class: "stock".into(),
+            held,
+        },
+        session: None,
+        close: Some(100.0),
+        change_1m: None,
+        readings: Vec::new(),
+        combined: Vec::new(),
+        outlook: vec![OutlookSummary {
+            horizon_sessions: 63,
+            median: 0.012,
+            low: -0.15,
+            high: 0.18,
+            p_up: 0.54,
+        }],
+        setup: None,
+        read: Read {
+            lean,
+            proven,
+            for_count: 0,
+            against_count: 3,
+            sentence: format!("{symbol} read. Caveat."),
+            short: format!("{symbol} read"),
+        },
+    }
+}
+
+#[test]
+fn the_board_gives_per_stock_signal_suggestions_labelled_by_proof() {
+    let mut f = facts(confirmed());
+    f.board = vec![
+        board_row("WEAK", true, Lean::Disfavoured, false),
+        board_row("FINE", true, Lean::Favoured, false),
+        board_row("STAR", false, Lean::Favoured, false),
+        board_row("MEH", false, Lean::Mixed, false),
+    ];
+    let today = build(f, &BTreeSet::new());
+    let signal: Vec<_> = today
+        .suggestions
+        .iter()
+        .filter(|s| s.kind == Kind::Signal)
+        .collect();
+    assert_eq!(signal.len(), 2);
+    let weak = signal.iter().find(|s| s.title.contains("against")).unwrap();
+    assert_eq!(weak.severity, Severity::Low);
+    assert_eq!(weak.tab, Tab::Signals);
+    assert_eq!(weak.confidence.as_deref(), Some("unproven"));
+    assert_eq!(weak.stocks.len(), 1);
+    assert_eq!(weak.stocks[0].symbol, "WEAK");
+    assert!(
+        weak.stocks[0]
+            .line
+            .starts_with("WEAK read. 3-month outlook: median +1.2%"),
+        "{}",
+        weak.stocks[0].line
+    );
+    assert!(weak.stocks[0].line.contains("54% chance of ending higher"));
+    assert!(!weak.stocks[0].line.contains("Caveat"));
+    let star = signal.iter().find(|s| s.title.contains("favour")).unwrap();
+    assert_eq!(
+        star.stocks
+            .iter()
+            .map(|s| s.symbol.as_str())
+            .collect::<Vec<_>>(),
+        ["STAR"]
+    );
+    // Nothing is sized, and doing nothing stays the stance.
+    assert!(signal.iter().all(|s| s.changes.is_empty()));
+    assert_eq!(today.stance.label, "hold");
+
+    // A validated read on a holding matters more.
+    let mut f = facts(confirmed());
+    f.combined_ic = 0.06;
+    f.board = vec![board_row("WEAK", true, Lean::Disfavoured, true)];
+    let today = build(f, &BTreeSet::new());
+    let weak = today
+        .suggestions
+        .iter()
+        .find(|s| s.kind == Kind::Signal)
+        .unwrap();
+    assert_eq!(weak.severity, Severity::Medium);
+    assert_eq!(weak.confidence.as_deref(), Some("medium"));
 }

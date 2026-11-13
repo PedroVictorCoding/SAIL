@@ -251,7 +251,45 @@ fn signals(service: &CapitalService, input: &Value) -> Result<Value, String> {
         None => (None, Vec::new(), Vec::new(), Vec::new()),
     };
 
+    let board = service
+        .signal_board(&account)
+        .map_err(|error| error.to_string())?;
+    let rows: Vec<Value> = board
+        .rows
+        .iter()
+        .map(|row| {
+            let three_months = row.outlook.iter().find(|o| o.horizon_sessions == 63);
+            json!({
+                "symbol": &row.meta.symbol,
+                "name": &row.meta.name,
+                "held": row.meta.held,
+                "lean": row.read.lean,
+                "proven": row.read.proven,
+                "read": &row.read.sentence,
+                "readings": row.readings.iter().map(|r| json!({
+                    "signal": r.signal,
+                    "percentile": r.percentile.round(),
+                    "text": &r.text,
+                })).collect::<Vec<_>>(),
+                "outlook_3m": three_months.map(|o| json!({
+                    "median": o.median,
+                    "low_5": o.low,
+                    "high_95": o.high,
+                    "chance_up": o.p_up,
+                })),
+                "setup": &row.setup,
+            })
+        })
+        .collect();
+
     Ok(json!({
+        "board": {
+            "session": board.session,
+            "validated_signals": &board.passed,
+            "outlook_record": &board.outlook_record,
+            "rows": rows,
+            "notes": &board.notes,
+        },
         "run_at": trade.run_at,
         "session": session,
         "cards": cards,

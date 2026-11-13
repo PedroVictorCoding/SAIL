@@ -92,7 +92,10 @@ impl CapitalService {
 
     /// Stored paths of the enabled outlook models for `key`, from each model's
     /// `evaluate_from` on.
-    fn external_paths(&self, key: &str) -> Result<Vec<crate::outlook::ExternalPath>, ServiceError> {
+    pub(super) fn external_paths(
+        &self,
+        key: &str,
+    ) -> Result<Vec<crate::outlook::ExternalPath>, ServiceError> {
         let mut out = Vec::new();
         for spec in &self.outlook_specs {
             let (_, paths) = self.store.outlook_paths(spec.component, Some(key))?;
@@ -111,8 +114,8 @@ impl CapitalService {
         }
     }
 
-    /// The blended outlook for one held symbol, from the latest close or as a replay
-    /// from `cutoff`.
+    /// The blended outlook for one symbol in the signal universe (a holding or a
+    /// watchlist stock or ETF), from the latest close or as a replay from `cutoff`.
     pub fn outlook(
         &self,
         account: &AccountId,
@@ -126,7 +129,8 @@ impl CapitalService {
                 crate::outlook::HORIZONS
             )));
         }
-        let held = self.held_instruments(account)?;
+        let mut held = self.held_instruments(account)?;
+        held.extend(self.universe_pairs(account)?);
         let wanted = symbol.trim().to_ascii_uppercase();
         let Some((key, symbol)) = held
             .iter()
@@ -134,7 +138,7 @@ impl CapitalService {
             .cloned()
         else {
             return Err(ServiceError::BadRequest(format!(
-                "{symbol} isn't a holding."
+                "{symbol} isn't a holding or on the watchlist."
             )));
         };
         let data = self.closes_for(&[(key.clone(), symbol.clone())], Utc::now())?;
@@ -203,7 +207,7 @@ impl CapitalService {
         account: &AccountId,
         cutoff: chrono::NaiveDate,
     ) -> Result<crate::signals::SignalReport, ServiceError> {
-        let held = self.held_instruments(account)?;
+        let held = self.universe_pairs(account)?;
         let data = self.closes_for(&held, Utc::now())?;
         type Closes = Vec<(chrono::NaiveDate, rust_decimal::Decimal)>;
         let cut: Vec<(String, String, Closes)> = data

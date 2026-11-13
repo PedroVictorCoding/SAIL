@@ -380,9 +380,9 @@ function setupCollapsibles() {
   }
 }
 
-const TABS = ["today", "portfolio", "income", "outlook", "record", "settings"];
+const TABS = ["today", "portfolio", "income", "signals", "outlook", "record", "settings"];
 // Links and bookmarks from before round 17.
-const TAB_ALIASES = { holdings: "portfolio", research: "portfolio", signals: "outlook", forecasts: "record", data: "settings" };
+const TAB_ALIASES = { holdings: "portfolio", research: "portfolio", forecasts: "record", data: "settings" };
 
 function normalizeTab(tabId) {
   const id = String(tabId || "").toLowerCase();

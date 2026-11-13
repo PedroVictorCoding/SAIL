@@ -150,14 +150,13 @@ pub async fn execute_escalation(
         _ => Importance::Normal,
     };
     let text = |key: &str| input[key].as_str().unwrap_or_default().to_owned();
-    let forge_job = input["forge_job_id"]
-        .as_str()
-        .map(str::trim)
-        .filter(|id| {
-            !id.is_empty()
-                && id.len() <= 64
-                && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        });
+    let forge_job = input["forge_job_id"].as_str().map(str::trim).filter(|id| {
+        !id.is_empty()
+            && id.len() <= 64
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    });
     // Trusted code sets the origin: a live voice turn is never the model's call to make.
     let origin = if sail_common::resources::global().voice_active() {
         Origin::VoiceTurn
@@ -880,7 +879,7 @@ pub fn registry() -> Arc<ToolRegistry> {
         ),
         (
             "capital:signals",
-            "The latest verified trade signals: run date and session, published cards with symbol, side, setup, entry zone, stop, targets, size and why; the full six-setup scoreboard; and setups that fired but were suppressed. Use for 'any signals?', 'what should I trade?', 'is there a buy or sell setup?'. Read-only.",
+            "The latest verified trade signals: run date and session, published cards with symbol, side, setup, entry zone, stop, targets, size and why; the full six-setup scoreboard; and setups that fired but were suppressed; plus the per-stock signal board: for every holding and watchlist stock or ETF, a read (favoured, disfavoured, mixed), whether it rests on validated signals, each price signal's reading and percentile, and the 3-month outlook (median, 5-95% range, chance up). Use for 'any signals?', 'what should I trade?', 'is there a buy or sell setup?', 'what do the signals say about X?', 'which of my stocks look weak?'. Read-only.",
             json!({"account": capital_account()}),
             &[],
             ToolEffect::ReadOnly,

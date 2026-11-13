@@ -1319,6 +1319,8 @@ body {
     border-right: 0;
     border-bottom: 1px solid var(--cp-line);
     overflow: visible;
+    /* The section strip scrolls inside; don't let it widen the page. */
+    overflow-x: clip;
   }
 
   .cp-brand {
