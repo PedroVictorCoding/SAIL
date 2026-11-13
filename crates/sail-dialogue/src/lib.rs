@@ -60,6 +60,7 @@ pub use control::{
 };
 pub use orb::{AudioSpectrum8Band, OrbEngine, OrbState, OrbTelemetry};
 pub use pipeline::RealtimeVoicePipeline;
+pub use execution::execute_escalation;
 pub use server::run_dialogue_server;
 pub use speech::SpeechChunker;
 pub use staged_ack::StagedAckCatalog;

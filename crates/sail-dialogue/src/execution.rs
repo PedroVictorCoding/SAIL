@@ -111,7 +111,8 @@ impl Tool for EscalateTool {
     }
 }
 
-pub(crate) async fn execute_escalation(
+/// Run the `escalate_reasoning` tool against the installed escalation service.
+pub async fn execute_escalation(
     input: &Value,
     correlation_id: Option<String>,
 ) -> Result<Value, String> {
@@ -356,6 +357,7 @@ impl Tool for Canvas {
 /// here: they act on the current turn's image and archive, not through the scheduler.
 /// Registered tools offered to the model only when the owner turned them on (see
 /// [`escalation_tool_definition`]); they are not in [`MODEL_TOOL_ORDER`].
+#[cfg(test)]
 pub(crate) const OWNER_GATED_TOOLS: [&str; 1] = ["escalate:reasoning"];
 
 pub(crate) const MODEL_TOOL_ORDER: [&str; 28] = [
@@ -775,12 +777,12 @@ pub fn registry() -> Arc<ToolRegistry> {
                 version: 1,
                 description: "Ask a stronger external model for help with a hard coding, research, reasoning, planning or writing problem you could not solve well yourself. Use rarely: only after trying, and only when a better answer clearly matters. SAIL's budget policy decides; it may refuse. Never for small talk.".into(),
                 input_schema: json!({"type":"object","properties":{
-                    "kind": {"type":"string","enum":["coding","research","reasoning","planning","writing"]},
+                    "kind": {"type":"string","maxLength":16,"enum":["coding","research","reasoning","planning","writing"]},
                     "question": string(12_000, "A self-contained question with the needed context; private details are removed automatically"),
                     "justification": string(600, "Why you cannot answer this well yourself"),
                     "expected_benefit": string(600, "What a better answer would change for the user"),
                     "token_budget": {"type":"integer","minimum":100,"maximum":32000,"description":"Most answer tokens worth spending"},
-                    "importance": {"type":"string","enum":["low","normal","high"]},
+                    "importance": {"type":"string","maxLength":8,"enum":["low","normal","high"]},
                     "complexity": {"type":"number","minimum":0,"maximum":1},
                     "local_confidence": {"type":"number","minimum":0,"maximum":1,"description":"Your confidence in your own answer"},
                     "local_attempts": {"type":"integer","minimum":0,"maximum":100},

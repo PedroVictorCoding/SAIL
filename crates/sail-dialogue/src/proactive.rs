@@ -78,15 +78,7 @@ pub fn start(pulse: Option<Arc<Pulse>>) -> Option<Arc<Proactive>> {
     let initiative = Arc::new(Initiative::new(attention, agenda));
     let _ = sail_discovery::install_global(initiative.clone());
     let escalation = start_escalation();
-    let proactive = Arc::new(Proactive {
-        initiative,
-        escalation,
-        pulse,
-        last_tick: Mutex::new(TickReport::default()),
-        last_digest: Mutex::new(None),
-        last_check: Mutex::new(Utc::now()),
-        answered: Mutex::new(Vec::new()),
-    });
+    let proactive = Proactive::new(initiative, escalation, pulse);
     let proactive = GLOBAL.get_or_init(|| proactive).clone();
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         let looping = proactive.clone();
@@ -130,6 +122,23 @@ fn start_escalation() -> Option<Arc<EscalationService>> {
 }
 
 impl Proactive {
+    /// An engine over the given stores, without a timer (`start` adds the timer).
+    pub fn new(
+        initiative: Arc<Initiative>,
+        escalation: Option<Arc<EscalationService>>,
+        pulse: Option<Arc<Pulse>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            initiative,
+            escalation,
+            pulse,
+            last_tick: Mutex::new(TickReport::default()),
+            last_digest: Mutex::new(None),
+            last_check: Mutex::new(Utc::now()),
+            answered: Mutex::new(Vec::new()),
+        })
+    }
+
     async fn run(self: Arc<Self>) {
         let mut answers = self.escalation.as_ref().map(|s| s.subscribe());
         let mut timer = tokio::time::interval(tick_period());
@@ -378,4 +387,40 @@ fn disk_observation() -> Option<Observation> {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn at(h: u32, m: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 11, 12, h, m, 0).unwrap()
+    }
+
+    #[test]
+    fn digest_fires_once_when_a_digest_time_passes() {
+        let settings = AttentionSettings::default(); // 08:00 and 18:00 local
+        assert!(digest_due(&settings, 0, at(7, 58), at(8, 3)));
+        assert!(!digest_due(&settings, 0, at(8, 3), at(8, 8)));
+        assert!(!digest_due(&settings, 0, at(9, 0), at(9, 0)));
+        // UTC+1: 08:00 local is 07:00 UTC.
+        assert!(digest_due(&settings, 60, at(6, 58), at(7, 2)));
+        assert!(!digest_due(&settings, 60, at(7, 58), at(8, 3)));
+    }
+
+    #[test]
+    fn digest_across_midnight_and_long_gaps() {
+        let mut settings = AttentionSettings::default();
+        settings.digest_minutes = vec![0];
+        let before = Utc.with_ymd_and_hms(2026, 11, 11, 23, 58, 0).unwrap();
+        assert!(digest_due(&settings, 0, before, at(0, 3)));
+        // A daemon that slept through 18:00 releases on wake.
+        assert!(digest_due(
+            &AttentionSettings::default(),
+            0,
+            at(17, 0),
+            at(19, 0)
+        ));
+    }
 }
