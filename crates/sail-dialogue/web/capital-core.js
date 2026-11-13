@@ -380,7 +380,7 @@ function setupCollapsibles() {
   }
 }
 
-const TABS = ["today", "portfolio", "income", "signals", "outlook", "record", "settings"];
+const TABS = ["today", "portfolio", "income", "signals", "outlook", "prediction", "record", "settings"];
 // Links and bookmarks from before round 17.
 const TAB_ALIASES = { holdings: "portfolio", research: "portfolio", forecasts: "record", data: "settings" };
 
@@ -427,7 +427,7 @@ function switchTab(tabId, updateUrl = true) {
   const crumb = document.getElementById("cpCrumb");
   const btn = document.getElementById(`cpTab-${tabId}`);
   if (crumb && btn) crumb.textContent = (btn.querySelector(".cp-tab-wide, span") || btn).textContent.trim();
-  if (typeof loadTab === "function" && accountList.length > 0) loadTab(tabId);
+  if (typeof loadTab === "function" && (accountList.length > 0 || tabId === "prediction")) loadTab(tabId);
 }
 
 function setupTabs() {

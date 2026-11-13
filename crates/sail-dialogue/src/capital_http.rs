@@ -52,6 +52,7 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/prices/refresh", post(price_refresh))
         .route("/prices/import", post(price_import))
         .route("/prices", get(prices))
+        .route("/prediction", get(prediction_status).post(prediction_start))
         .route("/forecasts", get(forecasts))
         .route("/forecasts/evaluation", get(forecast_evaluation))
         .route("/today", get(today))
@@ -1013,4 +1014,35 @@ mod tests {
         assert_eq!(query.allocation, Some(Allocation::Underweight));
         assert_eq!(query.top_n, None);
     }
+}
+
+async fn prediction_status(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    Ok(no_store(to_json(&s.service.prediction().status())?))
+}
+async fn prediction_start(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Json(request): Json<sail_capital::prediction::Request>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let engine = s.service.prediction();
+    let job = tokio::task::spawn_blocking(move || engine.start(request))
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"Forecast job could not start."})),
+            )
+        })?
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error":e}))))?;
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(job),
+    )
+        .into_response())
 }
