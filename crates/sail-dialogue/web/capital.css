@@ -238,6 +238,8 @@ main {
   color: var(--sail-text);
   margin: 6px 0 2px;
   letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .cp-tile-sub {

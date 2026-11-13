@@ -42,9 +42,29 @@ function groupDecimal(text) {
   return `${negative ? "-" : ""}${grouped}${frac !== undefined ? "." + frac : ""}`;
 }
 
+function roundDecimal(text, decimals = 2) {
+  const str = String(text);
+  const negative = str.startsWith("-");
+  const body = negative ? str.slice(1) : str;
+  const dot = body.indexOf(".");
+  if (dot === -1) return str;
+  const whole = body.slice(0, dot) || "0";
+  const frac = body.slice(dot + 1);
+  if (frac.length <= decimals) return str;
+
+  const kept = frac.slice(0, decimals);
+  const nextDigit = frac.charCodeAt(decimals) - 48;
+  let units = BigInt(whole + kept);
+  if (nextDigit >= 5) units += 1n;
+  const digits = units.toString().padStart(decimals + 1, "0");
+  const newWhole = digits.slice(0, digits.length - decimals);
+  const newFrac = decimals > 0 ? "." + digits.slice(digits.length - decimals) : "";
+  return `${negative && units > 0n ? "-" : ""}${newWhole}${newFrac}`;
+}
+
 function formatMoney(money) {
   if (!money || money.amount === undefined || money.amount === null) return "—";
-  return `${groupDecimal(money.amount)} ${money.currency || ""}`.trim();
+  return `${groupDecimal(roundDecimal(money.amount, 2))} ${money.currency || ""}`.trim();
 }
 
 /** "5 h ago" up to two days, then "3 days ago". */
