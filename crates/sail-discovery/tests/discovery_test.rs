@@ -31,6 +31,9 @@ fn school_item_stages_have_distinct_keys_and_rising_urgency() {
     assert_eq!(day[0].provenance, Provenance::UserCommitment);
     assert_eq!(day[0].source, Source::Moodle);
     assert!(day[0].body.contains("40%"));
+    // The title is the item's own name; the course goes in the body.
+    assert_eq!(day[0].title, "1.º Teste");
+    assert!(day[0].body.contains("Cálculo II"));
     // Same facts → same signal.
     assert_eq!(detect(&item(Duration::hours(5)), now()), day);
 }

@@ -278,6 +278,16 @@ pub fn digest_due(
     })
 }
 
+/// A readable course name: Moodle's full name, falling back to the short code.
+fn course_label(short_name: &str, full_name: &str) -> String {
+    let full = full_name.trim();
+    if full.is_empty() {
+        short_name.trim().to_owned()
+    } else {
+        full.to_owned()
+    }
+}
+
 fn moodle_observations(now: DateTime<Utc>, offset_minutes: i32) -> Vec<Observation> {
     use sail_moodle::{ChangeKind, Confidence, ItemKind};
     let Some(service) = sail_moodle::service::global() else {
@@ -288,7 +298,7 @@ fn moodle_observations(now: DateTime<Utc>, offset_minutes: i32) -> Vec<Observati
         .courses()
         .unwrap_or_default()
         .into_iter()
-        .map(|c| (c.id, c.short_name))
+        .map(|c| (c.id, course_label(&c.short_name, &c.full_name)))
         .collect();
     let course = |id: i64| {
         names

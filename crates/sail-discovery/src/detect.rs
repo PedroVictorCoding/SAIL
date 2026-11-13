@@ -208,8 +208,10 @@ fn school_item(
         source: Source::Moodle,
         kind: format!("due_{stage}"),
         dedupe_key: format!("moodle:item:{id}:{stage}"),
-        title: format!("{label} in {}: {}", excerpt(course, 60), excerpt(title, 80)),
-        body: format!("{label} {what}.{weight_text}"),
+        // The card shows the item's own name; the course and stage go in the body,
+        // so a long course name never crowds the title.
+        title: excerpt(title, 90),
+        body: format!("{label} for {} {what}.{weight_text}", excerpt(course, 60)),
         urgency,
         relevance,
         novelty: if stage == "14d" { 0.8 } else { 0.6 },
@@ -245,8 +247,8 @@ fn school_change(
         source: Source::Moodle,
         kind: kind_name.into(),
         dedupe_key: format!("moodle:change:{id}"),
-        title: format!("{}: {}", excerpt(course, 60), excerpt(title, 90)),
-        body: String::new(),
+        title: excerpt(title, 90),
+        body: excerpt(course, 80),
         urgency,
         relevance,
         // A new file is routine; other changes are news.
