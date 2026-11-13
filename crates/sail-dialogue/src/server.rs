@@ -1937,6 +1937,8 @@ async fn run_turn(
     state
         .arena
         .record_turn_at_epoch(&session, current, &prompt, &reply, learning_epoch);
+    // Did the reply use an answer a stronger model gave during this turn? (#450)
+    crate::escalation_outcomes::settle_turn(&tool_correlation(&session, current).to_string(), &reply);
     // Extract and add learned knowledge from the conversation turn once if not already in memory.
     state
         .arena

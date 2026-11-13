@@ -189,6 +189,7 @@ impl Proactive {
         let settings = self.initiative.attention().settings().unwrap_or_default();
         let context = self.context(now, &settings);
         let report = self.initiative.tick(&observations, context);
+        crate::escalation_outcomes::settle_forge_jobs();
         *lock(&self.last_tick) = report.clone();
         let previous = std::mem::replace(&mut *lock(&self.last_check), now);
         if digest_due(&settings, offset, previous, now) {

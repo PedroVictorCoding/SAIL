@@ -62,6 +62,8 @@
     const trimmed = raw.trim();
     if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return trimmed;
     if (trimmed.startsWith('#')) return trimmed;
+    // The only external pages a signal may link to (see attention::ALLOWED_EXTERNAL_LINK_PREFIXES).
+    if (trimmed.startsWith('https://github.com/') && !/[\s"'<>\\]/.test(trimmed)) return trimmed;
     return null;
   }
 
@@ -294,7 +296,16 @@
     const actions = el(
       'div',
       { class: 'init-actions' },
-      link ? el('a', { class: 'init-act init-act-primary', href: link, text: 'Open' }) : null,
+      link
+        ? el('a', {
+            class: 'init-act init-act-primary',
+            href: link,
+            text: 'Open',
+            ...(link.startsWith('https://')
+              ? { target: '_blank', rel: 'noopener noreferrer' }
+              : {}),
+          })
+        : null,
       act('Useful', { feedback: 'useful' }, link ? '' : 'init-act-primary'),
       act('Later', { feedback: 'later', until: laterIso('1h') }),
       act('Dismiss', { feedback: 'dismiss' }),

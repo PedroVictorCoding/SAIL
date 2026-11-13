@@ -15,7 +15,7 @@ use sail_guardian::authority::ApprovalAuthority;
 use sail_mind::escalation::provider::{ExternalProvider, ProviderError, ProviderReply};
 use sail_mind::escalation::service::{self, EscalationService};
 use sail_mind::escalation::store::EscalationStore;
-use sail_mind::escalation::{EscalationPolicy, ProviderConfig};
+use sail_mind::escalation::{EscalationPolicy, Outcome, ProviderConfig};
 use sail_pulse::attention::AttentionContext;
 use sail_pulse::attention::store::AttentionStore;
 
@@ -319,4 +319,37 @@ async fn escalate_reasoning_tool_redacts_answers_caches_and_reports() {
         .await
         .unwrap();
     assert_eq!(status["outcomes"]["by_kind"][0][1], 1);
+
+    // Tied to a Forge job: filed under `forge:<id>`, so the job's passing tests can
+    // record that the escalation helped (#450).
+    let forge_input = json!({
+        "kind": "coding",
+        "question": "Why does the borrow checker reject this closure capturing a guard?",
+        "justification": "Two local attempts failed to compile",
+        "expected_benefit": "The Forge job can finish",
+        "token_budget": 500,
+        "local_attempts": 2,
+        "complexity": 0.9,
+        "forge_job_id": "job-7"
+    });
+    let forged = sail_dialogue::execute_escalation(&forge_input, Some("turn-1".into()))
+        .await
+        .unwrap();
+    let forged_job = forged["job_id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        service
+            .observe_correlated("forge:job-7", Outcome::Improved, "forge_tests")
+            .unwrap(),
+        1
+    );
+    let job = service.store().job(&forged_job).unwrap().unwrap();
+    assert_eq!(job.correlation_id.as_deref(), Some("forge:job-7"));
+    assert_eq!(job.outcome, Some(Outcome::Improved));
+    // The owner's word beats the check.
+    service.feedback(&forged_job, Outcome::Worse).unwrap();
+    assert!(
+        !service
+            .observe_outcome(&forged_job, Outcome::Improved, "forge_tests")
+            .unwrap()
+    );
 }

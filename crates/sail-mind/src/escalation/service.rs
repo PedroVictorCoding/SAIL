@@ -255,6 +255,38 @@ impl EscalationService {
         self.store.record_outcome(job_id, outcome)
     }
 
+    /// An automatic check measured whether job `job_id` helped (#450). The owner's own
+    /// feedback always wins; returns whether this was recorded.
+    pub fn observe_outcome(
+        &self,
+        job_id: &str,
+        outcome: Outcome,
+        check: &str,
+    ) -> Result<bool, String> {
+        let recorded = self.store.record_check_outcome(job_id, outcome, check)?;
+        if recorded {
+            tracing::info!(job_id, ?outcome, check, "escalation outcome observed");
+        }
+        Ok(recorded)
+    }
+
+    /// Like [`Self::observe_outcome`] for every job submitted with `correlation_id`
+    /// (e.g. `forge:<job id>`). Returns how many were recorded.
+    pub fn observe_correlated(
+        &self,
+        correlation_id: &str,
+        outcome: Outcome,
+        check: &str,
+    ) -> Result<usize, String> {
+        let mut recorded = 0;
+        for job_id in self.store.jobs_by_correlation(correlation_id)? {
+            if self.observe_outcome(&job_id, outcome, check)? {
+                recorded += 1;
+            }
+        }
+        Ok(recorded)
+    }
+
     pub fn status(&self) -> Result<EscalationStatus, String> {
         let policy = self.policy();
         let now = Utc::now();
