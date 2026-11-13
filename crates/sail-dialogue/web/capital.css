@@ -130,6 +130,72 @@ body {
   color: #ffb8a8;
 }
 
+/* Main Content Area */
+main {
+  flex: 1;
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Metric / Glow Tiles */
+.cp-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  padding: 16px 24px 0;
+}
+
+.cp-tile {
+  background: var(--sail-surface);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-card);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 10px 24px -8px rgba(0, 0, 0, 0.4);
+}
+
+.cp-tile::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: radial-gradient(circle at center, #496f9d, transparent 80%);
+  opacity: 0.8;
+}
+
+.cp-tile-label {
+  font-size: 12px;
+  color: var(--sail-text-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
+.cp-tile-val {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--sail-text);
+  margin: 6px 0 2px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.cp-tile-sub {
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
 /* Panels & Tables */
 .cp-panel {
   background: var(--sail-surface);
