@@ -6,12 +6,15 @@ const TAB_TITLES = {
   today: "Dashboard",
   portfolio: "Portfolio",
   income: "Income",
+  signals: "Signals",
   outlook: "Outlook",
   record: "Track record",
   settings: "Settings",
 };
 
-const KIND_LABELS = { attention: "Attention", policy: "Limits", idea: "Idea" };
+const KIND_LABELS = { attention: "Attention", policy: "Limits", signal: "Signals", idea: "Idea" };
+
+const LEAN_WORDS = { favoured: "Favoured", disfavoured: "Against", neutral: "Neutral", mixed: "Mixed", no_data: "No data" };
 
 // Index tiles, in order of preference: the first four the watchlist has.
 const INDEX_TILES = [
@@ -134,6 +137,16 @@ function renderSuggestions(suggestions, account) {
     const ifNothing = s.if_nothing
       ? `<p class="cp-sug-line"><span class="cp-sug-label">If you do nothing</span> ${escapeHtml(s.if_nothing)}</p>`
       : "";
+    const stocks = (s.stocks || []).length
+      ? `<ul class="cp-sug-stocks">${s.stocks.map((st) => `<li>
+          <span class="cp-sug-stock-head">
+            <span class="cp-sug-stock-sym">${escapeHtml(st.symbol)}</span>
+            <span class="cp-lean" data-lean="${escapeHtml(st.lean)}">${escapeHtml(LEAN_WORDS[st.lean] || st.lean)}</span>
+            <span class="cp-proof" data-proven="${st.proven ? "yes" : "no"}">${st.proven ? "validated" : "unproven"}</span>
+          </span>
+          <span class="cp-sug-stock-line">${escapeHtml(st.line)}</span>
+        </li>`).join("")}</ul>`
+      : "";
     const open = tab !== "today"
       ? `<button type="button" class="cp-button cp-btn-sm cp-sug-open" data-tab="${escapeHtml(tab)}">Open ${escapeHtml(TAB_TITLES[tab] || tab)}</button>`
       : "";
@@ -147,6 +160,7 @@ function renderSuggestions(suggestions, account) {
           <div class="cp-sug-body">
             <p class="cp-sug-why">${escapeHtml(s.why)}</p>
             ${ifNothing}
+            ${stocks}
             ${suggestionChanges(s.changes, currency)}
             ${confidence}
             ${evidence}

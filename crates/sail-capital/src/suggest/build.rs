@@ -60,6 +60,8 @@ pub struct Facts {
     pub signals_passed: Vec<String>,
     /// Combined IC at that horizon (0 when nothing passed).
     pub combined_ic: f64,
+    /// The signal board's rows, when it could be built.
+    pub board: Vec<crate::board::BoardRow>,
 }
 
 /// Builds Today. Suggestions whose id is in `handled` are hidden and counted.
@@ -87,6 +89,7 @@ pub fn build(facts: Facts, handled: &BTreeSet<String>) -> Today {
     let idea = idea_suggestion(&facts, &money);
     let idea_exists = idea.is_some();
     all.extend(idea);
+    signal_suggestions(&facts, &mut all);
 
     all.sort_by(|a, b| a.severity.cmp(&b.severity).then(a.kind.cmp(&b.kind)));
     let stance = stance(&facts, !breaches.is_empty(), idea_exists);
@@ -134,6 +137,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
             confidence: None,
             evidence,
             tab,
+            stocks: Vec::new(),
         });
     };
 
@@ -438,6 +442,7 @@ fn policy_suggestions(
                 confidence: None,
                 evidence,
                 tab: Tab::Today,
+                stocks: Vec::new(),
             });
         }
         _ => {
@@ -464,6 +469,7 @@ fn policy_suggestions(
                     confidence: None,
                     evidence,
                     tab: if draft { Tab::Settings } else { Tab::Portfolio },
+                    stocks: Vec::new(),
                 });
             }
         }
@@ -526,8 +532,194 @@ fn idea_suggestion(facts: &Facts, money: &dyn Fn(f64) -> String) -> Option<Sugge
         rules: vec![Rule::Signal],
         confidence: Some(confidence.into()),
         evidence,
-        tab: Tab::Record,
+        tab: Tab::Signals,
+        stocks: Vec::new(),
     })
+}
+
+/// Most watchlist names in the "favoured" suggestion.
+pub const MAX_FAVOURED: usize = 5;
+/// Most holdings listed line by line in the "against" suggestion; the rest are on the
+/// Signals tab.
+pub const MAX_WEAK_LINES: usize = 8;
+
+/// The board's line for a stock: its read, then the 3-month outlook when there is one.
+fn stock_line(row: &crate::board::BoardRow) -> super::StockLine {
+    let mut line = format!("{}.", row.read.short);
+    if let Some(o) = row.outlook.iter().find(|o| o.horizon_sessions == 63) {
+        line.push_str(&format!(
+            " 3-month outlook: median {:+.1}%, 90% range {:+.0}% to {:+.0}%, {:.0}% chance of ending higher.",
+            o.median * 100.0,
+            o.low * 100.0,
+            o.high * 100.0,
+            o.p_up * 100.0
+        ));
+    }
+    if let Some(setup) = &row.setup {
+        let side = match setup.side {
+            crate::trade::Side::Long => "long",
+            crate::trade::Side::Short => "short",
+        };
+        line.push_str(&if setup.published {
+            format!(" A {side} trade setup published today (see Outlook → Trade signals).")
+        } else {
+            format!(" A {side} trade setup fired today but hasn't earned a record, so it didn't publish.")
+        });
+    }
+    super::StockLine {
+        symbol: row.meta.symbol.clone(),
+        lean: row.read.lean,
+        proven: row.read.proven,
+        line,
+    }
+}
+
+/// Strength of a read for ordering: the validated score, else the net agreement.
+fn strength(row: &crate::board::BoardRow) -> f64 {
+    if row.read.proven {
+        row.combined
+            .iter()
+            .filter(|c| c.alpha != 0.0)
+            .map(|c| c.score.abs())
+            .fold(0.0, f64::max)
+            + 10.0
+    } else {
+        (row.read.for_count as f64 - row.read.against_count as f64).abs()
+    }
+}
+
+/// " (combined IC 0.06 at 3 months)", or nothing when the 3-month combination is empty.
+fn ic_note(ic: f64) -> String {
+    if ic > 0.0 {
+        format!(" (combined IC {ic:.2} at 3 months)")
+    } else {
+        String::new()
+    }
+}
+
+fn signal_suggestions(facts: &Facts, out: &mut Vec<Suggestion>) {
+    use crate::board::Lean;
+    if facts.account.is_none() || facts.board.is_empty() {
+        return;
+    }
+    let mut weak: Vec<&crate::board::BoardRow> = facts
+        .board
+        .iter()
+        .filter(|r| r.meta.held && r.read.lean == Lean::Disfavoured)
+        .collect();
+    weak.sort_by(|a, b| {
+        strength(b)
+            .total_cmp(&strength(a))
+            .then(a.meta.symbol.cmp(&b.meta.symbol))
+    });
+    if !weak.is_empty() {
+        let n = weak.len();
+        let proven = weak.iter().any(|r| r.read.proven);
+        let symbols: Vec<String> = weak.iter().map(|r| r.meta.symbol.clone()).collect();
+        let evidence: Vec<String> = weak
+            .iter()
+            .map(|r| {
+                format!(
+                    "{} {}",
+                    r.meta.symbol,
+                    if r.read.proven {
+                        "validated"
+                    } else {
+                        "unproven"
+                    }
+                )
+            })
+            .collect();
+        out.push(Suggestion {
+            id: suggestion_id(Kind::Signal, "held-disfavoured", &evidence),
+            kind: Kind::Signal,
+            severity: if proven { Severity::Medium } else { Severity::Low },
+            title: format!(
+                "Signals are against {n} of your holding{}: {}",
+                plural(n),
+                list(&symbols, 3)
+            ),
+            why: {
+                let mut why = if proven {
+                    format!(
+                        "Validated signals rank these below the rest of your holdings and watchlist{}. Any single stock can still go the other way. Check whether your reasons for holding them still stand; trimming is one option, not a requirement.",
+                        ic_note(facts.combined_ic)
+                    )
+                } else {
+                    "Most price signals rank these in the bottom third of your holdings and watchlist. No signal has passed out-of-sample checks yet, so treat this as a prompt to look, not a reason to sell.".to_string()
+                };
+                if n > MAX_WEAK_LINES {
+                    why.push_str(&format!(
+                        " The strongest {MAX_WEAK_LINES} are below; all {n} are on the Signals tab."
+                    ));
+                }
+                why
+            },
+            if_nothing: None,
+            changes: Vec::new(),
+            rules: Vec::new(),
+            confidence: Some(if proven { confidence(facts.combined_ic) } else { "unproven" }.into()),
+            evidence,
+            tab: Tab::Signals,
+            stocks: weak.into_iter().take(MAX_WEAK_LINES).map(stock_line).collect(),
+        });
+    }
+
+    let mut strong: Vec<&crate::board::BoardRow> = facts
+        .board
+        .iter()
+        .filter(|r| !r.meta.held && r.read.lean == Lean::Favoured)
+        .collect();
+    strong.sort_by(|a, b| {
+        strength(b)
+            .total_cmp(&strength(a))
+            .then(a.meta.symbol.cmp(&b.meta.symbol))
+    });
+    strong.truncate(MAX_FAVOURED);
+    if !strong.is_empty() {
+        let n = strong.len();
+        let proven = strong.iter().any(|r| r.read.proven);
+        let symbols: Vec<String> = strong.iter().map(|r| r.meta.symbol.clone()).collect();
+        let evidence: Vec<String> = strong
+            .iter()
+            .map(|r| {
+                format!(
+                    "{} {}",
+                    r.meta.symbol,
+                    if r.read.proven {
+                        "validated"
+                    } else {
+                        "unproven"
+                    }
+                )
+            })
+            .collect();
+        out.push(Suggestion {
+            id: suggestion_id(Kind::Signal, "watch-favoured", &evidence),
+            kind: Kind::Signal,
+            severity: Severity::Low,
+            title: format!(
+                "Signals favour {n} watchlist name{}: {}",
+                plural(n),
+                list(&symbols, 3)
+            ),
+            why: if proven {
+                format!(
+                    "Validated signals rank these near the top of your holdings and watchlist{}. They are candidates to research, sized only if your limits allow.",
+                    ic_note(facts.combined_ic)
+                )
+            } else {
+                "Most price signals rank these in the top third of your holdings and watchlist. None has passed out-of-sample checks yet: past winners often keep going for a while, and often don't.".into()
+            },
+            if_nothing: None,
+            changes: Vec::new(),
+            rules: Vec::new(),
+            confidence: Some(if proven { confidence(facts.combined_ic) } else { "unproven" }.into()),
+            evidence,
+            tab: Tab::Signals,
+            stocks: strong.into_iter().map(stock_line).collect(),
+        });
+    }
 }
 
 fn stance(facts: &Facts, breached: bool, idea: bool) -> Stance {

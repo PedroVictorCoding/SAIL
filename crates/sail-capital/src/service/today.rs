@@ -66,12 +66,13 @@ impl CapitalService {
         Ok(record)
     }
 
-    /// The signal report over held instruments, cached until prices or holdings change.
+    /// The signal report over the signal universe (holdings plus the watchlist's stocks
+    /// and ETFs), cached until prices, model values or the universe change.
     pub fn signals(
         &self,
         account: &AccountId,
     ) -> Result<crate::signals::SignalReport, ServiceError> {
-        let held = self.held_instruments(account)?;
+        let held = self.universe_pairs(account)?;
         let mut held_keys: Vec<&str> = held.iter().map(|(key, _)| key.as_str()).collect();
         held_keys.sort_unstable();
         let model_version: u64 = self
@@ -285,6 +286,10 @@ impl CapitalService {
             idea_horizon: IDEA_HORIZON,
             signals_passed,
             combined_ic,
+            board: self
+                .signal_board(account)
+                .map(|b| b.rows)
+                .unwrap_or_default(),
         };
         Ok(crate::suggest::build::build(facts, &handled))
     }

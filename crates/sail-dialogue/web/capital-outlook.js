@@ -59,6 +59,32 @@ function updateOutlookHoldings(symbols) {
   loadOutlook();
 }
 
+// Opens the outlook chart for any symbol on the signal board, holding or watchlist.
+function openOutlookFor(symbol) {
+  const select = document.getElementById("cpOutlookSymbolSelect");
+  if (select && ![...select.options].some((o) => o.value === symbol)) {
+    let group = select.querySelector("optgroup[data-watch]");
+    if (!group) {
+      group = document.createElement("optgroup");
+      group.label = "Watchlist";
+      group.dataset.watch = "1";
+      select.appendChild(group);
+    }
+    const opt = document.createElement("option");
+    opt.value = symbol;
+    opt.textContent = symbol;
+    group.appendChild(opt);
+  }
+  if (select) select.value = symbol;
+  currentOutlookSymbol = symbol;
+  currentOutlookTrim = 0;
+  currentOutlookSessions = [];
+  const replay = document.getElementById("cpOutlookReplaySelect");
+  if (replay) replay.value = "0";
+  switchTab("outlook", true);
+  loadOutlook();
+}
+
 async function loadOutlook() {
   const wrap = document.getElementById("cpOutlookChartWrap");
   const replayBox = document.getElementById("cpOutlookReplaySummary");

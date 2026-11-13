@@ -6,6 +6,9 @@
 //!   sizing.
 //! - **Policy**: a limit the owner set is broken, with the smallest change that fixes
 //!   it (`optimize::Mode::Policy`). These are sized only against a **confirmed** policy.
+//! - **Signal**: what the signal board ([`crate::board`]) says per stock: holdings the
+//!   signals are against, and watchlist names they favour. Each line says whether it
+//!   rests on validated signals or only describes the past. There is no sizing.
 //! - **Idea**: a change that validated signals favour after risk and cost
 //!   (`optimize::Mode::Ideas`). Ideas exist only when a signal passed validation and the
 //!   net benefit is above zero. Each one shows its evidence and confidence, and how it
@@ -28,6 +31,8 @@ pub enum Kind {
     Attention,
     /// A limit is broken.
     Policy,
+    /// Per-stock signal reads from the board.
+    Signal,
     /// A validated signal favours a change.
     Idea,
 }
@@ -56,6 +61,8 @@ pub enum Tab {
     Income,
     /// The blended outlook per holding and trade signals.
     Outlook,
+    /// The signal board: every holding and watchlist stock side by side.
+    Signals,
     /// The track record: what has earned trust, and the evidence behind it.
     Record,
     /// Limits, watchlist, prices, model helpers and imports.
@@ -73,6 +80,19 @@ pub struct SizedChange {
     pub to_pct: f64,
     /// Signed amount in the account currency (positive adds).
     pub amount: f64,
+}
+
+/// One stock inside a signal suggestion.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StockLine {
+    /// Broker symbol.
+    pub symbol: String,
+    /// The board's lean.
+    pub lean: crate::board::Lean,
+    /// Rests on validated signals.
+    pub proven: bool,
+    /// The board's sentence, plus the outlook when there is one.
+    pub line: String,
 }
 
 /// A suggestion.
@@ -101,6 +121,9 @@ pub struct Suggestion {
     pub evidence: Vec<String>,
     /// Where the detail is.
     pub tab: Tab,
+    /// Per-stock lines (signal suggestions).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stocks: Vec<StockLine>,
 }
 
 /// What the owner did with a suggestion.

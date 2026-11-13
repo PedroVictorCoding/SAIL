@@ -27,15 +27,16 @@ Polymarket, a risk engine and any neural or `.sea` model are not built yet.
 ## The page
 
 `/capital` is a dashboard with a grouped sidebar (Overview, Account, Research, Others)
-and six sections; on a phone the sidebar becomes a top strip. A ticker of recent closes
-runs under the top bar. Old links (`#holdings`, `#research`, `#signals`, `#forecasts`,
-`#data`) still resolve.
+and seven sections; on a phone the sidebar becomes a top strip. A ticker of recent closes
+runs under the top bar. Old links (`#holdings`, `#research`, `#forecasts`, `#data`)
+still resolve.
 
 | Tab | Answers | Holds |
 |---|---|---|
 | Dashboard | How is it doing, and what needs me? | Account value with the holdings line, figures, market breadth, holding price cards, index tiles, what needs you, calendar, market overview |
 | Portfolio | What do I own, and is the ledger right? | Positions with trailing stops, CFDs, allocation, reconciliation, received shares, SEC filings |
 | Income | What does it pay? | Dividend projection, dividends received, income summary |
+| Signals | What do the signals say about each stock? | The signal board: every holding and watchlist stock or ETF with its read, the four price signals as percentiles, the 1- and 3-month outlook, any trade setup, and a CSV download |
 | Outlook | What could happen to a holding? | Holding outlook (fan and replay), trade signals, one-off asset check |
 | Track record | Has anything earned trust? | The scorecard, then the evidence: setups, live record, baselines, signal skill |
 | Settings | How is it configured? | Limits, watchlist, prices, model helpers, imports |
@@ -259,7 +260,7 @@ the account moved by one proposal, a smallest change of 50, costs of 10 bp (plus
 for another currency), and caution 4. The owner edits and confirms them in Data →
 Limits. Each save is a new append-only version. **Nothing is sized against a draft.**
 
-**Suggestions.** Three kinds, built by fixed rules (`suggest::build`):
+**Suggestions.** Four kinds, built by fixed rules (`suggest::build`):
 - **Attention:** old XTB data, figures that differ from XTB, holdings without prices,
   prices not being fetched, new SEC filings, positions XTB didn't value, and a draft
   policy.
@@ -267,6 +268,11 @@ Limits. Each save is a new append-only version. **Nothing is sized against a dra
   their own limits. Free funds outside the band become **one free-funds line** ("invest
   about X" or "raise about X"). SAIL has no evidence for which holdings to buy or sell
   with cash, so it doesn't choose them.
+- **Signal:** what the signal board says per stock. One item lists the holdings the
+  signals are against, and another the watchlist names they favour (at most five). Each
+  stock gets its read and 3-month outlook, and each item says once whether the reads
+  are validated or only describe the past. They are never sized. Validated reads on
+  holdings are medium severity; unproven ones are low.
 - **Idea:** validated signals favour a change, and its expected gain beats the extra risk
   and the trading costs. Each idea shows its confidence and what doing nothing means.
 
@@ -277,8 +283,11 @@ orders.
 **Signals** (`signals/`):
 - Price signals: 12-1 momentum, short-term reversal, low volatility, and distance from
   the 200-session average.
-- Each one is scored walk-forward by its rank IC across held instruments, on weekly
-  cross-sections.
+- Each one is scored walk-forward by its rank IC on weekly cross-sections of the
+  **signal universe**: the owned holdings (shares and ETFs, not CFDs) plus the
+  watchlist's stocks and ETFs. Until November 2026 it ranked only the holdings, which
+  left too few names for any signal to pass. FX, indices and commodities are left out,
+  because ranking a currency against a share says nothing.
 - The standard error is widened for overlapping outcomes. The horizon is converted to
   calendar days, about 1.4 per session.
 - A signal needs 26 cross-sections, and 8 effectively independent ones, before it can
@@ -297,6 +306,26 @@ orders.
   alone never turns into trading advice.
 - The covariance comes from weekly returns over two years, shrunk toward constant
   correlation.
+
+**The signal board** (`board.rs`, `GET /signals/board`). One row per instrument in the
+signal universe, holdings first:
+- **Readings:** each price signal in plain words ("up 34% over the past year, skipping
+  the last month") and as a percentile across the board, where 100 is the most
+  favourable.
+- **Outlook:** the blended outlook at 1 and 3 months: median, 5–95% range, and the
+  chance of ending higher, read from the fan's quantiles. The outlook's replay record
+  over the holdings (direction hit rate, share inside the 90% range) is shown once
+  above the table.
+- **Setup:** a trade setup that fired on the latest session, and whether it published.
+- **Read:** with a validated combination, its sign (favoured or against beyond ±0.5
+  SD, else neutral), marked *validated*. Without one, the agreement of the readings: a
+  percentile of 67 or more counts for and 33 or less against, and a net of two either
+  way leans. These are marked *unproven*, and the sentence says they describe the past.
+
+The board is cached until prices, model values, the universe, the trade run or the
+day change, and the background warm-up builds it every 5 minutes. A cold build over
+45 instruments takes about 3 seconds; a cached one is instant. Any row opens the
+outlook chart, including for watchlist names.
 
 **First run on the owner's holdings (2026-11-11).** No price signal passed at 60
 sessions, so there are no ideas. The draft limits flagged the idle free funds and one
@@ -622,7 +651,7 @@ search and check it.
 | `capital:overview` | Value, cash, top positions, stance, top suggestions, latest signals and risk |
 | `capital:today` | Stance, active suggestions with reasons and evidence, and sized changes |
 | `capital:portfolio` | Every position, cash, allocation, concentration, return, income and warnings |
-| `capital:signals` | Published cards, the six-by-two scoreboard and suppressed firings |
+| `capital:signals` | Published cards, the six-by-two scoreboard, suppressed firings, and the per-stock signal board (read, readings, 3-month outlook, setup) |
 | `capital:check` | One-off check of any Yahoo asset against the latest scoreboard |
 | `capital:search` | Yahoo symbol and name search for assets outside the universe |
 | `capital:watchlist` | The daily signal universe and its symbol mappings |
@@ -670,9 +699,10 @@ scoreboard.
 | `GET /policy?account=` | The policy in force (the built-in draft until one is saved) and every version |
 | `POST /policy?account=` | Body `{"limits": {...}, "confirm": bool}`. Stores a new version, or returns 400 with the reason |
 | `GET /signals?account=` | Signal skill per horizon, the combined IC and the latest combined scores |
+| `GET /signals/board?account=` | The signal board: per instrument, the read, readings with percentiles, combined scores, outlook summaries and any setup; plus validated signals and the outlook's record |
 | `GET /signals/models` | Each model signal and outlook model: what it is, its licence, whether it is on, the last run and what is stored |
 | `POST /signals/refresh?account=` | Starts the model helpers in the background |
-| `GET /outlook?account=&symbol=&horizon=&cutoff=` | The blended fan for one holding (a replay when `cutoff` is given), with the closes before it and every session date |
+| `GET /outlook?account=&symbol=&horizon=&cutoff=` | The blended fan for one holding or watchlist stock or ETF (a replay when `cutoff` is given), with the closes before it and every session date |
 | `GET /signals/trade?account=` | The latest run (cards, scoreboard, suppressed firings, notes), when it ran and the next run |
 | `GET /signals/trade/search?q=` | Yahoo instrument matches: symbol, name, exchange and asset class (at most 10) |
 | `GET /signals/trade/check?account=&symbol=&yahoo=&name=&exchange=&class=` | One asset checked against the latest scoreboard: cards, suppressed firings, group verdicts, recent closes and notes |
@@ -713,6 +743,8 @@ Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capit
 | 13 | #441 | Trade signals with a verified record, watchlist |
 | 14 | #442, #447 | Dividend projection with reinvestment and allocation modes |
 | 17 | — | One page structure, house style, lazy loading, the track record, backend modules |
+| — | #463 | Fast dividend projection and track records, 30-year monthly dividends |
+| — | — | Signals tab: the signal board, a wider signal universe, per-stock suggestions |
 
 ## Not built yet
 

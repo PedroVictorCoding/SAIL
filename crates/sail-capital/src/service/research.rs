@@ -244,6 +244,9 @@ impl CapitalService {
             if let Err(err) = self.scorecard(&account) {
                 tracing::debug!(error = %err, "Capital warm-up: track record");
             }
+            if let Err(err) = self.signal_board(&account) {
+                tracing::debug!(error = %err, "Capital warm-up: signal board");
+            }
             if let Err(err) = self.dividend_projection(
                 &account,
                 crate::dividends::MAX_YEARS,
