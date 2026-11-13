@@ -45,6 +45,9 @@ pub struct FilingsView {
     pub as_of: AsOf,
 }
 
+/// Seconds between warm-up passes.
+const WARMUP_EVERY_SECS: u64 = 300;
+
 impl CapitalService {
     /// How each owned position links to an issuer, using the ticker map SAIL had at
     /// `known_by`.
@@ -210,8 +213,52 @@ impl CapitalService {
 
     /// Starts the background SEC refresh when SEC is configured: every
     /// `$SAIL_SEC_REFRESH_HOURS` (1–168, default 12), first run a minute after start.
+    /// Keeps the slow analysis warm in the background so the page doesn't compute it on
+    /// first open: the track record (evaluation, signal skill, outlook replays) and the
+    /// dividend inputs for every account. Each pass is a few cheap version checks when
+    /// nothing changed; after an import or a price refresh it recomputes once.
+    fn start_warmup(self: &std::sync::Arc<Self>) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+            loop {
+                let svc = service.clone();
+                let started = std::time::Instant::now();
+                let _ = tokio::task::spawn_blocking(move || svc.warm()).await;
+                tracing::debug!(
+                    ms = started.elapsed().as_millis() as u64,
+                    "Capital warm-up pass"
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(WARMUP_EVERY_SECS)).await;
+            }
+        });
+    }
+
+    /// One warm-up pass (see [`Self::start_warmup`]). Errors are logged, not returned.
+    pub fn warm(&self) {
+        let Ok(accounts) = self.accounts() else {
+            return;
+        };
+        for summary in accounts {
+            let account = summary.account;
+            if let Err(err) = self.scorecard(&account) {
+                tracing::debug!(error = %err, "Capital warm-up: track record");
+            }
+            if let Err(err) = self.dividend_projection(
+                &account,
+                crate::dividends::MAX_YEARS,
+                100.0,
+                crate::dividends::Allocation::Proportional,
+                false,
+            ) {
+                tracing::debug!(error = %err, "Capital warm-up: dividends");
+            }
+        }
+    }
+
     pub fn start(self: &std::sync::Arc<Self>) {
         self.start_trade_schedule();
+        self.start_warmup();
         if !self.sec_configured {
             tracing::info!("SEC refresh off: SAIL_SEC_USER_AGENT is not set");
             return;

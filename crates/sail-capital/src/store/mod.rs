@@ -125,6 +125,9 @@ pub struct AccountSummary {
 pub struct CapitalStore {
     conn: Mutex<Connection>,
     dir: PathBuf,
+    /// Decoded price histories, so analysis doesn't re-read and re-decode them on every
+    /// request (see `prices::PriceCache`).
+    price_cache: Mutex<prices::PriceCache>,
 }
 
 const SCHEMA: &str = "
@@ -193,6 +196,7 @@ impl CapitalStore {
         Ok(Self {
             conn: Mutex::new(conn),
             dir: dir.to_path_buf(),
+            price_cache: Mutex::new(prices::PriceCache::default()),
         })
     }
 
@@ -341,6 +345,20 @@ impl CapitalStore {
         )?;
         tx.commit()?;
         Ok(status)
+    }
+
+    /// A cheap fingerprint of everything the ledger projection reads for `account`
+    /// (entries, snapshots and grants, including retractions). It changes on any write.
+    pub fn ledger_version(&self, account: &AccountId) -> Result<String, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        Ok(conn.query_row(
+            "SELECT (SELECT COUNT(*) || ':' || IFNULL(MAX(rowid), 0) FROM entries WHERE account = ?1)
+                 || '|' || (SELECT COUNT(*) || ':' || IFNULL(MAX(rowid), 0) FROM snapshots WHERE account = ?1)
+                 || '|' || (SELECT COUNT(*) || ':' || IFNULL(MAX(rowid), 0) || ':' || COUNT(retracted_at)
+                            FROM grants WHERE account = ?1)",
+            params![account.as_str()],
+            |r| r.get(0),
+        )?)
     }
 
     /// Every entry of `account`, in the order it was inserted. The ledger does its own

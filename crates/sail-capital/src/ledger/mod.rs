@@ -275,6 +275,37 @@ pub fn project(
 
 /// Records this account may see at `as_of`, in the canonical order. Both bounds apply: the
 /// row must have happened by `occurred_by` and have been stored by `known_by`.
+/// Units held per instrument key at each of `moments` (in any order), as [`project`] with
+/// `AsOf { occurred_by: moment, known_by }` would report them, from a single replay. Use it
+/// instead of projecting the whole ledger once per date.
+pub fn units_at(
+    account: &AccountId,
+    records: &[LedgerRecord],
+    known_by: chrono::DateTime<chrono::Utc>,
+    moments: &[chrono::DateTime<chrono::Utc>],
+) -> Vec<BTreeMap<String, Decimal>> {
+    let Some(last) = moments.iter().max() else {
+        return Vec::new();
+    };
+    let visible = visible_records(
+        account,
+        records,
+        &AsOf {
+            occurred_by: *last,
+            known_by,
+        },
+    );
+    let mut order: Vec<usize> = (0..moments.len()).collect();
+    order.sort_by_key(|&i| moments[i]);
+    let sorted: Vec<_> = order.iter().map(|&i| moments[i]).collect();
+    let snapshots = fifo::units_at_moments(&visible, &sorted);
+    let mut out = vec![BTreeMap::new(); moments.len()];
+    for (slot, units) in order.into_iter().zip(snapshots) {
+        out[slot] = units;
+    }
+    out
+}
+
 fn visible_records<'a>(
     account: &AccountId,
     records: &'a [LedgerRecord],

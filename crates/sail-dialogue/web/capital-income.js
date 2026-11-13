@@ -1,7 +1,8 @@
 // SAIL Capital — income.
 "use strict";
 
-let currentProjYears = 10;
+// The projection always looks 30 years ahead.
+const PROJ_YEARS = 30;
 
 let currentProjReinvestPct = 100;
 
@@ -326,19 +327,6 @@ function updateProjTopNVisibility() {
 }
 
 function setupDividendProjectionControls() {
-  const yearsInput = document.getElementById("cpProjYears");
-  const yearsVal = document.getElementById("cpProjYearsVal");
-  if (yearsInput) {
-    yearsInput.addEventListener("input", (e) => {
-      currentProjYears = parseInt(e.target.value, 10) || 10;
-      if (yearsVal) yearsVal.textContent = currentProjYears;
-      if (projDebounceTimer) clearTimeout(projDebounceTimer);
-      projDebounceTimer = setTimeout(() => {
-        loadDividendProjection();
-      }, 250);
-    });
-  }
-
   const reinvestInput = document.getElementById("cpProjReinvest");
   const reinvestVal = document.getElementById("cpProjReinvestVal");
   if (reinvestInput) {
@@ -348,7 +336,7 @@ function setupDividendProjectionControls() {
       if (reinvestVal) reinvestVal.textContent = `${currentProjReinvestPct}%`;
       if (projDebounceTimer) clearTimeout(projDebounceTimer);
       projDebounceTimer = setTimeout(() => {
-        loadDividendProjection();
+        loadDividendProjection(true);
       }, 250);
     });
   }
@@ -364,6 +352,8 @@ function setupDividendProjectionControls() {
       btn.setAttribute("aria-checked", "true");
       currentProjAllocation = btn.dataset.allocation || "proportional";
       updateProjTopNVisibility();
+      renderAllocHelp();
+      markCompareSelection();
       loadDividendProjection();
     });
   });
@@ -376,17 +366,18 @@ function setupDividendProjectionControls() {
       if (topNVal) topNVal.textContent = currentProjTopN;
       if (projDebounceTimer) clearTimeout(projDebounceTimer);
       projDebounceTimer = setTimeout(() => {
-        loadDividendProjection();
+        loadDividendProjection(true);
       }, 250);
     });
   }
   updateProjTopNVisibility();
+  renderAllocHelp();
 
   const reserveTaxCheckbox = document.getElementById("cpProjReserveTax");
   if (reserveTaxCheckbox) {
     reserveTaxCheckbox.addEventListener("change", (e) => {
       currentProjReservePtTax = e.target.checked;
-      loadDividendProjection();
+      loadDividendProjection(true);
     });
   }
 
@@ -404,7 +395,7 @@ function setupDividendProjectionControls() {
         } else {
           showBanner(`Dividend histories refreshed (${(res && res.fetched) || 0} fetched).`);
         }
-        await loadDividendProjection();
+        await loadDividendProjection(true);
       } catch (err) {
         showBanner(`Dividend history refresh failed: ${err.message}`, true);
       } finally {
@@ -425,13 +416,19 @@ function setupDividendProjectionControls() {
   }
 }
 
-async function loadDividendProjection() {
+function projectionUrl(allocation) {
+  const queryAcc = currentAccount ? `account=${encodeURIComponent(currentAccount)}&` : "";
+  return `/api/capital/dividends/projection?${queryAcc}years=${PROJ_YEARS}&reinvest_pct=${currentProjReinvestPct}&allocation=${allocation}&top_n=${currentProjTopN}&reserve_pt_tax=${currentProjReservePtTax}`;
+}
+
+// `compare` also re-runs the side-by-side table (the shared settings changed).
+async function loadDividendProjection(compare = false) {
+  if (compare || !lastCompare) loadProjectionCompare();
   const statusEl = document.getElementById("cpProjStatus");
   const chartWrap = document.getElementById("cpProjChartWrap");
   if (!chartWrap) return;
 
-  const queryAcc = currentAccount ? `account=${encodeURIComponent(currentAccount)}&` : "";
-  const url = `/api/capital/dividends/projection?${queryAcc}years=${currentProjYears}&reinvest_pct=${currentProjReinvestPct}&allocation=${currentProjAllocation}&top_n=${currentProjTopN}&reserve_pt_tax=${currentProjReservePtTax}`;
+  const url = projectionUrl(currentProjAllocation);
 
   try {
     const data = await fetchJson(url);
@@ -450,6 +447,7 @@ function renderDividendProjection(data) {
   if (!data) return;
   renderProjHeadlines(data);
   renderProjChart(data);
+  renderProjMonths(data);
   renderProjYearsTable(data);
   renderProjHoldingsTable(data);
   renderProjAssumptions(data);
@@ -503,7 +501,7 @@ function renderProjHeadlines(data) {
       if (doublingSub) doublingSub.textContent = `Net income reaches 2× Year 1`;
     } else {
       doublingEl.textContent = `Doesn't double`;
-      if (doublingSub) doublingSub.textContent = `Within ${data.settings?.years || currentProjYears} years`;
+      if (doublingSub) doublingSub.textContent = `Within ${data.settings?.years || PROJ_YEARS} years`;
     }
   }
 }
@@ -810,5 +808,187 @@ function renderProjAssumptions(data) {
 
 registerTab("income", {
   setup: setupDividendProjectionControls,
-  load: () => Promise.all([loadDividendProjection(), loadInsights()]),
+  load: () => Promise.all([loadDividendProjection(true), loadInsights()]),
 });
+
+// --- Choosing how to reinvest ---------------------------------------------------------
+
+const ALLOC_INFO = {
+  proportional: {
+    label: "Proportional",
+    help: "Spreads each dividend across your paying holdings by their current value, so your mix stays as it is.",
+    tradeoff: "Keeps your current mix. The default.",
+  },
+  same_holding: {
+    label: "Same holding (DRIP)",
+    help: "Each dividend buys more of the holding that paid it, like a broker's DRIP.",
+    tradeoff: "Simple; high payers grow their weight over time.",
+  },
+  top_value: {
+    label: "Top value",
+    help: "Everything goes into your largest holdings by value.",
+    tradeoff: "Concentrates further in what is already biggest.",
+  },
+  equal_weight: {
+    label: "Equal weight",
+    help: "Spreads dividends so paying holdings drift toward equal sizes.",
+    tradeoff: "Diversifies; small holdings grow fastest.",
+  },
+  top_yield: {
+    label: "Top yield",
+    help: "Everything goes into your highest-yielding holdings.",
+    tradeoff: "Most income on paper, but very high yields are the most likely to be cut.",
+  },
+  underweight: {
+    label: "Underweight",
+    help: "Tops up the paying holdings that are smallest relative to an equal split.",
+    tradeoff: "Rebalances without selling anything.",
+  },
+};
+
+let lastCompare = null;
+let compareSeq = 0;
+
+function renderAllocHelp() {
+  const el = document.getElementById("cpProjAllocHelp");
+  if (el) el.textContent = ALLOC_INFO[currentProjAllocation]?.help || "";
+}
+
+function monthlyAt(years, year) {
+  const row = (years || []).find((y) => y.year === year);
+  return row ? row.net / 12 : null;
+}
+
+async function loadProjectionCompare() {
+  const body = document.getElementById("cpProjCompareBody");
+  if (!body) return;
+  const seq = ++compareSeq;
+  const keys = Object.keys(ALLOC_INFO);
+  const results = await Promise.allSettled(keys.map((k) => fetchJson(projectionUrl(k))));
+  if (seq !== compareSeq) return;
+  const rows = [];
+  let without = null;
+  results.forEach((r, i) => {
+    if (r.status !== "fulfilled") return;
+    const base = (r.value.scenarios || []).find((s) => s.scenario === "base");
+    if (!base) return;
+    without = without || r.value.without_reinvestment;
+    rows.push({
+      key: keys[i],
+      y1: monthlyAt(base.years, 1),
+      y10: monthlyAt(base.years, 10),
+      y30: monthlyAt(base.years, PROJ_YEARS),
+    });
+  });
+  lastCompare = { rows, without };
+  renderProjectionCompare();
+}
+
+function renderProjectionCompare() {
+  const body = document.getElementById("cpProjCompareBody");
+  const note = document.getElementById("cpProjCompareNote");
+  if (!body || !lastCompare) return;
+  const { rows, without } = lastCompare;
+  if (rows.length === 0) {
+    body.innerHTML = `<tr><td colspan="5" class="cp-empty">No paying holdings to compare yet.</td></tr>`;
+    if (note) note.textContent = "";
+    return;
+  }
+  const best = rows.reduce((a, b) => ((b.y30 ?? -1) > (a.y30 ?? -1) ? b : a));
+  body.innerHTML = rows.map((r) => {
+    const info = ALLOC_INFO[r.key];
+    const tags = [];
+    if (r.key === "proportional") tags.push(`<span class="cp-chg" data-dir="flat">Default</span>`);
+    if (r.key === best.key) tags.push(`<span class="cp-chg" data-dir="up">Most income</span>`);
+    return `<tr class="cp-proj-choice" data-allocation="${r.key}" tabindex="0" aria-label="Use ${escapeHtml(info.label)}">
+        <td><strong>${escapeHtml(info.label)}</strong> ${tags.join(" ")}</td>
+        <td class="num">${formatProjMoney(r.y1)}</td>
+        <td class="num">${formatProjMoney(r.y10)}</td>
+        <td class="num"><strong>${formatProjMoney(r.y30)}</strong></td>
+        <td class="cp-muted">${escapeHtml(info.tradeoff)}</td>
+      </tr>`;
+  }).join("");
+  if (without) {
+    body.innerHTML += `<tr class="cp-proj-choice-ref">
+        <td><strong>Don't reinvest</strong></td>
+        <td class="num">${formatProjMoney(monthlyAt(without.years, 1))}</td>
+        <td class="num">${formatProjMoney(monthlyAt(without.years, 10))}</td>
+        <td class="num"><strong>${formatProjMoney(monthlyAt(without.years, PROJ_YEARS))}</strong></td>
+        <td class="cp-muted">Take every dividend as cash, for comparison.</td>
+      </tr>`;
+  }
+  body.querySelectorAll(".cp-proj-choice").forEach((tr) => {
+    const pick = () => {
+      const btn = document.querySelector(`.cp-proj-alloc-pills [data-allocation="${tr.dataset.allocation}"]`);
+      if (btn) btn.click();
+    };
+    tr.addEventListener("click", pick);
+    tr.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
+    });
+  });
+  markCompareSelection();
+  if (note) {
+    const gap = best.key !== "proportional"
+      ? rows.find((r) => r.key === "proportional")
+      : null;
+    note.textContent = gap && Number.isFinite(best.y30) && Number.isFinite(gap.y30)
+      ? `${ALLOC_INFO[best.key].label} gives ${formatProjMoney(best.y30 - gap.y30)} more a month by year ${PROJ_YEARS} than keeping your mix. Weigh that against its trade-off; the difference rests on past payouts continuing.`
+      : `Keeping your mix also gives the most income here.`;
+  }
+}
+
+function markCompareSelection() {
+  document.querySelectorAll(".cp-proj-choice").forEach((tr) => {
+    const on = tr.dataset.allocation === currentProjAllocation;
+    tr.classList.toggle("cp-proj-choice-on", on);
+    tr.setAttribute("aria-current", on ? "true" : "false");
+  });
+}
+
+// --- Month by month, every year ---------------------------------------------------------
+
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function compactMoney(value) {
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value >= 10000) return `${(value / 1000).toFixed(0)}k`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return value >= 100 ? value.toFixed(0) : value.toFixed(value >= 10 ? 0 : 1);
+}
+
+function renderProjMonths(data) {
+  const wrap = document.getElementById("cpProjMonths");
+  if (!wrap) return;
+  const base = (data.scenarios || []).find((s) => s.scenario === "base");
+  const monthly = base?.monthly_net || [];
+  const start = String(data.settings?.start || "");
+  const [sy, sm] = start.split("-").map(Number);
+  if (monthly.length === 0 || !sy || !sm) {
+    wrap.innerHTML = `<p class="cp-empty">No expected payments yet.</p>`;
+    return;
+  }
+  const byYear = new Map();
+  monthly.forEach((value, i) => {
+    const m0 = sm - 1 + i;
+    const year = sy + Math.floor(m0 / 12);
+    const month = m0 % 12;
+    if (!byYear.has(year)) byYear.set(year, new Array(12).fill(null));
+    byYear.get(year)[month] = value;
+  });
+  const max = Math.max(...monthly, 0) || 1;
+  const head = `<tr><th scope="col">Year</th>${MONTH_LABELS.map((m) => `<th scope="col" class="num">${m}</th>`).join("")}<th scope="col" class="num">Total</th></tr>`;
+  const rows = [...byYear.entries()].map(([year, months]) => {
+    const total = months.reduce((a, v) => a + (v || 0), 0);
+    const cells = months.map((v, m) => {
+      if (v === null) return `<td class="cp-mcell" data-out></td>`;
+      const heat = v > 0 ? Math.max(0.08, Math.sqrt(v / max)) : 0;
+      return `<td class="cp-mcell num" style="--heat:${heat.toFixed(3)}" title="${MONTH_LABELS[m]} ${year}: ${formatProjMoney(v)}">${compactMoney(v)}</td>`;
+    }).join("");
+    return `<tr><th scope="row">${year}</th>${cells}<td class="num cp-mtotal">${formatProjMoney(total)}</td></tr>`;
+  }).join("");
+  wrap.innerHTML = `<table class="cp-table cp-months-table"><thead>${head}</thead><tbody>${rows}</tbody></table>`;
+}

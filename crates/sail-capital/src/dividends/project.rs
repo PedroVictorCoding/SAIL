@@ -202,13 +202,17 @@ fn simulate(
             if !sim.scheduled || !sim.growth.months.contains(&month_of_year) {
                 continue;
             }
-            let per_share = sim.growth.ttm_per_share / sim.growth.months.len() as f64
-                * if high_yield(sim) {
-                    // Pays a constant share of its current price.
-                    price_at(sim, elapsed) / sim.holding.price
-                } else {
-                    (1.0 + sim.g).powf(elapsed)
-                };
+            let payments = sim.growth.months.len() as f64;
+            let per_share = if high_yield(sim) {
+                // Pays a constant share of its current price.
+                sim.growth.ttm_per_share / payments * prices[index] / sim.holding.price
+            } else {
+                // Grows with its dividends, but never yields more than the yield cap on
+                // the projected price: a payout growing while the price falls would
+                // otherwise compound into an impossible yield.
+                let grown = sim.growth.ttm_per_share / payments * (1.0 + sim.g).powf(elapsed);
+                grown.min(prices[index] * yield_cap(sim) / payments)
+            };
             let gross = sim.units * per_share * sim.holding.fx;
             let withheld = gross * sim.holding.withholding.clamp(0.0, 1.0);
             let pt_tax = if settings.reserve_pt_tax {
@@ -326,6 +330,16 @@ fn price_at(sim: &SimHolding<'_>, elapsed: f64) -> f64 {
             .max(-0.9);
     }
     sim.holding.price * (1.0 + g).powf(elapsed)
+}
+
+/// The most a holding may yield on its projected price: today's yield, or
+/// [`super::HIGH_YIELD`] when that is higher.
+fn yield_cap(sim: &SimHolding<'_>) -> f64 {
+    if sim.holding.price > 0.0 {
+        (sim.growth.ttm_per_share / sim.holding.price).max(super::HIGH_YIELD)
+    } else {
+        super::HIGH_YIELD
+    }
 }
 
 /// Yields more than [`super::HIGH_YIELD`] on today's price.
@@ -499,7 +513,7 @@ fn notes(holdings: &[Holding], growths: &[Growth], settings: &Settings) -> Vec<S
             .to_string(),
         "Scenarios are not probabilities: the low and high cases shift each holding's growth by its own payout volatility."
             .to_string(),
-        "Prices follow each holding's own price trend over the last three years (shrunk toward zero); without one, they grow with its dividends so the yield stays constant."
+        "Prices follow each holding's own price trend over the last three years (shrunk toward zero); without one, they grow with its dividends so the yield stays constant. A payout never exceeds today's yield (or 12%, if higher) on the projected price, so a falling price pulls its payout down with it."
             .to_string(),
         "FX is held at today's rate for the whole projection.".to_string(),
         "Withholding is the rate observed in the ledger over the last 24 months where available, otherwise a default by listing country."

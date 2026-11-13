@@ -14,7 +14,7 @@ const HISTORY_MAX_AGE_DAYS: i64 = 7;
 const CALIBRATION_TOLERANCE: f64 = 1.6;
 
 /// Holding inputs, the original cost of the paying holdings, and notes about the data.
-type Inputs = (Vec<Holding>, Option<f64>, Vec<String>);
+pub(super) type Inputs = (Vec<Holding>, Option<f64>, Vec<String>);
 
 /// `POST /dividends/refresh`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -172,7 +172,7 @@ impl CapitalService {
         }
         let now = Utc::now();
         let today = now.date_naive();
-        let (holdings, original_cost, mut notes) = self.dividend_inputs(account, now)?;
+        let (holdings, original_cost, mut notes) = self.cached_dividend_inputs(account, now)?;
         let start = first_of_next_month(today);
         let settings = Settings {
             years,
@@ -186,6 +186,35 @@ impl CapitalService {
         notes.append(&mut outlook.notes);
         outlook.notes = notes;
         Ok(outlook)
+    }
+
+    /// [`Self::dividend_inputs`], reused while the ledger, prices, payout histories and the
+    /// day are unchanged: the projection's settings don't affect them, so moving a control
+    /// only re-runs the simulation.
+    fn cached_dividend_inputs(
+        &self,
+        account: &AccountId,
+        now: DateTime<Utc>,
+    ) -> Result<Inputs, ServiceError> {
+        let version = format!(
+            "{}|{}|{}|{}|{}",
+            account.as_str(),
+            self.store.ledger_version(account)?,
+            self.store.price_version()?,
+            self.store.dividend_history_version()?,
+            now.date_naive()
+        );
+        if let Ok(cache) = self.dividend_inputs_cache.lock()
+            && let Some((v, inputs)) = cache.as_ref()
+            && *v == version
+        {
+            return Ok(inputs.clone());
+        }
+        let inputs = self.dividend_inputs(account, now)?;
+        if let Ok(mut cache) = self.dividend_inputs_cache.lock() {
+            *cache = Some((version, inputs.clone()));
+        }
+        Ok(inputs)
     }
 
     /// Holding inputs, the original cost of the paying holdings, and notes about the data.
@@ -202,6 +231,11 @@ impl CapitalService {
             .unwrap_or_else(|| "EUR".into());
         let fx_closes = self.watch_fx_closes(now)?;
         let received = self.dividends(account, Some(now - Duration::days(730)), None)?;
+        // Units held at each payment, from one replay of the ledger (not one projection per
+        // receipt, which took seconds on a real account).
+        let paid_at: Vec<DateTime<Utc>> = received.iter().map(|d| d.paid.at).collect();
+        let units_then =
+            crate::ledger::units_at(account, &self.ledger_records(account, now)?, now, &paid_at);
         let mut holdings = Vec::new();
         let mut notes = Vec::new();
         let mut cost = 0.0;
@@ -242,14 +276,19 @@ impl CapitalService {
                 .unwrap_or_default();
 
             // Observed withholding over the last 24 months.
-            let mine: Vec<&crate::ledger::DividendView> = received
+            let mine: Vec<(&crate::ledger::DividendView, f64)> = received
                 .iter()
-                .filter(|d| d.instrument.as_ref().is_some_and(|i| i.key() == key))
+                .zip(&units_then)
+                .filter(|(d, _)| d.instrument.as_ref().is_some_and(|i| i.key() == key))
+                .map(|(d, units)| (d, units.get(&key).and_then(|u| u.to_f64()).unwrap_or(0.0)))
                 .collect();
-            let gross: f64 = mine.iter().filter_map(|d| d.gross.amount.to_f64()).sum();
+            let gross: f64 = mine
+                .iter()
+                .filter_map(|(d, _)| d.gross.amount.to_f64())
+                .sum();
             let withheld: f64 = mine
                 .iter()
-                .filter_map(|d| d.withheld.as_ref().and_then(|w| w.amount.to_f64()))
+                .filter_map(|(d, _)| d.withheld.as_ref().and_then(|w| w.amount.to_f64()))
                 .map(f64::abs)
                 .sum();
             let (withholding, source) = if gross > 0.0 {
@@ -263,27 +302,16 @@ impl CapitalService {
 
             // Calibration: each receipt against the payment it came from, using the units
             // held on the payment date (positions change through the year).
-            let mut receipts = Vec::new();
-            for d in &mine {
-                let as_of = AsOf {
-                    occurred_by: d.paid.at,
-                    known_by: now,
-                };
-                let held_then = self
-                    .portfolio(account, as_of)?
-                    .positions
-                    .iter()
-                    .find(|p| p.instrument.key() == key)
-                    .and_then(|p| p.quantity.to_f64())
-                    .unwrap_or(0.0);
-                if let Some(g) = d.gross.amount.to_f64() {
-                    receipts.push(Receipt {
+            let receipts: Vec<Receipt> = mine
+                .iter()
+                .filter_map(|(d, held_then)| {
+                    Some(Receipt {
                         paid: d.paid.at.date_naive(),
-                        gross: g,
-                        units: held_then,
-                    });
-                }
-            }
+                        gross: d.gross.amount.to_f64()?,
+                        units: *held_then,
+                    })
+                })
+                .collect();
             let history = calibrate(&symbol, &history, &receipts, fx, &mut notes);
             let price_growth = price_trend(&observations);
 

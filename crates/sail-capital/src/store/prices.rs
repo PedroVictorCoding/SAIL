@@ -9,10 +9,22 @@ use crate::contracts::*;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// One row per (instrument, source, session, version). A changed bar for a known session
 /// is a revision that keeps the session's first availability time. A revert to an older
 /// content is a new version too, so the append-only history can represent it.
+/// Decoded histories keyed by instrument, valid while no price is written. Reads "as of
+/// now" (a `known_by` at or after the newest `ingested_at`) are served from here.
+#[derive(Default)]
+pub(super) struct PriceCache {
+    /// `MAX(rowid)` of `price_bars` when the cache was filled; `None` until first used.
+    version: Option<i64>,
+    /// The newest `ingested_at` at that version.
+    max_ingested: Option<String>,
+    series: std::collections::HashMap<String, Arc<Vec<crate::market::MarketObservation>>>,
+}
+
 const PRICE_TABLE_COLUMNS: &str = "
     id TEXT PRIMARY KEY,
     instrument_key TEXT NOT NULL,
@@ -209,6 +221,8 @@ impl CapitalStore {
             );
         }
         tx.commit()?;
+        drop(conn);
+        self.invalidate_price_cache();
         Ok(outcome)
     }
 
@@ -233,10 +247,67 @@ impl CapitalStore {
         from: Option<chrono::NaiveDate>,
         to: Option<chrono::NaiveDate>,
     ) -> Result<Vec<crate::market::MarketObservation>, StoreError> {
+        let in_range = |o: &crate::market::MarketObservation| {
+            from.is_none_or(|f| o.session >= f) && to.is_none_or(|t| o.session <= t)
+        };
+        if let Some(all) = self.cached_series(instrument_key, known_by)? {
+            return Ok(all.iter().filter(|o| in_range(o)).cloned().collect());
+        }
+        self.query_prices(instrument_key, Some(known_by), from, to)
+    }
+
+    /// The whole decoded series from the cache when `known_by` sees every stored row
+    /// (the usual "as of now" read), loading it once if needed. `None` for an earlier
+    /// `known_by`, which must go to SQL to respect "known since".
+    fn cached_series(
+        &self,
+        instrument_key: &str,
+        known_by: DateTime<Utc>,
+    ) -> Result<Option<Arc<Vec<crate::market::MarketObservation>>>, StoreError> {
+        let mut cache = self.price_cache.lock().map_err(|_| StoreError::Poisoned)?;
+        // Any write (from this store or another connection) moves the newest rowid; that
+        // check is a single index lookup, so the cache can never serve stale bars.
+        {
+            let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+            let version: i64 =
+                conn.query_row("SELECT IFNULL(MAX(rowid), 0) FROM price_bars", [], |r| {
+                    r.get(0)
+                })?;
+            if cache.version != Some(version) {
+                // Once per version: the newest ingest time decides which reads may use it.
+                let max_ingested: Option<String> =
+                    conn.query_row("SELECT MAX(ingested_at) FROM price_bars", [], |r| r.get(0))?;
+                *cache = PriceCache {
+                    version: Some(version),
+                    max_ingested: Some(max_ingested.unwrap_or_default()),
+                    series: Default::default(),
+                };
+            }
+        }
+        if cache.max_ingested.as_deref().unwrap_or_default() > known_by.to_rfc3339().as_str() {
+            return Ok(None);
+        }
+        if let Some(series) = cache.series.get(instrument_key) {
+            return Ok(Some(series.clone()));
+        }
+        let series = Arc::new(self.query_prices(instrument_key, None, None, None)?);
+        cache
+            .series
+            .insert(instrument_key.to_string(), series.clone());
+        Ok(Some(series))
+    }
+
+    fn query_prices(
+        &self,
+        instrument_key: &str,
+        known_by: Option<DateTime<Utc>>,
+        from: Option<chrono::NaiveDate>,
+        to: Option<chrono::NaiveDate>,
+    ) -> Result<Vec<crate::market::MarketObservation>, StoreError> {
         let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
         let mut stmt = conn.prepare(
             "SELECT session, observation_json FROM price_bars
-             WHERE instrument_key = ?1 AND ingested_at <= ?2
+             WHERE instrument_key = ?1 AND (?2 IS NULL OR ingested_at <= ?2)
                AND (?3 IS NULL OR session >= ?3)
                AND (?4 IS NULL OR session <= ?4)
              ORDER BY session, ingested_at, rowid",
@@ -244,7 +315,7 @@ impl CapitalStore {
         let from = from.map(|date| date.format("%Y-%m-%d").to_string());
         let to = to.map(|date| date.format("%Y-%m-%d").to_string());
         let rows = stmt.query_map(
-            params![instrument_key, known_by.to_rfc3339(), from, to],
+            params![instrument_key, known_by.map(|k| k.to_rfc3339()), from, to],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )?;
         let mut latest: std::collections::BTreeMap<String, String> = Default::default();
@@ -253,6 +324,13 @@ impl CapitalStore {
             latest.insert(session, json);
         }
         latest.values().map(|json| decode(json)).collect()
+    }
+
+    /// Forgets cached histories after a write.
+    fn invalidate_price_cache(&self) {
+        if let Ok(mut cache) = self.price_cache.lock() {
+            *cache = PriceCache::default();
+        }
     }
 
     /// Per-instrument coverage of stored prices.
