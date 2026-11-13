@@ -1,24 +1,58 @@
 # SAIL Capital
 
 SAIL Capital is the owner's private investment research subsystem (EPIC #422). Its job is
-after-tax, risk-aware, long-horizon growth. It is not there to produce trading signals. This
-page records the architecture decision (CAP-01) and what the first vertical slice does.
+after-tax, risk-aware, long-horizon growth. It is not there to produce trading signals.
+This page describes what Capital does today, how it is built, and the decisions behind it.
 
 ## Status
 
-Round 7 (2026-11-10) builds the **portfolio foundation**:
+Capital reads the owner's official XTB exports into an append-only ledger and builds
+everything else on that ledger:
 
-- import official XTB report exports (CAP-26);
-- keep an append-only private ledger;
-- project positions, cash, dividends and fees from that ledger;
-- reconcile the projection against the broker's own figures;
-- serve the result read-only at `/api/capital`.
+- **Portfolio:** positions with trailing stops, CFDs kept apart, allocation, reconciliation
+  against XTB's own figures, received shares and splits, and SEC filings for US holdings.
+- **Income:** dividends received with withholding, and a projection of future dividends
+  with reinvestment.
+- **Outlook:** a blended range per holding from daily prices and models, with replays,
+  plus trade signals that publish only after passing a replay with a holdout.
+- **Track record:** one scorecard that says, in the same words for everything, whether
+  any model, signal or setup has earned trust.
+- **Today:** a stance and the suggestions that need the owner, sized against limits the
+  owner confirmed.
 
-Round 8 adds the first research source, **SEC EDGAR filings** for the US companies the
-owner holds (see below). Round 9 adds splits, received shares and portfolio insights.
-Round 14 adds the **dividend projection with reinvestment**. Round 13 added **trade signals with a verified record** (entry, stop, targets, sizing). Round 12 added **model signals (YOLO, Chronos) and a blended per-holding outlook with replay**. Round 11 added the **Today view, risk limits and suggestions**. Round 10 added **daily prices and baseline forecasts** with an honest out-of-sample score
-(see below). House/Senate, FRED/ECB and Polymarket adapters, the risk engine and any neural
-or `.sea` model come in later rounds.
+On the owner's real data, nothing has yet earned trust as a predictor of direction. The
+page says so plainly rather than inventing signals. House/Senate disclosures, FRED/ECB,
+Polymarket, a risk engine and any neural or `.sea` model are not built yet.
+
+## The page
+
+`/capital` has six tabs. Old links (`#holdings`, `#research`, `#signals`, `#forecasts`,
+`#data`) still resolve.
+
+| Tab | Answers | Holds |
+|---|---|---|
+| Today | What needs me? | Stance and suggestions |
+| Portfolio | What do I own, and is the ledger right? | Positions with trailing stops, CFDs, allocation, reconciliation, received shares, SEC filings |
+| Income | What does it pay? | Dividend projection, dividends received, income summary |
+| Outlook | What could happen to a holding? | Holding outlook (fan and replay), trade signals, one-off asset check |
+| Track record | Has anything earned trust? | The scorecard, then the evidence: setups, live record, baselines, signal skill |
+| Settings | How is it configured? | Limits, watchlist, prices, model helpers, imports |
+
+**Files.** `web/capital.html` holds one region per tab. `capital-core.js` has the
+shared state, owner-token fetch, formatting, tabs and boot. Each tab has its own
+`capital-<tab>.js` and `capital-<tab>.css`, and `capital.css` holds the shared base.
+The scripts are classic `defer` scripts that share globals. Each tab registers
+`registerTab(id, { setup, load })`. The header (portfolio and Today's tiles) loads at
+start, and a tab loads its own data the first time it opens and again on Refresh.
+
+**House style.** The rules are written at the end of `capital.css`:
+- one panel per topic, with no panels inside panels;
+- lists are quiet rows;
+- a status is a coloured word, never a pill;
+- detail sits behind "Show …" disclosures;
+- each caveat appears once, as a note under what it qualifies;
+- empty sections are hidden;
+- nothing overflows at 390 px.
 
 ## ADR-0001: one crate, ledger first
 
@@ -49,12 +83,12 @@ through it.
 - The ledger is its own authoritative typed store. It is **not** Arena memory, and
   conversational mentions of holdings never become positions.
 - Flow, Arena, Agents and Mind come in with the research rounds.
-- No new inference daemon, and no model in this slice.
+- No new inference daemon. The first slice had no model; later models run as optional local helpers.
 
 **`.sea` / financial.sea.** This is a gated research experiment (CAP-20/CAP-28). Nothing in
-this slice depends on it.
+Capital depends on it.
 
-## Invariants this slice enforces
+## Invariants
 
 1. **Read-only, no credentials.** SAIL reads only files the owner exports and uploads. It
    never signs in to XTB and never asks for a password, session or 2FA. It never places,
@@ -126,7 +160,7 @@ The layout was checked against a real web-platform export in November 2026, and
   are kept as unsupported rows with a warning. Their cash still counts. The ledger
   doesn't model spin-offs, so the reconciliation reports any resulting difference.
 
-## Splits and received shares (round 9)
+## Splits and received shares
 
 **Splits.** A split of `new` units for every `old` scales every open lot of the holding
 by `new / old`. Each lot keeps its total cost, so its per-unit cost changes.
@@ -152,7 +186,7 @@ Grants are kept apart from imported rows and are never edited or deleted. A mist
 grant is **retracted**, once, and the time of retraction is recorded. A question asked
 as of before the retraction still sees the grant; one asked after it doesn't.
 
-## Portfolio insights (round 9)
+## Allocation and income insights
 
 `GET /insights` summarises the projection. Every figure uses only the broker's own values
 and the ledger: there are no market prices, no FX conversion and no model.
@@ -177,7 +211,7 @@ with no broker value are listed and named in a warning.
 - Cost basis is the cash actually paid, in the account currency.
 - The value at export is the broker's purchase value plus gross P/L.
 
-## SEC filings (round 8)
+## SEC filings
 
 SAIL reads SEC EDGAR's public JSON: the ticker map (`company_tickers.json`) and, for each
 held US issuer, its recent filings (`data.sec.gov/submissions/CIK##########.json`). Only
@@ -208,7 +242,111 @@ asked `AsOf { occurred_by, known_by }` sees a filing only if it was published by
 **watch** item or a **research proposal**, with the reason quoting only the form type and
 8-K item numbers. There is no buy or sell output.
 
-## Prices and baseline forecasts (round 10)
+## Today, limits and suggestions
+
+**Layout.** The page opens on **Today**: four account tiles, a one-line stance, and a
+ranked list of suggestions. Everything else sits in tabs: Holdings, Income, Forecasts,
+Research and Data. The open tab is kept in the URL hash.
+
+**Limits.** SAIL starts from a draft: largest position 10%, free funds between 5% and
+15%, high-volatility holdings (above 50% a year) at most 15% together, at most 20% of
+the account moved by one proposal, a smallest change of 50, costs of 10 bp (plus 50 bp
+for another currency), and caution 4. The owner edits and confirms them in Data →
+Limits. Each save is a new append-only version. **Nothing is sized against a draft.**
+
+**Suggestions.** Three kinds, built by fixed rules (`suggest::build`):
+- **Attention:** old XTB data, figures that differ from XTB, holdings without prices,
+  prices not being fetched, new SEC filings, positions XTB didn't value, and a draft
+  policy.
+- **Policy:** a confirmed limit is broken. The fix trims only the positions that break
+  their own limits. Free funds outside the band become **one free-funds line** ("invest
+  about X" or "raise about X"). SAIL has no evidence for which holdings to buy or sell
+  with cash, so it doesn't choose them.
+- **Idea:** validated signals favour a change, and its expected gain beats the extra risk
+  and the trading costs. Each idea shows its confidence and what doing nothing means.
+
+Dismissing a suggestion or marking it done is stored append-only. The suggestion's id
+hashes its evidence, so it comes back only when the evidence changes. SAIL never places
+orders.
+
+**Signals** (`signals/`):
+- Price signals: 12-1 momentum, short-term reversal, low volatility, and distance from
+  the 200-session average.
+- Each one is scored walk-forward by its rank IC across held instruments, on weekly
+  cross-sections.
+- The standard error is widened for overlapping outcomes. The horizon is converted to
+  calendar days, about 1.4 per session.
+- A signal needs 26 cross-sections, and 8 effectively independent ones, before it can
+  pass.
+- Its IC is shrunk by two standard errors, so one that isn't clearly better than chance
+  gets weight 0.
+- Survivors combine as `w = (C + 0.1·I)⁻¹·IC*`, with `α_j = IC_c · σ_j(h) · s_j`
+  (Grinold–Kahn).
+- Model scores from Python helpers count at a date only when they are at most 10 days
+  old.
+
+**Optimizer** (`optimize/`):
+- One long-only problem over the holdings and free funds, limited by the confirmed
+  limits.
+- Ideas maximize `α'w − λ/2·w'Σw − costs`. They run only when some `α ≠ 0`, so caution
+  alone never turns into trading advice.
+- The covariance comes from weekly returns over two years, shrunk toward constant
+  correlation.
+
+**First run on the owner's holdings (2026-11-11).** No price signal passed at 60
+sessions, so there are no ideas. The draft limits flagged the idle free funds and one
+position above 10%.
+
+## Dividend projection with reinvestment
+
+**Income → Dividend projection** projects net dividend income for 1–30 years, month by
+month (`dividends/`).
+
+**Inputs per holding:**
+- the units held and the latest price;
+- FX from the watchlist pairs, else the rate implied by XTB's own valuation;
+- the per-share payout history from Yahoo (`scripts/prices/dividends.py`, refreshed
+  weekly; only symbols are sent);
+- the withholding actually observed in the ledger over 24 months, else a default by
+  listing country.
+
+**Reinvestment.** A share of each net payment buys more units the same month. The
+allocation can be:
+- **proportional** across paying holdings by current value (the default, keeping the
+  mix);
+- back into the **same holding** (a DRIP);
+- **top value** (N largest paying holdings, by value; default N = 5);
+- **equal weight** (every paying holding gets the same cash, moving toward equal
+  weights);
+- **top yield** (N highest-yielding paying holdings, by value);
+- **underweight** (the paying holdings furthest below their equal-weight target get
+  the pool, a partial rebalance).
+
+The top-value and top-yield counts are 1–10 (`top_n`, default 5); top-yield and
+top-value spread the month's pool by current value among the selected holdings. The
+rest stays as cash. A comparison line shows the same projection without reinvesting.
+
+**Growth.** Past payout growth over up to five complete years, shrunk toward zero by
+`n/(n+3)` and capped at ±15%. A year without payment after a paying year counts as a
+cut. Low and high scenarios shift each holding's growth by its own payout volatility.
+They are scenarios, not probabilities.
+
+**Prices.** Each holding follows its own price trend over up to three years, shrunk by
+`years/(years+3)` and capped at −50% to +15% a year. A holding yielding more than 12%
+pays a constant share of its current price, and its price is assumed to fall by at
+least `yield − 8%` a year. Total return from yield alone is therefore capped at 8%, so a
+fund paying out of its capital can't compound at its headline yield. On real holdings
+an 81%-yield fund otherwise turned about 1,100 a year into 337,000.
+
+**Tax.** Withholding is subtracted. The optional Portuguese reserve is 28% of the gross
+minus what was withheld, floored at zero (simplified).
+
+**Cross-check with the ledger.** Each receipt is matched to the published payment it
+came from, using the units held on the payment date. A history is scaled only when the
+receipts consistently differ by more than 1.6× (for example a fund quoted in its base
+currency), and a note says so.
+
+## Prices and baseline forecasts
 
 **What it is.** Statistical ranges for each held instrument's price over 5, 20 and 60
 trading sessions (about a week, a month and a quarter), from four simple baselines, scored
@@ -280,62 +418,7 @@ calibrated. EWMA volatility beats `no_change` by about 1–2% CRPS at a week and
 Trailing drift is worse than `no_change` at every horizon, by about 12% at a quarter. Rank
 IC is near zero. In short, the baselines describe how much prices move, not which way.
 
-## Today, limits and suggestions (round 11)
-
-**Layout.** The page opens on **Today**: four account tiles, a one-line stance, and a
-ranked list of suggestions. Everything else sits in tabs: Holdings, Income, Forecasts,
-Research and Data. The open tab is kept in the URL hash.
-
-**Limits.** SAIL starts from a draft: largest position 10%, free funds between 5% and
-15%, high-volatility holdings (above 50% a year) at most 15% together, at most 20% of
-the account moved by one proposal, a smallest change of 50, costs of 10 bp (plus 50 bp
-for another currency), and caution 4. The owner edits and confirms them in Data →
-Limits. Each save is a new append-only version. **Nothing is sized against a draft.**
-
-**Suggestions.** Three kinds, built by fixed rules (`suggest::build`):
-- **Attention:** old XTB data, figures that differ from XTB, holdings without prices,
-  prices not being fetched, new SEC filings, positions XTB didn't value, and a draft
-  policy.
-- **Policy:** a confirmed limit is broken. The fix trims only the positions that break
-  their own limits. Free funds outside the band become **one free-funds line** ("invest
-  about X" or "raise about X"). SAIL has no evidence for which holdings to buy or sell
-  with cash, so it doesn't choose them.
-- **Idea:** validated signals favour a change, and its expected gain beats the extra risk
-  and the trading costs. Each idea shows its confidence and what doing nothing means.
-
-Dismissing a suggestion or marking it done is stored append-only. The suggestion's id
-hashes its evidence, so it comes back only when the evidence changes. SAIL never places
-orders.
-
-**Signals** (`signals/`):
-- Price signals: 12-1 momentum, short-term reversal, low volatility, and distance from
-  the 200-session average.
-- Each one is scored walk-forward by its rank IC across held instruments, on weekly
-  cross-sections.
-- The standard error is widened for overlapping outcomes. The horizon is converted to
-  calendar days, about 1.4 per session.
-- A signal needs 26 cross-sections, and 8 effectively independent ones, before it can
-  pass.
-- Its IC is shrunk by two standard errors, so one that isn't clearly better than chance
-  gets weight 0.
-- Survivors combine as `w = (C + 0.1·I)⁻¹·IC*`, with `α_j = IC_c · σ_j(h) · s_j`
-  (Grinold–Kahn).
-- Model scores from Python helpers count at a date only when they are at most 10 days
-  old.
-
-**Optimizer** (`optimize/`):
-- One long-only problem over the holdings and free funds, limited by the confirmed
-  limits.
-- Ideas maximize `α'w − λ/2·w'Σw − costs`. They run only when some `α ≠ 0`, so caution
-  alone never turns into trading advice.
-- The covariance comes from weekly returns over two years, shrunk toward constant
-  correlation.
-
-**First run on the owner's holdings (2026-11-11).** No price signal passed at 60
-sessions, so there are no ideas. The draft limits flagged the idle free funds and one
-position above 10%.
-
-## Model signals and the blended outlook (round 12)
+## Model signals and the holding outlook
 
 **Model signals.** Python helpers in `scripts/signals/` add three views. Each one goes
 through the same out-of-sample IC check as the price signals before it gets any weight:
@@ -425,7 +508,7 @@ weekly charts, which can take an hour. Later runs only add new weeks.
 `SAIL_SIGNALS_PYTHON`, `SAIL_SIGNALS_SCRIPTS` and `SAIL_SIGNALS_CACHE` override the
 defaults. Helpers receive instrument keys and prices only, never amounts or names.
 
-## Trade signals with a verified record (round 13)
+## Trade signals with a verified record
 
 The **Signals** tab gives near-daily long and short signals like a signals channel:
 symbol, side, entry zone, stop loss and three targets, sized to the owner's risk per
@@ -497,54 +580,30 @@ on, plus **Run now** on the page. A run fetches prices for the holdings and the
 watchlist, refreshes earnings weekly, publishes and grades. Risk per trade is a limit
 (draft 0.5% of the account lost at the stop).
 
-## Expected dividends with reinvestment (round 14)
+## The track record
 
-**Income → Dividend projection** projects net dividend income for 1–30 years, month by
-month (`dividends/`).
+Each evaluation used to speak its own language: CRPS skill and calibration for baselines,
+rank IC for signals, replay coverage for the outlook, expectancy with a holdout for setups,
+and the live record of published cards. `scorecard::summarize` maps all of them onto one
+standing:
 
-**Inputs per holding:**
-- the units held and the latest price;
-- FX from the watchlist pairs, else the rate implied by XTB's own valuation;
-- the per-share payout history from Yahoo (`scripts/prices/dividends.py`, refreshed
-  weekly; only symbols are sent);
-- the withholding actually observed in the ledger over 24 months, else a default by
-  listing country.
+| Standing | Meaning |
+|---|---|
+| Earned | Passed its bar out of sample |
+| Not yet | Too little evidence to judge |
+| Failed | Enough evidence, and it did not pass |
 
-**Reinvestment.** A share of each net payment buys more units the same month. The
-allocation can be:
-- **proportional** across paying holdings by current value (the default, keeping the
-  mix);
-- back into the **same holding** (a DRIP);
-- **top value** (N largest paying holdings, by value; default N = 5);
-- **equal weight** (every paying holding gets the same cash, moving toward equal
-  weights);
-- **top yield** (N highest-yielding paying holdings, by value);
-- **underweight** (the paying holdings furthest below their equal-weight target get
-  the pool, a partial rebalance).
+| Family | Earned when | Not yet when |
+|---|---|---|
+| Baseline forecast (not "no change", the benchmark) | ≥ 100 forecasts, calibrated, CRPS skill > 0 | < 100 forecasts |
+| Signal | It kept weight in the combination | Fewer cross-sections than `signals::MIN_ORIGINS` |
+| Holding outlook | ≥ 24 replays, skill > 0, 90% band within 0.80–1.00 | < 24 replays |
+| Trade setup | It publishes (selection lower bound > 0 and holdout mean > 0) | Fewer trades than `trade::MIN_TRADES` |
+| Published signals (live) | ≥ 20 closed and mean R > 0 | < 20 closed |
 
-The top-value and top-yield counts are 1–10 (`top_n`, default 5); top-yield and
-top-value spread the month's pool by current value among the selected holdings. The
-rest stays as cash. A comparison line shows the same projection without reinvesting.
-
-**Growth.** Past payout growth over up to five complete years, shrunk toward zero by
-`n/(n+3)` and capped at ±15%. A year without payment after a paying year counts as a
-cut. Low and high scenarios shift each holding's growth by its own payout volatility.
-They are scenarios, not probabilities.
-
-**Prices.** Each holding follows its own price trend over up to three years, shrunk by
-`years/(years+3)` and capped at −50% to +15% a year. A holding yielding more than 12%
-pays a constant share of its current price, and its price is assumed to fall by at
-least `yield − 8%` a year. Total return from yield alone is therefore capped at 8%, so a
-fund paying out of its capital can't compound at its headline yield. On real holdings
-an 81%-yield fund otherwise turned about 1,100 a year into 337,000.
-
-**Tax.** Withholding is subtracted. The optional Portuguese reserve is 28% of the gross
-minus what was withheld, floored at zero (simplified).
-
-**Cross-check with the ledger.** Each receipt is matched to the published payment it
-came from, using the units held on the payment date. A history is scaled only when the
-receipts consistently differ by more than 1.6× (for example a fund quoted in its base
-currency), and a note says so.
+Each row gets a plain name and one sentence with the number that decided it. The rows
+are ordered Earned, Not yet, Failed. `GET /scorecard` serves the scorecard, and the Track
+record tab shows it above the full tables.
 
 ## Talking to SAIL about it (voice tools)
 
@@ -619,6 +678,7 @@ scoreboard.
 | `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&top_n=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting, per-holding inputs and notes; allocation is `proportional`, `same_holding`, `top_value`, `equal_weight`, `top_yield` or `underweight` |
 | `POST /dividends/refresh?account=` | Fetches per-share payout histories for the holdings |
 | `GET /outlook/track-record?account=&horizon=` | Coverage, average percentile, skill and direction over monthly replays |
+| `GET /scorecard?account=` | The track record: one row per baseline, signal, outlook horizon, setup and the live record, each Earned / Not yet / Failed with a headline, plus a summary sentence |
 
 All amounts are decimal strings. Errors are `{"error": "..."}`, with these status codes:
 
@@ -634,13 +694,28 @@ Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capit
 - `reports/<sha256>.<ext>`, the original uploads, kept as evidence and readable only by
   the owner.
 
-## Not in this slice
+## History
+
+| Round | PR | Added |
+|---|---|---|
+| 7 | #425 | XTB import, append-only ledger, reconciliation |
+| 8 | #426 | SEC EDGAR filings for US holdings |
+| 9 | #429 | Splits, received shares, insights |
+| 10 | #433 | Daily prices (yfinance), baseline forecasts, walk-forward score |
+| 11 | #434 | Today, risk limits, suggestions, signal skill |
+| 12 | #436 | Model signals (YOLO, Chronos), blended outlook with replay |
+| 13 | #441 | Trade signals with a verified record, watchlist |
+| 14 | #442, #447 | Dividend projection with reinvestment and allocation modes |
+| 17 | — | One page structure, house style, lazy loading, the track record, backend modules |
+
+## Not built yet
 
 - FX conversion and EUR totals across currencies. Prices are stored in the trading
-  currency and feed forecasts only.
-- Tax computation. Withholding is recorded and matched to dividends, but the slice does
-  not estimate Portuguese tax due.
-- Research beyond SEC filings, models beyond the four baselines, and dossiers built from
-  research proposals.
-- The XTB browser companion (CAP-27), which depends on reviewing XTB's terms first.
+  currency.
+- Portuguese tax beyond the projection's optional 28% reserve. Withholding is recorded
+  and matched to dividends.
+- Spin-offs. They import as unsupported rows, and the reconciliation shows the difference.
+- Research beyond SEC filings: House/Senate disclosures, FRED/ECB, Polymarket, and
+  dossiers built from research proposals.
+- The XTB browser companion (CAP-27), which waits on a review of XTB's terms.
 - Multi-user or public use.
