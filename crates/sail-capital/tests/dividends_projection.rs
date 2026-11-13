@@ -506,3 +506,39 @@ fn a_high_yield_fund_with_a_falling_price_cannot_compound_at_its_headline_yield(
         "value follows the price trend",
     );
 }
+
+#[test]
+fn a_falling_price_pulls_a_growing_payout_down_instead_of_exploding() {
+    // Payouts grew 20% a year (capped to 15%) while the price trend is -30% a year: left
+    // alone, the yield would compound by about 1.6x a year and DRIP income would explode.
+    let mut falling = holding("FALL", 100.0, 100.0, steady_history(0.20));
+    falling.price_growth = Some(-0.30);
+    let ttm = falling.history.last().unwrap().per_share;
+    let today_yield = ttm / falling.price;
+    let outlook = project(
+        &[falling],
+        &settings(30, 100.0, Allocation::SameHolding, false),
+        None,
+    );
+    let base = scenario(&outlook, Scenario::Base);
+    for row in &base.years {
+        // Income can never exceed the cap times the holding's value at the start of the
+        // year it pays from; the year-end value is a safe upper bound for that.
+        let cap = today_yield.max(sail_capital::dividends::HIGH_YIELD);
+        assert!(row.net.is_finite(), "year {} is not finite", row.year);
+        assert!(
+            row.gross <= row.value * cap / (1.0 - 0.30) + 1e-6,
+            "year {}: gross {} against value {}",
+            row.year,
+            row.gross,
+            row.value
+        );
+    }
+    let last = base.years.last().unwrap();
+    assert!(
+        last.net < base.years[0].net * 50.0,
+        "year 30 income {} ran away from year 1 {}",
+        last.net,
+        base.years[0].net
+    );
+}

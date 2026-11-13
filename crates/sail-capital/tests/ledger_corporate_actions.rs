@@ -393,3 +393,45 @@ fn split_day_derivative_and_fee_rows_do_not_change_owned_quantities() {
         vec!["derivative_result", "fee:commission", "trade:buy"]
     );
 }
+
+#[test]
+fn units_at_matches_a_projection_at_every_moment() {
+    let records = vec![
+        trade("t1", 2, Side::Buy, "10", None, Some(money("-100", usd()))),
+        trade("t2", 4, Side::Buy, "5", None, Some(money("-60", usd()))),
+        trade("t3", 6, Side::Sell, "3", None, Some(money("40", usd()))),
+        split("s1", 8, "1", "10", None),
+        grant("g1", 9, "1", None),
+        trade("t4", 11, Side::Sell, "1", None, Some(money("30", usd()))),
+    ];
+    let known_by = time(28, 0);
+    // Out of order, on a row's exact time, between rows, before everything and after.
+    let moments = vec![
+        time(6, 10),
+        time(1, 0),
+        time(9, 12),
+        time(3, 0),
+        time(8, 10),
+        time(20, 0),
+        time(5, 0),
+    ];
+    let units = units_at(&account(), &records, known_by, &moments);
+    assert_eq!(units.len(), moments.len());
+    for (moment, got) in moments.iter().zip(&units) {
+        let projected = project(
+            &account(),
+            &records,
+            &[],
+            AsOf {
+                occurred_by: *moment,
+                known_by,
+            },
+        );
+        let want: std::collections::BTreeMap<String, Decimal> = projected
+            .positions
+            .iter()
+            .map(|p| (p.instrument.key(), p.quantity))
+            .collect();
+        assert_eq!(got, &want, "at {moment}");
+    }
+}

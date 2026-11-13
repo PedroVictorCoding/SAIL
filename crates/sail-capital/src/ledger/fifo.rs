@@ -65,6 +65,11 @@ impl LotBook {
         })
     }
 
+    /// Units in the open lots.
+    pub(super) fn open_units(&self) -> Decimal {
+        self.lots.iter().map(|lot| lot.quantity).sum()
+    }
+
     /// Units still open that were received free with no cost basis. Used for the owner
     /// warning; a granted lot with a stated cost doesn't count.
     pub(super) fn granted_zero_cost_units(&self) -> Decimal {
@@ -105,6 +110,51 @@ pub(super) fn build_positions(
     };
 
     for record in records {
+        build.apply(record);
+    }
+
+    (build.books, build.realized)
+}
+
+/// Units held by instrument key just after each moment in `moments` (ascending), replaying
+/// the rows once. A row at exactly a moment counts, as in `project`'s `occurred_by`.
+pub(super) fn units_at_moments(
+    records: &[&LedgerRecord],
+    moments: &[chrono::DateTime<chrono::Utc>],
+) -> Vec<BTreeMap<String, Decimal>> {
+    let mut warnings = Vec::new();
+    let mut variances = Vec::new();
+    let mut build = LedgerBuild {
+        books: BTreeMap::new(),
+        realized: Vec::new(),
+        warnings: &mut warnings,
+        variances: &mut variances,
+        missing_quantity_warned: BTreeSet::new(),
+        bad_quantity_warned: BTreeSet::new(),
+        account_currency: None,
+    };
+    let mut out = Vec::with_capacity(moments.len());
+    let mut rows = records.iter().peekable();
+    for moment in moments {
+        while let Some(record) = rows.next_if(|r| r.entry.occurred.at <= *moment) {
+            build.apply(record);
+        }
+        out.push(
+            build
+                .books
+                .iter()
+                .map(|(key, book)| (key.clone(), book.open_units()))
+                .filter(|(_, units)| *units > Decimal::ZERO)
+                .collect(),
+        );
+    }
+    out
+}
+
+impl LedgerBuild<'_> {
+    /// Apply one row if it changes lots.
+    fn apply(&mut self, record: &LedgerRecord) {
+        let build = self;
         match &record.entry.kind {
             EntryKind::Trade {
                 instrument,
@@ -129,8 +179,6 @@ pub(super) fn build_positions(
             _ => {}
         }
     }
-
-    (build.books, build.realized)
 }
 
 /// Mutable state while replaying rows, so every helper can warn and realize without a long

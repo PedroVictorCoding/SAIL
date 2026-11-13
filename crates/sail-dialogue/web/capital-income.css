@@ -266,3 +266,116 @@
     padding: 10px 12px 14px;
   }
 }
+
+/* Help under each projection control */
+.cp-proj-help {
+  margin-top: 4px;
+  max-width: 46ch;
+  line-height: 1.4;
+}
+
+.cp-proj-subtitle {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Compare your choices */
+.cp-proj-compare,
+.cp-proj-months {
+  padding: 16px 20px 8px;
+  border-top: 1px solid var(--cp-line);
+}
+
+.cp-proj-compare > .cp-muted,
+.cp-proj-months > .cp-muted {
+  margin-bottom: 10px;
+}
+
+.cp-proj-choice {
+  cursor: pointer;
+}
+
+.cp-proj-choice:hover td {
+  background: rgb(255 255 255 / .03);
+}
+
+.cp-proj-choice:focus-visible {
+  outline: 2px solid var(--sail-focus-ring);
+  outline-offset: -2px;
+}
+
+.cp-proj-choice-on td {
+  background: rgb(143 140 255 / .12);
+}
+
+.cp-proj-choice-on td:first-child {
+  box-shadow: inset 3px 0 0 var(--cp-accent);
+}
+
+.cp-proj-choice-ref td {
+  color: var(--sail-text-muted);
+}
+
+.cp-proj-compare-table .cp-chg {
+  margin-left: 6px;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+.cp-proj-compare .cp-note {
+  padding: 8px 0 4px;
+}
+
+/* Month by month: a heat grid of expected net dividends */
+.cp-proj-months-wrap {
+  max-height: 520px;
+  overflow: auto;
+  border: 1px solid var(--cp-line);
+  border-radius: 14px;
+}
+
+.cp-months-table {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-months-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--cp-card-2);
+}
+
+.cp-months-table th[scope="row"] {
+  position: sticky;
+  left: 0;
+  background: var(--cp-card);
+  font-weight: 500;
+}
+
+.cp-months-table td,
+.cp-months-table th {
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+.cp-mcell {
+  background: rgb(61 220 151 / calc(var(--heat, 0) * .55));
+  color: var(--sail-text);
+}
+
+.cp-mcell[data-out] {
+  background: transparent;
+}
+
+.cp-mtotal {
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .cp-proj-compare,
+  .cp-proj-months {
+    padding: 14px 16px 6px;
+  }
+}

@@ -27,7 +27,8 @@
 //!
 //! **Prices.** When the service measured a price trend (`Holding::price_growth`), the
 //! price follows it; otherwise it grows at the holding's dividend growth, so its yield
-//! stays where it is now. A holding yielding more than [`HIGH_YIELD`] pays a constant
+//! stays where it is now. A payout never yields more than today's yield (or
+//! [`HIGH_YIELD`], if higher) on the projected price. A holding yielding more than [`HIGH_YIELD`] pays a constant
 //! share of its *current* price, so its payout falls when its price falls. The reinvestment price for month `m` is
 //! `price₀ · (1 + g)^(m/12)`. Prices are the instrument's trading currency, converted
 //! with today's FX rate, held constant.

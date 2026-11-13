@@ -28,6 +28,16 @@ pub type DividendHistory = (
 );
 
 impl CapitalStore {
+    /// Changes whenever a payout history is stored.
+    pub fn dividend_history_version(&self) -> Result<String, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let last: Option<i64> =
+            conn.query_row("SELECT MAX(rowid) FROM dividend_histories", [], |r| {
+                r.get(0)
+            })?;
+        Ok(last.unwrap_or(0).to_string())
+    }
+
     /// Stores a per-share dividend history snapshot for a Yahoo symbol.
     pub fn record_dividend_history(
         &self,

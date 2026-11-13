@@ -571,7 +571,7 @@ function setupOutlookControls() {
       btn.setAttribute("aria-checked", "true");
       currentOutlookHorizon = parseInt(btn.dataset.horizon, 10) || 21;
       loadOutlook();
-      loadTrackRecord();
+      if (document.getElementById("cpOutlookDetails")?.open) loadTrackRecord();
     });
   });
 
@@ -1080,9 +1080,14 @@ function setupSignalsControls() {
 
 registerTab("outlook", {
   setup() {
+    // The replay track record sits inside "Show how this range was built": fetch it
+    // only when that opens.
+    document.getElementById("cpOutlookDetails")?.addEventListener("toggle", (e) => {
+      if (e.target.open) loadTrackRecord();
+    });
     setupOutlookControls();
     setupSignalsControls();
     setupSignalSearchControls();
   },
-  load: () => Promise.all([loadOutlook(), loadTrackRecord(), loadTradeSignals()]),
+  load: () => Promise.all([loadOutlook(), loadTradeSignals()]),
 });

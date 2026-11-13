@@ -87,6 +87,10 @@ pub struct CapitalService {
     helper_paths: (String, String, String),
     /// Track records, cached until prices, stored paths or holdings change.
     track_cache: std::sync::Mutex<std::collections::BTreeMap<String, crate::outlook::TrackRecord>>,
+    /// Decoded ledger inputs for one account, keyed by `CapitalStore::ledger_version`.
+    ledger_cache: std::sync::Mutex<Option<LedgerInputs>>,
+    /// Dividend projection inputs and the version they were built at.
+    dividend_inputs_cache: std::sync::Mutex<Option<(String, dividends_run::Inputs)>>,
     /// One model refresh at a time.
     model_refreshing: tokio::sync::Mutex<()>,
     /// The last model refresh, per model name.
@@ -100,6 +104,15 @@ pub struct CapitalService {
 static GLOBAL: OnceLock<Arc<CapitalService>> = OnceLock::new();
 
 /// Publishes the daemon's service to in-process tools (the voice assistant).
+/// The decoded ledger inputs for one account at one store version.
+#[derive(Clone)]
+struct LedgerInputs {
+    version: String,
+    records: std::sync::Arc<Vec<LedgerRecord>>,
+    snapshots: std::sync::Arc<Vec<crate::contracts::StoredSnapshot>>,
+    grants: std::sync::Arc<Vec<GrantView>>,
+}
+
 pub fn set_global(service: Arc<CapitalService>) {
     let _ = GLOBAL.set(service);
 }
@@ -190,6 +203,8 @@ impl CapitalService {
                 crate::models::DEFAULT_CACHE.to_string(),
             ),
             track_cache: std::sync::Mutex::new(Default::default()),
+            ledger_cache: std::sync::Mutex::new(None),
+            dividend_inputs_cache: std::sync::Mutex::new(None),
             model_refreshing: tokio::sync::Mutex::new(()),
             model_runs: std::sync::Mutex::new(Default::default()),
             evaluation_cache: std::sync::Mutex::new(None),
@@ -289,7 +304,7 @@ impl CapitalService {
     /// The ledger as seen at `as_of`.
     pub fn portfolio(&self, account: &AccountId, as_of: AsOf) -> Result<Projection, ServiceError> {
         let records = self.ledger_records(account, as_of.known_by)?;
-        let snapshots = self.store.snapshots(account)?;
+        let snapshots = self.ledger_inputs(account)?.snapshots;
         Ok(ledger::project(account, &records, &snapshots, as_of))
     }
 
@@ -300,14 +315,40 @@ impl CapitalService {
         account: &AccountId,
         known_by: DateTime<Utc>,
     ) -> Result<Vec<LedgerRecord>, ServiceError> {
-        let mut records = self.store.records(account)?;
-        for grant in self.store.grants(account)? {
+        let inputs = self.ledger_inputs(account)?;
+        let mut records = inputs.records.as_ref().clone();
+        for grant in inputs.grants.iter() {
             if grant.retracted_at.is_some_and(|at| at <= known_by) {
                 continue;
             }
-            records.push(grant_record(account, &grant));
+            records.push(grant_record(account, grant));
         }
         Ok(records)
+    }
+
+    /// Entries, snapshots and grants for `account`, decoded once per ledger version.
+    fn ledger_inputs(&self, account: &AccountId) -> Result<LedgerInputs, ServiceError> {
+        let version = format!(
+            "{}|{}",
+            account.as_str(),
+            self.store.ledger_version(account)?
+        );
+        if let Ok(cache) = self.ledger_cache.lock()
+            && let Some(inputs) = cache.as_ref()
+            && inputs.version == version
+        {
+            return Ok(inputs.clone());
+        }
+        let inputs = LedgerInputs {
+            version,
+            records: std::sync::Arc::new(self.store.records(account)?),
+            snapshots: std::sync::Arc::new(self.store.snapshots(account)?),
+            grants: std::sync::Arc::new(self.store.grants(account)?),
+        };
+        if let Ok(mut cache) = self.ledger_cache.lock() {
+            *cache = Some(inputs.clone());
+        }
+        Ok(inputs)
     }
 
     /// Portfolio insights at `as_of`, with `now` for freshness and trailing windows.
@@ -318,7 +359,7 @@ impl CapitalService {
         now: DateTime<Utc>,
     ) -> Result<crate::insights::Insights, ServiceError> {
         let records = self.ledger_records(account, as_of.known_by)?;
-        let snapshots = self.store.snapshots(account)?;
+        let snapshots = self.ledger_inputs(account)?.snapshots;
         let projection = ledger::project(account, &records, &snapshots, as_of);
         let visible: Vec<LedgerRecord> = records
             .into_iter()

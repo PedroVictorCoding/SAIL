@@ -288,7 +288,7 @@
       <header class="cp-panel-head">
         <div class="cp-title-group">
           <h2 id="cpProjectionTitle">Dividend projection</h2>
-          <span class="cp-sub-notice">Expected scaling with proportional, top-N, equal-weight, underweight or holding reinvestment</span>
+          <span class="cp-sub-notice">The next 30 years, from each holding's payout history. Scenarios, not promises: dividends can be cut.</span>
         </div>
         <div class="cp-panel-actions">
           <button type="button" class="cp-button cp-btn-sm" id="cpProjRefreshBtn">Refresh payout history</button>
@@ -297,13 +297,9 @@
 
       <div class="cp-proj-controls">
         <div class="cp-control-group">
-          <label for="cpProjYears" class="cp-control-label">Years: <strong id="cpProjYearsVal">10</strong></label>
-          <input type="range" class="cp-range" id="cpProjYears" min="1" max="30" value="10" step="1" aria-label="Projection horizon in years">
-        </div>
-
-        <div class="cp-control-group">
           <label for="cpProjReinvest" class="cp-control-label">Reinvest: <strong id="cpProjReinvestVal">100%</strong></label>
           <input type="range" class="cp-range" id="cpProjReinvest" min="0" max="100" value="100" step="5" aria-label="Reinvestment percentage">
+          <p class="cp-muted cp-proj-help">How much of each dividend buys more shares. The rest is paid to you as cash.</p>
         </div>
 
         <div class="cp-control-group">
@@ -316,6 +312,7 @@
             <button type="button" class="cp-horizon-btn" data-allocation="top_yield" aria-checked="false">Top yield</button>
             <button type="button" class="cp-horizon-btn" data-allocation="underweight" aria-checked="false">Underweight</button>
           </div>
+          <p class="cp-muted cp-proj-help" id="cpProjAllocHelp"></p>
         </div>
 
         <div class="cp-control-group" id="cpProjTopNGroup" hidden>
@@ -328,10 +325,31 @@
             <input type="checkbox" id="cpProjReserveTax">
             <span>Set aside Portuguese tax (28%)</span>
           </label>
+          <p class="cp-muted cp-proj-help">Shows income after the 28% Portuguese rate, less the tax already withheld abroad. Turn on to see what you keep.</p>
         </div>
       </div>
 
       <div id="cpProjStatus" class="cp-empty" hidden></div>
+
+      <div class="cp-proj-compare" id="cpProjCompareWrap">
+        <h3 class="cp-proj-subtitle">Compare your choices</h3>
+        <p class="cp-muted">Each way of reinvesting, with your reinvest share and tax setting, in the base scenario. Pick a row to use it.</p>
+        <div class="cp-table-wrap">
+          <table class="cp-table cp-proj-compare-table">
+            <thead>
+              <tr>
+                <th scope="col">Reinvest into</th>
+                <th scope="col" class="num">Per month, year 1</th>
+                <th scope="col" class="num">Year 10</th>
+                <th scope="col" class="num">Year 30</th>
+                <th scope="col">Trade-off</th>
+              </tr>
+            </thead>
+            <tbody id="cpProjCompareBody"><tr><td colspan="5" class="cp-empty">Comparing…</td></tr></tbody>
+          </table>
+        </div>
+        <p class="cp-note" id="cpProjCompareNote"></p>
+      </div>
 
       <div class="cp-proj-tiles" id="cpProjTiles">
         <div class="cp-proj-tile">
@@ -340,7 +358,7 @@
           <span class="cp-proj-tile-sub">Base scenario</span>
         </div>
         <div class="cp-proj-tile">
-          <span class="cp-proj-tile-label" id="cpProjTileFinalNetLabel">Year 10 net income</span>
+          <span class="cp-proj-tile-label" id="cpProjTileFinalNetLabel">Year 30 net income</span>
           <span class="cp-proj-tile-val" id="cpProjTileFinalNet">—</span>
           <span class="cp-proj-tile-sub" id="cpProjTileFinalNetRange">Low — · High —</span>
         </div>
@@ -360,13 +378,19 @@
         <p class="cp-empty" id="cpProjChartEmpty">Loading dividend projection chart...</p>
       </div>
 
+      <div class="cp-proj-months">
+        <h3 class="cp-proj-subtitle">Month by month, every year</h3>
+        <p class="cp-muted">Expected net dividends in each calendar month (base scenario). Brighter cells pay more.</p>
+        <div class="cp-proj-months-wrap" id="cpProjMonths"></div>
+      </div>
+
       <p class="cp-note">Projection from past payouts; dividends can be cut. Scenarios, not probabilities.</p>
 
       <details class="cp-more" id="cpProjYearsDetails">
         <summary>Show annual projection breakdown</summary>
         <div class="cp-proj-section">
           <div class="cp-proj-table-head">
-            <button type="button" class="cp-button cp-btn-sm" id="cpProjToggleYearsBtn" hidden>Show all 10 years</button>
+            <button type="button" class="cp-button cp-btn-sm" id="cpProjToggleYearsBtn" hidden>Show all 30 years</button>
           </div>
           <div class="cp-table-wrap">
             <table class="cp-table" id="cpProjYearsTable">
