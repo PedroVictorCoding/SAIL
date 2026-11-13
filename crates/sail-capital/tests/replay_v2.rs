@@ -3,9 +3,7 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
 use rust_decimal::Decimal;
 use sail_capital::calendar::{ExchangeCalendar, HolidayCalendar, WeekdayCalendar};
-use sail_capital::contracts::{
-    AccountId, Currency, DecisionTime, InputProvenance, VintagePolicy,
-};
+use sail_capital::contracts::{AccountId, Currency, DecisionTime, InputProvenance, VintagePolicy};
 use sail_capital::dividends::Payment;
 use sail_capital::forecast::ModelId;
 use sail_capital::market::{Adjustment, DisabledSource, PriceBar, PriceSeries};
@@ -51,9 +49,7 @@ fn synthetic_bars(start: NaiveDate, count: usize, base_cents: i64) -> Vec<PriceB
     bars
 }
 
-fn make_service(
-    dir: &std::path::Path,
-) -> (Arc<CapitalStore>, CapitalService, AccountId) {
+fn make_service(dir: &std::path::Path) -> (Arc<CapitalStore>, CapitalService, AccountId) {
     let model_specs: Vec<_> = specs()
         .into_iter()
         .filter(|s| s.name == "chronos")
@@ -91,10 +87,13 @@ fn replay_at_t_ignores_later_price_correction_membership_corporate_actions_and_m
 
     // Pick a held instrument from the imported XTB fixture.
     let projection = svc
-        .portfolio(&account, sail_capital::AsOf {
-            occurred_by: ts(2026, 4, 1, 12, 0, 0),
-            known_by: ts(2026, 4, 1, 12, 0, 0),
-        })
+        .portfolio(
+            &account,
+            sail_capital::AsOf {
+                occurred_by: ts(2026, 4, 1, 12, 0, 0),
+                known_by: ts(2026, 4, 1, 12, 0, 0),
+            },
+        )
         .unwrap();
     let pos = projection.positions.first().expect("fixture has positions");
     let held_key = pos.instrument.key();
@@ -102,10 +101,8 @@ fn replay_at_t_ignores_later_price_correction_membership_corporate_actions_and_m
 
     let bars_t = synthetic_bars(d(2025, 1, 2), 360, 10_000);
     let session_t = bars_t.last().unwrap().session;
-    let t = DateTime::<Utc>::from_naive_utc_and_offset(
-        session_t.and_hms_opt(22, 0, 0).unwrap(),
-        Utc,
-    );
+    let t =
+        DateTime::<Utc>::from_naive_utc_and_offset(session_t.and_hms_opt(22, 0, 0).unwrap(), Utc);
 
     store
         .record_prices(
@@ -137,7 +134,8 @@ fn replay_at_t_ignores_later_price_correction_membership_corporate_actions_and_m
             t,
         )
         .unwrap();
-    let yahoo = sail_capital::market::yahoo_symbol(&held_symbol).unwrap_or_else(|| held_symbol.clone());
+    let yahoo =
+        sail_capital::market::yahoo_symbol(&held_symbol).unwrap_or_else(|| held_symbol.clone());
     store
         .record_dividend_history(
             &yahoo,
@@ -149,9 +147,7 @@ fn replay_at_t_ignores_later_price_correction_membership_corporate_actions_and_m
             t,
         )
         .unwrap();
-    store
-        .record_earnings(&yahoo, &[d(2025, 1, 30)], t)
-        .unwrap();
+    store.record_earnings(&yahoo, &[d(2025, 1, 30)], t).unwrap();
     store
         .record_watch_change(
             &WatchChange::Add {
@@ -346,11 +342,20 @@ fn replay_at_t_ignores_later_price_correction_membership_corporate_actions_and_m
         .unwrap();
 
     assert_eq!(outlook_1.value, outlook_1_again.value);
-    assert_eq!(outlook_1.manifest.input_hash, outlook_1_again.manifest.input_hash);
+    assert_eq!(
+        outlook_1.manifest.input_hash,
+        outlook_1_again.manifest.input_hash
+    );
     assert_eq!(forecast_1.value, forecast_1_again.value);
-    assert_eq!(forecast_1.manifest.input_hash, forecast_1_again.manifest.input_hash);
+    assert_eq!(
+        forecast_1.manifest.input_hash,
+        forecast_1_again.manifest.input_hash
+    );
     assert_eq!(signals_1.value, signals_1_again.value);
-    assert_eq!(signals_1.manifest.input_hash, signals_1_again.manifest.input_hash);
+    assert_eq!(
+        signals_1.manifest.input_hash,
+        signals_1_again.manifest.input_hash
+    );
 
     // Replay at T2: later price correction, membership, corporate actions & v2 model ARE visible!
     let decision_t2 = DecisionTime::new(t2, session_t2);
@@ -388,10 +393,13 @@ fn provenance_distinguishes_observed_from_reconstructed_and_unavailable() {
     let (store, svc, account) = make_service(tmp.path());
 
     let projection = svc
-        .portfolio(&account, sail_capital::AsOf {
-            occurred_by: ts(2026, 4, 1, 12, 0, 0),
-            known_by: ts(2026, 4, 1, 12, 0, 0),
-        })
+        .portfolio(
+            &account,
+            sail_capital::AsOf {
+                occurred_by: ts(2026, 4, 1, 12, 0, 0),
+                known_by: ts(2026, 4, 1, 12, 0, 0),
+            },
+        )
         .unwrap();
     let pos = projection.positions.first().unwrap();
     let held_key = pos.instrument.key();
@@ -400,10 +408,8 @@ fn provenance_distinguishes_observed_from_reconstructed_and_unavailable() {
     // All bars ingested at T_archive, AFTER decision time T!
     let bars = synthetic_bars(d(2025, 1, 2), 360, 10_000);
     let session_t = bars[345].session;
-    let t = DateTime::<Utc>::from_naive_utc_and_offset(
-        session_t.and_hms_opt(22, 0, 0).unwrap(),
-        Utc,
-    );
+    let t =
+        DateTime::<Utc>::from_naive_utc_and_offset(session_t.and_hms_opt(22, 0, 0).unwrap(), Utc);
     let t_archive = t + Duration::days(30);
 
     store
@@ -501,10 +507,13 @@ fn holiday_calendar_prevents_session_and_origin_drift() {
     let (store, svc, account) = make_service(tmp.path());
 
     let projection = svc
-        .portfolio(&account, sail_capital::AsOf {
-            occurred_by: ts(2026, 4, 1, 12, 0, 0),
-            known_by: ts(2026, 4, 1, 12, 0, 0),
-        })
+        .portfolio(
+            &account,
+            sail_capital::AsOf {
+                occurred_by: ts(2026, 4, 1, 12, 0, 0),
+                known_by: ts(2026, 4, 1, 12, 0, 0),
+            },
+        )
         .unwrap();
     let pos = projection.positions.first().unwrap();
     let held_key = pos.instrument.key();
@@ -529,10 +538,7 @@ fn holiday_calendar_prevents_session_and_origin_drift() {
     assert!(!cal.is_session(holiday));
     assert_eq!(cal.session_on_or_before(holiday), Some(prior_session));
 
-    let t = DateTime::<Utc>::from_naive_utc_and_offset(
-        holiday.and_hms_opt(22, 0, 0).unwrap(),
-        Utc,
-    );
+    let t = DateTime::<Utc>::from_naive_utc_and_offset(holiday.and_hms_opt(22, 0, 0).unwrap(), Utc);
     store
         .record_prices(
             &held_key,
@@ -572,10 +578,13 @@ fn manifest_hash_is_deterministic_across_db_rewrites() {
     let (store_b, svc_b, acc_b) = make_service(dir_b.path());
 
     let proj = svc_a
-        .portfolio(&acc_a, sail_capital::AsOf {
-            occurred_by: ts(2026, 4, 1, 12, 0, 0),
-            known_by: ts(2026, 4, 1, 12, 0, 0),
-        })
+        .portfolio(
+            &acc_a,
+            sail_capital::AsOf {
+                occurred_by: ts(2026, 4, 1, 12, 0, 0),
+                known_by: ts(2026, 4, 1, 12, 0, 0),
+            },
+        )
         .unwrap();
     let pos = proj.positions.first().unwrap();
     let key = pos.instrument.key();
@@ -583,10 +592,8 @@ fn manifest_hash_is_deterministic_across_db_rewrites() {
 
     let bars = synthetic_bars(d(2025, 1, 2), 360, 10_000);
     let session_t = bars.last().unwrap().session;
-    let t = DateTime::<Utc>::from_naive_utc_and_offset(
-        session_t.and_hms_opt(22, 0, 0).unwrap(),
-        Utc,
-    );
+    let t =
+        DateTime::<Utc>::from_naive_utc_and_offset(session_t.and_hms_opt(22, 0, 0).unwrap(), Utc);
 
     // Insert an extra unrelated row in store_b first so all SQLite rowids differ!
     store_b
@@ -640,4 +647,36 @@ fn manifest_hash_is_deterministic_across_db_rewrites() {
 
     assert_eq!(out_a.manifest.input_hash, out_b.manifest.input_hash);
     assert_eq!(out_a.value.forecasts, out_b.value.forecasts);
+}
+
+#[test]
+fn bar_input_hash_does_not_include_the_sqlite_row_id() {
+    let session = d(2025, 1, 2);
+    let at = ts(2025, 1, 2, 22, 0, 0);
+    let observation = sail_capital::market::MarketObservation {
+        instrument_key: "sym:AAPL.US".into(),
+        symbol: "AAPL.US".into(),
+        session,
+        close: Decimal::new(10_000, 2),
+        ohl: None,
+        currency: Some(Currency::parse("USD").unwrap()),
+        price_kind: "close".into(),
+        adjustment: Adjustment::SplitAdjusted,
+        source_id: "synth".into(),
+        first_available_at: at,
+        ingested_at: at,
+    };
+    let first = sail_capital::replay::hash_bar_revisions(&[(
+        "1".into(),
+        "bar-hash".into(),
+        observation.clone(),
+        InputProvenance::Observed,
+    )]);
+    let rewritten = sail_capital::replay::hash_bar_revisions(&[(
+        "999".into(),
+        "bar-hash".into(),
+        observation,
+        InputProvenance::Observed,
+    )]);
+    assert_eq!(first, rewritten);
 }

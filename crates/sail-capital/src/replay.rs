@@ -309,16 +309,19 @@ fn opt_ts(ts: Option<DateTime<Utc>>) -> String {
     ts.map_or_else(String::new, canonical_ts)
 }
 
-/// Computes a canonical SHA-256 over bar revision tuples `(id, bar_sha256, observation, provenance)`.
+/// Computes a canonical SHA-256 over bar revision tuples
+/// `(unstable_row_id, bar_sha256, observation, provenance)`.
+///
+/// The row id is deliberately ignored: a rewrite that moves the same observation to a new
+/// SQLite row must not change an earlier replay's input hash. Content and vintage timestamps
+/// are the identity.
 pub fn hash_bar_revisions(
     revisions: &[(String, String, MarketObservation, InputProvenance)],
 ) -> String {
     let mut sorted: Vec<_> = revisions.iter().collect();
-    sorted.sort_by_key(|a| a.2.session);
+    sorted.sort_by_key(|a| (a.2.session, a.1.as_str()));
     let mut buf = String::new();
-    for (id, bar_sha, obs, prov) in sorted {
-        buf.push_str(id);
-        buf.push('|');
+    for (_id, bar_sha, obs, prov) in sorted {
         buf.push_str(bar_sha);
         buf.push('|');
         buf.push_str(&obs.session.format("%Y-%m-%d").to_string());
