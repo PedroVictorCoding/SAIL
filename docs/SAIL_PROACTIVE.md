@@ -90,6 +90,24 @@ falls back to a silent default.
   enforce cost caps before a call is made.
 - A cap of `0` means no cap of that kind.
 
+**Vendor CLIs (#449).** A provider can also be the owner's signed-in Claude Code, Codex or
+Gemini CLI, using their subscription instead of an API key:
+
+```json
+{ "id": "claude-sub", "adapter": "claude_cli", "model": "", "kinds": ["coding", "reasoning"],
+  "command": "/home/<owner>/.local/bin/claude", "cli_unverified_ok": false }
+```
+
+- `adapter` is `claude_cli`, `codex_cli` or `gemini_cli`. `command` defaults to `claude`,
+  `codex` or `gemini` on `PATH`. An empty `model` uses the CLI's default.
+- Each run happens in a fresh empty directory, with a cleared environment (no `SAIL_*`
+  variables) and the prompt on stdin. Flags are pinned so the CLI runs non-interactively,
+  read-only and without tools.
+- Only the CLI's text answer is used. A rate-limit reply blocks that provider until its
+  reset time. A CLI that is missing or not signed in is "unavailable", never a fake answer.
+- **Version gate.** The flags are verified per CLI version on this host. An unverified
+  version is refused unless `cli_unverified_ok` is `true`.
+
 ### Policy
 
 The local model calls `escalate_reasoning` with these fields:
@@ -123,6 +141,16 @@ The model never sets the origin. Trusted code marks a call made during a live vo
    `improved_rate` is a Laplace-smoothed share of past escalations of that kind that the owner,
    or a measurable check, marked as having improved the outcome. A kind whose escalations keep
    not helping falls below the threshold, so tracking outcomes refines routing by itself.
+
+   **Automatic outcomes (#450).** Two checks record outcomes without asking the owner. The
+   owner's own rating always wins over a check.
+   - `adopted_in_reply`: the turn's final reply is compared with the answer it received. If
+     the reply reuses at least 30% of the answer's content words, the answer counts as
+     `improved`; below 8%, as `no_change`. Anything in between, or a short answer, is not
+     judged.
+   - `forge_tests`: an escalation the model tied to a Forge job (`forge_job_id`) counts as
+     `improved` once that job reaches review or completes, and as `no_change` if it ends
+     blocked.
 4. **Egress guard.** Before anything leaves the host, these are replaced with stable
    placeholders, and the reply is re-hydrated locally:
    - e-mail addresses, phone numbers and IP addresses;
@@ -205,6 +233,8 @@ current time. Each stage has its own dedupe key, so a detector never repeats its
 | Finished escalation | "model X answered …", to the inbox |
 | Data disk below 10% (or 3%) free | a system alert |
 | New evidence matching an open agenda question | "new evidence on …", marked as a hypothesis |
+| GitHub activity, polled through `gh` at most every 15 min (#451) | CI failed on the owner's PR, review requested, issue assigned, PR merged, release on a watched repo (`SAIL_GITHUB_WATCH`); one item per fact (a new commit is a new fact) |
+| A Curiosity Engine finding (#453) | "Looked into: …", SAIL's unverified notes with sources, to the digest |
 
 **Agenda.** `sail-discovery/src/agenda.rs` (`$SAIL_DATA/discovery/agenda.db`) holds topics,
 investigations, commitments, potential actions and open questions. Each item records its
@@ -225,6 +255,29 @@ characters. It lists commitments due within three days and the top suggestions, 
 with its provenance. The model is told the items are optional. This is how SAIL "prepares
 conversations" without growing every prompt.
 
+**Curiosity Engine (#453).** "Investigate further" puts an investigation on the agenda. Under
+Proactive autonomy, open questions count too. After a tick, one bounded investigation may run
+in the background, only when:
+
+- autonomy is Balanced (investigations only) or Proactive (open questions too);
+- there is no live voice turn, no quiet hours and no focus;
+- the owner has been idle for 20 minutes;
+- fewer than 3 runs have happened today (UTC).
+
+How a run works:
+
+- It picks owner-requested investigations first, then whatever was looked into least
+  recently. An item is not revisited within 24 hours.
+- The local model runs at Background priority for at most 4 steps, 2 000 tokens and 4 minutes.
+  The steps are read-only: memory search (Guardian's Dialogue grant) and school search.
+- It may ask a stronger model only through the escalation policy, as `Origin::Background`.
+- A voice turn cancels it at once.
+
+Every run, including failed and cancelled ones, leaves a budget receipt in
+`$SAIL_DATA/discovery/curiosity.db`. A conclusive run produces a `hypothesis` digest item that
+starts "SAIL's unverified notes:", so it never reads as the owner's words.
+`SAIL_CURIOSITY=0` turns it off.
+
 **Configuration:**
 
 - `SAIL_PROACTIVE=0` turns the loop off.
@@ -233,8 +286,8 @@ conversations" without growing every prompt.
 
 ## 5. Resource and safety properties
 
-- **No model polling.** Ticks are deterministic, and a model runs only in a conversation or in
-  an approved escalation.
+- **No model polling.** Ticks are deterministic. A model runs only in a conversation, in an
+  approved escalation, or in an admitted, receipted Curiosity run.
 - **Bounded data.** Background loops are bounded; the stores are pruned (attention after 30
   days, escalation usage after 90) and text fields are capped.
 - **Permissions.**
@@ -255,23 +308,26 @@ conversations" without growing every prompt.
 | `GET /api/initiative/stats` | counts by delivery, state and feedback, and the last tick report |
 | `GET /api/initiative/agenda` | open agenda items |
 | `POST /api/initiative/tick` | a tick report |
+| `GET /api/initiative/curiosity` | Curiosity Engine state, limits, why it would not run now, and recent receipts |
 | `GET /api/mind/escalation/status` | caps, usage, outcomes and recent decisions |
 | `GET /api/mind/escalation/jobs` | recent jobs, with the answering model |
 | `POST /api/mind/escalation/jobs/:id/outcome` | records `improved`, `no_change` or `worse` |
 
 ## 7. Follow-up work
 
-These are tracked as GitHub issues rather than built here:
+Delivered in round 16:
 
-- CLI providers (Codex, Claude Code, Gemini) behind `ExternalProvider`;
-- the GitHub activity detector;
-- a calendar detector, once Life/calendar lands;
-- the Research Watcher;
-- the idle-time Curiosity Engine, with "Investigate further" running a bounded local
-  investigation;
-- the Reflection Engine;
+- CLI providers (#449);
+- automatic outcomes and the usage view under Settings → Models (#450);
+- the GitHub detector (#451);
+- the Curiosity Engine (#453).
+
+Still tracked as issues:
+
+- the calendar detector, once the calendar (#335) lands (#452);
+- the Research Watcher (#454);
+- the Reflection Engine (#455);
+- spoken and push delivery, and Sense-based busy and focus inference (#456, #102);
+- the Conversation Planner (#457);
 - the Friction Detector (#84);
-- Opportunity Radar (#83);
-- Sense-based busy and focus inference (#102);
-- delivery over Telegram once the gateway exists;
-- automatic outcome signals for escalations, such as tests passing after a Forge escalation.
+- Opportunity Radar (#83).
