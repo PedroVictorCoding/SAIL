@@ -10,6 +10,8 @@
 //! sources, external delivery and location triggers are follow-up work (see
 //! `docs/SAIL_PULSE.md`).
 
+pub mod attention;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -95,7 +97,11 @@ impl ReminderStatus {
             "due" => Self::Due,
             "delivered" => Self::Delivered,
             "cancelled" => Self::Cancelled,
-            other => return Err(PulseError::Storage(format!("unknown reminder state {other}"))),
+            other => {
+                return Err(PulseError::Storage(format!(
+                    "unknown reminder state {other}"
+                )));
+            }
         })
     }
 
@@ -293,7 +299,7 @@ fn validate_utc_offset(minutes: i32) -> Result<()> {
 /// Only same-origin destinations are accepted: an absolute path (`/learn`, not `//host`) or a
 /// same-document fragment (`#arena`). This keeps a reminder's link from becoming an open
 /// redirect or a `javascript:`/`data:` URL.
-fn validate_link(link: &str) -> Result<String> {
+pub(crate) fn validate_link(link: &str) -> Result<String> {
     let link = link.trim().to_owned();
     if link.is_empty() {
         return Err(PulseError::Invalid("reminder link is empty".into()));
@@ -352,9 +358,8 @@ impl Pulse {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                PulseError::Storage(format!("create {}: {e}", parent.display()))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| PulseError::Storage(format!("create {}: {e}", parent.display())))?;
         }
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
@@ -521,7 +526,10 @@ impl Pulse {
             "SELECT * FROM reminders WHERE status IN ('pending', 'due')
              ORDER BY due_at ASC LIMIT ?1",
         )?;
-        let rows = statement.query_map(params![limit.clamp(1, DEFAULT_LIST_LIMIT) as i64], row_to_reminder)?;
+        let rows = statement.query_map(
+            params![limit.clamp(1, DEFAULT_LIST_LIMIT) as i64],
+            row_to_reminder,
+        )?;
         collect_reminders(rows)
     }
 
@@ -572,10 +580,9 @@ impl Pulse {
                  ORDER BY due_at ASC LIMIT ?2",
             )?;
             statement
-                .query_map(
-                    params![format_ts(now), MAX_FIRE_PER_TICK as i64],
-                    |row| row.get::<_, String>(0),
-                )?
+                .query_map(params![format_ts(now), MAX_FIRE_PER_TICK as i64], |row| {
+                    row.get::<_, String>(0)
+                })?
                 .collect::<std::result::Result<Vec<_>, _>>()?
         };
         for id in ids {
@@ -773,7 +780,10 @@ fn row_to_reminder(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Reminder>
 }
 
 fn collect_reminders(
-    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<Result<Reminder>>>,
+    rows: rusqlite::MappedRows<
+        '_,
+        impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<Result<Reminder>>,
+    >,
 ) -> Result<Vec<Reminder>> {
     let mut reminders = Vec::new();
     for row in rows {
@@ -809,5 +819,3 @@ fn reminder_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Reminde
     })();
     Ok(result)
 }
-
-

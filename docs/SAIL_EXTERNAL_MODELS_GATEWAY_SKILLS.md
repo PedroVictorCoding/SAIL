@@ -1,6 +1,6 @@
 # External models, messaging gateway, skills and scheduling
 
-**Status:** decided design, not yet implemented · **Decided:** 2026-11-03 by the owner ·
+**Status:** decided design; P1 escalation core (policy, ledger, redaction, OpenAI-compatible adapter, `escalate_reasoning`) implemented — see [Proactive intelligence](SAIL_PROACTIVE.md) · **Decided:** 2026-11-03 by the owner ·
 **Vision:** [decisions 12–15](SAIL_MASTER_VISION.md#decisions-requiring-explicit-migration-rather-than-assumptions) ·
 **Reference:** [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT) and the
 [Agent Skills specification](https://agentskills.io/specification)

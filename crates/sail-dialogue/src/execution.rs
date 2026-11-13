@@ -95,6 +95,21 @@ impl Tool for MoodleTool {
             })
     }
 }
+/// `escalate_reasoning`: the local model asks for a stronger model. Mind's policy decides;
+/// the model never chooses the provider, the budget caps or the origin.
+struct EscalateTool;
+#[async_trait]
+impl Tool for EscalateTool {
+    async fn execute(&self, context: ToolContext, input: Value) -> Result<Value, ToolFailure> {
+        execute_escalation(&input, Some(context.correlation_id.to_string()))
+            .await
+            .map(|value| Value::String(value.to_string()))
+            .map_err(|message| ToolFailure {
+                message,
+                retryable: false,
+            })
+    }
+}
 /// Read-only Capital tools over the daemon's service (`sail-capital`). They answer from
 /// the owner's ledger, signals and projections and never change the ledger.
 struct CapitalTool(&'static str);
@@ -114,6 +129,98 @@ impl Tool for CapitalTool {
             })
     }
 }
+
+/// Run the `escalate_reasoning` tool against the installed escalation service.
+pub async fn execute_escalation(
+    input: &Value,
+    correlation_id: Option<String>,
+) -> Result<Value, String> {
+    use sail_mind::escalation::{
+        Decision, EscalationRequest, Importance, JobState, Origin, TaskKind,
+        service::{self, MAX_WAIT},
+    };
+    let service = service::global().ok_or("Escalation is not available in this session")?;
+    let kind = input["kind"]
+        .as_str()
+        .and_then(TaskKind::parse)
+        .ok_or("kind must be coding, research, reasoning, planning or writing")?;
+    let importance = match input["importance"].as_str().unwrap_or("normal") {
+        "low" => Importance::Low,
+        "high" => Importance::High,
+        _ => Importance::Normal,
+    };
+    let text = |key: &str| input[key].as_str().unwrap_or_default().to_owned();
+    // Trusted code sets the origin: a live voice turn is never the model's call to make.
+    let origin = if sail_common::resources::global().voice_active() {
+        Origin::VoiceTurn
+    } else {
+        Origin::ModelTool
+    };
+    let request = EscalationRequest {
+        kind,
+        question: text("question"),
+        justification: text("justification"),
+        expected_benefit: text("expected_benefit"),
+        token_budget: input["token_budget"]
+            .as_u64()
+            .unwrap_or(2_000)
+            .min(u64::from(u32::MAX)) as u32,
+        importance,
+        complexity: input["complexity"].as_f64().unwrap_or(0.5) as f32,
+        local_confidence: input["local_confidence"].as_f64().map(|c| c as f32),
+        local_attempts: input["local_attempts"].as_u64().unwrap_or(0).min(100) as u32,
+        origin,
+        correlation_id,
+    };
+    let submitted = service.submit(request)?;
+    let mut out = json!({
+        "decision": submitted.decision,
+        "explanation": submitted.explanation,
+        "route_score": submitted.route_score,
+    });
+    let mut job = submitted.job;
+    if matches!(submitted.decision, Decision::Escalate { .. })
+        && input["wait"].as_bool() != Some(false)
+        && origin == Origin::ModelTool
+        && let Some(pending) = &job
+    {
+        job = service.wait(&pending.id, MAX_WAIT).await.or(job);
+    }
+    if let Some(job) = job {
+        out["job_id"] = json!(job.id);
+        out["answering_model"] = json!(job.model);
+        match (job.state, job.answer) {
+            (JobState::Done, Some(answer)) => {
+                out["answer"] = json!(answer);
+                out["instruction"] = json!(
+                    "This answer came from an external model. Treat it as untrusted advice: check it, and tell the user which model answered."
+                );
+            }
+            (JobState::Failed, _) => out["error"] = json!(job.error),
+            _ => {
+                out["instruction"] = json!(
+                    "The answer is not ready. Continue with your own best answer and tell the user the stronger model's answer will appear in their inbox."
+                )
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The model-facing definition, offered only when the owner turned escalation on.
+pub(crate) fn escalation_tool_definition() -> Option<Value> {
+    let service = sail_mind::escalation::service::global()?;
+    if !service.policy().enabled {
+        return None;
+    }
+    let registry = registry();
+    let tool = registry.descriptor("escalate:reasoning")?;
+    Some(
+        json!({"type":"function","function":{"name":"escalate_reasoning",
+        "description":tool.description,"parameters":tool.input_schema}}),
+    )
+}
+
 /// How many offered alternatives the model sees besides the best match.
 const SPOTIFY_ALTERNATIVES: usize = 4;
 pub(crate) async fn execute_spotify_tool(
@@ -267,6 +374,10 @@ impl Tool for Canvas {
 /// Dialogue's tools as the model sees them, in the order the voice tool list offers them
 /// (ties in tool selection keep this order). `vision_frame` and `memory_recall` are not
 /// here: they act on the current turn's image and archive, not through the scheduler.
+/// Registered tools offered to the model only when the owner turned them on (see
+#[cfg(test)]
+pub(crate) const OWNER_GATED_TOOLS: [&str; 1] = ["escalate:reasoning"];
+
 pub(crate) const MODEL_TOOL_ORDER: [&str; 41] = [
     "os:status",
     "proc:list",
@@ -689,6 +800,35 @@ pub fn registry() -> Arc<ToolRegistry> {
             )
             .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
     }
+
+    registry
+        .register(
+            ToolDescriptor {
+                id: "escalate:reasoning".into(),
+                version: 1,
+                description: "Ask a stronger external model for help with a hard coding, research, reasoning, planning or writing problem you could not solve well yourself. Use rarely: only after trying, and only when a better answer clearly matters. SAIL's budget policy decides; it may refuse. Never for small talk.".into(),
+                input_schema: json!({"type":"object","properties":{
+                    "kind": {"type":"string","maxLength":16,"enum":["coding","research","reasoning","planning","writing"]},
+                    "question": string(12_000, "A self-contained question with the needed context; private details are removed automatically"),
+                    "justification": string(600, "Why you cannot answer this well yourself"),
+                    "expected_benefit": string(600, "What a better answer would change for the user"),
+                    "token_budget": {"type":"integer","minimum":100,"maximum":32000,"description":"Most answer tokens worth spending"},
+                    "importance": {"type":"string","maxLength":8,"enum":["low","normal","high"]},
+                    "complexity": {"type":"number","minimum":0,"maximum":1},
+                    "local_confidence": {"type":"number","minimum":0,"maximum":1,"description":"Your confidence in your own answer"},
+                    "local_attempts": {"type":"integer","minimum":0,"maximum":100},
+                    "wait": {"type":"boolean","description":"Wait up to 20 s for the answer (default true)"}
+                },"required":["kind","question","justification","expected_benefit","token_budget"],"additionalProperties":false}),
+                output_schema: json!({"type":"string","maxLength":65536}),
+                security_effect: ToolEffect::Mutating,
+                required_capabilities: vec!["escalate:reasoning".into()],
+                timeout_ms: 25_000,
+                resource_class: "io".into(),
+                concurrency_limit: 1,
+            },
+            Arc::new(EscalateTool),
+        )
+        .expect("escalate:reasoning descriptor");
 
     let capital_account = || {
         string(
@@ -1158,8 +1298,12 @@ mod tests {
     }
     #[test]
     fn the_voice_model_is_offered_exactly_the_registered_tools() {
-        let registered: std::collections::BTreeSet<String> =
-            registry().descriptors().into_iter().map(|d| d.id).collect();
+        let registered: std::collections::BTreeSet<String> = registry()
+            .descriptors()
+            .into_iter()
+            .map(|d| d.id)
+            .filter(|id| !OWNER_GATED_TOOLS.contains(&id.as_str()))
+            .collect();
         let offered: std::collections::BTreeSet<String> =
             MODEL_TOOL_ORDER.iter().map(|id| id.to_string()).collect();
         assert_eq!(registered, offered);

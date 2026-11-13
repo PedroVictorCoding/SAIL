@@ -58,3 +58,7 @@ Detect one opted-in useful change, propose with source and reason, honor snooze 
 - [Roadmap and subsystem taxonomy](https://github.com/PedroVictorCoding/SAIL/issues/15)
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
+
+## Initiative (implemented slice)
+
+Deterministic detectors and the agenda live in `crates/sail-discovery`. See [Proactive intelligence](SAIL_PROACTIVE.md#4-initiative-and-the-agenda-discovery).

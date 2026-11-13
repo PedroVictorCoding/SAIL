@@ -1956,6 +1956,9 @@ pub fn tool_definitions() -> serde_json::Value {
     tools.push(crate::vision_archive::tool_definition());
     tools.push(serde_json::json!({"type":"function","function":{"name":MEMORY_RECALL_TOOL,"description":"Read this conversation's archived memory: an earlier turn or a full tool result by id (mem:N), optionally only the parts matching query or a page from offset; or search the archive by query alone.","parameters":{"type":"object","properties":{"id":{"type":"string","description":"Archive handle such as mem:12"},"query":{"type":"string","maxLength":500,"description":"Words to look for"},"offset":{"type":"integer","minimum":0,"description":"Character offset to page through a long record"},"max_chars":{"type":"integer","minimum":200,"maximum":6000}},"additionalProperties":false}}}));
     tools.push(serde_json::json!({"type":"function","function":{"name":MEMORY_SEARCH_TOOL,"description":"Search what SAIL remembers long-term about the user: people, preferences, projects, decisions and facts from earlier conversations. Returns one fact per line.","parameters":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":500,"description":"Names or words to look for"},"limit":{"type":"integer","minimum":1,"maximum":20}},"required":["query"],"additionalProperties":false}}}));
+    if let Some(escalate) = crate::execution::escalation_tool_definition() {
+        tools.push(escalate);
+    }
     serde_json::Value::Array(tools)
 }
 pub fn multimodal_content(

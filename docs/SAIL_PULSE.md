@@ -61,3 +61,7 @@ Create a local reminder, persist across restart, honor quiet hours and deliver o
 - [Roadmap and subsystem taxonomy](https://github.com/PedroVictorCoding/SAIL/issues/15)
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
+
+## Attention
+
+Pulse scores everything SAIL notices before it reaches the owner (interrupt, suggest, digest, silent, drop), learns from feedback and enforces budgets, quiet hours and focus. See [Proactive intelligence](SAIL_PROACTIVE.md#3-attention-pulse).
