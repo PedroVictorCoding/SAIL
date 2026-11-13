@@ -642,6 +642,11 @@
       </header>
       <ul class="cp-rows" id="cpSignalsCardsGrid"></ul>
       <p class="cp-empty cp-signals-empty" id="cpSignalsEmpty" hidden>No setup has earned a signal today. That's the honest answer, not a fault.</p>
+      <div class="cp-signals-candidates" id="cpSignalsCandidates" hidden>
+        <h3 class="cp-signals-candidates-title">Candidates <span class="cp-more-count" id="cpSignalsCandidatesCount"></span></h3>
+        <p class="cp-note">The setup behind each candidate made money after costs in the replay years and again in the last two years, but not by enough to rule out luck. Same entry, stop and targets as a verified signal, sized at half your usual risk: ideas to watch or to trade small. Their live record is kept apart on Track record.</p>
+        <ul class="cp-rows" id="cpSignalsCandidatesGrid"></ul>
+      </div>
       <p class="cp-note">A setup publishes only if it stayed profitable after costs over 8 years of replay and a 2-year holdout. Signals are ideas for manual execution; SAIL never places orders.</p>
       <details class="cp-more cp-signal-search">
         <summary>Check another asset</summary>
@@ -705,6 +710,7 @@
       <details class="cp-more" id="cpRecordMore">
         <summary>Published signals, graded live <span class="cp-more-count" id="cpRecordCount"></span></summary>
         <p class="cp-note" id="cpRecordTotals">No closed signals yet.</p>
+        <p class="cp-note" id="cpRecordCandidateTotals" hidden></p>
         <div class="cp-table-wrap">
           <table class="cp-table" id="cpRecordTable">
             <thead>
@@ -712,6 +718,7 @@
                 <th scope="col">Date</th>
                 <th scope="col">Symbol</th>
                 <th scope="col">Side</th>
+                <th scope="col">Tier</th>
                 <th scope="col">Outcome</th>
                 <th scope="col" class="num">Result</th>
               </tr>

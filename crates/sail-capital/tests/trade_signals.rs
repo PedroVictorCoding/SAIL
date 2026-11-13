@@ -54,6 +54,38 @@ fn a_random_walk_publishes_nothing() {
         );
     }
     assert!(day.cards.is_empty());
+    // Candidates are honest about their tier and keep to the cap.
+    assert!(day.candidates.len() <= sail_capital::trade::MAX_CANDIDATES_PER_DAY);
+    for card in &day.candidates {
+        assert_eq!(card.tier, sail_capital::trade::Tier::Candidate);
+        assert!(card.verdict.candidate && !card.verdict.publishes);
+        // Unproven ideas risk half as much as a verified signal.
+        assert!((card.risk_pct - 0.25).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn candidates_skip_instruments_with_a_verified_card() {
+    let universe = planted_universe(20, 1999);
+    let day = day(&universe);
+    assert!(!day.cards.is_empty());
+    for card in &day.cards {
+        assert_eq!(card.tier, sail_capital::trade::Tier::Proven);
+        assert!(day.candidates.iter().all(|c| c.key != card.key));
+    }
+    let mut keys: Vec<&str> = day.candidates.iter().map(|c| c.key.as_str()).collect();
+    keys.dedup();
+    assert_eq!(keys.len(), day.candidates.len());
+    // Candidates aren't listed again as suppressed firings.
+    for card in &day.candidates {
+        assert!(
+            !day.suppressed
+                .iter()
+                .any(|(s, setup, side)| *s == card.symbol
+                    && *setup == card.setup
+                    && *side == card.side)
+        );
+    }
 }
 
 #[test]

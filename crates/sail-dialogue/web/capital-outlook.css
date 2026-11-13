@@ -639,3 +639,38 @@
   margin-left: 20px;
   margin-right: 20px;
 }
+
+/* Candidate trade ideas: positive in both periods, not yet clear of luck. */
+.cp-sig-tier {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cp-accent);
+  background: rgb(143 140 255 / .14);
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+.cp-signals-candidates {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--cp-line);
+}
+
+.cp-signals-candidates[hidden] {
+  display: none;
+}
+
+.cp-signals-candidates-title {
+  margin: 0 20px 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sail-text);
+}
+
+.cp-signals-candidates .cp-note {
+  margin-top: 0;
+}

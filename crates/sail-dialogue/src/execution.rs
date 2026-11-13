@@ -855,7 +855,7 @@ pub fn registry() -> Arc<ToolRegistry> {
     let capital_tools: [KernelTool; 13] = [
         (
             "capital:overview",
-            "Start here for questions about the owner's investments, portfolio, stocks, ETFs, funds, trades, signals, market positions, dividends, risk, or what to buy or sell. Returns account value, cash, largest positions, today's stance and top suggestions, the latest verified signals, watchlist size and risk per trade. Read-only.",
+            "Start here for questions about the owner's investments, portfolio, stocks, ETFs, funds, trades, signals, market positions, dividends, risk, or what to buy or sell. Returns account value, cash, largest positions, today's stance and top suggestions, the latest verified signals and candidate ideas, watchlist size and risk per trade. Read-only.",
             json!({"account": capital_account()}),
             &[],
             ToolEffect::ReadOnly,
@@ -879,7 +879,7 @@ pub fn registry() -> Arc<ToolRegistry> {
         ),
         (
             "capital:signals",
-            "The latest verified trade signals: run date and session, published cards with symbol, side, setup, entry zone, stop, targets, size and why; the full six-setup scoreboard; and setups that fired but were suppressed; plus the per-stock signal board: for every holding and watchlist stock or ETF, a read (favoured, disfavoured, mixed), whether it rests on validated signals, each price signal's reading and percentile, and the 3-month outlook (median, 5-95% range, chance up); plus the live record of past reads (how often each kind of read beat the board, and how well the outlook was calibrated). Use for 'any signals?', 'what should I trade?', 'is there a buy or sell setup?', 'what do the signals say about X?', 'which of my stocks look weak?'. Read-only.",
+            "The latest verified trade signals: run date and session, published cards with symbol, side, setup, entry zone, stop, targets, size and why; candidate cards (tier 'candidate': the setup made money after costs in both the selection years and the last two years but isn't yet clear of luck, so always call them unproven ideas, never verified signals); the full six-setup scoreboard; and setups that fired but were suppressed; plus the per-stock signal board: for every holding and watchlist stock or ETF, a read (favoured, disfavoured, mixed), whether it rests on validated signals, each price signal's reading and percentile, and the 3-month outlook (median, 5-95% range, chance up); plus the live record of past reads (how often each kind of read beat the board, and how well the outlook was calibrated). Use for 'any signals?', 'what should I trade?', 'is there a buy or sell setup?', 'what do the signals say about X?', 'which of my stocks look weak?'. Read-only.",
             json!({"account": capital_account()}),
             &[],
             ToolEffect::ReadOnly,
@@ -918,7 +918,7 @@ pub fn registry() -> Arc<ToolRegistry> {
         ),
         (
             "capital:record",
-            "The live graded record of published signals: closed count, target hit rate, mean and cumulative R, and recent cards with status, result and exit. Use to judge whether the signals are working. Read-only.",
+            "The live graded record of published signals: closed count, target hit rate, mean and cumulative R for verified signals, the same totals kept apart for candidate ideas, and recent cards (with their tier) with status, result and exit. Use to judge whether the signals are working. Read-only.",
             json!({"account": capital_account()}),
             &[],
             ToolEffect::ReadOnly,

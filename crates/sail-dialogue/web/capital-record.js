@@ -134,8 +134,17 @@ async function loadTradeRecord() {
         ? `${totals.closed} closed: reached target 1 in ${pct(totals.hit_target1)}, mean ${signed(totals.mean_r, 2, "R")}, cumulative ${signed(totals.cumulative_r, 2, "R")} after costs.`
         : "No closed signals yet.";
     }
+    const candEl = document.getElementById("cpRecordCandidateTotals");
+    const ct = res.candidate_totals || {};
+    const hasCandidates = cards.some((item) => item.card && item.card.tier === "candidate");
+    if (candEl) {
+      candEl.hidden = !hasCandidates;
+      candEl.textContent = ct.closed
+        ? `Candidates, kept apart: ${ct.closed} closed, reached target 1 in ${pct(ct.hit_target1)}, mean ${signed(ct.mean_r, 2, "R")}, cumulative ${signed(ct.cumulative_r, 2, "R")} after costs.`
+        : "Candidates, kept apart: none closed yet.";
+    }
     if (cards.length === 0) {
-      body.innerHTML = `<tr><td colspan="5" class="cp-empty">Nothing has been published yet.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="6" class="cp-empty">Nothing has been published yet.</td></tr>`;
       return;
     }
     body.innerHTML = cards.map((item) => {
@@ -156,12 +165,13 @@ async function loadTradeRecord() {
           <td>${formatDay(c.signal_session)}</td>
           <td>${escapeHtml(c.symbol || "—")}</td>
           <td>${escapeHtml(signalSideLabel(c.side))}</td>
+          <td>${c.tier === "candidate" ? "Candidate" : "Verified"}</td>
           <td>${escapeHtml(outcome)}</td>
           <td class="num ${resultClass}">${result}</td>
         </tr>`;
     }).join("");
   } catch (err) {
-    body.innerHTML = `<tr><td colspan="5" class="cp-empty">Record unavailable: ${escapeHtml(err.message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6" class="cp-empty">Record unavailable: ${escapeHtml(err.message)}</td></tr>`;
   }
 }
 

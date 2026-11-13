@@ -155,3 +155,60 @@ fn verdict_ignores_trades_that_exit_after_the_evaluation_date() {
     assert_eq!(early.holdout.trades, 0);
     assert!(!early.publishes);
 }
+
+/// Alternating wins and losses with a small positive mean: too noisy to clear the bar.
+fn noisy(trades: Vec<Trade>) -> Vec<Trade> {
+    trades
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut trade)| {
+            trade.r_multiple = if index % 2 == 0 { 1.2 } else { -1.0 };
+            trade
+        })
+        .collect()
+}
+
+#[test]
+fn a_positive_but_noisy_setup_is_a_candidate() {
+    let mut trades = noisy(selection(60, 0.0));
+    trades.extend(noisy(holdout(12, 0.0)));
+    let verdict = verdict(
+        "stocks",
+        SetupId::ThreeDayReversal,
+        Side::Long,
+        &trades,
+        date(2026, 1, 1),
+    );
+    assert!(!verdict.publishes);
+    assert!(verdict.candidate, "{}", verdict.reason);
+    assert!(
+        verdict.reason.starts_with("Candidate:"),
+        "{}",
+        verdict.reason
+    );
+    assert!(verdict.reason.contains("not yet clear of luck"));
+}
+
+#[test]
+fn a_candidate_needs_both_periods_positive_and_enough_trades() {
+    let at = date(2026, 1, 1);
+    let judge =
+        |trades: &[Trade]| verdict("stocks", SetupId::ThreeDayReversal, Side::Long, trades, at);
+    // A losing holdout.
+    let mut trades = noisy(selection(60, 0.0));
+    trades.extend(holdout(12, -0.2));
+    assert!(!judge(&trades).candidate);
+    // Too few holdout trades.
+    let mut trades = noisy(selection(60, 0.0));
+    trades.extend(noisy(holdout(8, 0.0)));
+    assert!(!judge(&trades).candidate);
+    // Too few selection trades.
+    let mut trades = noisy(selection(30, 0.0));
+    trades.extend(noisy(holdout(12, 0.0)));
+    assert!(!judge(&trades).candidate);
+    // A verified setup isn't also a candidate.
+    let mut trades = selection(120, 0.2);
+    trades.extend(holdout(25, 0.1));
+    let verified = judge(&trades);
+    assert!(verified.publishes && !verified.candidate);
+}

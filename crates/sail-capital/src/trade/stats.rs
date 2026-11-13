@@ -115,6 +115,11 @@ pub(super) fn verdict(
         && corrected_lower > 0.0
         && holdout.trades >= MIN_HOLDOUT_TRADES
         && holdout.expectancy_r > 0.0;
+    let candidate = !publishes
+        && selection.trades >= super::MIN_CANDIDATE_TRADES
+        && selection.expectancy_r > 0.0
+        && holdout.trades >= super::MIN_CANDIDATE_HOLDOUT_TRADES
+        && holdout.expectancy_r > 0.0;
     let reason = if publishes {
         format!(
             "Publishes: {:+.2}R a trade (95% from {:+.2}R) over {} trades; holdout {:+.2}R over {} trades",
@@ -150,11 +155,20 @@ pub(super) fn verdict(
             holdout.expectancy_r, holdout.trades
         )
     };
+    let reason = if candidate {
+        format!(
+            "Candidate: {:+.2}R a trade over {} trades and {:+.2}R over {} in the last two years, after costs, but not yet clear of luck. {}",
+            selection.expectancy_r, selection.trades, holdout.expectancy_r, holdout.trades, reason
+        )
+    } else {
+        reason
+    };
     Verdict {
         group: group.into(),
         selection,
         holdout,
         publishes,
+        candidate,
         reason,
     }
 }

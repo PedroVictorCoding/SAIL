@@ -623,16 +623,32 @@ side publish only with:
 - at least 100 trades;
 - a **lower 95% bound of expectancy above 0R after costs**, with the standard error
   widened for autocorrelated trades;
-- a positive mean in a separately judged **two-year holdout**.
+- a positive mean in a separately judged **two-year holdout**;
+- the bound also clears zero after a Bonferroni correction for the 36 setup, side and
+  group tests.
 
 Cards are ranked by that lower bound, at most eight a day and one per instrument. Stocks
-whose earnings fall inside the trade window are dropped. If nothing qualifies, the page
-says so.
+whose earnings fall inside the trade window are dropped.
 
-**Record.** Every published card is stored and never changed. After it plays out it is
-graded by the same rules: closed with its R, or unfilled when the next open missed the
-zone. The page shows the totals. That record is the real test of the setups' historical
-evidence.
+**Candidates.** That bar is strict, and on the owner's data it often leaves the page
+empty. A setup and side that made money after costs in the selection years *and* in the
+holdout (at least 40 and 10 trades) is a **candidate**. When it fires, the page shows
+the same card (entry, stop, three targets) under **Candidates**:
+- each card is tagged *Candidate · unproven*;
+- it is sized at half the owner's risk per trade;
+- its record line says why it isn't verified yet.
+
+There are at most eight candidates a day, one per instrument, and none on an instrument
+that already has a verified card. On pure random walks about one setup in six passes
+this bar by luck, so a candidate is an idea to watch, not evidence. When neither tier
+fires, the page says so.
+
+**Record.** Every published card, verified or candidate, is stored and never changed.
+After it plays out it is graded by the same rules: closed with its R, or unfilled when
+the next open missed the zone. The page shows the verified totals, and keeps the
+candidates' totals on a separate line. Only verified cards count on the scorecard. The
+live record is the real test of the setups' historical evidence, and it lets a
+candidate setup show in the open whether it holds up.
 
 **Holding view.** For each holding, a chandelier trailing stop (highest close of 22
 sessions minus 3·ATR(22)) with its distance, whether the close is below it, whether
@@ -774,7 +790,8 @@ Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capit
 | 17 | — | One page structure, house style, lazy loading, the track record, backend modules |
 | — | #463 | Fast dividend projection and track records, 30-year monthly dividends |
 | — | #464 | Signals tab: the signal board, a wider signal universe, per-stock suggestions |
-| 18 | — | The board's forward record, the stock drawer, model signals over the whole universe |
+| 18 | #465 | The board's forward record, the stock drawer, model signals over the whole universe |
+| — | — | Candidate trade ideas: positive in both periods, half size, their own live record |
 
 ## Not built yet
 
