@@ -16,6 +16,7 @@ use std::sync::{Arc, OnceLock};
 mod dividends_run;
 use grants::grant_record;
 mod grants;
+mod markets;
 mod outlook;
 mod prices;
 mod research;
