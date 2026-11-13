@@ -879,7 +879,7 @@ pub fn registry() -> Arc<ToolRegistry> {
         ),
         (
             "capital:signals",
-            "The latest verified trade signals: run date and session, published cards with symbol, side, setup, entry zone, stop, targets, size and why; the full six-setup scoreboard; and setups that fired but were suppressed; plus the per-stock signal board: for every holding and watchlist stock or ETF, a read (favoured, disfavoured, mixed), whether it rests on validated signals, each price signal's reading and percentile, and the 3-month outlook (median, 5-95% range, chance up). Use for 'any signals?', 'what should I trade?', 'is there a buy or sell setup?', 'what do the signals say about X?', 'which of my stocks look weak?'. Read-only.",
+            "The latest verified trade signals: run date and session, published cards with symbol, side, setup, entry zone, stop, targets, size and why; the full six-setup scoreboard; and setups that fired but were suppressed; plus the per-stock signal board: for every holding and watchlist stock or ETF, a read (favoured, disfavoured, mixed), whether it rests on validated signals, each price signal's reading and percentile, and the 3-month outlook (median, 5-95% range, chance up); plus the live record of past reads (how often each kind of read beat the board, and how well the outlook was calibrated). Use for 'any signals?', 'what should I trade?', 'is there a buy or sell setup?', 'what do the signals say about X?', 'which of my stocks look weak?'. Read-only.",
             json!({"account": capital_account()}),
             &[],
             ToolEffect::ReadOnly,
