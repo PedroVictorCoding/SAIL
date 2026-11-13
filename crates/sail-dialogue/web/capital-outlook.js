@@ -647,6 +647,25 @@ function formatCardSize(size, riskPct) {
 function formatEvidenceLine(verdict) {
   if (!verdict) return "No evidence record available.";
   const sel = verdict.selection || {};
+  const j = verdict.judgement;
+  if (j) {
+    const pooled = j.pooled || {};
+    const wf = j.walk_forward || {};
+    const live = j.live || {};
+    const postMean = Number(j.posterior_mean ?? pooled.posterior_mean ?? 0);
+    const postSd = Number(j.posterior_sd ?? pooled.posterior_sd ?? 0);
+    const margin = 1.96 * postSd;
+    const postStr = `${postMean >= 0 ? "+" : "−"}${Math.abs(postMean).toFixed(2)}R ± ${margin.toFixed(2)}R`;
+    const trades = sel.trades || 0;
+    const oosR = Number(wf.oos_mean_r || 0);
+    const oosStr = `${oosR >= 0 ? "+" : "−"}${Math.abs(oosR).toFixed(2)}R`;
+    const oosTrades = wf.oos_trades || 0;
+    const liveR = Number(live.mean_r || 0);
+    const liveStr = live.trades > 0
+      ? `${liveR >= 0 ? "+" : "−"}${Math.abs(liveR).toFixed(2)}R over ${live.trades}`
+      : "none yet";
+    return `${postStr} pooled over ${trades} trades · out of sample ${oosStr} over ${oosTrades} · live ${liveStr}`;
+  }
   const hold = verdict.holdout || {};
 
   const hitPct = ((sel.hit_target1 || 0) * 100).toFixed(0);
