@@ -224,74 +224,65 @@
   }
 
   // ------------------------------------------------------------------ render
+  const DELIVERY_LABEL = {
+    interrupt: 'Now',
+    suggest: 'Worth raising',
+    digest: 'Digest',
+    silent: 'Prepared',
+  };
+  // `assessment.delivery` is `{"delivery": "interrupt"}` (serde adjacently tagged).
+  function deliveryOf(item) {
+    const d = item.assessment?.delivery;
+    return (typeof d === 'string' ? d : d?.delivery) || 'digest';
+  }
+  // The inbox holds only what deserves attention now; the rest waits for the digest.
+  function isInboxWorthy(item) {
+    if (['snoozed', 'investigating', 'dismissed', 'done', 'digested'].includes(item.state)) {
+      return false;
+    }
+    const d = deliveryOf(item);
+    return d === 'interrupt' || d === 'suggest' || item.state === 'delivered';
+  }
+
   function renderCard(item) {
     const sig = item.signal || {};
-    const delivery = item.assessment?.delivery || 'digest';
+    const delivery = deliveryOf(item);
     const link = safeLink(sig.link);
     const metaChildren = [
-      el('span', { class: `init-pill delivery-${delivery}`, text: delivery }),
+      el('span', { class: `init-pill delivery-${delivery}`, text: DELIVERY_LABEL[delivery] || delivery }),
       el('span', { class: 'init-pill', text: sig.source || 'sail' }),
-      sig.kind ? el('span', { text: sig.kind }) : null,
+      sig.provenance === 'hypothesis' ? el('span', { text: 'idea, unverified' }) : null,
       sig.deadline ? el('span', { text: `due ${formatRelative(sig.deadline)}` }) : null,
       item.created_at ? el('span', { text: formatRelative(item.created_at) }) : null,
     ];
 
+    const button = (text, payload, extra = '') =>
+      el('button', {
+        type: 'button',
+        class: `init-btn ${extra}`.trim(),
+        text,
+        onclick: () => sendFeedback(item.id, payload),
+      });
     const actions = el(
       'div',
       { class: 'init-actions' },
-      el('button', {
-        type: 'button',
-        class: 'init-btn init-btn-primary',
-        text: 'Useful',
-        onclick: () => sendFeedback(item.id, { feedback: 'useful' }),
-      }),
-      el('button', {
-        type: 'button',
-        class: 'init-btn',
-        text: 'Not now',
-        onclick: () => sendFeedback(item.id, { feedback: 'not_now' }),
-      }),
+      button('Useful', { feedback: 'useful' }, 'init-btn-primary'),
+      button('Not now', { feedback: 'not_now' }),
+      button('Later (1 h)', { feedback: 'later', until: laterIso('1h') }),
+      button('Dismiss', { feedback: 'dismiss' }),
       el(
-        'span',
-        { class: 'init-later-group' },
-        el('span', { class: 'init-later-label', text: 'Tell me later:' }),
-        el('button', {
-          type: 'button',
-          class: 'init-btn',
-          text: '1 h',
-          onclick: () => sendFeedback(item.id, { feedback: 'later', until: laterIso('1h') }),
-        }),
-        el('button', {
-          type: 'button',
-          class: 'init-btn',
-          text: 'tonight',
-          onclick: () => sendFeedback(item.id, { feedback: 'later', until: laterIso('tonight') }),
-        }),
-        el('button', {
-          type: 'button',
-          class: 'init-btn',
-          text: 'tomorrow',
-          onclick: () => sendFeedback(item.id, { feedback: 'later', until: laterIso('tomorrow') }),
-        })
-      ),
-      el('button', {
-        type: 'button',
-        class: 'init-btn',
-        text: 'Investigate',
-        onclick: () => sendFeedback(item.id, { feedback: 'investigate' }),
-      }),
-      el('button', {
-        type: 'button',
-        class: 'init-btn',
-        text: 'Dismiss',
-        onclick: () => sendFeedback(item.id, { feedback: 'dismiss' }),
-      }),
-      el('button', {
-        type: 'button',
-        class: 'init-btn init-btn-danger',
-        text: 'Mute this kind',
-        onclick: () => sendFeedback(item.id, { feedback: 'mute' }),
-      })
+        'details',
+        { class: 'init-more' },
+        el('summary', { class: 'init-btn', text: 'More' }),
+        el(
+          'div',
+          { class: 'init-more-body' },
+          button('Tonight', { feedback: 'later', until: laterIso('tonight') }),
+          button('Tomorrow', { feedback: 'later', until: laterIso('tomorrow') }),
+          button('Investigate further', { feedback: 'investigate' }),
+          button('Mute this kind', { feedback: 'mute' }, 'init-btn-danger')
+        )
+      )
     );
 
     return el(
@@ -372,8 +363,11 @@
     const deliverableIds = new Set(state.deliverable.map((x) => x.id));
     const mergedInbox = [
       ...state.deliverable,
-      ...state.inbox.filter((x) => !deliverableIds.has(x.id)),
+      ...state.inbox.filter((x) => !deliverableIds.has(x.id) && isInboxWorthy(x)),
     ];
+    const waiting = state.inbox.filter(
+      (x) => !deliverableIds.has(x.id) && !isInboxWorthy(x) && x.state === 'pending'
+    );
     const badgeCount = state.deliverable.length || mergedInbox.length;
 
     const header = el(
@@ -445,6 +439,19 @@
           body.append(renderCard(item));
         }
       }
+      if (waiting.length > 0) {
+        body.append(
+          el('button', {
+            type: 'button',
+            class: 'init-waiting',
+            text: `${waiting.length} more waiting for the next digest`,
+            onclick: () => {
+              state.view = 'digest';
+              render();
+            },
+          })
+        );
+      }
       children.push(body);
     } else if (state.view === 'digest') {
       const body = el('div', { class: 'init-body' });
@@ -469,6 +476,10 @@
         body.append(el('p', { class: 'init-empty', text: 'Digest is empty.' }));
       } else {
         for (const item of items) body.append(renderCard(item));
+      }
+      if (waiting.length > 0) {
+        body.append(el('h3', { class: 'init-subhead', text: 'Waiting for the next digest' }));
+        for (const item of waiting.slice(0, 12)) body.append(renderCard(item));
       }
       children.push(body);
     }

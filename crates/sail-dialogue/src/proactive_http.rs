@@ -167,13 +167,43 @@ async fn feedback(
             Json(json!({"error":"later must be within the next 60 days"})),
         ));
     }
-    to_json(
-        s.proactive
-            .initiative
-            .attention()
-            .feedback(&id, feedback, now)
-            .map_err(failure)?,
-    )
+    let item = s
+        .proactive
+        .initiative
+        .attention()
+        .feedback(&id, feedback, now)
+        .map_err(failure)?;
+    if feedback == Feedback::Investigate {
+        // Carry it on the agenda so new evidence brings it back (revisit), instead of
+        // leaving an "investigating" flag nobody follows up.
+        let agenda = s.proactive.initiative.agenda();
+        let new = sail_discovery::agenda::NewAgendaItem {
+            key: format!("attention:{}", item.id),
+            kind: sail_discovery::agenda::AgendaKind::Investigation,
+            title: item.signal.title.clone(),
+            detail: item.signal.body.clone(),
+            provenance: sail_pulse::attention::Provenance::Suggestion,
+            match_terms: match_terms(&item.signal.title),
+            due: item.signal.deadline,
+        };
+        if let Err(error) = agenda.upsert(new, now) {
+            tracing::warn!(%error, "investigation not added to the agenda");
+        }
+    }
+    to_json(item)
+}
+
+/// The longest distinctive words of a title, as agenda match terms.
+fn match_terms(title: &str) -> Vec<String> {
+    let mut words: Vec<String> = title
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 5)
+        .map(str::to_lowercase)
+        .collect();
+    words.sort_by_key(|w| std::cmp::Reverse(w.chars().count()));
+    words.dedup();
+    words.truncate(3);
+    words
 }
 
 async fn digest(State(s): State<Arc<HttpState>>, headers: HeaderMap) -> Reply {

@@ -298,3 +298,44 @@
     border: 1px solid ButtonText;
   }
 }
+
+/* Secondary actions stay out of the way until asked for. */
+.init-more {
+  display: inline-block;
+}
+.init-more > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.init-more > summary::-webkit-details-marker {
+  display: none;
+}
+.init-more[open] > summary {
+  margin-bottom: 6px;
+}
+.init-more-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.init-waiting {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  color: inherit;
+  opacity: 0.75;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 4px 0;
+  font: inherit;
+}
+.init-waiting:focus-visible,
+.init-more > summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.init-subhead {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin: 12px 0 4px;
+}

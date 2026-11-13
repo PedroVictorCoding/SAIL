@@ -152,13 +152,32 @@ async fn inbox_feedback_settings_and_agenda_over_http() {
         .unwrap();
     assert_eq!(bad.status(), 400);
 
+    let investigate: Value = client
+        .post(format!("{base}/items/{id}/feedback"))
+        .bearer_auth(TOKEN)
+        .json(&json!({"feedback":"investigate"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(investigate["state"], "investigating");
+
     let agenda: Value = get(format!("{base}/agenda"))
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert_eq!(agenda[0]["kind"], "commitment");
+    let kinds: Vec<&str> = agenda
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"commitment"), "{agenda}");
+    assert!(kinds.contains(&"investigation"), "{agenda}");
     let stats: Value = get(format!("{base}/stats"))
         .await
         .unwrap()

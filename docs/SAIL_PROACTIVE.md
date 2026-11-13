@@ -189,7 +189,7 @@ The thresholds, budgets, cooldown and digest times can all be configured.
 - `{"feedback":"useful"}`;
 - `{"feedback":"not_now"}`, which moves the item to the digest;
 - `{"feedback":"later","until":"<RFC 3339>"}`, which snoozes it (within 60 days);
-- `{"feedback":"investigate"}`, which marks it for investigation;
+- `{"feedback":"investigate"}`, which marks it for investigation and opens an agenda investigation. That investigation's match terms come from the title, so new evidence brings it back as a revisit;
 - `{"feedback":"dismiss"}`;
 - `{"feedback":"mute"}`, which mutes that source and kind.
 
