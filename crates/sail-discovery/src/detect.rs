@@ -77,6 +77,14 @@ pub enum Observation {
     },
     /// Activity on the owner's GitHub repositories (#451; see [`crate::github`]).
     GitHub(crate::github::GithubEvent),
+    /// A Curiosity Engine run produced notes on an agenda item (#453).
+    CuriosityFinding {
+        run_id: String,
+        item_id: String,
+        title: String,
+        summary: String,
+        sources: Vec<String>,
+    },
 }
 
 /// Days before a school item when preparation starts to matter.
@@ -86,6 +94,13 @@ pub const SCHOOL_HORIZON_DAYS: i64 = 14;
 pub fn detect(observation: &Observation, now: DateTime<Utc>) -> Vec<Signal> {
     match observation {
         Observation::GitHub(event) => crate::github::github_signal(event, now),
+        Observation::CuriosityFinding {
+            run_id,
+            title,
+            summary,
+            sources,
+            ..
+        } => curiosity_finding(run_id, title, summary, sources, now),
         Observation::SchoolItem {
             id,
             course,
@@ -264,6 +279,45 @@ fn school_change(
         deadline: None,
         provenance: Provenance::Observation,
         link: Some("/moodle".into()),
+        observed_at: now,
+    }]
+}
+
+/// SAIL's own notes: a hypothesis for the digest, never the owner's words.
+fn curiosity_finding(
+    run_id: &str,
+    title: &str,
+    summary: &str,
+    sources: &[String],
+    now: DateTime<Utc>,
+) -> Vec<Signal> {
+    if summary.trim().is_empty() {
+        return Vec::new();
+    }
+    let sources = if sources.is_empty() {
+        "no sources".to_owned()
+    } else {
+        sources.join("; ")
+    };
+    vec![Signal {
+        source: Source::Curiosity,
+        kind: "finding".into(),
+        dedupe_key: format!("curiosity:{run_id}"),
+        title: format!("Looked into: {}", excerpt(title, 90)),
+        body: excerpt(
+            &format!(
+                "SAIL's unverified notes: {} Sources: {sources}.",
+                summary.trim()
+            ),
+            900,
+        ),
+        urgency: 0.1,
+        relevance: 0.6,
+        novelty: 0.8,
+        confidence: 0.5,
+        deadline: None,
+        provenance: Provenance::Hypothesis,
+        link: None,
         observed_at: now,
     }]
 }

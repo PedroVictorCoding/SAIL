@@ -53,6 +53,7 @@ pub fn initiative_router(
             .route("/settings", get(settings).post(save_settings))
             .route("/stats", get(stats))
             .route("/agenda", get(agenda))
+            .route("/curiosity", get(curiosity))
             .route("/tick", post(tick))
             .with_state(Arc::new(HttpState {
                 proactive,
@@ -280,6 +281,26 @@ async fn stats(State(s): State<Arc<HttpState>>, headers: HeaderMap) -> Reply {
     Ok(Json(
         json!({"attention": attention, "last_tick": s.proactive.last_tick()}),
     ))
+}
+
+/// The Curiosity Engine's state and budget receipts (#453).
+async fn curiosity(State(s): State<Arc<HttpState>>, headers: HeaderMap) -> Reply {
+    authorize(&s, &headers)?;
+    let Some(curiosity) = s.proactive.curiosity() else {
+        return Ok(Json(json!({"enabled": false})));
+    };
+    let now = Utc::now();
+    let gate = s.proactive.curiosity_gate(&curiosity, now);
+    let receipts = curiosity.ledger.recent(20).map_err(internal)?;
+    Ok(Json(json!({
+        "enabled": true,
+        "running": curiosity.running(),
+        "limits": curiosity.limits,
+        "runs_today": gate.runs_today,
+        "would_run": sail_discovery::curiosity::admit(&gate, &curiosity.limits).err(),
+        "last_skip": curiosity.last_skip(),
+        "receipts": receipts,
+    })))
 }
 
 async fn agenda(

@@ -6,6 +6,7 @@
 //!
 //! See `docs/SAIL_PROACTIVE.md`.
 pub mod agenda;
+pub mod curiosity;
 pub mod detect;
 pub mod github;
 pub mod initiative;

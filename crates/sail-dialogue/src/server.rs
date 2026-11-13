@@ -391,6 +391,20 @@ pub async fn run_dialogue_server_with_plans(
         .map(|pulse| crate::pulse_http::router(pulse, authority()));
     // Proactive initiative and reasoning escalation (deterministic loop; no model calls).
     let proactive = crate::proactive::start(pulse.clone());
+    if let Some(proactive) = &proactive {
+        match sail_discovery::curiosity::CuriosityLedger::open(
+            sail_common::storage::data_path("discovery").join("curiosity.db"),
+        ) {
+            Ok(ledger) => {
+                let investigator = Arc::new(crate::curiosity_runner::LocalInvestigator::new(
+                    inference.clone(),
+                    arena.clone(),
+                ));
+                proactive.enable_curiosity(investigator, ledger);
+            }
+            Err(error) => warn!(%error, "curiosity ledger unavailable; Curiosity Engine off"),
+        }
+    }
     let initiative_routes = proactive
         .clone()
         .map(|p| crate::proactive_http::initiative_router(p, authority()));
@@ -1939,6 +1953,7 @@ async fn run_turn(
         .record_turn_at_epoch(&session, current, &prompt, &reply, learning_epoch);
     // Did the reply use an answer a stronger model gave during this turn? (#450)
     crate::escalation_outcomes::settle_turn(&tool_correlation(&session, current).to_string(), &reply);
+    crate::proactive::note_conversation_turn();
     // Extract and add learned knowledge from the conversation turn once if not already in memory.
     state
         .arena

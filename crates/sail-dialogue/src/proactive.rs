@@ -7,11 +7,20 @@
 //!
 //! Set `SAIL_PROACTIVE=0` to turn the loop off; `SAIL_PROACTIVE_TICK_SECS` (60–3600,
 //! default 300) sets the period.
+//!
+//! The one exception to "no model calls" is the Curiosity Engine (#453): after a tick, when
+//! [`sail_discovery::curiosity::admit`] allows it (Balanced or Proactive autonomy, owner
+//! idle, no voice, quiet hours or focus, daily allowance left), one bounded local-model
+//! investigation runs in the background. `SAIL_CURIOSITY=0` turns it off.
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, NaiveTime, Utc};
 use sail_discovery::agenda::AgendaStore;
+use sail_discovery::curiosity::{
+    CuriosityLedger, CuriosityLimits, Gate, Investigator, Skip, admit, run_once,
+};
 use sail_discovery::detect::{Observation, SchoolChangeKind, SchoolItemKind};
 use sail_discovery::initiative::{Initiative, TickReport};
 use sail_mind::escalation::service::{self as escalation, EscalationService};
@@ -29,6 +38,41 @@ pub struct Proactive {
     last_digest: Mutex<Option<DigestBatch>>,
     last_check: Mutex<DateTime<Utc>>,
     answered: Mutex<Vec<Observation>>,
+    curiosity: Mutex<Option<Arc<Curiosity>>>,
+}
+
+/// The Curiosity Engine's runtime state (#453).
+pub struct Curiosity {
+    pub ledger: CuriosityLedger,
+    pub limits: CuriosityLimits,
+    investigator: Arc<dyn Investigator>,
+    running: AtomicBool,
+    last_skip: Mutex<Option<Skip>>,
+}
+
+impl Curiosity {
+    pub fn running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    pub fn last_skip(&self) -> Option<Skip> {
+        *lock(&self.last_skip)
+    }
+}
+
+/// Unix millis of the last finished conversation turn (0 = none yet).
+static LAST_TURN_MS: AtomicI64 = AtomicI64::new(0);
+
+/// A conversation turn just finished: background curiosity waits for the owner to be idle.
+pub fn note_conversation_turn() {
+    LAST_TURN_MS.store(Utc::now().timestamp_millis(), Ordering::SeqCst);
+}
+
+fn idle_for(now: DateTime<Utc>) -> Option<ChronoDuration> {
+    match LAST_TURN_MS.load(Ordering::SeqCst) {
+        0 => None,
+        ms => Some(now - DateTime::from_timestamp_millis(ms).unwrap_or(now)),
+    }
 }
 
 static GLOBAL: OnceLock<Arc<Proactive>> = OnceLock::new();
@@ -136,7 +180,109 @@ impl Proactive {
             last_digest: Mutex::new(None),
             last_check: Mutex::new(Utc::now()),
             answered: Mutex::new(Vec::new()),
+            curiosity: Mutex::new(None),
         })
+    }
+
+    /// Turn on idle-time investigations with `investigator` (off when `SAIL_CURIOSITY=0`).
+    pub fn enable_curiosity(
+        &self,
+        investigator: Arc<dyn Investigator>,
+        ledger: CuriosityLedger,
+    ) -> bool {
+        if std::env::var("SAIL_CURIOSITY").is_ok_and(|v| v == "0" || v == "false") {
+            info!("Curiosity Engine is off (SAIL_CURIOSITY=0)");
+            return false;
+        }
+        *lock(&self.curiosity) = Some(Arc::new(Curiosity {
+            ledger,
+            limits: CuriosityLimits::default(),
+            investigator,
+            running: AtomicBool::new(false),
+            last_skip: Mutex::new(None),
+        }));
+        true
+    }
+
+    pub fn curiosity(&self) -> Option<Arc<Curiosity>> {
+        lock(&self.curiosity).clone()
+    }
+
+    /// The facts the Curiosity gate decides on, now.
+    pub fn curiosity_gate(&self, curiosity: &Curiosity, now: DateTime<Utc>) -> Gate {
+        let settings = self.initiative.attention().settings().unwrap_or_default();
+        let context = self.context(now, &settings);
+        Gate {
+            autonomy: settings.autonomy,
+            voice_active: context.voice_active,
+            quiet_hours: context.quiet_hours,
+            focus: context.focus_until.is_some(),
+            idle_for: idle_for(now),
+            runs_today: curiosity.ledger.runs_today(now).unwrap_or(u32::MAX),
+            running: curiosity.running(),
+        }
+    }
+
+    /// Start one investigation in the background when the gate allows it. Returns the
+    /// reason when it doesn't.
+    pub fn maybe_investigate(self: &Arc<Self>) -> Result<(), Skip> {
+        let Some(curiosity) = self.curiosity() else {
+            return Err(Skip::Autonomy);
+        };
+        let gate = self.curiosity_gate(&curiosity, Utc::now());
+        if let Err(skip) = admit(&gate, &curiosity.limits) {
+            *lock(&curiosity.last_skip) = Some(skip);
+            return Err(skip);
+        }
+        if curiosity.running.swap(true, Ordering::SeqCst) {
+            return Err(Skip::Running);
+        }
+        let this = self.clone();
+        let autonomy = gate.autonomy;
+        tokio::spawn(async move {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            // Live voice always wins: cancel the moment a voice turn starts.
+            let watch = {
+                let cancel = cancel.clone();
+                tokio::spawn(async move {
+                    loop {
+                        if sail_common::resources::global().voice_active() {
+                            cancel.cancel();
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                })
+            };
+            let result = run_once(
+                this.initiative.agenda(),
+                &curiosity.ledger,
+                curiosity.investigator.as_ref(),
+                autonomy,
+                &curiosity.limits,
+                cancel,
+            )
+            .await;
+            watch.abort();
+            match result {
+                Ok(report) => {
+                    info!(
+                        item = %report.receipt.item_id,
+                        outcome = ?report.receipt.outcome,
+                        tokens = report.receipt.tokens_used,
+                        steps = report.receipt.tool_steps,
+                        "curiosity run finished"
+                    );
+                    if let Some(observation) = report.observation {
+                        lock(&this.answered).push(observation);
+                    }
+                    *lock(&curiosity.last_skip) = None;
+                }
+                Err(skip) => *lock(&curiosity.last_skip) = Some(skip),
+            }
+            curiosity.running.store(false, Ordering::SeqCst);
+        });
+        Ok(())
     }
 
     async fn run(self: Arc<Self>) {
@@ -170,6 +316,7 @@ impl Proactive {
             }
             let this = self.clone();
             let _ = tokio::task::spawn_blocking(move || this.tick_now()).await;
+            let _ = self.maybe_investigate();
         }
     }
 

@@ -353,3 +353,100 @@ async fn escalate_reasoning_tool_redacts_answers_caches_and_reports() {
             .unwrap()
     );
 }
+
+struct NotesInvestigator;
+
+#[async_trait::async_trait]
+impl sail_discovery::curiosity::Investigator for NotesInvestigator {
+    async fn investigate(
+        &self,
+        brief: &sail_discovery::curiosity::Brief,
+        _limits: &sail_discovery::curiosity::CuriosityLimits,
+        _cancel: CancellationToken,
+    ) -> Result<sail_discovery::curiosity::Finding, String> {
+        Ok(sail_discovery::curiosity::Finding {
+            summary: format!("Notes on {}: the course page lists it at 30%.", brief.title),
+            sources: vec!["moodle: avaliação".into()],
+            tokens_used: 300,
+            tool_steps: 1,
+            escalation_job: None,
+            conclusive: true,
+        })
+    }
+}
+
+#[tokio::test]
+async fn curiosity_respects_autonomy_and_reports_receipts() {
+    use sail_discovery::agenda::{AgendaKind, NewAgendaItem};
+    use sail_discovery::curiosity::{CuriosityLedger, Skip};
+    use sail_pulse::attention::{Autonomy, Provenance};
+
+    let proactive = engine(None);
+    assert!(proactive.enable_curiosity(
+        Arc::new(NotesInvestigator),
+        CuriosityLedger::open_in_memory().unwrap()
+    ));
+    proactive
+        .initiative
+        .agenda()
+        .upsert(
+            NewAgendaItem {
+                key: "investigate:fisica".into(),
+                kind: AgendaKind::Investigation,
+                title: "Física project weight".into(),
+                detail: String::new(),
+                provenance: Provenance::UserCommitment,
+                match_terms: vec![],
+                due: None,
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    let attention = proactive.initiative.attention();
+    let mut settings = attention.settings().unwrap();
+    settings.autonomy = Autonomy::Quiet;
+    attention.save_settings(&settings).unwrap();
+    assert_eq!(proactive.maybe_investigate(), Err(Skip::Autonomy));
+
+    settings.autonomy = Autonomy::Balanced;
+    attention.save_settings(&settings).unwrap();
+    assert_eq!(proactive.maybe_investigate(), Ok(()));
+    let curiosity = proactive.curiosity().unwrap();
+    for _ in 0..100 {
+        if !curiosity.running() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let base = serve(proactive_http::initiative_router(
+        proactive.clone(),
+        Some(ApprovalAuthority::new(TOKEN).unwrap()),
+    ))
+    .await;
+    let state: Value = reqwest::Client::new()
+        .get(format!("{base}/curiosity"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(state["enabled"], true, "{state}");
+    assert_eq!(state["runs_today"], 1, "{state}");
+    let receipt = &state["receipts"][0];
+    assert_eq!(receipt["outcome"], "finding", "{state}");
+    assert_eq!(receipt["tokens_used"], 300);
+    assert_eq!(receipt["item_title"], "Física project weight");
+
+    // The finding reaches the inbox on the next tick, as SAIL's hypothesis.
+    proactive.tick_now();
+    let items = attention.inbox(50).unwrap();
+    let finding = items
+        .iter()
+        .find(|i| i.signal.source == sail_pulse::attention::Source::Curiosity)
+        .expect("finding ingested");
+    assert_eq!(finding.signal.provenance, Provenance::Hypothesis);
+    assert!(finding.signal.body.starts_with("SAIL's unverified notes:"));
+}
