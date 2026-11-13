@@ -99,6 +99,7 @@ fn verdict(
         publishes,
         candidate: false,
         reason: reason.to_string(),
+        judgement: None,
     }
 }
 

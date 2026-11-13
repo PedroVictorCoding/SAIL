@@ -24,6 +24,8 @@ mod prices;
 mod research;
 mod scorecard;
 mod today;
+mod trade_cache;
+mod trade_health;
 mod trade_run;
 pub use dividends_run::DividendRefresh;
 pub use grants::{GrantCostInput, GrantInput};
@@ -31,6 +33,7 @@ pub use outlook::{ModelRun, ModelStatus, ModelsStatus, OutlookModelStatus, Outlo
 pub use prices::{ForecastsView, MAX_PRICES_REPLY, PriceImport, PriceStatus};
 pub use research::{FilingsView, MatchView, SecStatus};
 pub use today::{IDEA_HORIZON, PolicyView};
+pub use trade_health::{InstrumentHealth, ResearchCoverage, TradeHealth};
 pub use trade_run::{
     FxCloses, RecordTotals, SymbolSearchResult, TradeRecord, TradeSignalCheck, TradeView, fx_rate,
     next_run_after, watch_key,

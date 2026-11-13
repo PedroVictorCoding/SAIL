@@ -24,6 +24,8 @@ mod evidence;
 mod grants;
 mod outlook;
 mod prices;
+mod replays;
+mod research;
 mod signals;
 mod suggest;
 mod trade;
@@ -32,6 +34,7 @@ pub use dividends::DividendHistory;
 pub use evidence::EvidenceOutcome;
 pub use grants::{GrantView, RetractOutcome};
 pub use prices::{PriceCoverage, PriceOutcome};
+pub use replays::ReplayCache;
 pub use signals::{SignalValue, SignalValueCoverage};
 pub use trade::{EarningsSnapshot, GradedCard};
 
@@ -194,6 +197,8 @@ impl CapitalStore {
         conn.execute_batch(trade::SCHEMA)?;
         conn.execute_batch(dividends::SCHEMA)?;
         conn.execute_batch(board::SCHEMA)?;
+        conn.execute_batch(replays::SCHEMA)?;
+        conn.execute_batch(research::SCHEMA)?;
         prices::init_price_schema(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),

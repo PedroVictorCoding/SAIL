@@ -62,6 +62,8 @@ pub fn instrument(
         foreign_currency: foreign,
         bars,
         earnings: Vec::new(),
+        evidence_only: false,
+        membership: Vec::new(),
     }
 }
 
@@ -161,6 +163,7 @@ pub fn dummy_verdict(setup: SetupId, side: Side) -> Verdict {
         publishes: false,
         candidate: false,
         reason: String::new(),
+        judgement: None,
     }
 }
 
