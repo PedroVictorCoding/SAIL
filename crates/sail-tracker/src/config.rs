@@ -184,7 +184,12 @@ impl Default for TrackerConfig {
                 ticker("BTC-USD", "Bitcoin"),
                 ticker("^TNX", "US 10Y"),
             ],
-            topics: vec!["Ireland".into(), "semiconductors".into()],
+            topics: vec![
+                "Ireland".into(),
+                "semiconductors".into(),
+                "LLM training".into(),
+                "AI inference infrastructure".into(),
+            ],
             feeds: vec![
                 feed("BBC World", "https://feeds.bbci.co.uk/news/world/rss.xml"),
                 feed("RTÉ News", "https://www.rte.ie/feeds/rss/?index=/news/"),
@@ -192,6 +197,14 @@ impl Default for TrackerConfig {
                 feed("NPR", "https://feeds.npr.org/1001/rss.xml"),
                 feed("The Guardian", "https://www.theguardian.com/world/rss"),
                 feed("Hacker News", "https://hnrss.org/frontpage"),
+                feed(
+                    "arXiv: LLM Training",
+                    "https://export.arxiv.org/api/query?search_query=(cat:cs.CL+OR+cat:cs.LG+OR+cat:cs.AI)+AND+(ti:%22language+model%22+OR+ti:LLM+OR+ti:pretraining+OR+ti:post-training+OR+ti:RLHF+OR+ti:GRPO+OR+ti:scaling)&sortBy=submittedDate&sortOrder=descending&max_results=20",
+                ),
+                feed(
+                    "arXiv: Model Infra",
+                    "https://export.arxiv.org/api/query?search_query=(cat:cs.LG+OR+cat:cs.DC+OR+cat:cs.CL)+AND+(ti:inference+OR+ti:quantization+OR+ti:distributed+OR+ti:parallelism+OR+ti:kernel+OR+ti:CUDA+OR+ti:MoE+OR+ti:attention)&sortBy=submittedDate&sortOrder=descending&max_results=20",
+                ),
             ],
             routes: vec![Route {
                 id: "dublin-belfast".into(),
