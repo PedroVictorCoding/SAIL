@@ -107,7 +107,6 @@ impl CapitalService {
             RetractOutcome::NotFound => Err(ServiceError::NotFound(format!("No grant {id:?}."))),
         }
     }
-
 }
 
 /// Longest symbol a grant accepts.

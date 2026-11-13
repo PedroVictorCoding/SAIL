@@ -2,12 +2,11 @@
 //! changed except to set `retracted_at` once, and never deleted.
 
 use super::CapitalStore;
-use super::{decode, encode, parse_ts, StoreError};
+use super::{StoreError, decode, encode, parse_ts};
 use crate::contracts::*;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-
 
 /// Grants live apart from imported entries: they come from the owner, not a file. A row
 /// is never changed except to set `retracted_at` once, and never deleted.

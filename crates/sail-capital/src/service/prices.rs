@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 /// Most observations one `/prices` reply returns.
 pub const MAX_PRICES_REPLY: usize = 10_000;
 
@@ -63,7 +62,10 @@ pub struct ForecastsView {
 
 impl CapitalService {
     /// Held owned instruments: (instrument key, symbol). CFDs are never forecast.
-    pub(super) fn held_instruments(&self, account: &AccountId) -> Result<Vec<(String, String)>, ServiceError> {
+    pub(super) fn held_instruments(
+        &self,
+        account: &AccountId,
+    ) -> Result<Vec<(String, String)>, ServiceError> {
         let projection = self.portfolio(account, AsOf::now())?;
         let mut held: Vec<(String, String)> = projection
             .positions

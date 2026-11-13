@@ -2,7 +2,7 @@
 //! values, which both policies and signals share.
 
 use super::CapitalStore;
-use super::{decode, encode, StoreError};
+use super::{StoreError, decode, encode};
 use crate::contracts::*;
 use chrono::{DateTime, Utc};
 use rusqlite::params;

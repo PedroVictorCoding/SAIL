@@ -1,7 +1,7 @@
 //! Model signals, the blended outlook and the outlook track record.
 
-use super::*;
 use super::today::ewma_sigma;
+use super::*;
 
 /// The last run of one model signal.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

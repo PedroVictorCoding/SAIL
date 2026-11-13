@@ -4,12 +4,11 @@
 //! represent it.
 
 use super::CapitalStore;
-use super::{decode, encode, parse_ts, StoreError};
+use super::{StoreError, decode, encode, parse_ts};
 use crate::contracts::*;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-
 
 /// One row per (instrument, source, session, version). A changed bar for a known session
 /// is a revision that keeps the session's first availability time. A revert to an older

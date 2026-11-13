@@ -1,7 +1,7 @@
 //! Stored per-share dividend histories fetched from Yahoo.
 
 use super::CapitalStore;
-use super::{decode, encode, parse_ts, StoreError};
+use super::{StoreError, decode, encode, parse_ts};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 

@@ -121,4 +121,3 @@ impl CapitalStore {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 }
-

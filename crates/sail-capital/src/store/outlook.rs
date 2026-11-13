@@ -1,7 +1,7 @@
 //! Stored outlook component paths from the Python helpers, and their counts.
 
 use super::CapitalStore;
-use super::{decode, encode, StoreError};
+use super::{StoreError, decode, encode};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 

@@ -236,5 +236,4 @@ impl CapitalService {
             }
         });
     }
-
 }

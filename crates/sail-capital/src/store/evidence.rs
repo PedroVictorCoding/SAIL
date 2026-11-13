@@ -3,12 +3,11 @@
 //! decided at query time.
 
 use super::CapitalStore;
-use super::{decode, encode, parse_ts, StoreError};
+use super::{StoreError, decode, encode, parse_ts};
 use crate::contracts::*;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-
 
 /// Public research evidence and the identifier maps it was matched with. Evidence is not
 /// per account: a filing is public, and which holdings it touches is decided at query time.

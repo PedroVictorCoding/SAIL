@@ -375,5 +375,4 @@ impl CapitalService {
     pub fn conflicts(&self, account: &AccountId) -> Result<Vec<ConflictView>, ServiceError> {
         Ok(self.store.conflicts(account)?)
     }
-
 }

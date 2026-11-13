@@ -2,10 +2,10 @@
 //! and their grades.
 
 use super::CapitalStore;
-use super::{decode, encode, parse_ts, StoreError};
+use super::{StoreError, decode, encode, parse_ts};
 use crate::contracts::*;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 pub(super) const SCHEMA: &str = "
