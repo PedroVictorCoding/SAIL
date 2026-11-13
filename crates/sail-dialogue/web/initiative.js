@@ -266,7 +266,7 @@
     system: 'System',
     escalation: 'Escalation',
     curiosity: 'Curiosity',
-    projects: 'Projects',
+    projects: 'Forge',
   };
 
   let openMenuId = null;
