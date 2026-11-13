@@ -450,3 +450,56 @@ async fn curiosity_respects_autonomy_and_reports_receipts() {
     assert_eq!(finding.signal.provenance, Provenance::Hypothesis);
     assert!(finding.signal.body.starts_with("SAIL's unverified notes:"));
 }
+
+#[tokio::test]
+async fn escalation_status_exposes_every_field_read_by_usage_view() {
+    let service = EscalationService::new(
+        EscalationPolicy::default(),
+        Arc::new(EscalationStore::open_in_memory().unwrap()),
+    );
+    let proactive = engine(Some(service));
+    let esc = serve(proactive_http::escalation_router(
+        proactive,
+        Some(ApprovalAuthority::new(TOKEN).unwrap()),
+    ))
+    .await;
+    let status: Value = reqwest::Client::new()
+        .get(format!("{esc}/status"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert!(status.get("enabled").is_some_and(Value::is_boolean));
+    assert!(status.get("providers").is_some_and(Value::is_array));
+    assert!(status.get("daily_token_cap").is_some_and(Value::is_u64));
+    assert!(status.get("monthly_token_cap").is_some_and(Value::is_u64));
+    assert!(
+        status
+            .get("daily_cost_cap_micros")
+            .is_some_and(Value::is_u64)
+    );
+    assert!(
+        status
+            .get("monthly_cost_cap_micros")
+            .is_some_and(Value::is_u64)
+    );
+
+    let usage = &status["usage"];
+    assert!(usage.get("tokens_today").is_some_and(Value::is_u64));
+    assert!(usage.get("tokens_month").is_some_and(Value::is_u64));
+    assert!(usage.get("cost_today_micros").is_some_and(Value::is_u64));
+    assert!(usage.get("cost_month_micros").is_some_and(Value::is_u64));
+    assert!(usage.get("calls_today").is_some_and(Value::is_u64));
+    assert!(usage.get("blocked_until").is_some_and(Value::is_array));
+
+    assert!(
+        status["outcomes"]
+            .get("by_kind")
+            .is_some_and(Value::is_array)
+    );
+    assert!(status.get("recent_decisions").is_some_and(Value::is_array));
+}
