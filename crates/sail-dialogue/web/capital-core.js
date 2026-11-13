@@ -325,7 +325,8 @@ function setupCollapsibles() {
   const collapsed = readCollapsed();
   const sections = document.querySelectorAll("#cpMain section[id]");
   for (const section of sections) {
-    if (section.classList.contains("cp-metrics") || section.classList.contains("cp-suggestions-section")) continue;
+    // A section marked cp-fixed is always open (Today, the scorecard).
+    if (section.classList.contains("cp-metrics") || section.classList.contains("cp-fixed")) continue;
     const head = section.querySelector(":scope > .cp-panel-head, :scope > .cp-recon-header");
     const title = head && head.querySelector("h2");
     if (!title) continue;
@@ -444,17 +445,6 @@ function setupTabs() {
 
   const initial = getActiveTab();
   switchTab(initial, false);
-
-  const reviewLimitsLink = document.getElementById("cpReviewLimitsLink");
-  if (reviewLimitsLink) {
-    reviewLimitsLink.addEventListener("click", () => {
-      switchTab("settings", true);
-      const limitsSection = document.getElementById("cpLimitsSection");
-      if (limitsSection) {
-        limitsSection.scrollIntoView({ behavior: "smooth" });
-      }
-    });
-  }
 }
 
 function ordinalSuffix(n) {

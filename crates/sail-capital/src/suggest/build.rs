@@ -143,7 +143,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
             Severity::High,
             "no-portfolio",
             "Upload an XTB export to start".into(),
-            "SAIL has no positions for this account yet. Upload the account export from XTB in Data.".into(),
+            "SAIL has no positions for this account yet. Upload the account export from XTB with Upload report.".into(),
             vec![],
             Tab::Settings,
         );
@@ -156,7 +156,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
             Severity::Medium,
             "policy-draft",
             "Your limits are a draft".into(),
-            "SAIL sizes proposals only against limits you confirmed. Review the starting values in Data → Limits and confirm them.".into(),
+            "SAIL sizes proposals only against limits you confirmed. Review the starting values in Settings → Limits and confirm them.".into(),
             vec![format!("policy v{} draft", facts.policy.version)],
             Tab::Settings,
         );
@@ -207,7 +207,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
             Severity::Low,
             "prices-off",
             "Prices aren't being fetched".into(),
-            "Forecasts, volatility limits and ideas need daily prices. Turn on fetching or upload price files in Data.".into(),
+            "Forecasts, volatility limits and ideas need daily prices. Turn on fetching or upload price files in Settings → Prices.".into(),
             vec![],
             Tab::Settings,
         );
@@ -444,7 +444,7 @@ fn policy_suggestions(
             for b in breaches {
                 let evidence = breach_evidence(b, &facts.policy);
                 let why = if draft {
-                    "Confirm your limits in Data → Limits to see the smallest change that fixes this."
+                    "Confirm your limits in Settings → Limits to see the smallest change that fixes this."
                 } else {
                     "No change above your smallest trade size fixes this on its own."
                 };

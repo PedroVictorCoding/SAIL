@@ -900,7 +900,7 @@ async function loadTradeSignals() {
   }
 }
 
-// Asset search & one-off signal check (Signals tab)
+// Asset search and a one-off signal check.
 let signalSearchRows = [];
 
 let signalSearchController = null;

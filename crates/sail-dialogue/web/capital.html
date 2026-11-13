@@ -81,23 +81,11 @@
 
 <main id="cpMain" tabindex="-1">
   <div class="cp-tab-pane cp-pane-active" id="cpPanel-today" role="tabpanel" aria-labelledby="cpTab-today">
-    <div class="cp-stance-banner" id="cpStanceBanner" data-stance="hold">
-      <p class="cp-stance-sentence" id="cpStanceSentence">Loading stance…</p>
-    </div>
-
-    <div class="cp-policy-notice" id="cpPolicyDraftNotice" hidden>
-      <span class="cp-notice-icon" aria-hidden="true">ℹ</span>
-      <p>Your limits are a draft. <button type="button" class="cp-link-btn" id="cpReviewLimitsLink">Review them in Settings</button> to get sized proposals.</p>
-    </div>
-
-    <section class="cp-suggestions-section" aria-label="Today suggestions">
-      <div class="cp-suggestions-list" id="cpSuggestionsList">
-        <p class="cp-empty">Import a report to see suggestions.</p>
-      </div>
-      <p class="cp-hidden-count" id="cpSuggestionsHidden" hidden></p>
-      <footer class="cp-today-footer">
-        SAIL never places orders. Ideas appear only when a signal passed out-of-sample checks.
-      </footer>
+    <section class="cp-panel cp-fixed cp-today" id="cpTodayPanel" aria-labelledby="cpStanceSentence">
+      <p class="cp-stance" id="cpStanceSentence" data-stance="hold">Loading…</p>
+      <ul class="cp-rows" id="cpSuggestionsList"></ul>
+      <p class="cp-note" id="cpSuggestionsHidden" hidden></p>
+      <p class="cp-note">SAIL never places orders. Ideas appear only when a signal passed out-of-sample checks.</p>
     </section>
   </div>
 
