@@ -1,6 +1,6 @@
 //! Round 13: the trade-signal run (universe, prices, earnings, signals, grading, guards).
 use super::{CapitalService, ServiceError};
-use crate::contracts::{AccountId, AsOf, InstrumentKind};
+use crate::contracts::{AccountId, AsOf, DecisionTime, InstrumentKind, VintagePolicy};
 use crate::trade::{AssetClass, Bar, Instrument, SignalDay};
 use crate::universe::{WatchChange, WatchItem};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
@@ -177,7 +177,14 @@ fn asset_class_for(quote_type: &str) -> Option<AssetClass> {
 impl CapitalService {
     /// The current watchlist.
     pub fn watchlist(&self) -> Result<Vec<WatchItem>, ServiceError> {
-        Ok(crate::universe::apply(&self.store.watch_changes()?))
+        self.watchlist_as_of(DecisionTime::now())
+    }
+
+    /// The watchlist as known at `decision.at`.
+    pub fn watchlist_as_of(&self, decision: DecisionTime) -> Result<Vec<WatchItem>, ServiceError> {
+        Ok(crate::universe::apply(
+            &self.store.watch_changes_as_of(decision.at)?,
+        ))
     }
 
     /// Applies a watchlist change and returns the new list.
@@ -558,14 +565,14 @@ impl CapitalService {
         })
     }
 
-    /// Held instruments as signal-universe instruments.
     fn held_universe(
         &self,
         account: &AccountId,
         now: DateTime<Utc>,
     ) -> Result<Vec<Instrument>, ServiceError> {
-        let projection = self.portfolio(account, AsOf::now())?;
-        let account_currency = self.account_currency(account)?;
+        let decision = DecisionTime::at(now);
+        let projection = self.portfolio(account, decision.as_of())?;
+        let account_currency = self.account_currency_as_of(account, decision)?;
         let mut out = Vec::new();
         for position in &projection.positions {
             let key = position.instrument.key();
@@ -585,7 +592,14 @@ impl CapitalService {
                 foreign_currency: currency.as_deref().is_some_and(|c| c != account_currency),
                 bars,
                 earnings: if class == AssetClass::Stock {
-                    self.earnings_for(yahoo.as_deref())?
+                    match yahoo.as_deref() {
+                        Some(y) => self
+                            .store
+                            .earnings_as_of(y, decision, VintagePolicy::ObservedOnly)?
+                            .map(|((_, d), _)| d)
+                            .unwrap_or_default(),
+                        None => Vec::new(),
+                    }
                 } else {
                     Vec::new()
                 },
@@ -597,8 +611,16 @@ impl CapitalService {
     }
 
     pub(super) fn account_currency(&self, account: &AccountId) -> Result<String, ServiceError> {
+        self.account_currency_as_of(account, DecisionTime::now())
+    }
+
+    pub(super) fn account_currency_as_of(
+        &self,
+        account: &AccountId,
+        decision: DecisionTime,
+    ) -> Result<String, ServiceError> {
         Ok(self
-            .insights(account, AsOf::now(), Utc::now())?
+            .insights(account, decision.as_of(), decision.at)?
             .account
             .map(|a| a.account_value.currency.as_str().to_string())
             .unwrap_or_else(|| "EUR".into()))

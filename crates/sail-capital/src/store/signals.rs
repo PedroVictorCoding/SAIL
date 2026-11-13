@@ -1,7 +1,8 @@
 //! Stored model-signal values, keyed by signal, model version, instrument and session.
 
 use super::CapitalStore;
-use super::StoreError;
+use super::{StoreError, parse_ts};
+use crate::contracts::{DecisionTime, InputProvenance};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -98,6 +99,68 @@ impl CapitalStore {
             out.push((key, session, value));
         }
         Ok((Some(version), out))
+    }
+
+    /// Values of `signal` from the newest model version computed at or before `decision.at`,
+    /// keeping only rows with `computed_at <= decision.at` and `session <= decision.session`.
+    pub fn signal_values_as_of(
+        &self,
+        signal: &str,
+        decision: DecisionTime,
+    ) -> Result<(Option<String>, Vec<SignalValue>, InputProvenance), StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let mut stmt = conn.prepare(
+            "SELECT model_version, instrument_key, session, value, computed_at
+             FROM signal_values
+             WHERE signal = ?1
+             ORDER BY session, instrument_key",
+        )?;
+        let rows = stmt.query_map(params![signal], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, f64>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })?;
+
+        let mut latest_version: Option<(DateTime<Utc>, String)> = None;
+        let mut eligible: Vec<(String, String, chrono::NaiveDate, f64)> = Vec::new();
+        for row in rows {
+            let (version, key, session_str, value, computed_str) = row?;
+            let computed_at = parse_ts(&computed_str)?;
+            if computed_at > decision.at {
+                continue;
+            }
+            let session = chrono::NaiveDate::parse_from_str(&session_str, "%Y-%m-%d")
+                .map_err(|_| StoreError::Decode(format!("bad session {session_str}")))?;
+            if session > decision.session {
+                continue;
+            }
+            if latest_version
+                .as_ref()
+                .is_none_or(|(prev_ts, _)| computed_at > *prev_ts)
+            {
+                latest_version = Some((computed_at, version.clone()));
+            }
+            eligible.push((version, key, session, value));
+        }
+
+        let Some((_, version)) = latest_version else {
+            return Ok((None, Vec::new(), InputProvenance::Unavailable));
+        };
+        let out: Vec<SignalValue> = eligible
+            .into_iter()
+            .filter(|(v, ..)| v == &version)
+            .map(|(_, key, session, value)| (key, session, value))
+            .collect();
+        let prov = if out.is_empty() {
+            InputProvenance::Unavailable
+        } else {
+            InputProvenance::Observed
+        };
+        Ok((Some(version), out, prov))
     }
 
     /// What is stored per model signal.

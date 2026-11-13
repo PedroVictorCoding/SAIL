@@ -1,6 +1,6 @@
 //! Round 19: `GET /signals/trade/health` and the research universe (Claude's slice).
 use super::{CapitalService, ServiceError, trade_run::MIN_OHL_BARS};
-use crate::contracts::{AccountId, AsOf, InstrumentKind};
+use crate::contracts::{AccountId, AsOf, DecisionTime, InstrumentKind, VintagePolicy};
 use crate::trade::quality::{Gap, gaps, usable};
 use crate::trade::{AssetClass, Bar, Instrument};
 use chrono::{DateTime, Datelike, Days, NaiveDate, Utc, Weekday};
@@ -332,9 +332,13 @@ impl CapitalService {
         let Some(indexes) = research_indexes() else {
             return Ok(Vec::new());
         };
+        let decision = DecisionTime::at(now);
         let mut members: BTreeMap<String, crate::universe::ResearchMember> = BTreeMap::new();
         for index in indexes {
-            if let Some((_, stored)) = self.store.research_members(&index)? {
+            if let Some(((_, stored), _)) =
+                self.store
+                    .research_members_as_of(&index, decision, VintagePolicy::ObservedOnly)?
+            {
                 for member in stored {
                     members.insert(member.yahoo.clone(), member);
                 }

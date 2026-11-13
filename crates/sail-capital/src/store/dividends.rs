@@ -2,6 +2,7 @@
 
 use super::CapitalStore;
 use super::{StoreError, decode, encode, parse_ts};
+use crate::contracts::{DecisionTime, InputProvenance, VintagePolicy};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 
@@ -68,5 +69,56 @@ impl CapitalStore {
             .optional()?;
         row.map(|(at, currency, json)| Ok((parse_ts(&at)?, currency, decode(&json)?)))
             .transpose()
+    }
+
+    /// The newest dividend/corporate-action snapshot for `yahoo` known at `decision.at`
+    /// (or, when `policy == AllowReconstructed` and none existed by `decision.at`, rebuilt
+    /// from the earliest later snapshot filtered to `ex_date <= decision.session`).
+    pub fn dividend_history_as_of(
+        &self,
+        yahoo: &str,
+        decision: DecisionTime,
+        policy: VintagePolicy,
+    ) -> Result<Option<(DividendHistory, InputProvenance)>, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let mut stmt = conn.prepare(
+            "SELECT fetched_at, currency, history_json FROM dividend_histories
+             WHERE yahoo = ?1 ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![yahoo], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut observed: Option<(DateTime<Utc>, Option<String>, String)> = None;
+        let mut later: Option<(DateTime<Utc>, Option<String>, String)> = None;
+        for row in rows {
+            let (at_str, currency, json) = row?;
+            let at = parse_ts(&at_str)?;
+            if at <= decision.at {
+                if observed.as_ref().is_none_or(|(prev, ..)| at >= *prev) {
+                    observed = Some((at, currency, json));
+                }
+            } else if later.as_ref().is_none_or(|(prev, ..)| at < *prev) {
+                later = Some((at, currency, json));
+            }
+        }
+        if let Some((at, currency, json)) = observed {
+            let payments: Vec<crate::dividends::Payment> = decode(&json)?;
+            return Ok(Some(((at, currency, payments), InputProvenance::Observed)));
+        }
+        if policy == VintagePolicy::AllowReconstructed
+            && let Some((at, currency, json)) = later
+        {
+            let mut payments: Vec<crate::dividends::Payment> = decode(&json)?;
+            payments.retain(|p| p.ex_date <= decision.session);
+            return Ok(Some((
+                (at, currency, payments),
+                InputProvenance::Reconstructed,
+            )));
+        }
+        Ok(None)
     }
 }
