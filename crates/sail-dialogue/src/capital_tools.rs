@@ -13,11 +13,12 @@ use serde_json::{Value, json};
 
 /// Every Capital tool this module answers, checked by the registry tests.
 #[cfg(test)]
-pub const TOOL_IDS: [&str; 13] = [
+pub const TOOL_IDS: [&str; 14] = [
     "capital:overview",
     "capital:today",
     "capital:portfolio",
     "capital:signals",
+    "capital:health",
     "capital:check",
     "capital:search",
     "capital:watchlist",
@@ -37,6 +38,7 @@ pub async fn execute(service: &CapitalService, tool: &str, input: &Value) -> Res
         "capital:today" => today(service, input),
         "capital:portfolio" => portfolio(service, input),
         "capital:signals" => signals(service, input),
+        "capital:health" => health(service, input),
         "capital:watchlist" => watchlist(service),
         "capital:record" => record(service, input),
         "capital:guards" => guards(service, input),
@@ -245,6 +247,18 @@ fn signals(service: &CapitalService, input: &Value) -> Result<Value, String> {
                             "trades": verdict.holdout.trades,
                             "expectancy_r": verdict.holdout.expectancy_r,
                         },
+                        "judgement": verdict.judgement.as_ref().map(|judgement| json!({
+                            "p_value": judgement.p_value,
+                            "fdr_pass": judgement.fdr_pass,
+                            "pooled_mean": judgement.pooled.posterior_mean,
+                            "pooled_shrinkage": judgement.pooled.shrinkage,
+                            "live_trades": judgement.live.trades,
+                            "posterior_mean": judgement.posterior_mean,
+                            "posterior_lower": judgement.posterior_lower,
+                            "oos_trades": judgement.walk_forward.oos_trades,
+                            "oos_mean_r": judgement.walk_forward.oos_mean_r,
+                            "all_folds_mean_r": judgement.walk_forward.all_mean_r,
+                        })),
                     })
                 })
                 .collect();
@@ -321,6 +335,47 @@ fn signals(service: &CapitalService, input: &Value) -> Result<Value, String> {
         "running": trade.running,
         "next_run_at": trade.next_run_at,
         "last_error": &trade.last_error,
+    }))
+}
+
+fn health(service: &CapitalService, input: &Value) -> Result<Value, String> {
+    let account = account(service, input)?;
+    let health = service
+        .trade_health(&account)
+        .map_err(|error| error.to_string())?;
+    let problems: Vec<Value> = health
+        .instruments
+        .iter()
+        .filter(|instrument| {
+            instrument.excluded
+                || instrument.fetch_failed
+                || instrument.stale_weekdays > 2
+                || !instrument.enough_bars
+                || instrument.earnings_known == Some(false)
+        })
+        .map(|instrument| {
+            json!({
+                "symbol": &instrument.symbol,
+                "key": &instrument.key,
+                "last_session": instrument.last_session,
+                "stale_weekdays": instrument.stale_weekdays,
+                "bars": instrument.bars,
+                "enough_bars": instrument.enough_bars,
+                "excluded": instrument.excluded,
+                "gaps": &instrument.gaps,
+                "earnings_known": instrument.earnings_known,
+                "fetch_failed": instrument.fetch_failed,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "run_at": health.run_at,
+        "run_stats": health.run_stats,
+        "last_error": &health.last_error,
+        "problem_count": problems.len(),
+        "problems": problems,
+        "research": &health.research,
+        "notes": &health.notes,
     }))
 }
 

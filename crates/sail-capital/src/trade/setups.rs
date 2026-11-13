@@ -4,22 +4,29 @@ use super::indicators::{bollinger, previous_extreme, rolling_range, rsi, sma};
 use super::{Bar, SetupId, Side};
 
 pub(super) fn fire(setup: SetupId, bars: &[Bar]) -> Vec<(usize, Side)> {
+    fire_from(setup, bars, 0)
+}
+
+/// [`fire`], keeping only firings at `index >= start`. Indicators are still computed
+/// over every bar, so each firing is bit-identical to the one [`fire`] gives; only the
+/// per-session conditions (and their window scans) before `start` are skipped.
+pub(super) fn fire_from(setup: SetupId, bars: &[Bar], start: usize) -> Vec<(usize, Side)> {
     match setup {
-        SetupId::TrendPullback => trend_pullback(bars),
-        SetupId::SqueezeBreakout => squeeze_breakout(bars),
-        SetupId::Donchian55 => donchian55(bars),
-        SetupId::BollingerReversion => bollinger_reversion(bars),
-        SetupId::InsideBarBreak => inside_bar_break(bars),
-        SetupId::ThreeDayReversal => three_day_reversal(bars),
+        SetupId::TrendPullback => trend_pullback(bars, start),
+        SetupId::SqueezeBreakout => squeeze_breakout(bars, start),
+        SetupId::Donchian55 => donchian55(bars, start),
+        SetupId::BollingerReversion => bollinger_reversion(bars, start),
+        SetupId::InsideBarBreak => inside_bar_break(bars, start),
+        SetupId::ThreeDayReversal => three_day_reversal(bars, start),
     }
 }
 
-fn trend_pullback(bars: &[Bar]) -> Vec<(usize, Side)> {
+fn trend_pullback(bars: &[Bar], start: usize) -> Vec<(usize, Side)> {
     let fast = sma(bars, 50);
     let slow = sma(bars, 200);
     let rsi = rsi(bars, 2);
     let mut firings = Vec::new();
-    for index in 0..bars.len() {
+    for index in start..bars.len() {
         let (Some(fast), Some(slow), Some(rsi)) = (fast[index], slow[index], rsi[index]) else {
             continue;
         };
@@ -33,10 +40,10 @@ fn trend_pullback(bars: &[Bar]) -> Vec<(usize, Side)> {
     firings
 }
 
-fn squeeze_breakout(bars: &[Bar]) -> Vec<(usize, Side)> {
+fn squeeze_breakout(bars: &[Bar], start: usize) -> Vec<(usize, Side)> {
     let ranges = rolling_range(bars, 20);
     let mut firings = Vec::new();
-    for index in 0..bars.len() {
+    for index in start..bars.len() {
         if index < 78 {
             continue;
         }
@@ -64,10 +71,10 @@ fn squeeze_breakout(bars: &[Bar]) -> Vec<(usize, Side)> {
     firings
 }
 
-fn donchian55(bars: &[Bar]) -> Vec<(usize, Side)> {
+fn donchian55(bars: &[Bar], start: usize) -> Vec<(usize, Side)> {
     let slow = sma(bars, 200);
     let mut firings = Vec::new();
-    for index in 55..bars.len() {
+    for index in start.max(55)..bars.len() {
         if index == 0 {
             continue;
         }
@@ -90,11 +97,11 @@ fn donchian55(bars: &[Bar]) -> Vec<(usize, Side)> {
     firings
 }
 
-fn bollinger_reversion(bars: &[Bar]) -> Vec<(usize, Side)> {
+fn bollinger_reversion(bars: &[Bar], start: usize) -> Vec<(usize, Side)> {
     let bands = bollinger(bars, 20);
     let slow = sma(bars, 200);
     let mut firings = Vec::new();
-    for index in 0..bars.len() {
+    for index in start..bars.len() {
         let (Some((_, lower, upper)), Some(slow)) = (bands[index], slow[index]) else {
             continue;
         };
@@ -108,10 +115,10 @@ fn bollinger_reversion(bars: &[Bar]) -> Vec<(usize, Side)> {
     firings
 }
 
-fn inside_bar_break(bars: &[Bar]) -> Vec<(usize, Side)> {
+fn inside_bar_break(bars: &[Bar], start: usize) -> Vec<(usize, Side)> {
     let average = sma(bars, 20);
     let mut firings = Vec::new();
-    for index in 1..bars.len() {
+    for index in start.max(1)..bars.len() {
         let Some(now) = average[index] else {
             continue;
         };
@@ -132,10 +139,10 @@ fn inside_bar_break(bars: &[Bar]) -> Vec<(usize, Side)> {
     firings
 }
 
-fn three_day_reversal(bars: &[Bar]) -> Vec<(usize, Side)> {
+fn three_day_reversal(bars: &[Bar], start: usize) -> Vec<(usize, Side)> {
     let slow = sma(bars, 200);
     let mut firings = Vec::new();
-    for index in 2..bars.len() {
+    for index in start.max(2)..bars.len() {
         let Some(slow) = slow[index] else {
             continue;
         };

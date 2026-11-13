@@ -3,18 +3,34 @@
 use chrono::NaiveDate;
 
 use super::indicators::atr;
-use super::setups::fire;
+use super::setups::fire_from;
 use super::{Bar, Costs, Exit, HoldingGuard, Instrument, SetupId, Side, SignalCard, Trade};
 
 const ENTRY_ZONE_ATR: f64 = 0.25;
 
 pub(super) fn replay(instrument: &Instrument, costs: Costs) -> Vec<Trade> {
+    replay_since(instrument, costs, None)
+}
+
+pub(super) fn replay_from(instrument: &Instrument, costs: Costs, from: NaiveDate) -> Vec<Trade> {
+    replay_since(instrument, costs, Some(from))
+}
+
+fn replay_since(instrument: &Instrument, costs: Costs, from: Option<NaiveDate>) -> Vec<Trade> {
     let bars = &instrument.bars;
     let atr = atr(bars, 14);
     let mut trades = Vec::new();
     for setup in SetupId::ALL {
-        let firings = fire(setup, bars);
+        // Indicators always see every bar (the running sums in `sma` and `bollinger`
+        // would round differently from a shorter start and could flip a firing); only
+        // the per-session conditions before `from` are skipped.
+        let start = from.map_or(0, |from| bars.partition_point(|bar| bar.session < from));
+        let firings = fire_from(setup, bars, start);
         for (index, side) in firings {
+            // Only firings from `from` on are simulated; earlier ones come from the cache.
+            if from.is_some_and(|from| bars[index].session < from) {
+                continue;
+            }
             let Some(entry_index) = index.checked_add(1) else {
                 continue;
             };

@@ -14,7 +14,7 @@ pub const RUN_AT_UTC: (u32, u32) = (22, 30);
 const EARNINGS_MAX_AGE_DAYS: i64 = 7;
 
 /// Fewest bars with open/high/low before an instrument joins the universe.
-const MIN_OHL_BARS: usize = 300;
+pub(super) const MIN_OHL_BARS: usize = 300;
 
 /// `GET /signals/trade`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -371,6 +371,8 @@ impl CapitalService {
                 .is_some_and(|currency| currency != account_currency),
             bars,
             earnings,
+            evidence_only: false,
+            membership: Vec::new(),
         };
         let fx = |instrument: &Instrument| -> Option<f64> {
             if instrument.key != checked_key {
@@ -587,6 +589,8 @@ impl CapitalService {
                 } else {
                     Vec::new()
                 },
+                evidence_only: false,
+                membership: Vec::new(),
             });
         }
         Ok(out)
@@ -756,6 +760,7 @@ impl CapitalService {
         if !self.prices_configured {
             return Ok(());
         }
+        let started = Utc::now();
         let watch = self.watchlist()?;
         let held = self.held_instruments(account)?;
         let held_symbols: Vec<String> = held.iter().map(|(_, s)| s.clone()).collect();
@@ -775,6 +780,7 @@ impl CapitalService {
         stock_yahoo.sort();
         stock_yahoo.dedup();
         self.refresh_earnings(&stock_yahoo).await?;
+        self.refresh_research(Utc::now()).await;
 
         let now = Utc::now();
         let mut universe = self.held_universe(account, now)?;
@@ -809,6 +815,8 @@ impl CapitalService {
                 } else {
                     Vec::new()
                 },
+                evidence_only: false,
+                membership: Vec::new(),
             });
         }
         for instrument in &universe {
@@ -847,7 +855,26 @@ impl CapitalService {
             fx_rate(currency, &account_currency, &fx_closes)
         };
         let held_fn = |key: &str| held_desc.get(key).cloned();
-        let mut day = crate::trade::signal_day(&universe, account_value, risk_pct, &fx, &held_fn);
+        // Round 19: research names add evidence; bars with a likely unadjusted split never
+        // do. Replays come from the cache where the past is unchanged.
+        universe.extend(self.research_universe(now)?);
+        universe.retain(|instrument| crate::trade::quality::usable(&instrument.bars));
+        let cached = self.cached_replays(&universe)?;
+        let live = self.live_trades(account)?;
+        let mut day = crate::trade::signal_day_with(&crate::trade::RunInputs {
+            universe: &universe,
+            replays: &cached.replays,
+            live: &live,
+            account_value,
+            risk_pct,
+            fx_to_account: &fx,
+            held: &held_fn,
+        });
+        if let Some(stats) = day.run_stats.as_mut() {
+            stats.replay_cache_hits = cached.hits;
+            stats.replay_cache_misses = cached.misses;
+            stats.run_ms = u64::try_from((Utc::now() - started).num_milliseconds()).unwrap_or(0);
+        }
         if !failed.is_empty() {
             day.notes.push(format!(
                 "Prices could not be fetched for {}.",

@@ -69,6 +69,7 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/signals/trade/run", post(trade_run))
         .route("/signals/trade/record", get(trade_record))
         .route("/signals/trade/guards", get(trade_guards))
+        .route("/signals/trade/health", get(trade_health))
         .route("/universe/watchlist", get(watchlist).post(change_watchlist))
         .route("/dividends/projection", get(dividend_projection))
         .route("/dividends/refresh", post(dividend_refresh))
@@ -907,6 +908,20 @@ async fn trade_guards(
     })
     .await?;
     Ok(no_store(to_json(&guards)?))
+}
+
+async fn trade_health(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let health = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.trade_health(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&health)?))
 }
 
 async fn watchlist(State(s): State<Arc<CapitalState>>, h: HeaderMap) -> Result<Response, Failure> {

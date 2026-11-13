@@ -38,7 +38,10 @@
 //! starts at `i + 1`. Selection at date `d` uses trades whose exit is on or before `d`.
 //!
 //! **Purity.** No I/O and no clock. Prices are `f64` here (statistics, not ledger money).
+pub mod cache;
 mod indicators;
+pub mod quality;
+pub mod select;
 mod setups;
 mod sim;
 mod stats;
@@ -239,9 +242,27 @@ pub struct Instrument {
     pub bars: Vec<Bar>,
     /// Sessions on which the company reports earnings, when known (past and next).
     pub earnings: Vec<NaiveDate>,
+    /// Round 19: a research-universe name. Its trades count as evidence for its group,
+    /// but it never gets a card, a candidate or a suppressed entry.
+    #[serde(default)]
+    pub evidence_only: bool,
+    /// Round 19: index membership intervals `[from, to)` (`to = None`: still a member).
+    /// A replayed trade counts as evidence only when its `signal_session` falls inside
+    /// one. Empty means always.
+    #[serde(default)]
+    pub membership: Vec<(NaiveDate, Option<NaiveDate>)>,
 }
 
 impl Instrument {
+    /// Whether a trade signalled on `session` counts as evidence (see `membership`).
+    pub fn member_on(&self, session: NaiveDate) -> bool {
+        self.membership.is_empty()
+            || self
+                .membership
+                .iter()
+                .any(|(from, to)| *from <= session && to.is_none_or(|to| session < to))
+    }
+
     /// Whether a trade on this side needs a CFD at XTB. Shorts always do; FX, indices
     /// and commodities only trade as CFDs there.
     pub fn needs_cfd(&self, side: Side) -> bool {
@@ -340,6 +361,10 @@ pub struct Verdict {
     pub candidate: bool,
     /// One plain sentence: why it publishes or not.
     pub reason: String,
+    /// Round 19: the statistics behind the verdict ([`select`]). `None` on runs stored
+    /// before round 19.
+    #[serde(default)]
+    pub judgement: Option<select::Judgement>,
 }
 
 /// A published signal, as the owner sees it.
@@ -407,6 +432,45 @@ pub struct SignalDay {
     pub suppressed: Vec<(String, SetupId, Side)>,
     /// Plain notes on the limits: survivorship, daily bars only, costs assumed.
     pub notes: Vec<String>,
+    /// Round 19: what the run did. `None` on runs stored before round 19.
+    #[serde(default)]
+    pub run_stats: Option<RunStats>,
+}
+
+/// Round 19: counts and timing of one run.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RunStats {
+    /// Instruments that can get cards.
+    pub instruments: u32,
+    /// Evidence-only (research) instruments.
+    pub evidence_only: u32,
+    /// Replayed trades pooled as evidence (after membership filtering).
+    pub trades: u32,
+    /// Instruments whose replay came from the cache (set by the service).
+    pub replay_cache_hits: u32,
+    /// Instruments replayed in full (set by the service).
+    pub replay_cache_misses: u32,
+    /// Wall time of the whole run in milliseconds (set by the service).
+    pub run_ms: u64,
+}
+
+/// Round 19: everything [`signal_day_with`] needs.
+pub struct RunInputs<'a> {
+    /// Instruments, including evidence-only ones.
+    pub universe: &'a [Instrument],
+    /// Replayed trades per instrument key, as [`replay`] (or [`replay_from`] plus the
+    /// cached prefix) would give them. Instruments missing here are replayed inline.
+    pub replays: &'a HashMap<String, Vec<Trade>>,
+    /// Closed live cards, for [`select::judge`].
+    pub live: &'a [select::LiveTrade],
+    /// Account value in the account currency, for sizing.
+    pub account_value: Option<f64>,
+    /// Percent of the account at risk per verified trade.
+    pub risk_pct: f64,
+    /// Units of the account currency per unit of the instrument's currency.
+    pub fx_to_account: &'a dyn Fn(&Instrument) -> Option<f64>,
+    /// Short description of a held key, used in `relation`.
+    pub held: &'a dyn Fn(&str) -> Option<String>,
 }
 
 /// A setup that fired on a checked instrument but could not publish, and why.
@@ -468,6 +532,20 @@ pub fn replay(instrument: &Instrument, costs: Costs) -> Vec<Trade> {
     sim::replay(instrument, costs)
 }
 
+/// Round 19: the trades of [`replay`] whose `signal_session >= from`, simulating only
+/// those firings (indicators still see every bar). For any `from`,
+/// `replay` == (trades of a past `replay` with `signal_session < from`) ++ `replay_from`,
+/// provided the bars before `from` are unchanged and `from` is at least
+/// [`REPLAY_SAFE_SESSIONS`] sessions before the past replay's last bar. Kilo, round 19:
+/// until then this filters a full replay (correct, not faster).
+pub fn replay_from(instrument: &Instrument, costs: Costs, from: NaiveDate) -> Vec<Trade> {
+    sim::replay_from(instrument, costs, from)
+}
+
+/// Sessions before a replay's last bar from which [`replay_from`] must restart: longer than
+/// any setup's `max_sessions` plus the entry session, so every earlier trade had closed.
+pub const REPLAY_SAFE_SESSIONS: usize = 25;
+
 /// Evidence over `trades` (any mix of instruments) for one setup and side.
 pub fn evidence(setup: SetupId, side: Side, trades: &[Trade]) -> Evidence {
     stats::evidence(setup, side, trades)
@@ -515,17 +593,41 @@ pub fn signal_day(
     fx_to_account: &dyn Fn(&Instrument) -> Option<f64>,
     held: &dyn Fn(&str) -> Option<String>,
 ) -> SignalDay {
+    signal_day_with(&RunInputs {
+        universe,
+        replays: &HashMap::new(),
+        live: &[],
+        account_value,
+        risk_pct,
+        fx_to_account,
+        held,
+    })
+}
+
+/// Round 19: [`signal_day`] with cached replays, live evidence and research instruments.
+/// - The session is the latest bar over instruments that can get cards (all instruments
+///   when every one is evidence-only).
+/// - Each instrument's trades come from `replays` or an inline [`replay`]; only trades
+///   whose `signal_session` passes [`Instrument::member_on`] are pooled.
+/// - The scoreboard is [`select::judge`] over the pooled trades and `live`.
+/// - Evidence-only instruments never get cards, candidates or suppressed entries.
+/// - `run_stats` has `instruments`, `evidence_only` and `trades` filled; the service
+///   fills the cache counts and the timing.
+pub fn signal_day_with(inputs: &RunInputs) -> SignalDay {
+    let universe = inputs.universe;
     let notes = vec![
         "History covers the current watchlist only; names that disappeared are not included."
             .to_string(),
         "Daily bars only; a stop and a target in the same session count as the stop.".to_string(),
         "Costs are assumptions: spread, FX conversion and CFD overnight financing.".to_string(),
     ];
-    let Some(session) = universe
-        .iter()
-        .filter_map(|instrument| instrument.bars.last().map(|bar| bar.session))
-        .max()
-    else {
+    let tradable = universe.iter().filter(|i| !i.evidence_only);
+    let latest = |it: &mut dyn Iterator<Item = &Instrument>| {
+        it.filter_map(|instrument| instrument.bars.last().map(|bar| bar.session))
+            .max()
+    };
+    let session = latest(&mut tradable.clone()).or_else(|| latest(&mut universe.iter()));
+    let Some(session) = session else {
         return SignalDay {
             session: NaiveDate::MIN,
             cards: Vec::new(),
@@ -533,39 +635,46 @@ pub fn signal_day(
             scoreboard: Vec::new(),
             suppressed: Vec::new(),
             notes,
+            run_stats: Some(RunStats::default()),
         };
     };
 
-    let mut pooled: HashMap<&'static str, Vec<Trade>> = HashMap::new();
+    let mut pooled: std::collections::BTreeMap<String, Vec<Trade>> =
+        std::collections::BTreeMap::new();
+    let mut pooled_count = 0u32;
     for instrument in universe {
-        let trades = sim::replay(instrument, Costs::default_for(instrument.class));
-        pooled
-            .entry(group_of(instrument.class))
-            .or_default()
-            .extend(trades);
-    }
-
-    let mut scoreboard = Vec::new();
-    for group in ["fx", "stocks", "indices"] {
-        let trades = pooled.get(group).map(Vec::as_slice).unwrap_or(&[]);
-        for setup in SetupId::ALL {
-            for side in [Side::Long, Side::Short] {
-                scoreboard.push(stats::verdict(group, setup, side, trades, session));
+        let inline;
+        let trades = match inputs.replays.get(&instrument.key) {
+            Some(trades) => trades,
+            None => {
+                inline = sim::replay(instrument, Costs::default_for(instrument.class));
+                &inline
+            }
+        };
+        let entry = pooled
+            .entry(group_of(instrument.class).to_string())
+            .or_default();
+        for trade in trades {
+            if instrument.member_on(trade.signal_session) {
+                entry.push(trade.clone());
+                pooled_count += 1;
             }
         }
     }
 
+    let scoreboard = select::judge(&pooled, inputs.live, session);
+
     let mut cards = Vec::new();
     let mut candidates = Vec::new();
     let mut suppressed = Vec::new();
-    for instrument in universe {
+    for instrument in tradable {
         let signals = instrument_signals(
             instrument,
             &scoreboard,
-            account_value,
-            risk_pct,
-            fx_to_account,
-            held,
+            inputs.account_value,
+            inputs.risk_pct,
+            inputs.fx_to_account,
+            inputs.held,
         );
         cards.extend(signals.cards);
         candidates.extend(signals.candidates);
@@ -588,6 +697,7 @@ pub fn signal_day(
     candidates.retain(|card| !verified.contains(&card.key) && seen.insert(card.key.clone()));
     candidates.truncate(MAX_CANDIDATES_PER_DAY);
 
+    let evidence_only = universe.iter().filter(|i| i.evidence_only).count() as u32;
     SignalDay {
         session,
         cards,
@@ -595,6 +705,12 @@ pub fn signal_day(
         scoreboard,
         suppressed,
         notes,
+        run_stats: Some(RunStats {
+            instruments: universe.len() as u32 - evidence_only,
+            evidence_only,
+            trades: pooled_count,
+            ..RunStats::default()
+        }),
     }
 }
 

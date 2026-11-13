@@ -78,7 +78,31 @@ function renderScoreTally(rows) {
 
 // --- Trade setups (from the latest signals run) --------------------------------------
 
+const SCOREBOARD_HEAD_R13 = `<tr>
+  <th scope="col">Setup</th>
+  <th scope="col">Side</th>
+  <th scope="col">Group</th>
+  <th scope="col" class="num">Trades</th>
+  <th scope="col" class="num">Hit target 1 (95%)</th>
+  <th scope="col" class="num">Mean R (95%)</th>
+  <th scope="col" class="num">Holdout</th>
+  <th scope="col">Verdict</th>
+</tr>`;
+
+const SCOREBOARD_HEAD_R19 = `<tr>
+  <th scope="col">Setup</th>
+  <th scope="col">Side</th>
+  <th scope="col">Group</th>
+  <th scope="col" class="num">Trades</th>
+  <th scope="col" class="num">Mean R (95%)</th>
+  <th scope="col" class="num">Pooled</th>
+  <th scope="col" class="num">Out of sample</th>
+  <th scope="col" class="num">Live</th>
+  <th scope="col">Verdict</th>
+</tr>`;
+
 function renderScoreboard(verdicts) {
+  const head = document.getElementById("cpScoreboardHead");
   const body = document.getElementById("cpScoreboardBody");
   const count = document.getElementById("cpScoreboardCount");
   if (count) {
@@ -86,24 +110,70 @@ function renderScoreboard(verdicts) {
     count.textContent = verdicts.length ? `· ${passing} of ${verdicts.length} pass` : "";
   }
   if (!body) return;
+  const hasJudgement = verdicts.some((v) => v && v.judgement != null);
+  if (head) head.innerHTML = hasJudgement ? SCOREBOARD_HEAD_R19 : SCOREBOARD_HEAD_R13;
   if (verdicts.length === 0) {
     body.innerHTML = `<tr><td colspan="8" class="cp-empty">No run yet. Run the signals on Outlook.</td></tr>`;
     return;
   }
+  if (!hasJudgement) {
+    body.innerHTML = verdicts.map((v) => {
+      const sel = v.selection || {};
+      const hold = v.holdout || {};
+      const hitCi = Array.isArray(sel.hit_target1_ci) ? `${pct(sel.hit_target1_ci[0])}–${pct(sel.hit_target1_ci[1])}` : "—";
+      const expCi = Array.isArray(sel.expectancy_ci) ? `${signed(sel.expectancy_ci[0])} to ${signed(sel.expectancy_ci[1])}` : "—";
+      return `<tr>
+          <td>${escapeHtml(formatSetupName(sel.setup))}</td>
+          <td>${escapeHtml(signalSideLabel(sel.side))}</td>
+          <td>${escapeHtml(v.group || "—")}</td>
+          <td class="num">${sel.trades || 0}</td>
+          <td class="num">${pct(sel.hit_target1)} <span class="cp-ci">${hitCi}</span></td>
+          <td class="num">${signed(sel.expectancy_r, 2, "R")} <span class="cp-ci">${expCi}</span></td>
+          <td class="num">${signed(hold.expectancy_r, 2, "R")} <span class="cp-ci">${hold.trades || 0} trades</span></td>
+          <td><span class="${v.publishes ? "cp-word-good" : "cp-word-wait"}">${v.publishes ? "Publishes" : "Doesn't"}</span> <span class="cp-ci">${escapeHtml(v.reason || "")}</span></td>
+        </tr>`;
+    }).join("");
+    return;
+  }
   body.innerHTML = verdicts.map((v) => {
     const sel = v.selection || {};
-    const hold = v.holdout || {};
-    const hitCi = Array.isArray(sel.hit_target1_ci) ? `${pct(sel.hit_target1_ci[0])}–${pct(sel.hit_target1_ci[1])}` : "—";
     const expCi = Array.isArray(sel.expectancy_ci) ? `${signed(sel.expectancy_ci[0])} to ${signed(sel.expectancy_ci[1])}` : "—";
+    const j = v.judgement;
+    let pooledCell = "—";
+    let oosCell = "—";
+    let liveCell = "—";
+    if (j) {
+      const pooled = j.pooled || {};
+      const postMean = j.posterior_mean ?? pooled.posterior_mean ?? 0;
+      const postSd = j.posterior_sd ?? pooled.posterior_sd ?? 0;
+      const margin = 1.96 * Number(postSd);
+      const shrinkPct = Math.round(Number(pooled.shrinkage || 0) * 100);
+      pooledCell = `${signed(postMean, 2, "R")} ± ${margin.toFixed(2)}R <span class="cp-ci">shrunk ${shrinkPct}% to the group</span>`;
+
+      const wf = j.walk_forward || {};
+      const folds = Array.isArray(wf.folds) ? wf.folds : [];
+      const selectedFolds = folds.filter((f) => f.selected).length;
+      const totalFolds = folds.length || 4;
+      oosCell = `${signed(wf.oos_mean_r, 2, "R")} over ${wf.oos_trades || 0} <span class="cp-ci">in ${selectedFolds} of ${totalFolds} years</span>`;
+
+      const live = j.live || {};
+      liveCell = live.trades > 0
+        ? `${signed(live.mean_r, 2, "R")} <span class="cp-ci">over ${live.trades}</span>`
+        : "—";
+    }
+    const verdictLabel = v.publishes ? "Verified" : v.candidate ? "Candidate · unproven" : "Not yet";
+    const verdictClass = v.publishes ? "cp-word-good" : v.candidate ? "cp-word-warn" : "cp-word-wait";
+    const reason = v.reason || "";
     return `<tr>
         <td>${escapeHtml(formatSetupName(sel.setup))}</td>
         <td>${escapeHtml(signalSideLabel(sel.side))}</td>
         <td>${escapeHtml(v.group || "—")}</td>
         <td class="num">${sel.trades || 0}</td>
-        <td class="num">${pct(sel.hit_target1)} <span class="cp-ci">${hitCi}</span></td>
         <td class="num">${signed(sel.expectancy_r, 2, "R")} <span class="cp-ci">${expCi}</span></td>
-        <td class="num">${signed(hold.expectancy_r, 2, "R")} <span class="cp-ci">${hold.trades || 0} trades</span></td>
-        <td><span class="${v.publishes ? "cp-word-good" : "cp-word-wait"}">${v.publishes ? "Publishes" : "Doesn't"}</span> <span class="cp-ci">${escapeHtml(v.reason || "")}</span></td>
+        <td class="num">${pooledCell}</td>
+        <td class="num">${oosCell}</td>
+        <td class="num">${liveCell}</td>
+        <td title="${escapeHtml(reason)}"><span class="${verdictClass}">${verdictLabel}</span>${reason ? `<span class="cp-sr-only"> — ${escapeHtml(reason)}</span>` : ""}</td>
       </tr>`;
   }).join("");
 }

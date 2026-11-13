@@ -170,6 +170,7 @@ pub(super) fn verdict(
         publishes,
         candidate,
         reason,
+        judgement: None,
     }
 }
 

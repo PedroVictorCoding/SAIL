@@ -274,3 +274,18 @@ mod tests {
         assert!(list.iter().all(|w| w.symbol != "EURUSD"));
     }
 }
+
+/// Round 19: one member of a research index, with when it was in it. Research names add
+/// evidence to their group's statistics and never get cards (see
+/// [`crate::trade::Instrument::evidence_only`]).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ResearchMember {
+    /// Yahoo symbol, e.g. `AAPL` or `SAP.DE`.
+    pub yahoo: String,
+    /// Display name.
+    pub name: String,
+    /// `"stocks"` group asset class: stock or ETF.
+    pub class: crate::trade::AssetClass,
+    /// Membership intervals `[from, to)`; `to = None` while still a member.
+    pub membership: Vec<(chrono::NaiveDate, Option<chrono::NaiveDate>)>,
+}
