@@ -72,7 +72,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::NaiveDate;
+use chrono::{Days, Months, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use super::{Evidence, SetupId, Side, Tier, Trade, Verdict};
@@ -188,19 +188,116 @@ pub struct Judgement {
 
 /// Step 2. Kilo, round 19.
 pub fn p_value(evidence: &Evidence) -> f64 {
-    let _ = evidence;
-    1.0
+    if evidence.trades < 2 {
+        return 1.0;
+    }
+    let se = (evidence.expectancy_ci.1 - evidence.expectancy_ci.0) / (2.0 * Z95);
+    if !se.is_finite() || se <= 0.0 {
+        return 1.0;
+    }
+    let z = evidence.expectancy_r / se;
+    if z.is_nan() {
+        return f64::NAN;
+    }
+    normal_survival(z)
 }
 
 /// Step 3: which p-values are rejected at `q`. Kilo, round 19.
 pub fn benjamini_hochberg(p_values: &[f64], q: f64) -> Vec<bool> {
-    let _ = q;
-    vec![false; p_values.len()]
+    let mut rejected = vec![false; p_values.len()];
+    if p_values.is_empty() {
+        return rejected;
+    }
+    let m = p_values.len() as f64;
+    let mut ordered: Vec<(usize, f64)> = p_values
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, p)| p.is_finite())
+        .collect();
+    ordered.sort_by(|left, right| left.1.total_cmp(&right.1));
+    let mut last = 0usize;
+    for (rank, (_, p)) in ordered.iter().enumerate() {
+        let rank = (rank + 1) as f64;
+        if *p <= rank / m * q {
+            last = rank as usize;
+        }
+    }
+    for (index, _) in ordered.into_iter().take(last) {
+        rejected[index] = true;
+    }
+    rejected
 }
 
 /// Step 4 over one group's cells (any order; output in the same order). Kilo, round 19.
 pub fn pool(cells: &[Evidence]) -> Vec<Pooled> {
-    vec![Pooled::default(); cells.len()]
+    let mut out = vec![Pooled::default(); cells.len()];
+    let mut informing: Vec<(usize, f64, f64)> = Vec::new();
+    for (index, cell) in cells.iter().enumerate() {
+        if cell.trades < MIN_POOL_TRADES {
+            continue;
+        }
+        let se = (cell.expectancy_ci.1 - cell.expectancy_ci.0) / (2.0 * Z95);
+        let variance = se * se;
+        if !variance.is_finite() || variance <= 0.0 {
+            continue;
+        }
+        informing.push((index, cell.expectancy_r, variance));
+    }
+    let k = informing.len();
+    if k == 0 {
+        for cell in &mut out {
+            cell.shrinkage = 1.0;
+        }
+        return out;
+    }
+    if k == 1 {
+        let prior = informing[0].1;
+        for cell in &mut out {
+            cell.prior_mean = prior;
+            cell.shrinkage = 1.0;
+            cell.posterior_mean = prior;
+        }
+        return out;
+    }
+    let sum_w: f64 = informing.iter().map(|(_, _, v)| 1.0 / v).sum();
+    let sum_w2: f64 = informing.iter().map(|(_, _, v)| (1.0 / v).powi(2)).sum();
+    let y_bar: f64 = informing.iter().map(|(_, y, v)| y / v).sum::<f64>() / sum_w;
+    let q: f64 = informing
+        .iter()
+        .map(|(_, y, v)| (y - y_bar).powi(2) / v)
+        .sum();
+    let denominator = sum_w - sum_w2 / sum_w;
+    let tau2 = if denominator > 0.0 {
+        ((q - (k as f64 - 1.0)) / denominator).max(0.0)
+    } else {
+        0.0
+    };
+    let sum_star: f64 = informing.iter().map(|(_, _, v)| 1.0 / (v + tau2)).sum();
+    let prior_mean: f64 = informing
+        .iter()
+        .map(|(_, y, v)| y / (v + tau2))
+        .sum::<f64>()
+        / sum_star;
+    let prior_sd = tau2.sqrt();
+    for (index, cell) in out.iter_mut().enumerate() {
+        cell.prior_mean = prior_mean;
+        cell.prior_sd = prior_sd;
+        let Some((_, y, variance)) = informing.iter().find(|(at, _, _)| *at == index) else {
+            cell.shrinkage = 1.0;
+            cell.posterior_mean = prior_mean;
+            continue;
+        };
+        let b = variance / (variance + tau2);
+        cell.shrinkage = b;
+        cell.posterior_mean = b * prior_mean + (1.0 - b) * y;
+        cell.posterior_sd = if b >= 1.0 {
+            (variance * tau2 / (variance + tau2)).sqrt()
+        } else {
+            ((1.0 - b) * variance).sqrt()
+        };
+    }
+    out
 }
 
 /// Step 6 for every cell of every group, keyed by `(group, setup, side)`. Kilo, round 19.
@@ -208,8 +305,105 @@ pub fn walk_forward(
     trades_by_group: &BTreeMap<String, Vec<Trade>>,
     as_of: NaiveDate,
 ) -> BTreeMap<(String, SetupId, Side), WalkForward> {
-    let _ = (trades_by_group, as_of);
-    BTreeMap::new()
+    let cells = cells_in_order();
+    let mut folds: BTreeMap<(String, SetupId, Side), Vec<Fold>> = cells
+        .iter()
+        .map(|key| (key.clone(), Vec::with_capacity(WF_FOLDS as usize)))
+        .collect();
+    let mut selected_trades: Vec<Vec<Trade>> = vec![Vec::new(); cells.len()];
+    let mut all_trades: Vec<Vec<Trade>> = vec![Vec::new(); cells.len()];
+
+    for (start, end) in fold_bounds(as_of) {
+        let cutoff = start
+            .checked_sub_days(Days::new(EMBARGO_DAYS))
+            .unwrap_or(NaiveDate::MIN);
+        let fit_groups: Vec<Vec<Trade>> = GROUPS
+            .iter()
+            .map(|group| {
+                trades_by_group
+                    .get(*group)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter(|trade| trade.exit_session < cutoff)
+                    .cloned()
+                    .collect()
+            })
+            .collect();
+        let fit_evidence: Vec<Evidence> = cells
+            .iter()
+            .enumerate()
+            .map(|(index, (_, setup, side))| {
+                super::stats::evidence(*setup, *side, &fit_groups[group_index(index)])
+            })
+            .collect();
+        let p_values: Vec<f64> = fit_evidence.iter().map(p_value).collect();
+        let rejected = benjamini_hochberg(&p_values, FDR_Q);
+        let pooled: Vec<Vec<Pooled>> = (0..GROUPS.len())
+            .map(|group| {
+                let from = group * SETUPS_PER_GROUP;
+                pool(&fit_evidence[from..from + SETUPS_PER_GROUP])
+            })
+            .collect();
+        let selected: Vec<bool> = cells
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let group = group_index(index);
+                let estimate = &pooled[group][index - group * SETUPS_PER_GROUP];
+                rejected[index] && estimate.posterior_mean - Z95 * estimate.posterior_sd > 0.0
+            })
+            .collect();
+
+        for (index, (group, setup, side)) in cells.iter().enumerate() {
+            let cell_trades: Vec<&Trade> = trades_by_group
+                .get(group)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+                .iter()
+                .filter(|trade| {
+                    trade.setup == *setup
+                        && trade.side == *side
+                        && trade.signal_session >= start
+                        && trade.signal_session < end
+                        && trade.exit_session <= as_of
+                })
+                .collect();
+            let count = cell_trades.len() as u32;
+            let mean_r = mean_of(cell_trades.iter().map(|trade| trade.r_multiple));
+            if let Some(fold) = folds.get_mut(&(group.clone(), *setup, *side)) {
+                fold.push(Fold {
+                    start,
+                    end,
+                    selected: selected[index],
+                    trades: count,
+                    mean_r,
+                });
+            }
+            all_trades[index].extend(cell_trades.iter().map(|trade| (*trade).clone()));
+            if selected[index] {
+                selected_trades[index].extend(cell_trades.into_iter().cloned());
+            }
+        }
+    }
+
+    let mut out = BTreeMap::new();
+    for (index, (group, setup, side)) in cells.into_iter().enumerate() {
+        let oos = &selected_trades[index];
+        let all = &all_trades[index];
+        let walk_forward = WalkForward {
+            folds: folds
+                .remove(&(group.clone(), setup, side))
+                .unwrap_or_default(),
+            oos_trades: oos.len() as u32,
+            oos_mean_r: mean_of(oos.iter().map(|trade| trade.r_multiple)),
+            oos_ci: super::stats::evidence(setup, side, oos).expectancy_ci,
+            all_trades: all.len() as u32,
+            all_mean_r: mean_of(all.iter().map(|trade| trade.r_multiple)),
+        };
+        out.insert((group, setup, side), walk_forward);
+    }
+    out
 }
 
 /// Steps 1–6 and the verdicts, in scoreboard order. Kilo, round 19: until then this keeps
@@ -219,15 +413,270 @@ pub fn judge(
     live: &[LiveTrade],
     as_of: NaiveDate,
 ) -> Vec<Verdict> {
-    let _ = live;
-    let mut out = Vec::with_capacity(36);
-    for group in ["fx", "stocks", "indices"] {
-        let trades = trades_by_group.get(group).map(Vec::as_slice).unwrap_or(&[]);
+    let cells = cells_in_order();
+    let cutoff = as_of
+        .checked_sub_months(Months::new(HOLDOUT_MONTHS))
+        .unwrap_or(NaiveDate::MIN);
+    let selection_groups: Vec<Vec<Trade>> = GROUPS
+        .iter()
+        .map(|group| {
+            trades_by_group
+                .get(*group)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+                .iter()
+                .filter(|trade| trade.exit_session <= as_of)
+                .cloned()
+                .collect()
+        })
+        .collect();
+    let selection: Vec<Evidence> = cells
+        .iter()
+        .enumerate()
+        .map(|(index, (_, setup, side))| {
+            super::stats::evidence(*setup, *side, &selection_groups[group_index(index)])
+        })
+        .collect();
+    let holdout: Vec<Evidence> = cells
+        .iter()
+        .enumerate()
+        .map(|(index, (_, setup, side))| {
+            let trades: Vec<Trade> = selection_groups[group_index(index)]
+                .iter()
+                .filter(|trade| trade.exit_session > cutoff)
+                .cloned()
+                .collect();
+            super::stats::evidence(*setup, *side, &trades)
+        })
+        .collect();
+    let p_values: Vec<f64> = selection.iter().map(p_value).collect();
+    let fdr = benjamini_hochberg(&p_values, FDR_Q);
+    let pooled: Vec<Vec<Pooled>> = (0..GROUPS.len())
+        .map(|group| {
+            let from = group * SETUPS_PER_GROUP;
+            pool(&selection[from..from + SETUPS_PER_GROUP])
+        })
+        .collect();
+    let walk = walk_forward(trades_by_group, as_of);
+
+    let mut out = Vec::with_capacity(cells.len());
+    for (index, (group, setup, side)) in cells.into_iter().enumerate() {
+        let group_at = group_index(index);
+        let estimate = &pooled[group_at][index - group_at * SETUPS_PER_GROUP];
+        let cell_live: Vec<&LiveTrade> = live
+            .iter()
+            .filter(|card| {
+                card.group == group
+                    && card.setup == setup
+                    && card.side == side
+                    && card.exit_session <= as_of
+            })
+            .collect();
+        let live_evidence = LiveEvidence {
+            trades: cell_live.len() as u32,
+            mean_r: mean_of(cell_live.iter().map(|card| card.r_multiple)),
+        };
+        let (posterior_mean, posterior_sd) =
+            live_update(estimate, &selection[index], &cell_live, &live_evidence);
+        let posterior_lower = posterior_mean - Z95 * posterior_sd;
+        let walk_forward = walk
+            .get(&(group.clone(), setup, side))
+            .cloned()
+            .unwrap_or_default();
+        let publishes = fdr[index]
+            && posterior_lower > 0.0
+            && walk_forward.oos_trades >= MIN_OOS_TRADES
+            && walk_forward.oos_mean_r > 0.0;
+        let candidate = !publishes
+            && selection[index].trades >= super::MIN_CANDIDATE_TRADES
+            && posterior_mean > 0.0
+            && walk_forward.all_trades >= MIN_CANDIDATE_OOS_TRADES
+            && walk_forward.all_mean_r > 0.0;
+        let reason = verdict_reason(
+            publishes,
+            candidate,
+            &group,
+            &selection[index],
+            &live_evidence,
+            p_values[index],
+            fdr[index],
+            posterior_mean,
+            posterior_lower,
+            &walk_forward,
+        );
+        out.push(Verdict {
+            group: group.clone(),
+            selection: selection[index].clone(),
+            holdout: holdout[index].clone(),
+            publishes,
+            candidate,
+            reason,
+            judgement: Some(Judgement {
+                p_value: p_values[index],
+                fdr_pass: fdr[index],
+                pooled: estimate.clone(),
+                live: live_evidence,
+                posterior_mean,
+                posterior_sd,
+                posterior_lower,
+                walk_forward,
+            }),
+        });
+    }
+    out
+}
+
+const Z95: f64 = 1.959_964;
+const HOLDOUT_MONTHS: u32 = 24;
+const GROUPS: [&str; 3] = ["fx", "stocks", "indices"];
+const SETUPS_PER_GROUP: usize = 12;
+
+fn cells_in_order() -> Vec<(String, SetupId, Side)> {
+    let mut cells = Vec::with_capacity(GROUPS.len() * SETUPS_PER_GROUP);
+    for group in GROUPS {
         for setup in SetupId::ALL {
             for side in [Side::Long, Side::Short] {
-                out.push(super::stats::verdict(group, setup, side, trades, as_of));
+                cells.push((group.to_string(), setup, side));
             }
         }
     }
-    out
+    cells
+}
+
+fn group_index(cell: usize) -> usize {
+    cell / SETUPS_PER_GROUP
+}
+
+fn fold_bounds(as_of: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
+    let mut bounds = Vec::with_capacity(WF_FOLDS as usize + 1);
+    for step in (0..=WF_FOLDS).rev() {
+        let months = step * WF_FOLD_MONTHS;
+        bounds.push(
+            as_of
+                .checked_sub_months(Months::new(months))
+                .unwrap_or(NaiveDate::MIN),
+        );
+    }
+    bounds.windows(2).map(|pair| (pair[0], pair[1])).collect()
+}
+
+fn live_update(
+    pooled: &Pooled,
+    selection: &Evidence,
+    live: &[&LiveTrade],
+    live_evidence: &LiveEvidence,
+) -> (f64, f64) {
+    if live.is_empty() || pooled.posterior_sd == 0.0 {
+        return (pooled.posterior_mean, pooled.posterior_sd);
+    }
+    let se = (selection.expectancy_ci.1 - selection.expectancy_ci.0) / (2.0 * Z95);
+    let backtest_variance = se * se * selection.trades as f64;
+    if !backtest_variance.is_finite() || backtest_variance <= 0.0 {
+        return (pooled.posterior_mean, pooled.posterior_sd);
+    }
+    let prior_precision = 1.0 / pooled.posterior_sd.powi(2);
+    let precision = prior_precision + live_evidence.trades as f64 / backtest_variance;
+    if !precision.is_finite() || precision <= 0.0 {
+        return (pooled.posterior_mean, pooled.posterior_sd);
+    }
+    let sum: f64 = live.iter().map(|card| card.r_multiple).sum();
+    let mean = (pooled.posterior_mean * prior_precision + sum / backtest_variance) / precision;
+    (mean, (1.0 / precision).sqrt())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verdict_reason(
+    publishes: bool,
+    candidate: bool,
+    _group: &str,
+    selection: &Evidence,
+    live: &LiveEvidence,
+    p_value: f64,
+    fdr_pass: bool,
+    posterior_mean: f64,
+    posterior_lower: f64,
+    walk: &WalkForward,
+) -> String {
+    if publishes {
+        return format!(
+            "Publishes: {:+.2}R a trade over {} trades, pooled lower bound {:+.2}R, out of sample {:+.2}R over {} trades",
+            selection.expectancy_r,
+            selection.trades,
+            posterior_lower,
+            walk.oos_mean_r,
+            walk.oos_trades
+        );
+    }
+    let failed = if !fdr_pass {
+        format!("the false-discovery-rate test did not reject this cell (p = {p_value:.3})")
+    } else if posterior_lower <= 0.0 {
+        format!("the pooled lower bound is {posterior_lower:+.2}R")
+    } else if walk.oos_trades < MIN_OOS_TRADES {
+        format!(
+            "out of sample {:+.2}R over {} trades, fewer than {}",
+            walk.oos_mean_r, walk.oos_trades, MIN_OOS_TRADES
+        )
+    } else if walk.oos_mean_r <= 0.0 {
+        format!(
+            "out of sample {:+.2}R over {} trades",
+            walk.oos_mean_r, walk.oos_trades
+        )
+    } else if selection.trades < super::MIN_CANDIDATE_TRADES {
+        format!(
+            "only {} trades in the selection period, fewer than {}",
+            selection.trades,
+            super::MIN_CANDIDATE_TRADES
+        )
+    } else if posterior_mean <= 0.0 {
+        format!("the pooled mean is {posterior_mean:+.2}R")
+    } else if walk.all_trades < MIN_CANDIDATE_OOS_TRADES {
+        format!(
+            "out of sample {:+.2}R over {} trades over all folds, fewer than {}",
+            walk.all_mean_r, walk.all_trades, MIN_CANDIDATE_OOS_TRADES
+        )
+    } else {
+        format!(
+            "out of sample {:+.2}R over {} trades over all folds",
+            walk.all_mean_r, walk.all_trades
+        )
+    };
+    if candidate {
+        format!(
+            "Candidate: {failed}; {:+.2}R a trade over {} trades with {} live, not yet clear of luck",
+            selection.expectancy_r, selection.trades, live.trades
+        )
+    } else {
+        format!("Doesn't publish: {failed}")
+    }
+}
+
+fn mean_of(values: impl Iterator<Item = f64>) -> f64 {
+    let mut count = 0u32;
+    let mut sum = 0.0;
+    for value in values {
+        sum += value;
+        count += 1;
+    }
+    if count == 0 { 0.0 } else { sum / count as f64 }
+}
+
+fn normal_survival(z: f64) -> f64 {
+    0.5 * erfc(z / std::f64::consts::SQRT_2)
+}
+
+fn erfc(x: f64) -> f64 {
+    let z = x.abs();
+    let t = 1.0 / (1.0 + 0.5 * z);
+    let answer = t
+        * (-z * z - 1.265_512_23
+            + t * (1.000_023_68
+                + t * (0.374_091_96
+                    + t * (0.096_784_18
+                        + t * (-0.186_288_06
+                            + t * (0.278_868_07
+                                + t * (-1.135_203_98
+                                    + t * (1.488_515_87
+                                        + t * (-0.822_152_23 + t * 0.170_872_77)))))))))
+            .exp();
+    if x >= 0.0 { answer } else { 2.0 - answer }
 }
