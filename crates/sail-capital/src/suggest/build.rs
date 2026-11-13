@@ -145,7 +145,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
             "Upload an XTB export to start".into(),
             "SAIL has no positions for this account yet. Upload the account export from XTB in Data.".into(),
             vec![],
-            Tab::Data,
+            Tab::Settings,
         );
         return;
     }
@@ -158,7 +158,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
             "Your limits are a draft".into(),
             "SAIL sizes proposals only against limits you confirmed. Review the starting values in Data → Limits and confirm them.".into(),
             vec![format!("policy v{} draft", facts.policy.version)],
-            Tab::Data,
+            Tab::Settings,
         );
     }
 
@@ -176,7 +176,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
                 format!("Your XTB data is {days} days old"),
                 "Positions, cash and every suggestion are as of the last upload. Upload a fresh export from XTB to bring them up to date.".into(),
                 vec![format!("snapshot {}", at.date_naive())],
-                Tab::Data,
+                Tab::Settings,
             );
         }
     }
@@ -197,7 +197,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
                 list(&facts.variances, 3)
             ),
             facts.variances.clone(),
-            Tab::Holdings,
+            Tab::Portfolio,
         );
     }
 
@@ -209,7 +209,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
             "Prices aren't being fetched".into(),
             "Forecasts, volatility limits and ideas need daily prices. Turn on fetching or upload price files in Data.".into(),
             vec![],
-            Tab::Data,
+            Tab::Settings,
         );
     }
 
@@ -226,7 +226,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
                 if n == 1 { "it" } else { "them" }
             ),
             facts.without_prices.clone(),
-            Tab::Data,
+            Tab::Settings,
         );
     }
 
@@ -247,7 +247,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
                 .iter()
                 .map(|(s, d)| format!("{s} {d}"))
                 .collect(),
-            Tab::Data,
+            Tab::Settings,
         );
     }
 
@@ -273,7 +273,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
                 .iter()
                 .map(|f| format!("filing {} {}", f.form, f.accession))
                 .collect(),
-            Tab::Research,
+            Tab::Portfolio,
         );
     }
 
@@ -291,7 +291,7 @@ fn attention(facts: &Facts, out: &mut Vec<Suggestion>) {
                 if n == 1 { "it" } else { "them" }
             ),
             facts.unvalued.clone(),
-            Tab::Holdings,
+            Tab::Portfolio,
         );
     }
 }
@@ -463,7 +463,7 @@ fn policy_suggestions(
                     rules: vec![b.rule],
                     confidence: None,
                     evidence,
-                    tab: if draft { Tab::Data } else { Tab::Holdings },
+                    tab: if draft { Tab::Settings } else { Tab::Portfolio },
                 });
             }
         }
@@ -526,7 +526,7 @@ fn idea_suggestion(facts: &Facts, money: &dyn Fn(f64) -> String) -> Option<Sugge
         rules: vec![Rule::Signal],
         confidence: Some(confidence.into()),
         evidence,
-        tab: Tab::Forecasts,
+        tab: Tab::Record,
     })
 }
 

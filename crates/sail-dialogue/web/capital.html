@@ -8,6 +8,12 @@
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/capital.css">
+<link rel="stylesheet" href="/capital-today.css">
+<link rel="stylesheet" href="/capital-portfolio.css">
+<link rel="stylesheet" href="/capital-income.css">
+<link rel="stylesheet" href="/capital-outlook.css">
+<link rel="stylesheet" href="/capital-record.css">
+<link rel="stylesheet" href="/capital-settings.css">
 </head>
 <body>
 <a class="cp-skip" href="#cpMain">Skip to portfolio</a>
@@ -38,7 +44,6 @@
 
 <p class="cp-banner" id="cpBanner" role="alert" hidden></p>
 
-<!-- Header Tiles: Always visible under top bar -->
 <section class="cp-metrics" id="cpMetrics" aria-label="Account summary">
   <div class="cp-tile">
     <span class="cp-tile-label">Account Value</span>
@@ -61,46 +66,30 @@
     <span class="cp-tile-sub">Positions − invested</span>
   </div>
 
-  <!-- Legacy metric hooks preserved for backwards compatibility -->
-  <div hidden aria-hidden="true">
-    <span id="cpCashVal">—</span>
-    <span id="cpHoldingsVal">—</span>
-    <span id="cpHoldingsSub">0 positions</span>
-    <span id="cpDividendsVal">—</span>
-    <span id="cpDividendsSub">After withholding</span>
-    <span id="cpFeesVal">—</span>
-    <span id="cpFeesSub">Commissions &amp; swaps</span>
-  </div>
 </section>
 
-<!-- Tab Navigation Bar -->
 <nav class="cp-tab-nav" aria-label="Sections">
   <div class="cp-tab-bar" role="tablist" aria-label="Capital sections">
     <button type="button" class="cp-tab-btn cp-tab-active" role="tab" id="cpTab-today" aria-controls="cpPanel-today" aria-selected="true" tabindex="0">Today</button>
-    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-signals" aria-controls="cpPanel-signals" aria-selected="false" tabindex="-1">Signals</button>
-    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-holdings" aria-controls="cpPanel-holdings" aria-selected="false" tabindex="-1">Holdings</button>
+    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-portfolio" aria-controls="cpPanel-portfolio" aria-selected="false" tabindex="-1">Portfolio</button>
     <button type="button" class="cp-tab-btn" role="tab" id="cpTab-income" aria-controls="cpPanel-income" aria-selected="false" tabindex="-1">Income</button>
-    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-forecasts" aria-controls="cpPanel-forecasts" aria-selected="false" tabindex="-1">Forecasts</button>
-    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-research" aria-controls="cpPanel-research" aria-selected="false" tabindex="-1">Research</button>
-    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-data" aria-controls="cpPanel-data" aria-selected="false" tabindex="-1">Data</button>
+    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-outlook" aria-controls="cpPanel-outlook" aria-selected="false" tabindex="-1">Outlook</button>
+    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-record" aria-controls="cpPanel-record" aria-selected="false" tabindex="-1">Track record</button>
+    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-settings" aria-controls="cpPanel-settings" aria-selected="false" tabindex="-1">Settings</button>
   </div>
 </nav>
 
 <main id="cpMain" tabindex="-1">
-  <!-- TAB 1: TODAY -->
   <div class="cp-tab-pane cp-pane-active" id="cpPanel-today" role="tabpanel" aria-labelledby="cpTab-today">
-    <!-- Stance banner styled by label (hold, fix_limits, consider_changes) -->
     <div class="cp-stance-banner" id="cpStanceBanner" data-stance="hold">
       <p class="cp-stance-sentence" id="cpStanceSentence">Loading stance…</p>
     </div>
 
-    <!-- Policy notice: shown when today.policy.status === 'draft' -->
     <div class="cp-policy-notice" id="cpPolicyDraftNotice" hidden>
       <span class="cp-notice-icon" aria-hidden="true">ℹ</span>
-      <p>Your limits are a draft. <button type="button" class="cp-link-btn" id="cpReviewLimitsLink">Review them in Data → Limits</button> to get sized proposals.</p>
+      <p>Your limits are a draft. <button type="button" class="cp-link-btn" id="cpReviewLimitsLink">Review them in Settings</button> to get sized proposals.</p>
     </div>
 
-    <!-- Suggestions List -->
     <section class="cp-suggestions-section" aria-label="Today suggestions">
       <div class="cp-suggestions-list" id="cpSuggestionsList">
         <p class="cp-empty">Import a report to see suggestions.</p>
@@ -112,143 +101,7 @@
     </section>
   </div>
 
-  <!-- TAB: SIGNALS (Round 13) -->
-  <div class="cp-tab-pane" id="cpPanel-signals" role="tabpanel" aria-labelledby="cpTab-signals" hidden>
-    <!-- Signals Header Panel -->
-    <header class="cp-signals-header">
-      <div class="cp-signals-title-group">
-        <h2>Trade Signals</h2>
-        <span class="cp-sub-notice" id="cpSignalsSessionMeta">Session: — · Last run: —</span>
-      </div>
-      <div class="cp-signals-actions">
-        <button class="cp-button cp-primary" id="cpSignalsRunBtn" type="button">Run now</button>
-      </div>
-    </header>
-
-    <!-- Honesty Contract Banner -->
-    <div class="cp-signals-banner">
-      <p>
-        Signals are generated by deterministic rules verified across 8 years of replay after all costs. Only setups whose lower 95% expectancy bound is positive and who passed an independent 2-year holdout publish. Signals are ideas for manual execution; SAIL never places orders.
-      </p>
-    </div>
-
-    <!-- Asset search & one-off signal check -->
-    <section class="cp-panel cp-signal-search" aria-labelledby="cpSignalSearchTitle">
-      <header class="cp-panel-head">
-        <div class="cp-title-group">
-          <h3 id="cpSignalSearchTitle">Check another asset</h3>
-          <span class="cp-sub-notice">Search a listed asset outside your portfolio or watchlist and see whether a verified setup fires today.</span>
-        </div>
-      </header>
-      <form class="cp-signal-search-form" id="cpSignalSearchForm" role="search">
-        <label class="cp-sr-only" for="cpSignalSearchInput">Search by asset name or symbol</label>
-        <input class="cp-input" id="cpSignalSearchInput" type="search" placeholder="Search by name or symbol, e.g. NVDA, SAP, gold" autocomplete="off" spellcheck="false" />
-        <button class="cp-button cp-primary" id="cpSignalSearchBtn" type="submit">Check asset</button>
-      </form>
-      <p class="cp-signal-search-status" id="cpSignalSearchStatus" role="status" aria-live="polite"></p>
-      <ul class="cp-signal-search-results" id="cpSignalSearchResults" hidden></ul>
-      <div class="cp-signal-check" id="cpSignalCheck" hidden></div>
-    </section>
-
-    <!-- Active Cards List -->
-    <section class="cp-signals-cards-section" aria-label="Published trade signals">
-      <div class="cp-signals-cards-grid" id="cpSignalsCardsGrid">
-        <!-- Rendered dynamically -->
-      </div>
-      <div class="cp-signals-empty" id="cpSignalsEmpty" hidden>
-        <p class="cp-empty-statement">No setup has earned a signal today. That's the honest answer, not a fault.</p>
-        <p class="cp-empty-sub">Earlier rounds measured that no model predicts direction better than chance. Only setups with proven positive expectancy after costs publish here.</p>
-      </div>
-    </section>
-
-    <!-- Scoreboard (Collapsible) -->
-    <section class="cp-panel cp-scoreboard-panel" id="cpScoreboardPanel" aria-labelledby="cpScoreboardTitle">
-      <header class="cp-panel-head cp-clickable-head" id="cpScoreboardToggle" role="button" tabindex="0" aria-expanded="false">
-        <div class="cp-title-group">
-          <h3 id="cpScoreboardTitle">Signal Scoreboard</h3>
-          <span class="cp-sub-notice">Replay evidence &amp; verdict across all setups and asset groups</span>
-        </div>
-        <div class="cp-head-right">
-          <span class="cp-badge" id="cpScoreboardCountBadge">—</span>
-          <span class="cp-chevron" id="cpScoreboardChevron" aria-hidden="true">▼</span>
-        </div>
-      </header>
-      <div class="cp-scoreboard-content" id="cpScoreboardContent" hidden>
-        <div class="cp-table-wrap">
-          <table class="cp-table" id="cpScoreboardTable">
-            <thead>
-              <tr>
-                <th scope="col">Setup</th>
-                <th scope="col">Side</th>
-                <th scope="col">Group</th>
-                <th scope="col" class="num">Trades</th>
-                <th scope="col" class="num">Hit T1 (95% CI)</th>
-                <th scope="col" class="num">Expectancy (95% CI)</th>
-                <th scope="col" class="num">Holdout Mean</th>
-                <th scope="col" class="num">Publishes</th>
-                <th scope="col">Reason</th>
-              </tr>
-            </thead>
-            <tbody id="cpScoreboardBody">
-              <tr><td colspan="9" class="cp-empty">No scoreboard data available.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <!-- Live Graded Record -->
-    <section class="cp-panel cp-record-panel" id="cpRecordPanel" aria-labelledby="cpRecordTitle">
-      <header class="cp-panel-head">
-        <div class="cp-title-group">
-          <h3 id="cpRecordTitle">Live Graded Record</h3>
-          <span class="cp-sub-notice">Immutable log of published cards graded against subsequent bars</span>
-        </div>
-        <span class="cp-badge cp-badge-confirmed">Immutable</span>
-      </header>
-
-      <!-- Totals Metrics -->
-      <div class="cp-record-totals" id="cpRecordTotals">
-        <div class="cp-record-stat">
-          <span class="cp-stat-label">Closed Trades</span>
-          <span class="cp-stat-val" id="cpRecordTotalClosed">0</span>
-        </div>
-        <div class="cp-record-stat">
-          <span class="cp-stat-label">Target 1 Hit Rate</span>
-          <span class="cp-stat-val" id="cpRecordTotalHitT1">—</span>
-        </div>
-        <div class="cp-record-stat">
-          <span class="cp-stat-label">Mean R</span>
-          <span class="cp-stat-val" id="cpRecordTotalMeanR">—</span>
-        </div>
-        <div class="cp-record-stat">
-          <span class="cp-stat-label">Cumulative R</span>
-          <span class="cp-stat-val" id="cpRecordTotalCumR">—</span>
-        </div>
-      </div>
-
-      <div class="cp-table-wrap">
-        <table class="cp-table" id="cpRecordTable">
-          <thead>
-            <tr>
-              <th scope="col">Date</th>
-              <th scope="col">Symbol</th>
-              <th scope="col">Side</th>
-              <th scope="col">Status / Exit</th>
-              <th scope="col" class="num">Result (R)</th>
-            </tr>
-          </thead>
-          <tbody id="cpRecordBody">
-            <tr><td colspan="5" class="cp-empty">No past signals recorded yet.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-  </div>
-
-  <!-- TAB 2: HOLDINGS -->
-  <div class="cp-tab-pane" id="cpPanel-holdings" role="tabpanel" aria-labelledby="cpTab-holdings" hidden>
-    <!-- Reconciliation Card -->
+  <div class="cp-tab-pane" id="cpPanel-portfolio" role="tabpanel" aria-labelledby="cpTab-portfolio" hidden>
     <section class="cp-reconciliation" id="cpReconciliation" aria-labelledby="cpReconTitle" hidden>
       <div class="cp-recon-header">
         <h2 id="cpReconTitle">Reconciliation</h2>
@@ -265,7 +118,28 @@
       </div>
     </section>
 
-    <!-- Protective Stops & Holding Guards (Round 13) -->
+    <section class="cp-panel" id="cpPositionsPanel" aria-labelledby="cpPositionsTitle">
+      <header class="cp-panel-head">
+        <h2 id="cpPositionsTitle">Owned Positions</h2>
+      </header>
+      <div class="cp-table-wrap">
+        <table class="cp-table" id="cpPositionsTable">
+          <thead>
+            <tr>
+              <th scope="col">Instrument</th>
+              <th scope="col" class="num">Quantity</th>
+              <th scope="col" class="num">Cost Basis</th>
+              <th scope="col" class="num">Broker Market Value</th>
+              <th scope="col">Lots</th>
+            </tr>
+          </thead>
+          <tbody id="cpPositionsBody">
+            <tr><td colspan="5" class="cp-empty">No owned positions recorded.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="cp-panel cp-guards-panel" id="cpGuardsPanel" aria-labelledby="cpGuardsTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
@@ -295,38 +169,12 @@
       </div>
     </section>
 
-    <!-- Owned Positions -->
-    <section class="cp-panel" id="cpPositionsPanel" aria-labelledby="cpPositionsTitle">
-      <header class="cp-panel-head">
-        <h2 id="cpPositionsTitle">Owned Positions</h2>
-        <span class="cp-badge">Stocks &amp; ETFs</span>
-      </header>
-      <div class="cp-table-wrap">
-        <table class="cp-table" id="cpPositionsTable">
-          <thead>
-            <tr>
-              <th scope="col">Instrument</th>
-              <th scope="col" class="num">Quantity</th>
-              <th scope="col" class="num">Cost Basis</th>
-              <th scope="col" class="num">Broker Market Value</th>
-              <th scope="col">Lots</th>
-            </tr>
-          </thead>
-          <tbody id="cpPositionsBody">
-            <tr><td colspan="5" class="cp-empty">No owned positions recorded.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- CFD Positions -->
     <section class="cp-panel cp-cfd-panel" id="cpCfdPanel" aria-labelledby="cpCfdTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
           <h2 id="cpCfdTitle">CFD Positions</h2>
           <span class="cp-sub-notice">Leveraged contracts · not owned shares</span>
         </div>
-        <span class="cp-badge cp-badge-cfd">Derivatives</span>
       </header>
       <div class="cp-table-wrap">
         <table class="cp-table" id="cpCfdTable">
@@ -345,11 +193,35 @@
         </table>
       </div>
     </section>
+
+    <section class="cp-panel" id="cpFilingsPanel" aria-labelledby="cpFilingsTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpFilingsTitle">SEC Filings &amp; Evidence</h2>
+          <span class="cp-sub-notice" id="cpSecStatusMeta">Point-in-time public disclosures</span>
+        </div>
+        <div class="cp-panel-actions">
+          <button class="cp-button" id="cpSecRefreshBtn" type="button" aria-label="Check SEC now">Check SEC now</button>
+          <span class="cp-badge" id="cpSecBadge">EDGAR</span>
+        </div>
+      </header>
+
+      <div class="cp-sec-note" id="cpSecNotConfiguredNote" hidden>
+        <p>SEC access isn't configured: set <code>SAIL_SEC_USER_AGENT</code> to <code>"&lt;name&gt; &lt;contact email&gt;"</code> to enable automatic filing checks.</p>
+      </div>
+
+      <div class="cp-filings-list" id="cpFilingsList">
+        <p class="cp-empty">No filings recorded for owned holdings.</p>
+      </div>
+
+      <div class="cp-unmatched-wrap" id="cpUnmatchedWrap" hidden>
+        <h3 class="cp-unmatched-title">Holdings Not Covered by SEC</h3>
+        <ul class="cp-unmatched-list" id="cpUnmatchedList"></ul>
+      </div>
+    </section>
   </div>
 
-  <!-- TAB 3: INCOME -->
   <div class="cp-tab-pane" id="cpPanel-income" role="tabpanel" aria-labelledby="cpTab-income" hidden>
-    <!-- Dividend Projection (Round 14) -->
     <section class="cp-panel cp-projection-panel" id="cpProjectionPanel" aria-labelledby="cpProjectionTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
@@ -362,12 +234,10 @@
         </div>
       </header>
 
-      <!-- Disclaimer / Honest Wording Banner -->
       <div class="cp-forecast-disclaimer">
         <p>Projection from past payouts; dividends can be cut. Scenarios, not probabilities.</p>
       </div>
 
-      <!-- Controls: Years slider, Reinvest % slider, Allocation pills, PT tax checkbox -->
       <div class="cp-proj-controls">
         <div class="cp-control-group">
           <label for="cpProjYears" class="cp-control-label">Years: <strong id="cpProjYearsVal">10</strong></label>
@@ -404,10 +274,8 @@
         </div>
       </div>
 
-      <!-- Status / empty message -->
       <div id="cpProjStatus" class="cp-empty" hidden></div>
 
-      <!-- Headline Tiles (4 tiles) -->
       <div class="cp-proj-tiles" id="cpProjTiles">
         <div class="cp-proj-tile">
           <span class="cp-proj-tile-label">Year 1 Net Income</span>
@@ -431,12 +299,10 @@
         </div>
       </div>
 
-      <!-- Chart Container -->
       <div class="cp-proj-chart-wrap" id="cpProjChartWrap">
         <p class="cp-empty" id="cpProjChartEmpty">Loading dividend projection chart...</p>
       </div>
 
-      <!-- Annual Year Table Breakdown -->
       <div class="cp-proj-section">
         <div class="cp-proj-table-head">
           <h3 class="cp-proj-subheading">Annual Projection Breakdown</h3>
@@ -464,7 +330,6 @@
         </div>
       </div>
 
-      <!-- Per-Holding Breakdown Section -->
       <div class="cp-proj-section">
         <h3 class="cp-proj-subheading">Per-Holding Inputs &amp; Projections (Base Scenario)</h3>
         <div class="cp-table-wrap">
@@ -485,14 +350,12 @@
             </tbody>
           </table>
         </div>
-        <!-- Non-paying holdings list -->
         <div class="cp-proj-non-paying" id="cpProjNonPaying" hidden>
           <span class="cp-proj-non-paying-title">Non-paying holdings:</span>
           <span id="cpProjNonPayingList" class="cp-proj-non-paying-content"></span>
         </div>
       </div>
 
-      <!-- Assumptions Box -->
       <div class="cp-proj-assumptions" id="cpProjAssumptions">
         <h4 class="cp-proj-assumptions-title">Assumptions &amp; Notes</h4>
         <p class="cp-proj-assumptions-core">Projection from past payouts; dividends can be cut. Scenarios, not probabilities.</p>
@@ -501,11 +364,9 @@
       </div>
     </section>
 
-    <!-- Dividends & Income -->
     <section class="cp-panel" id="cpDividendsPanel" aria-labelledby="cpDividendsTitle">
       <header class="cp-panel-head">
         <h2 id="cpDividendsTitle">Dividends &amp; Income</h2>
-        <span class="cp-badge">Distributions</span>
       </header>
       <div class="cp-table-wrap">
         <table class="cp-table" id="cpDividendsTable">
@@ -525,7 +386,6 @@
       </div>
     </section>
 
-    <!-- Portfolio Insights (Income, Total Return & Allocation blocks) -->
     <section class="cp-panel" id="cpInsightsPanel" aria-labelledby="cpInsightsTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
@@ -540,9 +400,7 @@
     </section>
   </div>
 
-  <!-- TAB 4: FORECASTS -->
-  <div class="cp-tab-pane" id="cpPanel-forecasts" role="tabpanel" aria-labelledby="cpTab-forecasts" hidden>
-    <!-- Blended Outlook Card (Round 12) -->
+  <div class="cp-tab-pane" id="cpPanel-outlook" role="tabpanel" aria-labelledby="cpTab-outlook" hidden>
     <section class="cp-panel cp-outlook-panel" id="cpOutlookPanel" aria-labelledby="cpOutlookTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
@@ -552,12 +410,10 @@
         <span class="cp-badge" id="cpOutlookBadge">Outlook</span>
       </header>
 
-      <!-- Required Disclaimer Banner -->
       <div class="cp-forecast-disclaimer">
         <p>Statistical range from past prices and models; not a price target or advice.</p>
       </div>
 
-      <!-- One compact control row. The chart stays the primary object. -->
       <div class="cp-outlook-controls">
         <div class="cp-control-group">
           <label for="cpOutlookSymbolSelect" class="cp-control-label">Holding</label>
@@ -588,29 +444,23 @@
         </div>
       </div>
 
-      <!-- Chart Container -->
       <div class="cp-outlook-chart-wrap" id="cpOutlookChartWrap">
         <p class="cp-empty" id="cpOutlookEmpty">Select a holding to see its blended outlook.</p>
       </div>
 
-      <!-- Three numbers replace the five-card summary -->
       <div class="cp-outlook-stats" id="cpOutlookStats" hidden></div>
 
-      <!-- Replay result statement (when replay active) -->
       <div class="cp-outlook-replay-summary" id="cpOutlookReplaySummary" hidden></div>
 
-      <!-- Model detail stays available but out of the first reading path. -->
       <details class="cp-outlook-details" id="cpOutlookDetails" hidden>
         <summary>How this fan was built</summary>
         <div class="cp-outlook-meta-grid" id="cpOutlookMetaGrid">
-          <!-- Component weights & direction tilt -->
           <div class="cp-outlook-weights-block">
             <h3 class="cp-outlook-subheading">Component Weights &amp; Tilt</h3>
             <div class="cp-outlook-weights-list" id="cpOutlookWeightsList"></div>
             <div class="cp-outlook-tilt-note" id="cpOutlookTiltNote"></div>
           </div>
 
-          <!-- Track Record for selected horizon -->
           <div class="cp-outlook-track-record-block">
             <h3 class="cp-outlook-subheading">Track Record (<span id="cpTrackRecordHorizonLabel">1M</span>)</h3>
             <div class="cp-track-record-grid" id="cpTrackRecordGrid"></div>
@@ -619,44 +469,230 @@
       </details>
     </section>
 
-  </div>
+    <header class="cp-signals-header">
+      <div class="cp-signals-title-group">
+        <h2>Trade Signals</h2>
+        <span class="cp-sub-notice" id="cpSignalsSessionMeta">Session: — · Last run: —</span>
+      </div>
+      <div class="cp-signals-actions">
+        <button class="cp-button cp-primary" id="cpSignalsRunBtn" type="button">Run now</button>
+      </div>
+    </header>
 
-  <!-- TAB 5: RESEARCH -->
-  <div class="cp-tab-pane" id="cpPanel-research" role="tabpanel" aria-labelledby="cpTab-research" hidden>
-    <!-- SEC Filings & Evidence -->
-    <section class="cp-panel" id="cpFilingsPanel" aria-labelledby="cpFilingsTitle">
+    <div class="cp-signals-banner">
+      <p>
+        Signals are generated by deterministic rules verified across 8 years of replay after all costs. Only setups whose lower 95% expectancy bound is positive and who passed an independent 2-year holdout publish. Signals are ideas for manual execution; SAIL never places orders.
+      </p>
+    </div>
+
+    <section class="cp-signals-cards-section" aria-label="Published trade signals">
+      <div class="cp-signals-cards-grid" id="cpSignalsCardsGrid">
+      </div>
+      <div class="cp-signals-empty" id="cpSignalsEmpty" hidden>
+        <p class="cp-empty-statement">No setup has earned a signal today. That's the honest answer, not a fault.</p>
+        <p class="cp-empty-sub">Earlier rounds measured that no model predicts direction better than chance. Only setups with proven positive expectancy after costs publish here.</p>
+      </div>
+    </section>
+
+    <section class="cp-panel cp-signal-search" aria-labelledby="cpSignalSearchTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
-          <h2 id="cpFilingsTitle">SEC Filings &amp; Evidence</h2>
-          <span class="cp-sub-notice" id="cpSecStatusMeta">Point-in-time public disclosures</span>
-        </div>
-        <div class="cp-panel-actions">
-          <button class="cp-button" id="cpSecRefreshBtn" type="button" aria-label="Check SEC now">Check SEC now</button>
-          <span class="cp-badge" id="cpSecBadge">EDGAR</span>
+          <h3 id="cpSignalSearchTitle">Check another asset</h3>
+          <span class="cp-sub-notice">Search a listed asset outside your portfolio or watchlist and see whether a verified setup fires today.</span>
         </div>
       </header>
-
-      <!-- Not Configured Notice -->
-      <div class="cp-sec-note" id="cpSecNotConfiguredNote" hidden>
-        <p>SEC access isn't configured: set <code>SAIL_SEC_USER_AGENT</code> to <code>"&lt;name&gt; &lt;contact email&gt;"</code> to enable automatic filing checks.</p>
-      </div>
-
-      <!-- Filings Watch Items List -->
-      <div class="cp-filings-list" id="cpFilingsList">
-        <p class="cp-empty">No filings recorded for owned holdings.</p>
-      </div>
-
-      <!-- Holdings Not Covered by SEC -->
-      <div class="cp-unmatched-wrap" id="cpUnmatchedWrap" hidden>
-        <h3 class="cp-unmatched-title">Holdings Not Covered by SEC</h3>
-        <ul class="cp-unmatched-list" id="cpUnmatchedList"></ul>
-      </div>
+      <form class="cp-signal-search-form" id="cpSignalSearchForm" role="search">
+        <label class="cp-sr-only" for="cpSignalSearchInput">Search by asset name or symbol</label>
+        <input class="cp-input" id="cpSignalSearchInput" type="search" placeholder="Search by name or symbol, e.g. NVDA, SAP, gold" autocomplete="off" spellcheck="false" />
+        <button class="cp-button cp-primary" id="cpSignalSearchBtn" type="submit">Check asset</button>
+      </form>
+      <p class="cp-signal-search-status" id="cpSignalSearchStatus" role="status" aria-live="polite"></p>
+      <ul class="cp-signal-search-results" id="cpSignalSearchResults" hidden></ul>
+      <div class="cp-signal-check" id="cpSignalCheck" hidden></div>
     </section>
   </div>
 
-  <!-- TAB 6: DATA -->
-  <div class="cp-tab-pane" id="cpPanel-data" role="tabpanel" aria-labelledby="cpTab-data" hidden>
-    <!-- Risk Limits Editor (Round 11) -->
+  <div class="cp-tab-pane" id="cpPanel-record" role="tabpanel" aria-labelledby="cpTab-record" hidden>
+    <section class="cp-panel" id="cpScorecardPanel" aria-labelledby="cpScorecardTitle">
+      <header class="cp-panel-head">
+        <h2 id="cpScorecardTitle">What has earned trust</h2>
+      </header>
+      <p class="cp-scorecard-summary" id="cpScorecardSummary">Loading the track record…</p>
+      <div id="cpScorecardRows"></div>
+    </section>
+
+    <section class="cp-panel cp-scoreboard-panel" id="cpScoreboardPanel" aria-labelledby="cpScoreboardTitle">
+      <header class="cp-panel-head cp-clickable-head" id="cpScoreboardToggle" role="button" tabindex="0" aria-expanded="false">
+        <div class="cp-title-group">
+          <h3 id="cpScoreboardTitle">Signal Scoreboard</h3>
+          <span class="cp-sub-notice">Replay evidence &amp; verdict across all setups and asset groups</span>
+        </div>
+        <div class="cp-head-right">
+          <span class="cp-badge" id="cpScoreboardCountBadge">—</span>
+          <span class="cp-chevron" id="cpScoreboardChevron" aria-hidden="true">▼</span>
+        </div>
+      </header>
+      <div class="cp-scoreboard-content" id="cpScoreboardContent" hidden>
+        <div class="cp-table-wrap">
+          <table class="cp-table" id="cpScoreboardTable">
+            <thead>
+              <tr>
+                <th scope="col">Setup</th>
+                <th scope="col">Side</th>
+                <th scope="col">Group</th>
+                <th scope="col" class="num">Trades</th>
+                <th scope="col" class="num">Hit T1 (95% CI)</th>
+                <th scope="col" class="num">Expectancy (95% CI)</th>
+                <th scope="col" class="num">Holdout Mean</th>
+                <th scope="col" class="num">Publishes</th>
+                <th scope="col">Reason</th>
+              </tr>
+            </thead>
+            <tbody id="cpScoreboardBody">
+              <tr><td colspan="9" class="cp-empty">No scoreboard data available.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="cp-panel cp-record-panel" id="cpRecordPanel" aria-labelledby="cpRecordTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h3 id="cpRecordTitle">Live Graded Record</h3>
+          <span class="cp-sub-notice">Immutable log of published cards graded against subsequent bars</span>
+        </div>
+      </header>
+
+      <div class="cp-record-totals" id="cpRecordTotals">
+        <div class="cp-record-stat">
+          <span class="cp-stat-label">Closed Trades</span>
+          <span class="cp-stat-val" id="cpRecordTotalClosed">0</span>
+        </div>
+        <div class="cp-record-stat">
+          <span class="cp-stat-label">Target 1 Hit Rate</span>
+          <span class="cp-stat-val" id="cpRecordTotalHitT1">—</span>
+        </div>
+        <div class="cp-record-stat">
+          <span class="cp-stat-label">Mean R</span>
+          <span class="cp-stat-val" id="cpRecordTotalMeanR">—</span>
+        </div>
+        <div class="cp-record-stat">
+          <span class="cp-stat-label">Cumulative R</span>
+          <span class="cp-stat-val" id="cpRecordTotalCumR">—</span>
+        </div>
+      </div>
+
+      <div class="cp-table-wrap">
+        <table class="cp-table" id="cpRecordTable">
+          <thead>
+            <tr>
+              <th scope="col">Date</th>
+              <th scope="col">Symbol</th>
+              <th scope="col">Side</th>
+              <th scope="col">Status / Exit</th>
+              <th scope="col" class="num">Result (R)</th>
+            </tr>
+          </thead>
+          <tbody id="cpRecordBody">
+            <tr><td colspan="5" class="cp-empty">No past signals recorded yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="cp-panel" id="cpForecastsPanel" aria-labelledby="cpForecastsTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpForecastsTitle">Baseline Forecasts</h2>
+          <span class="cp-sub-notice" id="cpPriceStatusLine">Point-in-time price distributions</span>
+        </div>
+        <div class="cp-panel-actions">
+          <button class="cp-button" id="cpPriceRefreshBtn" type="button" aria-label="Fetch prices">Fetch prices</button>
+          <button class="cp-button" id="cpPriceUploadBtn" type="button" aria-label="Upload price file">Upload price file</button>
+          <span class="cp-badge" id="cpPriceBadge">Prices</span>
+        </div>
+      </header>
+
+      <div class="cp-forecast-disclaimer">
+        <p>Baselines are point-in-time diagnostics for the blended outlook, not predictions of what to do. No model here is better than chance until its score says so.</p>
+      </div>
+
+      <div class="cp-price-note" id="cpPriceOptInNote" hidden>
+        <p>Price fetching is off. Turning it on sends the ticker symbols you hold, and nothing else, to Yahoo Finance through the yfinance library: no amounts, account or name. To turn it on, run <code>scripts/prices/setup.sh</code> once and set <code>SAIL_PRICES_SOURCE=yfinance</code>. Or use <strong>Upload price file</strong>, which sends nothing.</p>
+      </div>
+
+      <div class="cp-unmapped-note" id="cpPriceUnmappedNote" hidden></div>
+
+      <div class="cp-forecast-controls">
+        <div class="cp-control-group">
+          <span class="cp-control-label">Baseline horizon</span>
+          <div class="cp-horizon-pills" role="radiogroup" aria-label="Forecast horizon">
+            <button type="button" class="cp-horizon-btn" data-horizon="5">1W</button>
+            <button type="button" class="cp-horizon-btn cp-active" data-horizon="20" aria-checked="true">1M</button>
+            <button type="button" class="cp-horizon-btn" data-horizon="60">1Q</button>
+          </div>
+        </div>
+        <div class="cp-control-group">
+          <label for="cpForecastModelSelect" class="cp-control-label">Baseline model</label>
+          <select class="cp-select" id="cpForecastModelSelect">
+            <option value="no_change" selected>No change (zero drift, 252d σ)</option>
+            <option value="trailing_drift">Trailing drift (252d mean &amp; σ)</option>
+            <option value="ewma_volatility">EWMA volatility (RiskMetrics λ=0.94)</option>
+            <option value="empirical_horizon">Empirical horizon (3y historical samples)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="cp-forecasts-body">
+        <div class="cp-forecast-list" id="cpForecastsList">
+          <p class="cp-empty">Fetch or upload prices to see forecasts</p>
+        </div>
+        <div class="cp-without-prices-wrap" id="cpWithoutPricesWrap" hidden></div>
+      </div>
+
+      <div class="cp-scorecard-section" id="cpScorecardSection">
+        <div class="cp-scorecard-head">
+          <h3 class="cp-scorecard-title">Walk-Forward Evaluation Scorecard</h3>
+          <span class="cp-scorecard-meta" id="cpScorecardMeta">Out-of-sample backtest</span>
+        </div>
+        <div id="cpScorecardWrap">
+          <p class="cp-empty">No evaluation available yet</p>
+        </div>
+        <div class="cp-scorecard-notes" id="cpScorecardNotes" hidden></div>
+      </div>
+    </section>
+
+    <section class="cp-panel" id="cpSignalsSection" aria-labelledby="cpSignalsTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpSignalsTitle">Signal Skill</h2>
+          <span class="cp-sub-notice">Walk-forward information coefficients across held instruments</span>
+        </div>
+        <span class="cp-badge" id="cpSignalsBadge">Signals</span>
+      </header>
+      <div class="cp-table-wrap">
+        <table class="cp-table" id="cpSignalsTable">
+          <thead>
+            <tr>
+              <th scope="col">Signal</th>
+              <th scope="col">Horizon</th>
+              <th scope="col" class="num">IC</th>
+              <th scope="col" class="num">t</th>
+              <th scope="col" class="num">IC used</th>
+              <th scope="col" class="num">Weight</th>
+            </tr>
+          </thead>
+          <tbody id="cpSignalsBody">
+            <tr><td colspan="6" class="cp-empty">No signal report yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cp-scorecard-notes" id="cpSignalsNotes" hidden></div>
+    </section>
+  </div>
+
+  <div class="cp-tab-pane" id="cpPanel-settings" role="tabpanel" aria-labelledby="cpTab-settings" hidden>
     <section class="cp-panel" id="cpLimitsSection" aria-labelledby="cpLimitsTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
@@ -747,7 +783,6 @@
         </div>
       </form>
 
-      <!-- Version History -->
       <div class="cp-policy-history" id="cpPolicyHistory">
         <h3 class="cp-history-title">Policy Version History</h3>
         <ul class="cp-history-list" id="cpPolicyHistoryList">
@@ -756,25 +791,6 @@
       </div>
     </section>
 
-    <!-- Price Data Management -->
-    <section class="cp-panel" id="cpDataPricesPanel" aria-labelledby="cpDataPricesTitle">
-      <header class="cp-panel-head">
-        <div class="cp-title-group">
-          <h2 id="cpDataPricesTitle">Price Data &amp; Sources</h2>
-          <span class="cp-sub-notice" id="cpDataPriceStatusLine">Point-in-time price status</span>
-        </div>
-        <div class="cp-panel-actions">
-          <button class="cp-button" id="cpDataPriceRefreshBtn" type="button">Fetch prices</button>
-          <button class="cp-button" id="cpDataPriceUploadBtn" type="button">Upload price file</button>
-        </div>
-      </header>
-      <div class="cp-price-note" id="cpDataPriceOptInNote" hidden>
-        <p>Price fetching is off. Turning it on sends ticker symbols you hold to Yahoo Finance through yfinance. To enable, set <code>SAIL_PRICES_SOURCE=yfinance</code>, or upload a CSV file privately.</p>
-      </div>
-      <div class="cp-unmapped-note" id="cpDataPriceUnmappedNote" hidden></div>
-    </section>
-
-    <!-- Watchlist & Signal Universe (Round 13) -->
     <section class="cp-panel" id="cpWatchlistPanel" aria-labelledby="cpWatchlistTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
@@ -806,7 +822,6 @@
         </table>
       </div>
 
-      <!-- Add Watchlist Item Form -->
       <form class="cp-watchlist-form" id="cpWatchlistAddForm">
         <h3 class="cp-subheading">Add Watchlist Instrument</h3>
         <div class="cp-form-error" id="cpWatchlistError" role="alert" hidden></div>
@@ -849,7 +864,23 @@
       </form>
     </section>
 
-    <!-- Predictive Models Panel (Round 12) -->
+    <section class="cp-panel" id="cpDataPricesPanel" aria-labelledby="cpDataPricesTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpDataPricesTitle">Price Data &amp; Sources</h2>
+          <span class="cp-sub-notice" id="cpDataPriceStatusLine">Point-in-time price status</span>
+        </div>
+        <div class="cp-panel-actions">
+          <button class="cp-button" id="cpDataPriceRefreshBtn" type="button">Fetch prices</button>
+          <button class="cp-button" id="cpDataPriceUploadBtn" type="button">Upload price file</button>
+        </div>
+      </header>
+      <div class="cp-price-note" id="cpDataPriceOptInNote" hidden>
+        <p>Price fetching is off. Turning it on sends ticker symbols you hold to Yahoo Finance through yfinance. To enable, set <code>SAIL_PRICES_SOURCE=yfinance</code>, or upload a CSV file privately.</p>
+      </div>
+      <div class="cp-unmapped-note" id="cpDataPriceUnmappedNote" hidden></div>
+    </section>
+
     <section class="cp-panel" id="cpModelsPanel" aria-labelledby="cpModelsTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
@@ -885,105 +916,6 @@
       </div>
     </section>
 
-    <!-- Baseline Forecasts & Model Diagnostics (moved from Forecasts) -->
-    <section class="cp-panel" id="cpForecastsPanel" aria-labelledby="cpForecastsTitle">
-      <header class="cp-panel-head">
-        <div class="cp-title-group">
-          <h2 id="cpForecastsTitle">Baseline Forecasts</h2>
-          <span class="cp-sub-notice" id="cpPriceStatusLine">Point-in-time price distributions</span>
-        </div>
-        <div class="cp-panel-actions">
-          <button class="cp-button" id="cpPriceRefreshBtn" type="button" aria-label="Fetch prices">Fetch prices</button>
-          <button class="cp-button" id="cpPriceUploadBtn" type="button" aria-label="Upload price file">Upload price file</button>
-          <span class="cp-badge" id="cpPriceBadge">Prices</span>
-        </div>
-      </header>
-
-      <!-- Required Disclaimer Banner -->
-      <div class="cp-forecast-disclaimer">
-        <p>Baselines are point-in-time diagnostics for the blended outlook, not predictions of what to do. No model here is better than chance until its score says so.</p>
-      </div>
-
-      <!-- Opt-in Note when prices not configured -->
-      <div class="cp-price-note" id="cpPriceOptInNote" hidden>
-        <p>Price fetching is off. Turning it on sends the ticker symbols you hold, and nothing else, to Yahoo Finance through the yfinance library: no amounts, account or name. To turn it on, run <code>scripts/prices/setup.sh</code> once and set <code>SAIL_PRICES_SOURCE=yfinance</code>. Or use <strong>Upload price file</strong>, which sends nothing.</p>
-      </div>
-
-      <!-- Unmapped Symbols Note -->
-      <div class="cp-unmapped-note" id="cpPriceUnmappedNote" hidden></div>
-
-      <!-- Controls Bar: Horizon and Model -->
-      <div class="cp-forecast-controls">
-        <div class="cp-control-group">
-          <span class="cp-control-label">Baseline horizon</span>
-          <div class="cp-horizon-pills" role="radiogroup" aria-label="Forecast horizon">
-            <button type="button" class="cp-horizon-btn" data-horizon="5">1W</button>
-            <button type="button" class="cp-horizon-btn cp-active" data-horizon="20" aria-checked="true">1M</button>
-            <button type="button" class="cp-horizon-btn" data-horizon="60">1Q</button>
-          </div>
-        </div>
-        <div class="cp-control-group">
-          <label for="cpForecastModelSelect" class="cp-control-label">Baseline model</label>
-          <select class="cp-select" id="cpForecastModelSelect">
-            <option value="no_change" selected>No change (zero drift, 252d σ)</option>
-            <option value="trailing_drift">Trailing drift (252d mean &amp; σ)</option>
-            <option value="ewma_volatility">EWMA volatility (RiskMetrics λ=0.94)</option>
-            <option value="empirical_horizon">Empirical horizon (3y historical samples)</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Per Holding Forecast Cards -->
-      <div class="cp-forecasts-body">
-        <div class="cp-forecast-list" id="cpForecastsList">
-          <p class="cp-empty">Fetch or upload prices to see forecasts</p>
-        </div>
-        <div class="cp-without-prices-wrap" id="cpWithoutPricesWrap" hidden></div>
-      </div>
-
-      <!-- Scorecard (Evaluation) -->
-      <div class="cp-scorecard-section" id="cpScorecardSection">
-        <div class="cp-scorecard-head">
-          <h3 class="cp-scorecard-title">Walk-Forward Evaluation Scorecard</h3>
-          <span class="cp-scorecard-meta" id="cpScorecardMeta">Out-of-sample backtest</span>
-        </div>
-        <div id="cpScorecardWrap">
-          <p class="cp-empty">No evaluation available yet</p>
-        </div>
-        <div class="cp-scorecard-notes" id="cpScorecardNotes" hidden></div>
-      </div>
-    </section>
-
-    <!-- Signal Skill Section (Round 11) -->
-    <section class="cp-panel" id="cpSignalsSection" aria-labelledby="cpSignalsTitle">
-      <header class="cp-panel-head">
-        <div class="cp-title-group">
-          <h2 id="cpSignalsTitle">Signal Skill</h2>
-          <span class="cp-sub-notice">Walk-forward information coefficients across held instruments</span>
-        </div>
-        <span class="cp-badge" id="cpSignalsBadge">Signals</span>
-      </header>
-      <div class="cp-table-wrap">
-        <table class="cp-table" id="cpSignalsTable">
-          <thead>
-            <tr>
-              <th scope="col">Signal</th>
-              <th scope="col">Horizon</th>
-              <th scope="col" class="num">IC</th>
-              <th scope="col" class="num">t</th>
-              <th scope="col" class="num">IC used</th>
-              <th scope="col" class="num">Weight</th>
-            </tr>
-          </thead>
-          <tbody id="cpSignalsBody">
-            <tr><td colspan="6" class="cp-empty">No signal report yet.</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="cp-scorecard-notes" id="cpSignalsNotes" hidden></div>
-    </section>
-
-    <!-- Import Status & Batches -->
     <section class="cp-panel" id="cpSyncPanel" aria-labelledby="cpSyncTitle">
       <header class="cp-panel-head">
         <div class="cp-title-group">
@@ -992,7 +924,6 @@
         </div>
         <div class="cp-panel-actions">
           <button class="cp-button cp-primary" id="cpDataUploadBtn" type="button">Upload report</button>
-          <span class="cp-badge">History &amp; Issues</span>
         </div>
       </header>
       <div class="cp-sync-list" id="cpSyncList">
@@ -1007,7 +938,6 @@
   <span>Evidence, not truth. Reconciled against official broker exports.</span>
 </footer>
 
-<!-- Upload Options Dialog -->
 <dialog class="cp-dialog" id="cpUploadDialog" aria-labelledby="cpDialogTitle">
   <form method="dialog" class="cp-dialog-form" id="cpUploadForm">
     <header class="cp-dialog-head">
@@ -1047,7 +977,6 @@
   </form>
 </dialog>
 
-<!-- Record Received Shares Dialog -->
 <dialog class="cp-dialog" id="cpGrantDialog" aria-labelledby="cpGrantDialogTitle">
   <form method="dialog" class="cp-dialog-form" id="cpGrantForm">
     <header class="cp-dialog-head">
@@ -1105,7 +1034,6 @@
   </form>
 </dialog>
 
-<!-- Upload Price File Dialog -->
 <dialog class="cp-dialog" id="cpPriceFileDialog" aria-labelledby="cpPriceFileDialogTitle">
   <form method="dialog" class="cp-dialog-form" id="cpPriceFileForm">
     <header class="cp-dialog-head">
@@ -1151,6 +1079,12 @@
   </form>
 </dialog>
 
-<script src="/capital.js" type="module"></script>
+<script src="/capital-core.js" defer></script>
+<script src="/capital-today.js" defer></script>
+<script src="/capital-portfolio.js" defer></script>
+<script src="/capital-income.js" defer></script>
+<script src="/capital-outlook.js" defer></script>
+<script src="/capital-record.js" defer></script>
+<script src="/capital-settings.js" defer></script>
 </body>
 </html>

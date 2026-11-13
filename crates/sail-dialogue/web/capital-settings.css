@@ -1,0 +1,202 @@
+/* SAIL Capital — settings tab. Shared components live in capital.css. */
+
+/* Sync History */
+.cp-sync-list {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cp-batch-card {
+  background: var(--sail-surface-raised);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cp-batch-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cp-batch-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
+.cp-issues-details {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.cp-issues-details summary {
+  cursor: pointer;
+  color: #e5be79;
+}
+
+.cp-issues-list {
+  list-style: none;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 12px;
+}
+
+.cp-issue-item[data-severity="warning"] { color: #f3b05a; }
+.cp-issue-item[data-severity="error"] { color: #e17055; }
+.cp-issue-item[data-severity="info"] { color: var(--sail-text-muted); }
+
+/* Data Tab: Limits Editor */
+.cp-limits-intro {
+  font-size: 13px;
+  color: var(--sail-text-muted);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.cp-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .cp-field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cp-limits-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.cp-badge-draft {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.cp-badge-confirmed {
+  background: rgba(92, 205, 164, 0.15);
+  color: #5ccda4;
+  border: 1px solid rgba(92, 205, 164, 0.3);
+}
+
+.cp-form-error {
+  padding: 10px 14px;
+  border-radius: var(--sail-radius-control, 8px);
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #f87171;
+  font-size: 13px;
+  margin-top: 14px;
+}
+
+.cp-policy-history {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--sail-glass-border);
+}
+
+.cp-history-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.cp-history-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+}
+
+.cp-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--sail-surface-raised);
+  border-radius: var(--sail-radius-control, 8px);
+  font-size: 12px;
+}
+
+.cp-history-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cp-history-version {
+  font-weight: 600;
+  color: var(--sail-text);
+}
+
+.cp-history-time {
+  color: var(--sail-text-subtle);
+}
+
+/* Predictive Models Panel (Data Tab) */
+.cp-models-note {
+  font-size: 12px;
+  color: var(--sail-text-muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+.cp-badge-enabled {
+  background: rgba(92, 205, 164, 0.15);
+  color: #5ccda4;
+  border: 1px solid rgba(92, 205, 164, 0.3);
+}
+
+.cp-badge-off {
+  background: rgba(133, 146, 166, 0.15);
+  color: #8592a6;
+  border: 1px solid rgba(133, 146, 166, 0.3);
+}
+
+/* Watchlist Editor */
+.cp-watchlist-intro {
+  font-size: 13px;
+  color: var(--sail-text-muted);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.cp-watchlist-form {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--sail-glass-border);
+}
+
+.cp-subheading {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sail-text);
+  margin-bottom: 12px;
+}
+
+.cp-watchlist-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cp-watch-remove-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+}

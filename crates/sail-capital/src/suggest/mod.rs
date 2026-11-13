@@ -50,16 +50,16 @@ pub enum Severity {
 pub enum Tab {
     /// Today.
     Today,
-    /// Positions, CFDs, reconciliation.
-    Holdings,
-    /// Dividends and income.
+    /// Positions, CFDs, allocation, reconciliation, received shares and SEC filings.
+    Portfolio,
+    /// Dividends received and the projection.
     Income,
-    /// Forecasts, the scorecard and signal skill.
-    Forecasts,
-    /// SEC filings.
-    Research,
-    /// Imports, prices and the policy editor.
-    Data,
+    /// The blended outlook per holding and trade signals.
+    Outlook,
+    /// The track record: what has earned trust, and the evidence behind it.
+    Record,
+    /// Limits, watchlist, prices, model helpers and imports.
+    Settings,
 }
 
 /// One sized change inside a policy or idea suggestion.
