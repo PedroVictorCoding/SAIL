@@ -21,6 +21,7 @@ use std::sync::Mutex;
 mod board;
 mod dividends;
 mod evidence;
+mod forecast_records;
 mod grants;
 mod outlook;
 mod prices;
@@ -199,6 +200,7 @@ impl CapitalStore {
         conn.execute_batch(board::SCHEMA)?;
         conn.execute_batch(replays::SCHEMA)?;
         conn.execute_batch(research::SCHEMA)?;
+        conn.execute_batch(forecast_records::SCHEMA)?;
         prices::init_price_schema(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),

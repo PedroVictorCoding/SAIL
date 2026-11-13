@@ -23,6 +23,7 @@
 //! - nothing here proposes a trade.
 pub mod baseline;
 mod model;
+pub mod record;
 pub(crate) mod stats;
 
 use std::collections::BTreeMap;
