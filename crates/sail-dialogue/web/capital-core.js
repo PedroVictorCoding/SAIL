@@ -115,7 +115,7 @@ function updateAccountHeaderTiles(account) {
     if (freeFundsVal) freeFundsVal.textContent = "—";
     if (openResultVal) {
       openResultVal.textContent = "—";
-      openResultVal.className = "cp-tile-val";
+      openResultVal.classList.remove("positive", "negative");
     }
     return;
   }
@@ -127,10 +127,11 @@ function updateAccountHeaderTiles(account) {
     if (account.open_result) {
       openResultVal.textContent = formatMoney(account.open_result);
       const isNeg = String(account.open_result.amount).startsWith("-");
-      openResultVal.className = `cp-tile-val ${isNeg ? "negative" : "positive"}`;
+      openResultVal.classList.toggle("negative", isNeg);
+      openResultVal.classList.toggle("positive", !isNeg);
     } else {
       openResultVal.textContent = "—";
-      openResultVal.className = "cp-tile-val";
+      openResultVal.classList.remove("positive", "negative");
     }
   }
 }
@@ -345,7 +346,8 @@ function setupCollapsibles() {
   const collapsed = readCollapsed();
   const sections = document.querySelectorAll("#cpMain section[id]");
   for (const section of sections) {
-    if (section.classList.contains("cp-metrics") || section.classList.contains("cp-suggestions-section")) continue;
+    // A section marked cp-fixed is always open (Today, the scorecard).
+    if (section.classList.contains("cp-metrics") || section.classList.contains("cp-fixed")) continue;
     const head = section.querySelector(":scope > .cp-panel-head, :scope > .cp-recon-header");
     const title = head && head.querySelector("h2");
     if (!title) continue;
@@ -422,6 +424,9 @@ function switchTab(tabId, updateUrl = true) {
   if (updateUrl && window.location.hash !== `#${tabId}`) {
     history.replaceState(null, "", `#${tabId}`);
   }
+  const crumb = document.getElementById("cpCrumb");
+  const btn = document.getElementById(`cpTab-${tabId}`);
+  if (crumb && btn) crumb.textContent = (btn.querySelector(".cp-tab-wide, span") || btn).textContent.trim();
   if (typeof loadTab === "function" && accountList.length > 0) loadTab(tabId);
 }
 
@@ -464,17 +469,6 @@ function setupTabs() {
 
   const initial = getActiveTab();
   switchTab(initial, false);
-
-  const reviewLimitsLink = document.getElementById("cpReviewLimitsLink");
-  if (reviewLimitsLink) {
-    reviewLimitsLink.addEventListener("click", () => {
-      switchTab("settings", true);
-      const limitsSection = document.getElementById("cpLimitsSection");
-      if (limitsSection) {
-        limitsSection.scrollIntoView({ behavior: "smooth" });
-      }
-    });
-  }
 }
 
 function ordinalSuffix(n) {
@@ -485,6 +479,134 @@ function ordinalSuffix(n) {
   if (j === 2 && k !== 12) return `${rounded}nd`;
   if (j === 3 && k !== 13) return `${rounded}rd`;
   return `${rounded}th`;
+}
+
+// --- Dashboard material: sparklines, change pills, avatars, the market board ----------
+
+let sparkSeq = 0;
+
+// An SVG sparkline. `area` fills under the line; colour follows the direction unless given.
+function sparklineSvg(values, { width = 300, height = 90, area = true, color = null, dot = true } = {}) {
+  const pts = (values || []).filter((v) => Number.isFinite(v));
+  if (pts.length < 2) return "";
+  const min = Math.min(...pts);
+  const max = Math.max(...pts);
+  const span = max - min || 1;
+  const pad = 4;
+  const x = (i) => (i / (pts.length - 1)) * width;
+  const y = (v) => pad + (1 - (v - min) / span) * (height - pad * 2);
+  const up = pts[pts.length - 1] >= pts[0];
+  const stroke = color || (up ? "var(--cp-up)" : "var(--cp-down)");
+  const line = pts.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const id = `cpSpark${++sparkSeq}`;
+  const fill = area
+    ? `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
+         <stop offset="0" stop-color="${stroke}" stop-opacity=".32"/>
+         <stop offset="1" stop-color="${stroke}" stop-opacity="0"/>
+       </linearGradient></defs>
+       <path d="${line} L${width},${height} L0,${height} Z" fill="url(#${id})" stroke="none"/>`
+    : "";
+  const last = dot
+    ? `<circle cx="${x(pts.length - 1).toFixed(1)}" cy="${y(pts[pts.length - 1]).toFixed(1)}" r="3.2" fill="${stroke}" stroke="#0b0c10" stroke-width="1.5"/>`
+    : "";
+  return `<svg class="cp-sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+      ${fill}<path d="${line}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>${last}
+    </svg>`;
+}
+
+// A green/red pill for a fractional change (0.012 → "+1.20%"); a dash when unknown.
+function changePill(fraction, digits = 2) {
+  if (fraction === null || fraction === undefined || !Number.isFinite(fraction)) {
+    return `<span class="cp-chg-none">—</span>`;
+  }
+  const pctValue = fraction * 100;
+  const dir = Math.abs(pctValue) < 0.005 ? "flat" : pctValue > 0 ? "up" : "down";
+  const arrow = dir === "up" ? "↗" : dir === "down" ? "↘" : "→";
+  const sign = pctValue > 0 ? "+" : pctValue < 0 ? "−" : "";
+  return `<span class="cp-chg" data-dir="${dir}"><span aria-hidden="true">${arrow}</span>${sign}${Math.abs(pctValue).toFixed(digits)}%</span>`;
+}
+
+function changeDir(fraction) {
+  if (!Number.isFinite(fraction) || Math.abs(fraction) < 0.00005) return "flat";
+  return fraction > 0 ? "up" : "down";
+}
+
+function instrumentAvatar(symbol, cls) {
+  const letters = String(symbol || "?").replace(/[^A-Za-z0-9]/g, "").slice(0, 3).toUpperCase();
+  return `<span class="cp-avatar" data-class="${escapeHtml(cls || "stock")}" aria-hidden="true">${escapeHtml(letters || "?")}</span>`;
+}
+
+function formatPrice(value, currency) {
+  if (!Number.isFinite(value)) return "—";
+  const digits = Math.abs(value) < 10 ? 4 : 2;
+  const text = value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: digits });
+  return currency ? `${text} ${currency}` : text;
+}
+
+// The market board, fetched once per load and shared by the dashboard and the ticker.
+let marketsPromise = null;
+
+function loadMarkets(force = false) {
+  if (!force && marketsPromise) return marketsPromise;
+  const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+  marketsPromise = fetchJson(`/api/capital/markets${query}`).catch((err) => {
+    marketsPromise = null;
+    throw err;
+  });
+  return marketsPromise;
+}
+
+function renderTicker(board) {
+  const strip = document.getElementById("cpTicker");
+  const track = document.getElementById("cpTickerTrack");
+  if (!strip || !track) return;
+  const tiles = (board?.tiles || []).slice(0, 24);
+  if (tiles.length === 0) {
+    strip.hidden = true;
+    return;
+  }
+  const items = tiles.map((t) => `<span class="cp-tick">
+      ${instrumentAvatar(t.symbol, t.class).replace("cp-avatar", "cp-avatar cp-avatar-xs")}
+      <span class="cp-tick-sym">${escapeHtml(t.symbol)}</span>
+      <span class="cp-tick-px">${formatPrice(t.close)}</span>
+      ${changePill(t.change_1d)}
+    </span>`).join("");
+  // Two copies make the loop seamless; the second is hidden from assistive tech.
+  track.innerHTML = `<div class="cp-tick-set">${items}</div><div class="cp-tick-set" aria-hidden="true">${items}</div>`;
+  strip.hidden = false;
+}
+
+function updateHello() {
+  const hello = document.getElementById("cpHello");
+  if (!hello) return;
+  const hour = new Date().getHours();
+  hello.textContent = hour < 5 ? "Good night" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+}
+
+// Names shared by Outlook, Portfolio and Track record.
+const SETUP_NAMES = {
+  trend_pullback: "Trend pullback",
+  squeeze_breakout: "Squeeze breakout",
+  donchian55: "55-day breakout",
+  donchian_55: "55-day breakout",
+  bollinger_reversion: "Bollinger reversion",
+  inside_bar_break: "Inside-bar break",
+  three_day_reversal: "Three-day reversal",
+};
+
+function formatSetupName(setup) {
+  if (!setup) return "—";
+  const key = String(setup).replace(/([a-z])([A-Z0-9])/g, "$1_$2").toLowerCase();
+  return SETUP_NAMES[key] || key.replace(/_/g, " ");
+}
+
+function signalSideLabel(side) {
+  return side === "long" ? "Buy (long)" : "Sell (short)";
+}
+
+// Marks tabs to reload the next time they open (e.g. after new prices arrive).
+function invalidateTabs(...tabIds) {
+  for (const id of tabIds) loadedTabs.delete(id);
 }
 
 // Each tab registers what it loads. The header (portfolio and today's tiles) loads at
@@ -512,11 +634,14 @@ async function loadTab(tabId, force = false) {
 
 async function loadAll() {
   loadedTabs.clear();
+  marketsPromise = null;
+  loadMarkets().then(renderTicker).catch(() => renderTicker(null));
   await Promise.all([loadPortfolio(), loadToday()]);
   await loadTab(getActiveTab(), true);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  updateHello();
   setupTabs();
   setupCollapsibles();
   setupUploadDialog();

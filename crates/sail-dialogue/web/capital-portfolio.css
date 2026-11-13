@@ -129,3 +129,16 @@
     order: 3;
   }
 }
+
+#cpPositionsBody .cp-inst {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cp-pos-chg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}

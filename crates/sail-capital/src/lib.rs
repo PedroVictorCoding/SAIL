@@ -14,6 +14,7 @@ pub mod import;
 pub mod insights;
 pub mod ledger;
 pub mod market;
+pub mod markets;
 pub mod models;
 pub mod optimize;
 pub mod outlook;

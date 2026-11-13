@@ -165,6 +165,7 @@ function renderPortfolio(p) {
 
   // Owned Positions Table
   renderPositionsTable("cpPositionsBody", p.positions || [], false);
+  fillPositionChanges();
 
   // CFD Positions Table (hidden when empty)
   const cfds = p.cfd_positions || [];
@@ -228,13 +229,18 @@ function renderPositionsTable(tbodyId, positions, isCfd) {
 
     tr.innerHTML = `
       <td>
-        <strong>${escapeHtml(inst.symbol || "UNKNOWN")}</strong>
-        ${inst.name ? `<br><span class="cp-pos-name">${escapeHtml(inst.name)}</span>` : ""}
-        ${inst.isin ? `<br><span class="cp-pos-isin">${escapeHtml(inst.isin)}</span>` : ""}
+        <span class="cp-inst">
+          ${instrumentAvatar(inst.symbol, isCfd ? "index" : String(inst.kind || "stock").toLowerCase())}
+          <span>
+            <strong>${escapeHtml(inst.symbol || "UNKNOWN")}</strong>
+            ${inst.name ? `<br><span class="cp-pos-name">${escapeHtml(inst.name)}</span>` : ""}
+            ${inst.isin ? `<br><span class="cp-pos-isin">${escapeHtml(inst.isin)}</span>` : ""}
+          </span>
+        </span>
       </td>
       <td class="num">${escapeHtml(pos.quantity || "0")}</td>
       <td class="num">${pos.cost_basis ? formatMoney(pos.cost_basis) : "—"}</td>
-      <td class="num">${pos.broker_market_value ? formatMoney(pos.broker_market_value) : "—"}</td>
+      <td class="num">${pos.broker_market_value ? formatMoney(pos.broker_market_value) : "—"}${isCfd ? "" : `<br><span class="cp-pos-chg" data-symbol="${escapeHtml(inst.symbol || "")}"></span>`}</td>
       ${stopCellHtml}
       <td>${lotsBtn}</td>
     `;
@@ -727,6 +733,19 @@ function setupSecRefresh() {
       btn.textContent = "Check SEC now";
     }
   });
+}
+
+// Each owned position gains its last session's move from the shared market board.
+function fillPositionChanges() {
+  loadMarkets()
+    .then((board) => {
+      const bySymbol = new Map((board.tiles || []).map((t) => [t.symbol, t]));
+      document.querySelectorAll(".cp-pos-chg[data-symbol]").forEach((el) => {
+        const tile = bySymbol.get(el.dataset.symbol);
+        el.innerHTML = tile ? `${changePill(tile.change_1d)} <span class="cp-muted">1D</span>` : "";
+      });
+    })
+    .catch(() => {});
 }
 
 registerTab("portfolio", {
