@@ -31,6 +31,8 @@ fn config(base: &str, key_env: &str) -> ProviderConfig {
         input_price_micros_per_mtok: 0,
         output_price_micros_per_mtok: 0,
         enabled: true,
+        command: None,
+        cli_unverified_ok: false,
     }
 }
 

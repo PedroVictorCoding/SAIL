@@ -75,6 +75,8 @@ pub enum Observation {
         title: String,
         evidence: String,
     },
+    /// Activity on the owner's GitHub repositories (#451; see [`crate::github`]).
+    GitHub(crate::github::GithubEvent),
 }
 
 /// Days before a school item when preparation starts to matter.
@@ -83,6 +85,7 @@ pub const SCHOOL_HORIZON_DAYS: i64 = 14;
 /// The signals one observation produces (zero or more).
 pub fn detect(observation: &Observation, now: DateTime<Utc>) -> Vec<Signal> {
     match observation {
+        Observation::GitHub(event) => crate::github::github_signal(event, now),
         Observation::SchoolItem {
             id,
             course,

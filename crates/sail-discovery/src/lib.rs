@@ -7,6 +7,7 @@
 //! See `docs/SAIL_PROACTIVE.md`.
 pub mod agenda;
 pub mod detect;
+pub mod github;
 pub mod initiative;
 
 use async_trait::async_trait;

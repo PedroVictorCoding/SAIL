@@ -149,7 +149,8 @@ pub struct Signal {
     pub confidence: f32,
     pub deadline: Option<DateTime<Utc>>,
     pub provenance: Provenance,
-    /// Same-origin link to open (validated like reminder links).
+    /// Link to open: a same-origin path (validated like reminder links), or a
+    /// `https://github.com/…` page (see [`ALLOWED_EXTERNAL_LINK_PREFIXES`]).
     pub link: Option<String>,
     pub observed_at: DateTime<Utc>,
 }
@@ -335,7 +336,7 @@ pub fn normalize(mut signal: Signal) -> crate::Result<Signal> {
         ));
     }
     signal.link = match signal.link {
-        Some(link) => Some(crate::validate_link(&link)?),
+        Some(link) => Some(validate_signal_link(&link)?),
         None => None,
     };
     Ok(signal)
@@ -343,4 +344,26 @@ pub fn normalize(mut signal: Signal) -> crate::Result<Signal> {
 
 fn cut_chars(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
+}
+
+/// External pages a signal may link to. Everything else must be same-origin.
+pub const ALLOWED_EXTERNAL_LINK_PREFIXES: &[&str] = &["https://github.com/"];
+
+fn validate_signal_link(link: &str) -> crate::Result<String> {
+    let trimmed = link.trim();
+    let external = ALLOWED_EXTERNAL_LINK_PREFIXES
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix));
+    if !external {
+        return crate::validate_link(trimmed);
+    }
+    let bad_char = trimmed
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\\' | '\''));
+    if trimmed.len() > 300 || bad_char {
+        return Err(crate::PulseError::Invalid(
+            "external signal link is too long or has a disallowed character".into(),
+        ));
+    }
+    Ok(trimmed.to_owned())
 }

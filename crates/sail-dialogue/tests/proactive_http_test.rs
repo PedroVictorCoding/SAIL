@@ -232,6 +232,8 @@ async fn escalate_reasoning_tool_redacts_answers_caches_and_reports() {
             input_price_micros_per_mtok: 1_000_000,
             output_price_micros_per_mtok: 2_000_000,
             enabled: true,
+            command: None,
+            cli_unverified_ok: false,
         }],
         route_threshold: 0.0,
         ..EscalationPolicy::default()

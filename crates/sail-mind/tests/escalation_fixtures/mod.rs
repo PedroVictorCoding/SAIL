@@ -33,6 +33,8 @@ pub fn provider(id: &str) -> ProviderConfig {
         input_price_micros_per_mtok: 1_000_000,
         output_price_micros_per_mtok: 1_000_000,
         enabled: true,
+        command: None,
+        cli_unverified_ok: false,
     }
 }
 

@@ -100,6 +100,7 @@
 //! The answering model is always reported to the user. External output is untrusted text:
 //! it is shown or fed back to the local model as a tool observation, never executed.
 
+pub mod cli;
 pub mod policy;
 pub mod provider;
 pub mod redact;
@@ -261,14 +262,30 @@ pub enum Decision {
 pub struct ProviderConfig {
     /// Stable id shown to the owner, e.g. `openrouter-sonnet`.
     pub id: String,
-    /// `openai_compatible` for now; CLI adapters are follow-ups.
+    /// `openai_compatible`, or a vendor CLI adapter: `claude_cli`, `codex_cli`, `gemini_cli`
+    /// (see [`cli`]). CLI adapters use the owner's signed-in subscription; they ignore
+    /// `base_url` and `api_key_env`.
     pub adapter: String,
     /// e.g. `https://openrouter.ai/api/v1`. Must be `https://` unless the host is loopback.
+    /// Empty for CLI adapters.
+    #[serde(default)]
     pub base_url: String,
-    /// Model name sent to the endpoint and shown as "answering model".
+    /// Model name sent to the endpoint and shown as "answering model". For a CLI adapter,
+    /// passed as the CLI's model flag; empty means the CLI's own default.
     pub model: String,
-    /// Name of the environment variable holding the key. Never the key itself.
+    /// Name of the environment variable holding the key. Never the key itself. Empty for
+    /// CLI adapters.
+    #[serde(default)]
     pub api_key_env: String,
+    /// CLI adapters: the executable (absolute path or a name looked up on `PATH`). `None`
+    /// means the vendor's usual name (`claude`, `codex`, `gemini`).
+    #[serde(default)]
+    pub command: Option<String>,
+    /// CLI adapters: run even when the installed CLI version is not one whose permission
+    /// flags were verified ([`cli::Vendor::verified_versions`]). Off by default: an
+    /// unverified version is `ProviderError::Unavailable`.
+    #[serde(default)]
+    pub cli_unverified_ok: bool,
     /// Task kinds this provider may serve. Empty means all.
     #[serde(default)]
     pub kinds: Vec<TaskKind>,
