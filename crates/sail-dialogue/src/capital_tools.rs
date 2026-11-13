@@ -282,7 +282,19 @@ fn signals(service: &CapitalService, input: &Value) -> Result<Value, String> {
         })
         .collect();
 
+    let record = service
+        .board_record(&account)
+        .map_err(|error| error.to_string())?;
+
     Ok(json!({
+        "board_record": {
+            "first_session": record.first_session,
+            "sessions": record.sessions,
+            "graded": record.graded,
+            "by_lean": &record.by_lean,
+            "outlook": &record.outlook,
+            "notes": &record.notes,
+        },
         "board": {
             "session": board.session,
             "validated_signals": &board.passed,

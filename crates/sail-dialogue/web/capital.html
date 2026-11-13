@@ -542,7 +542,31 @@
       <p class="cp-note cp-sigb-legend">Signal columns are percentiles against the rest of the board: 100 is the most favourable, 50 is the middle. Select a row for the details.</p>
       <div id="cpSigbNotes"></div>
     </section>
+
+    <section class="cp-panel" id="cpSigbRecordPanel" aria-labelledby="cpSigbRecordTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpSigbRecordTitle">How the reads have done</h2>
+          <span class="cp-sub-notice" id="cpSigbRecordSub">Forward record of every board read, graded at 1 and 3 months</span>
+        </div>
+        <div class="cp-panel-actions">
+          <button type="button" class="cp-button cp-btn-sm" id="cpSigbRecordCsv" disabled>Download graded reads</button>
+        </div>
+      </header>
+      <div id="cpSigbRecordBody">
+        <p class="cp-empty">Loading forward record…</p>
+      </div>
+    </section>
   </div>
+
+  <div class="cp-sigb-backdrop" id="cpSigbBackdrop" hidden></div>
+  <aside class="cp-sigb-drawer" id="cpSigbDrawer" role="dialog" aria-modal="true" aria-labelledby="cpSigbDrawerTitle" hidden>
+    <header class="cp-sigb-drawer-head">
+      <div class="cp-sigb-drawer-id" id="cpSigbDrawerId"></div>
+      <button type="button" class="cp-button cp-btn-sm cp-sigb-drawer-close" id="cpSigbDrawerClose" aria-label="Close stock details">Close</button>
+    </header>
+    <div class="cp-sigb-drawer-body" id="cpSigbDrawerBody"></div>
+  </aside>
 
   <div class="cp-tab-pane" id="cpPanel-outlook" role="tabpanel" aria-labelledby="cpTab-outlook" hidden>
     <section class="cp-panel cp-outlook-panel" id="cpOutlookPanel" aria-labelledby="cpOutlookTitle">

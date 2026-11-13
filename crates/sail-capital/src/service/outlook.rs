@@ -386,8 +386,9 @@ impl CapitalService {
         })
     }
 
-    /// Runs every enabled model helper over the held instruments, for the origins not
-    /// stored yet, and stores the values. Slow the first time (it downloads weights and
+    /// Runs every enabled model helper over the signal universe (holdings plus the
+    /// watchlist's stocks and ETFs), for the origins not stored yet, and stores the
+    /// values. Slow the first time (it downloads weights and
     /// scores years of weekly origins); later runs only add new weeks.
     pub async fn refresh_model_signals(
         &self,
@@ -395,7 +396,7 @@ impl CapitalService {
     ) -> Result<ModelsStatus, ServiceError> {
         let _running = self.model_refreshing.lock().await;
         let (python, scripts, cache) = self.helper_paths.clone();
-        let held = self.held_instruments(account)?;
+        let held = self.universe_pairs(account)?;
         let now = Utc::now();
         for spec in self.model_specs.clone() {
             let signal = Self::signal_name(spec.signal);

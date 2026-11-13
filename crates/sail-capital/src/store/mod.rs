@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+mod board;
 mod dividends;
 mod evidence;
 mod grants;
@@ -192,6 +193,7 @@ impl CapitalStore {
         conn.execute_batch(suggest::SCHEMA)?;
         conn.execute_batch(trade::SCHEMA)?;
         conn.execute_batch(dividends::SCHEMA)?;
+        conn.execute_batch(board::SCHEMA)?;
         prices::init_price_schema(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),

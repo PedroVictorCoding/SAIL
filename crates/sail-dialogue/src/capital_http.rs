@@ -59,6 +59,7 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/policy", get(policy).post(save_policy))
         .route("/signals", get(signals))
         .route("/signals/board", get(signal_board))
+        .route("/signals/board/record", get(board_record))
         .route("/signals/models", get(signal_models))
         .route("/signals/refresh", post(signal_refresh))
         .route("/outlook", get(outlook))
@@ -678,6 +679,20 @@ async fn signal_board(
     })
     .await?;
     Ok(no_store(to_json(&board)?))
+}
+
+async fn board_record(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let record = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.board_record(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&record)?))
 }
 
 async fn markets(

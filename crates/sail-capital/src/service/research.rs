@@ -247,6 +247,9 @@ impl CapitalService {
             if let Err(err) = self.signal_board(&account) {
                 tracing::debug!(error = %err, "Capital warm-up: signal board");
             }
+            if let Err(err) = self.record_board_snapshot(&account, chrono::Utc::now()) {
+                tracing::debug!(error = %err, "Capital warm-up: board snapshot");
+            }
             if let Err(err) = self.dividend_projection(
                 &account,
                 crate::dividends::MAX_YEARS,

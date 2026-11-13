@@ -93,11 +93,18 @@ impl CapitalService {
             .iter()
             .map(|(.., n)| u64::from(*n))
             .sum();
+        let model_values: u64 = self
+            .store
+            .signal_value_coverage()?
+            .iter()
+            .map(|c| u64::from(c.values))
+            .sum();
         let version = format!(
-            "{}|{}|{}|{}|{:?}|{}|{}",
+            "{}|{}|{}|{}|{}|{:?}|{}|{}",
             account.as_str(),
             self.store.price_version()?,
             paths,
+            model_values,
             report
                 .combined_ic
                 .iter()
@@ -125,6 +132,22 @@ impl CapitalService {
             .collect();
         let data = self.closes_for(&pairs, Utc::now())?;
         let day = latest_run.as_ref().map(|(_, day)| day);
+        // The latest model value per (signal, instrument), with its session.
+        let keys: Vec<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
+        let mut model_latest: std::collections::BTreeMap<
+            (SignalId, String),
+            (chrono::NaiveDate, f64),
+        > = Default::default();
+        for scores in self.external_scores(&keys)? {
+            for (key, session, value) in scores.values {
+                let slot = model_latest
+                    .entry((scores.signal, key))
+                    .or_insert((session, value));
+                if session > slot.0 {
+                    *slot = (session, value);
+                }
+            }
+        }
         let mut inputs = Vec::with_capacity(universe.len());
         for (meta, (key, symbol, closes)) in universe.into_iter().zip(data.iter()) {
             let series = crate::forecast::CloseSeries {
@@ -132,10 +155,20 @@ impl CapitalService {
                 symbol,
                 closes,
             };
-            let raw: Vec<(SignalId, f64)> = SignalId::PRICE
+            let mut raw: Vec<(SignalId, f64)> = SignalId::PRICE
                 .iter()
                 .filter_map(|s| crate::signals::price_signal(&series, *s).map(|v| (*s, v)))
                 .collect();
+            // Model values count only when recent against the instrument's last close.
+            if let Some((last, _)) = closes.last() {
+                for ((signal, k), (session, value)) in &model_latest {
+                    if k == key
+                        && (*last - *session).num_days() <= crate::signals::MAX_EXTERNAL_AGE_DAYS
+                    {
+                        raw.push((*signal, *value));
+                    }
+                }
+            }
             let mut outlook = Vec::new();
             if !closes.is_empty() {
                 let external = self.external_paths(key)?;

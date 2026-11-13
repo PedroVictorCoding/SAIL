@@ -250,7 +250,30 @@ pub fn reading_text(signal: SignalId, raw: f64) -> String {
                 if r >= 0.0 { "above" } else { "below" }
             )
         }
-        _ => format!("{raw:.3}"),
+        SignalId::FoundationForecast => {
+            let r = ret(raw);
+            format!(
+                "Chronos's median forecast: {} {} over the next 3 months",
+                if r >= 0.0 { "up" } else { "down" },
+                pct(r)
+            )
+        }
+        SignalId::ChartPattern | SignalId::ChartTrend => {
+            let what = if signal == SignalId::ChartTrend {
+                "trend"
+            } else {
+                "patterns"
+            };
+            if raw.abs() < 1e-9 {
+                format!("No directional chart {what} at the latest bars")
+            } else {
+                format!(
+                    "{} chart {what} at the latest bars (score {raw:+.2})",
+                    if raw > 0.0 { "Rising" } else { "Falling" }
+                )
+            }
+        }
+        _ => format!("Score {raw:+.3}"),
     }
 }
 
@@ -732,5 +755,33 @@ mod tests {
             "10% below its 200-day average"
         );
         assert!(reading_text(SignalId::ShortTermReversal, 0.1).starts_with("Down 10% last month"));
+        assert_eq!(
+            reading_text(SignalId::FoundationForecast, 0.05f64.ln_1p()),
+            "Chronos's median forecast: up 5% over the next 3 months"
+        );
+        assert_eq!(
+            reading_text(SignalId::ChartTrend, -0.4),
+            "Falling chart trend at the latest bars (score -0.40)"
+        );
+        assert_eq!(
+            reading_text(SignalId::ChartPattern, 0.0),
+            "No directional chart patterns at the latest bars"
+        );
+    }
+
+    #[test]
+    fn model_readings_rank_with_the_rest() {
+        let mut a = input("A", true, 1.0);
+        let mut b = input("B", false, 1.0);
+        a.raw.push((SignalId::FoundationForecast, 0.04));
+        b.raw.push((SignalId::FoundationForecast, -0.02));
+        let board = build(vec![a, b], &empty_report(), Vec::new(), None);
+        let fa = board.rows[0]
+            .readings
+            .iter()
+            .find(|r| r.signal == SignalId::FoundationForecast)
+            .unwrap();
+        assert_eq!(fa.percentile, 100.0);
+        assert_eq!(board.rows[0].readings.len(), 5);
     }
 }
