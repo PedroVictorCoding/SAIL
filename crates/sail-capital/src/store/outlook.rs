@@ -1,7 +1,8 @@
 //! Stored outlook component paths from the Python helpers, and their counts.
 
 use super::CapitalStore;
-use super::{StoreError, decode, encode};
+use super::{StoreError, decode, encode, parse_ts};
+use crate::contracts::{DecisionTime, InputProvenance};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 
@@ -87,6 +88,87 @@ impl CapitalStore {
             });
         }
         Ok((Some(version), out))
+    }
+
+    /// Paths of `component` from the newest model version computed at or before `decision.at`,
+    /// keeping only rows with `computed_at <= decision.at` and `origin <= decision.session`.
+    pub fn outlook_paths_as_of(
+        &self,
+        component: crate::outlook::ComponentId,
+        instrument_key: Option<&str>,
+        decision: DecisionTime,
+    ) -> Result<
+        (
+            Option<String>,
+            Vec<crate::outlook::ExternalPath>,
+            InputProvenance,
+        ),
+        StoreError,
+    > {
+        let name = encode(&component)?.trim_matches('"').to_string();
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let mut stmt = conn.prepare(
+            "SELECT model_version, instrument_key, origin, horizon, path_json, computed_at
+             FROM outlook_paths
+             WHERE component = ?1 AND (?2 IS NULL OR instrument_key = ?2)
+             ORDER BY origin, instrument_key, horizon",
+        )?;
+        let rows = stmt.query_map(params![name, instrument_key], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, u32>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })?;
+
+        let mut latest_version: Option<(DateTime<Utc>, String)> = None;
+        let mut eligible = Vec::new();
+        for row in rows {
+            let (version, key, origin_str, horizon, json, computed_str) = row?;
+            let computed_at = parse_ts(&computed_str)?;
+            if computed_at > decision.at {
+                continue;
+            }
+            let origin = chrono::NaiveDate::parse_from_str(&origin_str, "%Y-%m-%d")
+                .map_err(|_| StoreError::Decode(format!("bad origin {origin_str}")))?;
+            if origin > decision.session {
+                continue;
+            }
+            if latest_version
+                .as_ref()
+                .is_none_or(|(prev_ts, _)| computed_at > *prev_ts)
+            {
+                latest_version = Some((computed_at, version.clone()));
+            }
+            eligible.push((
+                version,
+                crate::outlook::ExternalPath {
+                    component,
+                    instrument_key: key,
+                    origin,
+                    horizon,
+                    path: decode(&json)?,
+                },
+            ));
+        }
+
+        let Some((_, version)) = latest_version else {
+            return Ok((None, Vec::new(), InputProvenance::Unavailable));
+        };
+        let out: Vec<_> = eligible
+            .into_iter()
+            .filter(|(v, _)| v == &version)
+            .map(|(_, p)| p)
+            .collect();
+        let prov = if out.is_empty() {
+            InputProvenance::Unavailable
+        } else {
+            InputProvenance::Observed
+        };
+        Ok((Some(version), out, prov))
     }
 
     /// Paths stored, per component: (component, model version, instruments, paths).

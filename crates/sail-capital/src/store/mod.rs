@@ -33,7 +33,7 @@ mod trade;
 pub use dividends::DividendHistory;
 pub use evidence::EvidenceOutcome;
 pub use grants::{GrantView, RetractOutcome};
-pub use prices::{PriceCoverage, PriceOutcome};
+pub use prices::{PriceBarRevision, PriceCoverage, PriceOutcome};
 pub use replays::ReplayCache;
 pub use signals::{SignalValue, SignalValueCoverage};
 pub use trade::{EarningsSnapshot, GradedCard};

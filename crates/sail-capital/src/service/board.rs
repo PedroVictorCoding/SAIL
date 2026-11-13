@@ -2,24 +2,22 @@
 
 use super::{CapitalService, ServiceError, watch_key};
 use crate::board::{BoardMeta, OutlookRecord, RowInput, SetupView, SignalBoard};
-use crate::contracts::{AccountId, AsOf, InstrumentKind};
+use crate::contracts::{AccountId, DecisionTime, InputProvenance, InstrumentKind};
+use crate::replay::{MembershipInputManifest, hash_universe_pairs};
 use crate::signals::SignalId;
 use crate::trade::AssetClass;
-use chrono::Utc;
 use rust_decimal::prelude::ToPrimitive;
 
 impl CapitalService {
-    /// The instruments signals are ranked across: owned holdings (shares and ETFs, not
-    /// CFDs), then the watchlist's stocks and ETFs that aren't held. Ranking against a
-    /// few dozen names instead of only the holdings gives each signal enough
-    /// cross-sections to be tested. FX, indices and commodities are left out: ranking a
-    /// currency against a share says nothing.
-    pub(super) fn signal_universe(
+    /// Signal universe as known at `decision`, along with its membership manifest entries.
+    pub(super) fn signal_universe_as_of(
         &self,
         account: &AccountId,
-    ) -> Result<Vec<BoardMeta>, ServiceError> {
-        let projection = self.portfolio(account, AsOf::now())?;
+        decision: DecisionTime,
+    ) -> Result<(Vec<BoardMeta>, Vec<MembershipInputManifest>), ServiceError> {
+        let projection = self.portfolio(account, decision.as_of())?;
         let mut out: Vec<BoardMeta> = Vec::new();
+        let mut portfolio_pairs: Vec<(String, String)> = Vec::new();
         for position in &projection.positions {
             let instrument = &position.instrument;
             if instrument.kind == InstrumentKind::Cfd
@@ -29,6 +27,7 @@ impl CapitalService {
             {
                 continue;
             }
+            portfolio_pairs.push((instrument.key(), instrument.symbol.clone()));
             out.push(BoardMeta {
                 key: instrument.key(),
                 symbol: instrument.symbol.clone(),
@@ -44,7 +43,8 @@ impl CapitalService {
                 held: true,
             });
         }
-        for item in self.watchlist()? {
+        let mut watch_pairs: Vec<(String, String)> = Vec::new();
+        for item in self.watchlist_as_of(decision)? {
             if !matches!(item.class, AssetClass::Stock | AssetClass::Etf)
                 || out
                     .iter()
@@ -52,8 +52,10 @@ impl CapitalService {
             {
                 continue;
             }
+            let key = watch_key(&item.symbol);
+            watch_pairs.push((key.clone(), item.symbol.clone()));
             out.push(BoardMeta {
-                key: watch_key(&item.symbol),
+                key,
                 symbol: item.symbol.clone(),
                 name: item.name.clone(),
                 class: if item.class == AssetClass::Etf {
@@ -64,7 +66,21 @@ impl CapitalService {
                 held: false,
             });
         }
-        Ok(out)
+        let manifests = vec![
+            MembershipInputManifest {
+                source: "portfolio".into(),
+                provenance: InputProvenance::Observed,
+                snapshot_at: Some(decision.at),
+                snapshot_sha256: hash_universe_pairs(&portfolio_pairs),
+            },
+            MembershipInputManifest {
+                source: "watchlist".into(),
+                provenance: InputProvenance::Observed,
+                snapshot_at: Some(decision.at),
+                snapshot_sha256: hash_universe_pairs(&watch_pairs),
+            },
+        ];
+        Ok((out, manifests))
     }
 
     /// `(key, symbol)` pairs of [`Self::signal_universe`], sorted by key.
@@ -72,8 +88,18 @@ impl CapitalService {
         &self,
         account: &AccountId,
     ) -> Result<Vec<(String, String)>, ServiceError> {
+        self.universe_pairs_as_of(account, DecisionTime::now())
+    }
+
+    /// `(key, symbol)` pairs of [`Self::signal_universe_as_of`], sorted by key.
+    pub(super) fn universe_pairs_as_of(
+        &self,
+        account: &AccountId,
+        decision: DecisionTime,
+    ) -> Result<Vec<(String, String)>, ServiceError> {
         let mut pairs: Vec<(String, String)> = self
-            .signal_universe(account)?
+            .signal_universe_as_of(account, decision)?
+            .0
             .into_iter()
             .map(|m| (m.key, m.symbol))
             .collect();
@@ -84,8 +110,15 @@ impl CapitalService {
     /// Every instrument's signals, outlook and setup, side by side. Cached until prices,
     /// model values, the universe, the trade run or the day change.
     pub fn signal_board(&self, account: &AccountId) -> Result<SignalBoard, ServiceError> {
-        let report = self.signals(account)?;
-        let universe = self.signal_universe(account)?;
+        let decision = DecisionTime::now();
+        let report = self
+            .signals_as_of(
+                account,
+                decision,
+                crate::contracts::VintagePolicy::ObservedOnly,
+            )?
+            .value;
+        let (universe, _) = self.signal_universe_as_of(account, decision)?;
         let latest_run = self.store.latest_trade_run(account)?;
         let paths: u64 = self
             .store
@@ -112,7 +145,7 @@ impl CapitalService {
                 .collect::<Vec<_>>()
                 .join(","),
             latest_run.as_ref().map(|(at, _)| *at),
-            Utc::now().date_naive(),
+            decision.session,
             universe
                 .iter()
                 .map(|m| m.key.as_str())
@@ -130,7 +163,7 @@ impl CapitalService {
             .iter()
             .map(|m| (m.key.clone(), m.symbol.clone()))
             .collect();
-        let data = self.closes_for(&pairs, Utc::now())?;
+        let data = self.closes_for(&pairs, decision.at)?;
         let day = latest_run.as_ref().map(|(_, day)| day);
         // The latest model value per (signal, instrument), with its session.
         let keys: Vec<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
@@ -138,7 +171,7 @@ impl CapitalService {
             (SignalId, String),
             (chrono::NaiveDate, f64),
         > = Default::default();
-        for scores in self.external_scores(&keys)? {
+        for scores in self.external_scores_as_of(&keys, decision)?.0 {
             for (key, session, value) in scores.values {
                 let slot = model_latest
                     .entry((scores.signal, key))
@@ -171,7 +204,7 @@ impl CapitalService {
             }
             let mut outlook = Vec::new();
             if !closes.is_empty() {
-                let external = self.external_paths(key)?;
+                let external = self.external_paths_as_of(key, decision)?.0;
                 for (signal_h, outlook_h) in crate::board::BOARD_HORIZONS {
                     let alpha = report
                         .latest

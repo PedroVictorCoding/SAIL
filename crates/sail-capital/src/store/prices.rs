@@ -89,6 +89,19 @@ pub struct PriceOutcome {
     pub revisions: u32,
 }
 
+/// One price bar revision returned by an as-of query, with its provenance.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriceBarRevision {
+    /// Deterministic bar observation id (`price_bars.id`).
+    pub id: String,
+    /// Content hash of the bar (`price_bars.bar_sha256`).
+    pub bar_sha256: String,
+    /// The decoded market observation.
+    pub observation: crate::market::MarketObservation,
+    /// Whether this bar was observed by `decision.at` or reconstructed from a later archive.
+    pub provenance: InputProvenance,
+}
+
 /// Stored prices for one instrument.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriceCoverage {
@@ -256,6 +269,77 @@ impl CapitalStore {
         self.query_prices(instrument_key, Some(known_by), from, to)
     }
 
+    /// Closes for `instrument_key` at `decision`, with explicit provenance (`Observed` when
+    /// available by `decision.at`, or `Reconstructed` when `policy == AllowReconstructed`
+    /// and a session `<= decision.session` only has a later-ingested archive row).
+    pub fn prices_with_provenance(
+        &self,
+        instrument_key: &str,
+        decision: DecisionTime,
+        policy: VintagePolicy,
+    ) -> Result<Vec<PriceBarRevision>, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, session, bar_sha256, first_available_at, ingested_at, observation_json
+             FROM price_bars
+             WHERE instrument_key = ?1 AND session <= ?2
+             ORDER BY session, ingested_at, rowid",
+        )?;
+        let to = decision.session.format("%Y-%m-%d").to_string();
+        let rows = stmt.query_map(params![instrument_key, to], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })?;
+        type RowEntry = (String, String, DateTime<Utc>, DateTime<Utc>, String);
+        let mut by_session: std::collections::BTreeMap<String, Vec<RowEntry>> = Default::default();
+        for row in rows {
+            let (id, session, bar_sha256, first_avail, ingested, json) = row?;
+            let first_available_at = parse_ts(&first_avail)?;
+            let ingested_at = parse_ts(&ingested)?;
+            by_session.entry(session).or_default().push((
+                id,
+                bar_sha256,
+                first_available_at,
+                ingested_at,
+                json,
+            ));
+        }
+
+        let mut out = Vec::with_capacity(by_session.len());
+        for (_, mut entries) in by_session {
+            entries.sort_by_key(|e| e.3);
+            if let Some((id, bar_sha256, _, _, json)) = entries
+                .iter()
+                .rev()
+                .find(|e| e.3 <= decision.at && e.2 <= decision.at)
+                .cloned()
+            {
+                out.push(PriceBarRevision {
+                    id,
+                    bar_sha256,
+                    observation: decode(&json)?,
+                    provenance: InputProvenance::Observed,
+                });
+            } else if policy == VintagePolicy::AllowReconstructed
+                && let Some((id, bar_sha256, _, _, json)) = entries.into_iter().next()
+            {
+                out.push(PriceBarRevision {
+                    id,
+                    bar_sha256,
+                    observation: decode(&json)?,
+                    provenance: InputProvenance::Reconstructed,
+                });
+            }
+        }
+        Ok(out)
+    }
+
     /// The whole decoded series from the cache when `known_by` sees every stored row
     /// (the usual "as of now" read), loading it once if needed. `None` for an earlier
     /// `known_by`, which must go to SQL to respect "known since".
@@ -275,16 +359,23 @@ impl CapitalStore {
                 })?;
             if cache.version != Some(version) {
                 // Once per version: the newest ingest time decides which reads may use it.
-                let max_ingested: Option<String> =
-                    conn.query_row("SELECT MAX(ingested_at) FROM price_bars", [], |r| r.get(0))?;
+                let mut stmt = conn.prepare("SELECT DISTINCT ingested_at FROM price_bars")?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                let mut newest: Option<DateTime<Utc>> = None;
+                for row in rows {
+                    let ts = parse_ts(&row?)?;
+                    newest = Some(newest.map_or(ts, |cur| cur.max(ts)));
+                }
                 *cache = PriceCache {
                     version: Some(version),
-                    max_ingested: Some(max_ingested.unwrap_or_default()),
+                    max_ingested: newest.map(|ts| ts.to_rfc3339()),
                     series: Default::default(),
                 };
             }
         }
-        if cache.max_ingested.as_deref().unwrap_or_default() > known_by.to_rfc3339().as_str() {
+        if let Some(max_ingested) = cache.max_ingested.as_deref().filter(|s| !s.is_empty())
+            && parse_ts(max_ingested)? > known_by
+        {
             return Ok(None);
         }
         if let Some(series) = cache.series.get(instrument_key) {
@@ -306,24 +397,39 @@ impl CapitalStore {
     ) -> Result<Vec<crate::market::MarketObservation>, StoreError> {
         let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
         let mut stmt = conn.prepare(
-            "SELECT session, observation_json FROM price_bars
-             WHERE instrument_key = ?1 AND (?2 IS NULL OR ingested_at <= ?2)
-               AND (?3 IS NULL OR session >= ?3)
-               AND (?4 IS NULL OR session <= ?4)
+            "SELECT session, ingested_at, observation_json FROM price_bars
+             WHERE instrument_key = ?1
+               AND (?2 IS NULL OR session >= ?2)
+               AND (?3 IS NULL OR session <= ?3)
              ORDER BY session, ingested_at, rowid",
         )?;
         let from = from.map(|date| date.format("%Y-%m-%d").to_string());
         let to = to.map(|date| date.format("%Y-%m-%d").to_string());
-        let rows = stmt.query_map(
-            params![instrument_key, known_by.map(|k| k.to_rfc3339()), from, to],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-        )?;
-        let mut latest: std::collections::BTreeMap<String, String> = Default::default();
+        let rows = stmt.query_map(params![instrument_key, from, to], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut latest: std::collections::BTreeMap<String, (DateTime<Utc>, String)> =
+            Default::default();
         for row in rows {
-            let (session, json) = row?;
-            latest.insert(session, json);
+            let (session, ingested_at, json) = row?;
+            let ingested = parse_ts(&ingested_at)?;
+            if let Some(cutoff) = known_by
+                && ingested > cutoff
+            {
+                continue;
+            }
+            match latest.get(&session) {
+                Some((prev_ts, _)) if *prev_ts > ingested => {}
+                _ => {
+                    latest.insert(session, (ingested, json));
+                }
+            }
         }
-        latest.values().map(|json| decode(json)).collect()
+        latest.values().map(|(_, json)| decode(json)).collect()
     }
 
     /// Forgets cached histories after a write.

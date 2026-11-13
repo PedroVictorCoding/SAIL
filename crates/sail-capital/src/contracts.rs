@@ -658,6 +658,73 @@ impl AsOf {
     }
 }
 
+/// Explicit point-in-time decision boundary for replays, forecasts, signals and outlook.
+///
+/// Every reader in a replay path uses `at` as the knowledge cutoff (`ingested_at <= at`,
+/// `fetched_at <= at`, `computed_at <= at`) and `session` as the chosen exchange session
+/// date (`session <= decision.session`), rather than reading `Utc::now()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct DecisionTime {
+    /// UTC timestamp at which information must already have been known/observed.
+    pub at: DateTime<Utc>,
+    /// Chosen session date for the decision.
+    pub session: chrono::NaiveDate,
+}
+
+impl DecisionTime {
+    /// Constructs a decision time from an explicit UTC timestamp and session date.
+    pub fn new(at: DateTime<Utc>, session: chrono::NaiveDate) -> Self {
+        Self { at, session }
+    }
+
+    /// Constructs a decision time at `at`, using `at.date_naive()` as the session date.
+    pub fn at(at: DateTime<Utc>) -> Self {
+        Self {
+            at,
+            session: at.date_naive(),
+        }
+    }
+
+    /// Constructs a decision time for "right now" at a public API boundary.
+    pub fn now() -> Self {
+        Self::at(Utc::now())
+    }
+
+    /// Converts to a ledger [`AsOf`] bound where both `occurred_by` and `known_by` are `at`.
+    pub fn as_of(self) -> AsOf {
+        AsOf {
+            occurred_by: self.at,
+            known_by: self.at,
+        }
+    }
+}
+
+/// How a replay input was obtained relative to the decision time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputProvenance {
+    /// Available and observed by the decision timestamp.
+    Observed,
+    /// Rebuilt from a later-stamped archive when no vintage at `decision.at` was stored.
+    /// Never presented as [`InputProvenance::Observed`].
+    Reconstructed,
+    /// No vintage or archive was available for the decision time.
+    Unavailable,
+}
+
+/// Controls whether a replay accepts only inputs observed by `decision.at`, or may fall
+/// back to later-stamped archive rows (always labeled [`InputProvenance::Reconstructed`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VintagePolicy {
+    /// Strict point-in-time: only rows with timestamp <= `decision.at` are visible.
+    #[default]
+    ObservedOnly,
+    /// Allow rebuilding missing vintages from later-stamped archives, explicitly labeled
+    /// [`InputProvenance::Reconstructed`] in the manifest.
+    AllowReconstructed,
+}
+
 // ---------------------------------------------------------------------------------------
 // Helpers every slice uses the same way
 // ---------------------------------------------------------------------------------------

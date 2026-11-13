@@ -1,6 +1,7 @@
 //! The risk policy, suggestion actions, signals and the Today view.
 
 use super::*;
+use crate::calendar::ExchangeCalendar;
 
 /// `GET /policy`: the policy in force and every stored version.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,7 +73,8 @@ impl CapitalService {
         &self,
         account: &AccountId,
     ) -> Result<crate::signals::SignalReport, ServiceError> {
-        let held = self.universe_pairs(account)?;
+        let decision = DecisionTime::now();
+        let held = self.universe_pairs_as_of(account, decision)?;
         let mut held_keys: Vec<&str> = held.iter().map(|(key, _)| key.as_str()).collect();
         held_keys.sort_unstable();
         let model_version: u64 = self
@@ -94,7 +96,28 @@ impl CapitalService {
         {
             return Ok(report.clone());
         }
-        let data = self.closes_for(&held, Utc::now())?;
+        let report = self
+            .signals_as_of(account, decision, VintagePolicy::ObservedOnly)?
+            .value;
+        if let Ok(mut cache) = self.signals_cache.lock() {
+            *cache = Some((version, report.clone()));
+        }
+        Ok(report)
+    }
+
+    /// Point-in-time signal evaluation at `decision`, returning the report and its
+    /// deterministic [`crate::replay::ReplayManifest`]. Never calls `Utc::now()`.
+    pub fn signals_as_of(
+        &self,
+        account: &AccountId,
+        decision: DecisionTime,
+        policy: VintagePolicy,
+    ) -> Result<crate::replay::ReplayOutput<crate::signals::SignalReport>, ServiceError> {
+        let (universe, mut membership) = self.signal_universe_as_of(account, decision)?;
+        let mut held: Vec<(String, String)> =
+            universe.into_iter().map(|m| (m.key, m.symbol)).collect();
+        held.sort();
+        let (data, bar_manifests) = self.closes_for_as_of(&held, decision, policy)?;
         let series: Vec<crate::forecast::CloseSeries<'_>> = data
             .iter()
             .filter(|(_, _, closes)| !closes.is_empty())
@@ -108,17 +131,31 @@ impl CapitalService {
             let s = series.iter().find(|s| s.instrument_key == key)?;
             ewma_sigma(s, horizon)
         };
-        let external = self.external_scores(&held_keys)?;
+        let held_keys: Vec<&str> = held.iter().map(|(k, _)| k.as_str()).collect();
+        let (external, model_manifests) = self.external_scores_as_of(&held_keys, decision)?;
         let report = crate::signals::evaluate_and_combine(
             &series,
             &external,
             &sigma,
             &crate::signals::SignalEvalConfig::default(),
         );
-        if let Ok(mut cache) = self.signals_cache.lock() {
-            *cache = Some((version, report.clone()));
-        }
-        Ok(report)
+        let mut manifest = crate::replay::ReplayManifest::new(
+            decision,
+            crate::calendar::WeekdayCalendar.id(),
+            self.cost_policy_version_as_of(account, decision)?,
+            format!("signals/1|{}", crate::replay::REPLAY_CODE_VERSION),
+        );
+        manifest.instrument_keys = held.iter().map(|(k, _)| k.clone()).collect();
+        manifest.bars = bar_manifests;
+        membership.extend(self.research_membership_manifest_as_of(decision, policy)?);
+        manifest.membership = membership;
+        manifest.corporate_actions =
+            self.corporate_actions_manifest_as_of(&held, decision, policy)?;
+        manifest.model_outputs = model_manifests;
+        Ok(crate::replay::ReplayOutput {
+            value: report,
+            manifest: manifest.finalize(),
+        })
     }
 
     /// Everything the Today view shows.

@@ -7,6 +7,7 @@
 //! cancels orders and never holds broker credentials. See `docs/SAIL_CAPITAL.md`.
 pub mod board;
 pub mod board_record;
+pub mod calendar;
 pub mod contracts;
 pub mod dividends;
 pub mod evidence;
@@ -21,6 +22,7 @@ pub mod models;
 pub mod optimize;
 pub mod outlook;
 pub mod policy;
+pub mod replay;
 pub mod scorecard;
 pub mod sec;
 pub mod service;
