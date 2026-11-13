@@ -8,6 +8,8 @@
 
   const state = {
     view: 'collapsed', // 'inbox' | 'digest' | 'collapsed'
+    showSettings: false,
+    showAll: false,
     deliverable: [],
     inbox: [],
     digest: null,
@@ -244,63 +246,105 @@
     return d === 'interrupt' || d === 'suggest' || item.state === 'delivered';
   }
 
+  // Items stored before course names were readable carry Moodle's course code as a
+  // title prefix ("Deadline in DECD_03749-2026_…: Entrega"); show only the item name.
+  const COURSE_CODE_PREFIX =
+    /^(?:(?:Exam|Test|Quiz|Deadline|Presentation|Lab|Schedule change|Registration|School item) in )?[A-Z][A-Z0-9]*_[\w.-]+:\s*/;
+  function tidyTitle(title) {
+    const t = String(title || '').trim();
+    return t.replace(COURSE_CODE_PREFIX, '') || t || 'Attention item';
+  }
+  const SOURCE_LABEL = {
+    moodle: 'Moodle',
+    calendar: 'Calendar',
+    reminders: 'Reminders',
+    git_hub: 'GitHub',
+    research: 'Research',
+    capital: 'Capital',
+    system: 'System',
+    escalation: 'Escalation',
+    curiosity: 'Curiosity',
+    projects: 'Projects',
+  };
+
+  let openMenuId = null;
+
   function renderCard(item) {
     const sig = item.signal || {};
     const delivery = deliveryOf(item);
     const link = safeLink(sig.link);
-    const metaChildren = [
-      el('span', { class: `init-pill delivery-${delivery}`, text: DELIVERY_LABEL[delivery] || delivery }),
-      el('span', { class: 'init-pill', text: sig.source || 'sail' }),
-      sig.provenance === 'hypothesis' ? el('span', { text: 'idea, unverified' }) : null,
-      sig.deadline ? el('span', { text: `due ${formatRelative(sig.deadline)}` }) : null,
-      item.created_at ? el('span', { text: formatRelative(item.created_at) }) : null,
-    ];
+    const source = SOURCE_LABEL[sig.source] || sig.source || 'SAIL';
+    const when = sig.deadline
+      ? `due ${formatRelative(sig.deadline)}`
+      : item.created_at
+        ? formatRelative(item.created_at)
+        : '';
+    const meta = [source, when, sig.provenance === 'hypothesis' ? 'unverified idea' : '']
+      .filter(Boolean)
+      .join(' · ');
 
-    const button = (text, payload, extra = '') =>
+    const act = (text, payload, extra = '') =>
       el('button', {
         type: 'button',
-        class: `init-btn ${extra}`.trim(),
+        class: `init-act ${extra}`.trim(),
         text,
         onclick: () => sendFeedback(item.id, payload),
       });
+    const menuOpen = openMenuId === item.id;
     const actions = el(
       'div',
       { class: 'init-actions' },
-      button('Useful', { feedback: 'useful' }, 'init-btn-primary'),
-      button('Not now', { feedback: 'not_now' }),
-      button('Later (1 h)', { feedback: 'later', until: laterIso('1h') }),
-      button('Dismiss', { feedback: 'dismiss' }),
-      el(
-        'details',
-        { class: 'init-more' },
-        el('summary', { class: 'init-btn', text: 'More' }),
-        el(
-          'div',
-          { class: 'init-more-body' },
-          button('Tonight', { feedback: 'later', until: laterIso('tonight') }),
-          button('Tomorrow', { feedback: 'later', until: laterIso('tomorrow') }),
-          button('Investigate further', { feedback: 'investigate' }),
-          button('Mute this kind', { feedback: 'mute' }, 'init-btn-danger')
-        )
-      )
+      link ? el('a', { class: 'init-act init-act-primary', href: link, text: 'Open' }) : null,
+      act('Useful', { feedback: 'useful' }, link ? '' : 'init-act-primary'),
+      act('Later', { feedback: 'later', until: laterIso('1h') }),
+      act('Dismiss', { feedback: 'dismiss' }),
+      el('button', {
+        type: 'button',
+        class: 'init-act init-act-more',
+        'aria-label': 'More actions',
+        'aria-expanded': String(menuOpen),
+        text: '⋯',
+        onclick: () => {
+          openMenuId = menuOpen ? null : item.id;
+          render();
+        },
+      })
     );
+    const menu = menuOpen
+      ? el(
+          'div',
+          { class: 'init-menu' },
+          act('Not now', { feedback: 'not_now' }),
+          act('Tonight', { feedback: 'later', until: laterIso('tonight') }),
+          act('Tomorrow', { feedback: 'later', until: laterIso('tomorrow') }),
+          act('Investigate', { feedback: 'investigate' }),
+          act('Mute this kind', { feedback: 'mute' }, 'init-act-danger')
+        )
+      : null;
 
     return el(
       'article',
-      { class: 'init-card' },
-      el('div', { class: 'init-card-top' }, el('div', { class: 'init-meta' }, metaChildren)),
-      el('h3', { class: 'init-card-title', text: sig.title || 'Attention item' }),
-      sig.body ? el('p', { class: 'init-card-body', text: sig.body }) : null,
-      link ? el('a', { class: 'init-link', href: link, text: 'Open' }) : null,
-      actions
+      { class: `init-item delivery-${delivery}` },
+      el(
+        'div',
+        { class: 'init-meta' },
+        el('span', {
+          class: 'init-dot',
+          title: DELIVERY_LABEL[delivery] || delivery,
+          'aria-label': DELIVERY_LABEL[delivery] || delivery,
+        }),
+        el('span', { text: meta })
+      ),
+      el('h3', { class: 'init-item-title', text: tidyTitle(sig.title) }),
+      sig.body ? el('p', { class: 'init-item-body', text: sig.body }) : null,
+      actions,
+      menu
     );
   }
 
   function renderSettingsBar() {
     if (!state.settings) return null;
     const autonomy = state.settings.autonomy || 'balanced';
-    const focusUntil = state.settings.focus_until;
-    const focusActive = focusUntil && Date.parse(focusUntil) > Date.now();
 
     const autonomySelect = el(
       'select',
@@ -319,11 +363,9 @@
       'select',
       {
         class: 'init-select',
-        'aria-label': "Don't interrupt until",
+        'aria-label': 'Focus: no interruptions',
         onchange: (e) => {
-          const val = e.target.value;
-          if (!val) return updateSettings({ focus_until: null });
-          const mins = Number(val);
+          const mins = Number(e.target.value);
           if (Number.isFinite(mins) && mins > 0) {
             updateSettings({
               focus_until: new Date(Date.now() + mins * 60 * 1000).toISOString(),
@@ -331,31 +373,39 @@
           }
         },
       },
-      el('option', { value: '', selected: !focusActive, text: "Don't interrupt until…" }),
-      el('option', { value: '60', text: 'For 1 hour' }),
-      el('option', { value: '120', text: 'For 2 hours' }),
-      el('option', { value: '240', text: 'For 4 hours' })
+      el('option', { value: '', selected: true, text: 'Off' }),
+      el('option', { value: '60', text: '1 hour' }),
+      el('option', { value: '120', text: '2 hours' }),
+      el('option', { value: '240', text: '4 hours' })
     );
 
     return el(
       'div',
       { class: 'init-settings-bar' },
       el('label', { class: 'init-field' }, el('span', { text: 'Autonomy' }), autonomySelect),
-      el('label', { class: 'init-field' }, focusSelect),
-      focusActive
-        ? el('span', {
-            class: 'init-focus-status',
-            text: `Focus until ${new Date(focusUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-          })
-        : null,
-      focusActive
-        ? el('button', {
-            type: 'button',
-            class: 'init-btn',
-            text: 'Resume',
-            onclick: () => updateSettings({ focus_until: null }),
-          })
-        : null
+      el('label', { class: 'init-field' }, el('span', { text: 'Focus' }), focusSelect)
+    );
+  }
+
+  function focusUntil() {
+    const until = state.settings?.focus_until;
+    return until && Date.parse(until) > Date.now() ? until : null;
+  }
+
+  function renderFocusNote() {
+    const until = focusUntil();
+    if (!until) return null;
+    const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return el(
+      'p',
+      { class: 'init-focus-note' },
+      `Focus until ${time} — only urgent items interrupt. `,
+      el('button', {
+        type: 'button',
+        class: 'init-act',
+        text: 'Resume',
+        onclick: () => updateSettings({ focus_until: null }),
+      })
     );
   }
 
@@ -409,16 +459,30 @@
               render();
             },
           })
-        )
+        ),
+        el('button', {
+          type: 'button',
+          class: 'init-tab init-gear',
+          'aria-label': 'Initiative settings',
+          'aria-pressed': String(state.showSettings),
+          title: 'Settings',
+          text: '⚙',
+          onclick: () => {
+            state.showSettings = !state.showSettings;
+            render();
+          },
+        })
       )
     );
 
     const children = [header];
 
-    if (state.view !== 'collapsed') {
+    if (state.showSettings) {
       const settingsBar = renderSettingsBar();
       if (settingsBar) children.push(settingsBar);
     }
+    const focusNote = renderFocusNote();
+    if (focusNote) children.push(focusNote);
 
     if (state.statusText) {
       children.push(
@@ -435,8 +499,20 @@
       if (mergedInbox.length === 0) {
         body.append(el('p', { class: 'init-empty', text: 'Nothing needs attention right now.' }));
       } else {
-        for (const item of mergedInbox.slice(0, 12)) {
-          body.append(renderCard(item));
+        const shown = state.showAll ? mergedInbox.slice(0, 12) : mergedInbox.slice(0, 3);
+        for (const item of shown) body.append(renderCard(item));
+        if (mergedInbox.length > shown.length) {
+          body.append(
+            el('button', {
+              type: 'button',
+              class: 'init-waiting',
+              text: `Show ${Math.min(mergedInbox.length, 12) - shown.length} more`,
+              onclick: () => {
+                state.showAll = true;
+                render();
+              },
+            })
+          );
         }
       }
       if (waiting.length > 0) {
@@ -465,8 +541,8 @@
         }),
         el('button', {
           type: 'button',
-          class: 'init-btn',
-          text: 'Release digest now',
+          class: 'init-act',
+          text: 'Release now',
           onclick: releaseDigestNow,
         })
       );
