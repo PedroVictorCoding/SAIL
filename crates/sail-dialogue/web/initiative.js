@@ -420,12 +420,37 @@
     );
   }
 
+  // Variety over volume: take items round-robin by source (keeping each source's order),
+  // so one busy source can't fill the visible rows. Interrupts stay first.
+  function interleaveBySource(items) {
+    const urgent = items.filter((x) => deliveryOf(x) === 'interrupt');
+    const rest = items.filter((x) => deliveryOf(x) !== 'interrupt');
+    const queues = new Map();
+    for (const item of rest) {
+      const key = item.signal?.source || 'sail';
+      if (!queues.has(key)) queues.set(key, []);
+      queues.get(key).push(item);
+    }
+    const out = [...urgent];
+    let added = true;
+    while (added) {
+      added = false;
+      for (const queue of queues.values()) {
+        if (queue.length) {
+          out.push(queue.shift());
+          added = true;
+        }
+      }
+    }
+    return out;
+  }
+
   function render() {
     const deliverableIds = new Set(state.deliverable.map((x) => x.id));
-    const mergedInbox = [
+    const mergedInbox = interleaveBySource([
       ...state.deliverable,
       ...state.inbox.filter((x) => !deliverableIds.has(x.id) && isInboxWorthy(x)),
-    ];
+    ]);
     const waiting = state.inbox.filter(
       (x) => !deliverableIds.has(x.id) && !isInboxWorthy(x) && x.state === 'pending'
     );

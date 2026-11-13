@@ -114,8 +114,18 @@ impl Initiative {
                 }
             }
         }
-        if let Ok(items) = self.attention.suggestions(3) {
+        if let Ok(items) = self.attention.suggestions(12) {
+            // Variety over volume: one suggestion per source, three in all, so a busy
+            // source (school, usually) cannot fill the brief by itself.
+            let mut sources = Vec::new();
             for item in items {
+                if sources.contains(&item.signal.source) {
+                    continue;
+                }
+                sources.push(item.signal.source);
+                if sources.len() > 3 {
+                    break;
+                }
                 let tag = match item.signal.provenance {
                     Provenance::Hypothesis => "idea (unverified)",
                     Provenance::Suggestion => "suggestion",

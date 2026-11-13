@@ -21,7 +21,8 @@ use sail_discovery::agenda::AgendaStore;
 use sail_discovery::curiosity::{
     CuriosityLedger, CuriosityLimits, Gate, Investigator, Skip, admit, run_once,
 };
-use sail_discovery::detect::{Observation, SchoolChangeKind, SchoolItemKind};
+use sail_discovery::detect::{ForgeJobState, Level, Observation, SchoolChangeKind, SchoolItemKind};
+use sail_discovery::github::{GhCliActivity, GithubActivity, GithubError, GithubPoller};
 use sail_discovery::initiative::{Initiative, TickReport};
 use sail_mind::escalation::service::{self as escalation, EscalationService};
 use sail_mind::escalation::{JobState, Origin};
@@ -39,7 +40,20 @@ pub struct Proactive {
     last_check: Mutex<DateTime<Utc>>,
     answered: Mutex<Vec<Observation>>,
     curiosity: Mutex<Option<Arc<Curiosity>>>,
+    /// GitHub activity source and its pacing; set only by [`start`], so tests never run `gh`.
+    github: Mutex<Option<GithubWatch>>,
+    /// When Capital suggestions were last read (at most hourly).
+    last_capital: Mutex<Option<DateTime<Utc>>>,
 }
+
+struct GithubWatch {
+    source: Arc<dyn GithubActivity>,
+    poller: GithubPoller,
+    unavailable_logged: bool,
+}
+
+/// Capital's suggestions are recomputed from prices; reading them hourly is plenty.
+const CAPITAL_EVERY: ChronoDuration = ChronoDuration::hours(1);
 
 /// The Curiosity Engine's runtime state (#453).
 pub struct Curiosity {
@@ -123,6 +137,7 @@ pub fn start(pulse: Option<Arc<Pulse>>) -> Option<Arc<Proactive>> {
     let _ = sail_discovery::install_global(initiative.clone());
     let escalation = start_escalation();
     let proactive = Proactive::new(initiative, escalation, pulse);
+    proactive.watch_github(Arc::new(GhCliActivity::from_env()));
     let proactive = GLOBAL.get_or_init(|| proactive).clone();
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         let looping = proactive.clone();
@@ -181,7 +196,90 @@ impl Proactive {
             last_check: Mutex::new(Utc::now()),
             answered: Mutex::new(Vec::new()),
             curiosity: Mutex::new(None),
+            github: Mutex::new(None),
+            last_capital: Mutex::new(None),
         })
+    }
+
+    /// Watch GitHub through `source` (production: the signed-in `gh`). Off by default in
+    /// tests; `SAIL_GITHUB_DETECTOR=0` turns it off.
+    pub fn watch_github(&self, source: Arc<dyn GithubActivity>) {
+        if std::env::var("SAIL_GITHUB_DETECTOR").is_ok_and(|v| v == "0" || v == "false") {
+            return;
+        }
+        *lock(&self.github) = Some(GithubWatch {
+            source,
+            poller: GithubPoller::default(),
+            unavailable_logged: false,
+        });
+    }
+
+    /// GitHub events, when the poller says it's time (at most every 15 min). Blocking.
+    fn github_observations(&self, now: DateTime<Utc>) -> Vec<Observation> {
+        let mut guard = lock(&self.github);
+        let Some(watch) = guard.as_mut() else {
+            return Vec::new();
+        };
+        if !watch.poller.due(now) {
+            return Vec::new();
+        }
+        let since = watch.poller.since(now);
+        match watch.source.fetch(since) {
+            Ok(events) => {
+                watch.poller.record(now, true);
+                watch.unavailable_logged = false;
+                events.into_iter().map(Observation::GitHub).collect()
+            }
+            Err(GithubError::Unavailable(reason)) => {
+                watch.poller.record(now, false);
+                if !watch.unavailable_logged {
+                    info!(%reason, "GitHub detector waiting for a signed-in gh");
+                    watch.unavailable_logged = true;
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    /// Active High and Medium Capital suggestions, at most hourly. Blocking.
+    fn capital_observations(&self, now: DateTime<Utc>) -> Vec<Observation> {
+        {
+            let mut last = lock(&self.last_capital);
+            if last.is_some_and(|at| now - at < CAPITAL_EVERY) {
+                return Vec::new();
+            }
+            *last = Some(now);
+        }
+        let Some(capital) = sail_capital::service::global() else {
+            return Vec::new();
+        };
+        let today = capital
+            .resolve_account(None)
+            .and_then(|account| capital.today(&account, now));
+        let today = match today {
+            Ok(today) => today,
+            Err(error) => {
+                tracing::debug!(%error, "capital suggestions unavailable");
+                return Vec::new();
+            }
+        };
+        today
+            .suggestions
+            .into_iter()
+            .filter_map(|s| {
+                let severity = match s.severity {
+                    sail_capital::suggest::Severity::High => Level::High,
+                    sail_capital::suggest::Severity::Medium => Level::Medium,
+                    sail_capital::suggest::Severity::Low => return None,
+                };
+                Some(Observation::CapitalSuggestion {
+                    id: s.id,
+                    severity,
+                    title: s.title,
+                    why: s.why,
+                })
+            })
+            .collect()
     }
 
     /// Turn on idle-time investigations with `investigator` (off when `SAIL_CURIOSITY=0`).
@@ -330,6 +428,9 @@ impl Proactive {
             .and_then(|p| p.settings().ok())
             .map_or(0, |s| s.utc_offset_minutes);
         observations.extend(moodle_observations(now, offset));
+        observations.extend(forge_observations());
+        observations.extend(self.capital_observations(now));
+        observations.extend(self.github_observations(now));
         if let Some(disk) = disk_observation() {
             observations.push(disk);
         }
@@ -424,6 +525,36 @@ pub fn digest_due(
             at > local_prev && at <= local_now
         })
     })
+}
+
+/// Forge jobs in a state the owner may care about. Dedupe keys include the state, so each
+/// state is news once.
+fn forge_observations() -> Vec<Observation> {
+    use sail_forge::ForgeTaskState as S;
+    let Ok(orchestrator) = sail_forge::global_orchestrator() else {
+        return Vec::new();
+    };
+    // Only recent activity is news; old finished or abandoned jobs stay quiet.
+    let recent = Utc::now() - ChronoDuration::days(2);
+    orchestrator
+        .list_all_jobs()
+        .into_iter()
+        .filter(|job| job.events.iter().any(|e| e.timestamp >= recent))
+        .filter_map(|job| {
+            let state = match job.state {
+                S::AwaitingUser => ForgeJobState::AwaitingUser,
+                S::ReviewPending => ForgeJobState::ReviewPending,
+                S::Blocked => ForgeJobState::Blocked,
+                S::Completed => ForgeJobState::Completed,
+                _ => return None,
+            };
+            Some(Observation::ForgeJob {
+                subject: format!("{}#{}", job.repo, job.issue_number),
+                job_id: job.job_id,
+                state,
+            })
+        })
+        .collect()
 }
 
 /// A readable course name: Moodle's full name, falling back to the short code.
