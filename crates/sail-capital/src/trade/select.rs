@@ -492,17 +492,22 @@ pub fn judge(
             && posterior_mean > 0.0
             && walk_forward.all_trades >= MIN_CANDIDATE_OOS_TRADES
             && walk_forward.all_mean_r > 0.0;
+        let judgement = Judgement {
+            p_value: p_values[index],
+            fdr_pass: fdr[index],
+            pooled: estimate.clone(),
+            live: live_evidence,
+            posterior_mean,
+            posterior_sd,
+            posterior_lower,
+            walk_forward,
+        };
         let reason = verdict_reason(
             publishes,
             candidate,
-            &group,
             &selection[index],
-            &live_evidence,
-            p_values[index],
-            fdr[index],
-            posterior_mean,
-            posterior_lower,
-            &walk_forward,
+            &judgement.live,
+            &judgement,
         );
         out.push(Verdict {
             group: group.clone(),
@@ -511,16 +516,7 @@ pub fn judge(
             publishes,
             candidate,
             reason,
-            judgement: Some(Judgement {
-                p_value: p_values[index],
-                fdr_pass: fdr[index],
-                pooled: estimate.clone(),
-                live: live_evidence,
-                posterior_mean,
-                posterior_sd,
-                posterior_lower,
-                walk_forward,
-            }),
+            judgement: Some(judgement),
         });
     }
     out
@@ -584,19 +580,18 @@ fn live_update(
     (mean, (1.0 / precision).sqrt())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn verdict_reason(
     publishes: bool,
     candidate: bool,
-    _group: &str,
     selection: &Evidence,
     live: &LiveEvidence,
-    p_value: f64,
-    fdr_pass: bool,
-    posterior_mean: f64,
-    posterior_lower: f64,
-    walk: &WalkForward,
+    judgement: &Judgement,
 ) -> String {
+    let p_value = judgement.p_value;
+    let fdr_pass = judgement.fdr_pass;
+    let posterior_mean = judgement.posterior_mean;
+    let posterior_lower = judgement.posterior_lower;
+    let walk = &judgement.walk_forward;
     if publishes {
         return format!(
             "Publishes: {:+.2}R a trade over {} trades, pooled lower bound {:+.2}R, out of sample {:+.2}R over {} trades",
