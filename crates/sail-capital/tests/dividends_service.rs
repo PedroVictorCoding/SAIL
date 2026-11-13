@@ -28,6 +28,27 @@ fn out_of_range_settings_are_refused() {
             "{years} {pct}"
         );
     }
+    for top_n in [0, 11] {
+        assert!(
+            matches!(
+                svc.dividend_projection_with(
+                    &account,
+                    5,
+                    100.0,
+                    Allocation::TopValue,
+                    top_n,
+                    false,
+                ),
+                Err(ServiceError::BadRequest(_))
+            ),
+            "top_n {top_n}"
+        );
+    }
+    let top = svc
+        .dividend_projection_with(&account, 5, 100.0, Allocation::TopValue, 3, false)
+        .unwrap();
+    assert_eq!(top.settings.top_n, 3);
+
     // Without stored prices the holdings are left out, and the notes say so.
     let outlook = svc
         .dividend_projection(&account, 5, 100.0, Allocation::SameHolding, true)

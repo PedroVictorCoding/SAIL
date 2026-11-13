@@ -17,6 +17,7 @@ let modelsPollingTimer = null;
 let currentProjYears = 10;
 let currentProjReinvestPct = 100;
 let currentProjAllocation = "proportional";
+let currentProjTopN = 5;
 let currentProjReservePtTax = false;
 let projDebounceTimer = null;
 let currentProjectionData = null;
@@ -4098,6 +4099,12 @@ function formatProjMoney(val, currency = "") {
   return curr ? `${formatted} ${curr}` : formatted;
 }
 
+function updateProjTopNVisibility() {
+  const group = document.getElementById("cpProjTopNGroup");
+  if (!group) return;
+  group.hidden = !(currentProjAllocation === "top_value" || currentProjAllocation === "top_yield");
+}
+
 function setupDividendProjectionControls() {
   const yearsInput = document.getElementById("cpProjYears");
   const yearsVal = document.getElementById("cpProjYearsVal");
@@ -4136,9 +4143,24 @@ function setupDividendProjectionControls() {
       btn.classList.add("cp-active");
       btn.setAttribute("aria-checked", "true");
       currentProjAllocation = btn.dataset.allocation || "proportional";
+      updateProjTopNVisibility();
       loadDividendProjection();
     });
   });
+
+  const topNInput = document.getElementById("cpProjTopN");
+  const topNVal = document.getElementById("cpProjTopNVal");
+  if (topNInput) {
+    topNInput.addEventListener("input", (e) => {
+      currentProjTopN = parseInt(e.target.value, 10) || 5;
+      if (topNVal) topNVal.textContent = currentProjTopN;
+      if (projDebounceTimer) clearTimeout(projDebounceTimer);
+      projDebounceTimer = setTimeout(() => {
+        loadDividendProjection();
+      }, 250);
+    });
+  }
+  updateProjTopNVisibility();
 
   const reserveTaxCheckbox = document.getElementById("cpProjReserveTax");
   if (reserveTaxCheckbox) {
@@ -4189,7 +4211,7 @@ async function loadDividendProjection() {
   if (!chartWrap) return;
 
   const queryAcc = currentAccount ? `account=${encodeURIComponent(currentAccount)}&` : "";
-  const url = `/api/capital/dividends/projection?${queryAcc}years=${currentProjYears}&reinvest_pct=${currentProjReinvestPct}&allocation=${currentProjAllocation}&reserve_pt_tax=${currentProjReservePtTax}`;
+  const url = `/api/capital/dividends/projection?${queryAcc}years=${currentProjYears}&reinvest_pct=${currentProjReinvestPct}&allocation=${currentProjAllocation}&top_n=${currentProjTopN}&reserve_pt_tax=${currentProjReservePtTax}`;
 
   try {
     const data = await fetchJson(url);

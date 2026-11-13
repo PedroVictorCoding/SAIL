@@ -123,13 +123,34 @@ impl CapitalService {
         Ok(DividendRefresh { fetched, failed })
     }
 
-    /// The dividend projection for the current holdings.
+    /// The dividend projection for the current holdings, with the default top-N count.
     pub fn dividend_projection(
         &self,
         account: &AccountId,
         years: u32,
         reinvest_pct: f64,
         allocation: Allocation,
+        reserve_pt_tax: bool,
+    ) -> Result<DividendOutlook, ServiceError> {
+        self.dividend_projection_with(
+            account,
+            years,
+            reinvest_pct,
+            allocation,
+            crate::dividends::DEFAULT_TOP_N,
+            reserve_pt_tax,
+        )
+    }
+
+    /// The dividend projection with an explicit top-N count for the top-value and
+    /// top-yield strategies.
+    pub fn dividend_projection_with(
+        &self,
+        account: &AccountId,
+        years: u32,
+        reinvest_pct: f64,
+        allocation: Allocation,
+        top_n: u32,
         reserve_pt_tax: bool,
     ) -> Result<DividendOutlook, ServiceError> {
         if !(1..=crate::dividends::MAX_YEARS).contains(&years) {
@@ -143,6 +164,12 @@ impl CapitalService {
                 "The reinvested share must be between 0 and 100.".into(),
             ));
         }
+        if !(1..=crate::dividends::MAX_TOP_N).contains(&top_n) {
+            return Err(ServiceError::BadRequest(format!(
+                "Top N must be between 1 and {}.",
+                crate::dividends::MAX_TOP_N
+            )));
+        }
         let now = Utc::now();
         let today = now.date_naive();
         let (holdings, original_cost, mut notes) = self.dividend_inputs(account, now)?;
@@ -151,6 +178,7 @@ impl CapitalService {
             years,
             reinvest_pct,
             allocation,
+            top_n,
             reserve_pt_tax,
             start,
         };

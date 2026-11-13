@@ -601,7 +601,8 @@ html.tm-active, html.tm-active body { overflow: hidden; }
 .tm-pane[data-mode="arena"] .lh-root { margin: 0; border-radius: 0; }
 .tm-pane[data-mode="arena"] .lh-shell { flex: 1; height: 100%; min-height: 0; max-height: none; }
 .tm-pane[data-mode="arena"] #memoryPanelMain,
-.tm-pane[data-mode="arena"] #memoryPanelTranscript { overflow-y: auto; padding: var(--space-4); }
+.tm-pane[data-mode="arena"] #memoryPanelTranscript,
+.tm-pane[data-mode="arena"] #memoryPanelToolLog { overflow-y: auto; padding: var(--space-4); }
 .tm-pane[data-mode="arena"] #memoryPanelMain { overflow-y: auto; padding: var(--space-4); }
 
 /* Terminal full workspace */

@@ -230,7 +230,14 @@ fn simulate(
         }
 
         if pct > 0.0 {
-            reinvest(&mut sims, &prices, &reinvested, settings.allocation);
+            reinvest(
+                &mut sims,
+                &prices,
+                &reinvested,
+                settings.allocation,
+                settings.top_n,
+                elapsed,
+            );
         }
 
         monthly_net.push(month.net);
@@ -326,51 +333,142 @@ fn high_yield(sim: &SimHolding<'_>) -> bool {
     sim.holding.price > 0.0 && sim.growth.ttm_per_share / sim.holding.price > super::HIGH_YIELD
 }
 
-/// Buys units with the month's reinvestment.
+/// Buys units with the month's reinvestment. The top-N, equal-weight and underweight
+/// modes spread every month's pool across the paying holdings, not only the ones that
+/// paid this month.
 fn reinvest(
     sims: &mut [SimHolding<'_>],
     prices: &[f64],
     reinvested: &[f64],
     allocation: Allocation,
+    top_n: u32,
+    elapsed: f64,
 ) {
+    let total: f64 = reinvested.iter().sum();
+    if total <= 0.0 {
+        return;
+    }
+    let top_n = top_n.clamp(1, super::MAX_TOP_N) as usize;
+    let values: Vec<f64> = sims
+        .iter()
+        .zip(prices)
+        .map(|(sim, price)| {
+            if sim.scheduled {
+                sim.units * price * sim.holding.fx
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let scheduled: Vec<usize> = (0..sims.len())
+        .filter(|index| sims[*index].scheduled)
+        .collect();
+    let mut amounts = vec![0.0; sims.len()];
+
     match allocation {
-        Allocation::SameHolding => {
-            for (sim, (price, amount)) in sims.iter_mut().zip(prices.iter().zip(reinvested)) {
-                if !sim.scheduled || *amount <= 0.0 {
-                    continue;
+        Allocation::SameHolding => amounts.copy_from_slice(reinvested),
+        Allocation::Proportional => {
+            let total_value: f64 = values.iter().sum();
+            if total_value <= 0.0 {
+                return;
+            }
+            for index in scheduled {
+                amounts[index] = total * values[index] / total_value;
+            }
+        }
+        Allocation::EqualWeight => {
+            if scheduled.is_empty() {
+                return;
+            }
+            let each = total / scheduled.len() as f64;
+            for index in scheduled {
+                amounts[index] = each;
+            }
+        }
+        Allocation::TopValue => {
+            let mut ranked: Vec<(usize, f64)> = scheduled
+                .iter()
+                .map(|index| (*index, values[*index]))
+                .collect();
+            ranked.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(&right.0)));
+            ranked.truncate(top_n);
+            if ranked.is_empty() {
+                return;
+            }
+            let selected_value: f64 = ranked.iter().map(|(_, value)| value).sum();
+            if selected_value <= 0.0 {
+                return;
+            }
+            for (index, value) in ranked {
+                amounts[index] = total * value / selected_value;
+            }
+        }
+        Allocation::TopYield => {
+            let mut ranked: Vec<(usize, f64)> = scheduled
+                .iter()
+                .map(|index| {
+                    let sim = &sims[*index];
+                    let ttm = if high_yield(sim) {
+                        sim.growth.ttm_per_share
+                    } else {
+                        sim.growth.ttm_per_share * (1.0 + sim.g).powf(elapsed)
+                    };
+                    let current_yield = if prices[*index] > 0.0 {
+                        ttm / prices[*index]
+                    } else {
+                        0.0
+                    };
+                    (*index, current_yield)
+                })
+                .collect();
+            ranked.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(&right.0)));
+            ranked.truncate(top_n);
+            if ranked.is_empty() {
+                return;
+            }
+            let selected_value: f64 = ranked.iter().map(|(index, _)| values[*index]).sum();
+            if selected_value <= 0.0 {
+                let each = total / ranked.len() as f64;
+                for (index, _) in ranked {
+                    amounts[index] = each;
                 }
-                let unit_price = price * sim.holding.fx;
-                if unit_price > 0.0 {
-                    sim.units += amount / unit_price;
+            } else {
+                for (index, _) in ranked {
+                    amounts[index] = total * values[index] / selected_value;
                 }
             }
         }
-        Allocation::Proportional => {
-            let total: f64 = reinvested.iter().sum();
-            let values: Vec<f64> = sims
-                .iter()
-                .zip(prices)
-                .map(|(sim, price)| {
-                    if sim.scheduled {
-                        sim.units * price * sim.holding.fx
-                    } else {
-                        0.0
-                    }
-                })
-                .collect();
-            let total_value: f64 = values.iter().sum();
-            if total <= 0.0 || total_value <= 0.0 {
+        Allocation::Underweight => {
+            if scheduled.is_empty() {
                 return;
             }
-            for (sim, (price, value)) in sims.iter_mut().zip(prices.iter().zip(&values)) {
-                if !sim.scheduled {
-                    continue;
+            let total_value: f64 = scheduled.iter().map(|index| values[*index]).sum();
+            let target = total_value / scheduled.len() as f64;
+            let shortfalls: Vec<(usize, f64)> = scheduled
+                .iter()
+                .map(|index| (*index, (target - values[*index]).max(0.0)))
+                .collect();
+            let shortfall_total: f64 = shortfalls.iter().map(|(_, value)| value).sum();
+            if shortfall_total <= 0.0 {
+                let each = total / scheduled.len() as f64;
+                for index in scheduled {
+                    amounts[index] = each;
                 }
-                let unit_price = price * sim.holding.fx;
-                if unit_price > 0.0 {
-                    sim.units += (total * value / total_value) / unit_price;
+            } else {
+                for (index, shortfall) in shortfalls {
+                    amounts[index] = total * shortfall / shortfall_total;
                 }
             }
+        }
+    }
+
+    for (sim, (price, amount)) in sims.iter_mut().zip(prices.iter().zip(&amounts)) {
+        if !sim.scheduled || *amount <= 0.0 {
+            continue;
+        }
+        let unit_price = price * sim.holding.fx;
+        if unit_price > 0.0 {
+            sim.units += amount / unit_price;
         }
     }
 }
@@ -440,6 +538,30 @@ fn notes(holdings: &[Holding], growths: &[Growth], settings: &Settings) -> Vec<S
             ));
         }
     }
+    let top_n = settings.top_n.clamp(1, super::MAX_TOP_N);
+    notes.push(match settings.allocation {
+        Allocation::Proportional => {
+            "Reinvestment is spread across the paying holdings in proportion to their current value."
+                .to_string()
+        }
+        Allocation::SameHolding => {
+            "Each net payment is reinvested in the holding that paid it.".to_string()
+        }
+        Allocation::TopValue => format!(
+            "Reinvestment is spread across the {top_n} largest paying holdings by current value, in proportion to value."
+        ),
+        Allocation::EqualWeight => {
+            "Reinvestment is split equally across every paying holding, regardless of current weight."
+                .to_string()
+        }
+        Allocation::TopYield => format!(
+            "Reinvestment is spread across the {top_n} highest-yielding paying holdings, in proportion to value."
+        ),
+        Allocation::Underweight => {
+            "Reinvestment goes to the paying holdings furthest below their equal-weight target."
+                .to_string()
+        }
+    });
     notes.push(
         "Reinvestment assumes fractional units, no commissions and no price impact.".to_string(),
     );

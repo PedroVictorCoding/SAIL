@@ -510,13 +510,21 @@ month (`dividends/`).
 - the withholding actually observed in the ledger over 24 months, else a default by
   listing country.
 
-**Reinvestment.** A share of each net payment buys more units the same month:
-- **proportionally** across paying holdings by current value (the default, keeping the
+**Reinvestment.** A share of each net payment buys more units the same month. The
+allocation can be:
+- **proportional** across paying holdings by current value (the default, keeping the
   mix);
-- or back into the **same holding** (a DRIP).
+- back into the **same holding** (a DRIP);
+- **top value** (N largest paying holdings, by value; default N = 5);
+- **equal weight** (every paying holding gets the same cash, moving toward equal
+  weights);
+- **top yield** (N highest-yielding paying holdings, by value);
+- **underweight** (the paying holdings furthest below their equal-weight target get
+  the pool, a partial rebalance).
 
-The rest stays as cash. A comparison line shows the same projection without
-reinvesting.
+The top-value and top-yield counts are 1–10 (`top_n`, default 5); top-yield and
+top-value spread the month's pool by current value among the selected holdings. The
+rest stays as cash. A comparison line shows the same projection without reinvesting.
 
 **Growth.** Past payout growth over up to five complete years, shrunk toward zero by
 `n/(n+3)` and capped at ±15%. A year without payment after a paying year counts as a
@@ -537,6 +545,36 @@ minus what was withheld, floored at zero (simplified).
 came from, using the units held on the payment date. A history is scaled only when the
 receipts consistently differ by more than 1.6× (for example a fund quoted in its base
 currency), and a note says so.
+
+## Talking to SAIL about it (voice tools)
+
+The voice assistant can discuss the owner's investments through read-only Capital
+tools over the same service the page uses. They are offered for finance prompts and
+stay available for follow-ups after a finance turn, so "what about Nvidia?" can still
+search and check it.
+
+| Tool | Answers |
+|---|---|
+| `capital:overview` | Value, cash, top positions, stance, top suggestions, latest signals and risk |
+| `capital:today` | Stance, active suggestions with reasons and evidence, and sized changes |
+| `capital:portfolio` | Every position, cash, allocation, concentration, return, income and warnings |
+| `capital:signals` | Published cards, the six-by-two scoreboard and suppressed firings |
+| `capital:check` | One-off check of any Yahoo asset against the latest scoreboard |
+| `capital:search` | Yahoo symbol and name search for assets outside the universe |
+| `capital:watchlist` | The daily signal universe and its symbol mappings |
+| `capital:record` | The live graded record: closed count, hit rate, mean and cumulative R |
+| `capital:guards` | Trailing stops, trend and next earnings for the holdings |
+| `capital:dividends` | Low, base and high dividend income projections |
+| `capital:forecast` | Model price distributions at 5, 20 or 60 sessions |
+| `capital:policy` | Position, cash, volatility, turnover and risk-per-trade limits |
+| `capital:filings` | Recent SEC filings for the holdings and why each matters |
+
+The assistant may suggest ideas freely, including ideas that are not published signals.
+It must say which are verified cards and which are its own view, give the main risk,
+respect the saved policy, and never imply a guaranteed return. SAIL never places
+orders. `capital:search` and `capital:check` need Yahoo prices
+(`SAIL_PRICES_SOURCE=yfinance`), and the check needs a recent signal run for the
+scoreboard.
 
 ## API (`/api/capital`, owner token required)
 
@@ -578,7 +616,7 @@ currency), and a note says so.
 | `GET /signals/trade/record?account=` | Every published card with its grade, and totals |
 | `GET /signals/trade/guards?account=` | Trailing stops and trend for each holding |
 | `GET /universe/watchlist` / `POST /universe/watchlist` | The watchlist, and a change: `{"op": "add", "item": {...}}` or `{"op": "remove", "symbol": "..."}` |
-| `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting, per-holding inputs and notes |
+| `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&top_n=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting, per-holding inputs and notes; allocation is `proportional`, `same_holding`, `top_value`, `equal_weight`, `top_yield` or `underweight` |
 | `POST /dividends/refresh?account=` | Fetches per-share payout histories for the holdings |
 | `GET /outlook/track-record?account=&horizon=` | Coverage, average percentile, skill and direction over monthly replays |
 

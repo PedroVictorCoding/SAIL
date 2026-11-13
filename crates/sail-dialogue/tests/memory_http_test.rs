@@ -118,3 +118,84 @@ async fn learning_requires_owner_and_a_live_session_and_is_not_retroactive() {
     assert_eq!(stale.status(), 400);
     task.abort();
 }
+
+#[tokio::test]
+async fn tool_logs_require_owner_and_return_persisted_entries() {
+    let store = Arc::new(MemoryStore::open_in_memory().unwrap());
+    store
+        .record_tool_log(&sail_arena::NewToolLog {
+            tool: "os:status",
+            channel: "voice:vlm",
+            session: "s1",
+            success: true,
+            duration_ms: Some(15),
+            summary: "CPU 12%",
+            params_json: Some("{}"),
+            output_json: Some("{\"cpu\":12}"),
+        })
+        .unwrap();
+    let app = sail_dialogue::memory_http::router(
+        store.clone(),
+        Some(sail_guardian::authority::ApprovalAuthority::new(TOKEN).unwrap()),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::new();
+    let read_url = format!("http://{addr}/read");
+    let clear_url = format!("http://{addr}/tool-logs/clear");
+
+    assert_eq!(
+        client
+            .post(&read_url)
+            .json(&serde_json::json!({"action":"tool_logs"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        client
+            .post(&clear_url)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+
+    let res = client
+        .post(&read_url)
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({"action":"tool_logs","limit":50}))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success());
+    let body: serde_json::Value = res.json().await.unwrap();
+    let entries = body["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["tool"], "os:status");
+    assert_eq!(entries[0]["channel"], "voice:vlm");
+    assert_eq!(entries[0]["success"], true);
+
+    let cleared = client
+        .post(&clear_url)
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert!(cleared.status().is_success());
+    let cleared_body: serde_json::Value = cleared.json().await.unwrap();
+    assert_eq!(cleared_body["deleted"], 1);
+    assert!(
+        store
+            .list_tool_logs(None, None, None, 10, None)
+            .unwrap()
+            .is_empty()
+    );
+    task.abort();
+}

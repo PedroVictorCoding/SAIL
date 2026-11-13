@@ -46,12 +46,13 @@ const subsystemPages = [
     "description": "Search, review and export what SAIL remembers from your conversations, or transcribe a live lesson without replies.",
     "card": "memoryCard",
     "panel": "memoryPanelMain",
-    "tabs": ["memoryPanelMain", "memoryPanelTranscript"],
+    "tabs": ["memoryPanelMain", "memoryPanelTranscript", "memoryPanelToolLog"],
     "settings": null,
     "details": [
       "Episodic memory",
       "Associative knowledge graph",
       "Live lesson and conversation transcript (Listen without reply)",
+      "Persistent log of all tools used by SAIL",
       "Change history and export"
     ]
   },

@@ -1803,6 +1803,60 @@ a.nav-item { text-decoration:none; color:var(--muted) }
   .memory-card .lt-ask-form button { width:100% }
 }
 
+/* Tool Log (Memory > Tool Log tab) */
+.tl-panel { min-width:0 }
+.tl-card {
+  display:flex; flex-direction:column; width:100%; max-width:860px; margin:0 auto; overflow:hidden;
+  border-radius:var(--radius-card); border:var(--border); background:var(--surface); box-shadow:var(--depth-panel);
+}
+.tl-header { display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); padding:var(--space-3) var(--space-4); border-bottom:var(--border); flex-wrap:wrap }
+.tl-title-group { display:flex; flex-direction:column; gap:2px; min-width:0 }
+.memory-card .tl-heading { margin:0; font-size:15px; font-weight:600; color:var(--text) }
+.memory-card .tl-status { margin:0; font-size:12px; color:var(--muted) }
+.tl-actions { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap }
+.tl-toolbar { display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); padding:var(--space-2) var(--space-4); border-bottom:var(--border); background:var(--recessed); flex-wrap:wrap }
+.tl-filters { display:inline-flex; align-items:center; gap:var(--space-1) }
+.tl-filter-btn {
+  min-height:34px; padding:4px 12px; border-radius:var(--radius-pill); border:var(--border);
+  background:transparent; color:var(--muted); font-size:12px; font-weight:600; cursor:pointer;
+  transition:background var(--transition-fast),color var(--transition-fast),border-color var(--transition-fast);
+}
+.tl-filter-btn:hover { color:var(--text); background:var(--control) }
+.tl-filter-btn.active { background:var(--control); color:var(--text); border-color:color-mix(in srgb,var(--accent) 45%,var(--stroke)) }
+.tl-search-form { flex:1 1 220px; max-width:340px; margin:0 }
+.tl-search-form input { width:100%; min-height:36px }
+.tl-list { display:flex; flex-direction:column; gap:var(--space-2); padding:var(--space-3) var(--space-4); min-height:200px; max-height:520px; overflow-y:auto; scrollbar-width:thin }
+.memory-card .tl-empty { margin:auto 0; color:var(--muted); font-size:13px; line-height:1.6 }
+.tl-entry {
+  display:flex; flex-direction:column; gap:6px; padding:var(--space-3); border-radius:var(--radius-control);
+  border:var(--border); background:var(--recessed);
+}
+.tl-entry-head { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); flex-wrap:wrap }
+.tl-entry-left { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap; min-width:0 }
+.tl-tool-name { font-size:13px; font-weight:600; color:var(--text); font-family:var(--font-mono,ui-monospace,monospace) }
+.tl-status-pill {
+  display:inline-flex; align-items:center; padding:2px 8px; border-radius:var(--radius-pill);
+  font-size:11px; font-weight:700; letter-spacing:.03em; border:var(--border);
+}
+.tl-status-pill.ok { color:var(--listening); background:color-mix(in srgb,var(--listening) 12%,var(--surface)); border-color:color-mix(in srgb,var(--listening) 35%,var(--stroke)) }
+.tl-status-pill.err { color:var(--recording); background:color-mix(in srgb,var(--recording) 12%,var(--surface)); border-color:color-mix(in srgb,var(--recording) 35%,var(--stroke)) }
+.tl-channel,.tl-duration { font-size:11px; color:var(--muted); padding:2px 7px; border-radius:var(--radius-pill); background:var(--surface); border:var(--border) }
+.tl-time { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; flex-shrink:0 }
+.memory-card .tl-summary { margin:0; font-size:13px; color:var(--text-muted,var(--muted)); line-height:1.5; overflow-wrap:anywhere }
+.tl-details summary { font-size:12px; color:var(--muted); cursor:pointer; user-select:none }
+.tl-detail-label { margin-top:var(--space-2); font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em }
+.tl-pre {
+  margin:4px 0 0; padding:var(--space-2); border-radius:var(--radius-sm); background:var(--surface);
+  border:var(--border); color:var(--text); font-size:12px; line-height:1.45; max-height:220px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere;
+}
+.tl-footer { display:flex; justify-content:center; padding:var(--space-3) var(--space-4); border-top:var(--border); background:var(--recessed) }
+@media (forced-colors: active) {
+  .tl-card,.tl-entry,.tl-status-pill,.tl-filter-btn { border:1px solid ButtonText }
+}
+@media (max-width: 640px) {
+  .tl-search-form { max-width:100% }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Arena Learn — Complete LearnHarness Visual & Functional UI (#247)          */
 /* -------------------------------------------------------------------------- */
