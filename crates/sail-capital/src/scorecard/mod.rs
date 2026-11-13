@@ -64,11 +64,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::forecast::ModelScore;
+use crate::forecast::{ModelId, ModelScore};
 use crate::outlook::TrackRecord;
 use crate::service::RecordTotals;
-use crate::signals::SignalSkill;
-use crate::trade::Verdict;
+use crate::signals::{SignalId, SignalSkill};
+use crate::trade::{MIN_TRADES, SetupId, Side, Verdict};
 
 /// Which evaluation a row comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -147,6 +147,349 @@ pub struct ScorecardInputs<'a> {
 
 /// Builds the track record. See the module doc.
 pub fn summarize(inputs: &ScorecardInputs<'_>, as_of: DateTime<Utc>) -> Scorecard {
-    let _ = (inputs, as_of);
-    unimplemented!("round 17: Kilo")
+    let mut rows = Vec::new();
+
+    rows.extend(
+        inputs
+            .forecasts
+            .iter()
+            .filter(|score| score.model != ModelId::NoChange)
+            .map(forecast_row),
+    );
+    rows.extend(inputs.signals.iter().map(signal_row));
+    rows.extend(inputs.outlook.iter().map(outlook_row));
+    rows.extend(inputs.setups.iter().map(setup_row));
+    if let Some(totals) = inputs.live {
+        rows.push(live_row(totals));
+    }
+
+    rows.sort_by(|a, b| {
+        a.standing
+            .cmp(&b.standing)
+            .then(a.family.cmp(&b.family))
+            .then(
+                a.horizon_sessions
+                    .unwrap_or(0)
+                    .cmp(&b.horizon_sessions.unwrap_or(0)),
+            )
+            .then(a.name.cmp(&b.name))
+            .then(a.key.cmp(&b.key))
+    });
+
+    let earned = rows
+        .iter()
+        .filter(|row| row.standing == Standing::Earned)
+        .count() as u32;
+    let summary = if earned == 0 {
+        "Nothing has earned trust yet. SAIL shows ranges, not calls.".to_string()
+    } else {
+        let names: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.standing == Standing::Earned)
+            .map(|row| row.name.as_str())
+            .take(3)
+            .collect();
+        format!(
+            "{earned} of {} earned trust: {}.",
+            rows.len(),
+            names.join(", ")
+        )
+    };
+
+    Scorecard {
+        as_of,
+        rows,
+        earned,
+        summary,
+    }
+}
+
+fn forecast_row(score: &ModelScore) -> ScoreRow {
+    let standing = if score.forecasts >= 100 && score.calibrated && score.crps_skill > 0.0 {
+        Standing::Earned
+    } else if score.forecasts < 100 {
+        Standing::NotYet
+    } else {
+        Standing::Failed
+    };
+    let headline = match standing {
+        Standing::Earned => format!(
+            "{}% better than no change over {} forecasts; ranges well calibrated.",
+            whole(score.crps_skill * 100.0),
+            thousands(score.forecasts)
+        ),
+        Standing::NotYet => format!(
+            "Needs 100 scored forecasts; has {}.",
+            thousands(score.forecasts)
+        ),
+        Standing::Failed if !score.calibrated => {
+            let observed = whole(score.interval_90 * 100.0);
+            if score.interval_90 < 0.85 {
+                format!("Ranges too narrow: {observed}% landed inside the 90% band.")
+            } else if score.interval_90 > 0.95 {
+                format!("Ranges too wide: {observed}% landed inside the 90% band.")
+            } else {
+                format!("Ranges miscalibrated: {observed}% landed inside the 90% band.")
+            }
+        }
+        Standing::Failed => format!(
+            "No better than no change over {} forecasts.",
+            thousands(score.forecasts)
+        ),
+    };
+    ScoreRow {
+        key: format!(
+            "forecast:{}:h{}",
+            model_key(score.model),
+            score.horizon_sessions
+        ),
+        family: Family::Forecast,
+        name: model_name(score.model).to_string(),
+        horizon_sessions: Some(score.horizon_sessions),
+        standing,
+        headline,
+        evidence: score.forecasts,
+    }
+}
+
+fn signal_row(skill: &SignalSkill) -> ScoreRow {
+    let standing = if skill.weight > 0.0 {
+        Standing::Earned
+    } else if (skill.origins as usize) < crate::signals::MIN_ORIGINS {
+        Standing::NotYet
+    } else {
+        Standing::Failed
+    };
+    let headline = match standing {
+        Standing::Earned => format!(
+            "Rank IC {:+.2} (t {:.1}) over {} weeks; weight {:.2}.",
+            skill.ic_mean, skill.t_stat, skill.origins, skill.weight
+        ),
+        Standing::NotYet => format!(
+            "Needs {} cross-sections; has {}.",
+            crate::signals::MIN_ORIGINS,
+            skill.origins
+        ),
+        Standing::Failed => format!(
+            "Rank IC {:+.2} (t {:.1}): indistinguishable from chance.",
+            skill.ic_mean, skill.t_stat
+        ),
+    };
+    ScoreRow {
+        key: format!(
+            "signal:{}:h{}",
+            signal_key(skill.signal),
+            skill.horizon_sessions
+        ),
+        family: Family::Signal,
+        name: signal_name(skill.signal).to_string(),
+        horizon_sessions: Some(skill.horizon_sessions),
+        standing,
+        headline,
+        evidence: skill.origins,
+    }
+}
+
+fn outlook_row(record: &TrackRecord) -> ScoreRow {
+    let band_ok = (record.inside_90 - 0.90).abs() <= 0.10;
+    let standing = if record.replays >= 24 && record.skill_vs_no_change > 0.0 && band_ok {
+        Standing::Earned
+    } else if record.replays < 24 {
+        Standing::NotYet
+    } else {
+        Standing::Failed
+    };
+    let headline = match standing {
+        Standing::Earned => format!(
+            "90% band held {}% of {} monthly replays; {}% better than no change.",
+            whole(record.inside_90 * 100.0),
+            record.replays,
+            whole(record.skill_vs_no_change * 100.0)
+        ),
+        Standing::NotYet => format!("Needs 24 monthly replays; has {}.", record.replays),
+        Standing::Failed if !band_ok => format!(
+            "90% band held {}% of {} monthly replays.",
+            whole(record.inside_90 * 100.0),
+            record.replays
+        ),
+        Standing::Failed => format!(
+            "No better than no change across {} monthly replays.",
+            record.replays
+        ),
+    };
+    ScoreRow {
+        key: format!("outlook:h{}", record.horizon),
+        family: Family::Outlook,
+        name: "Blended outlook".to_string(),
+        horizon_sessions: Some(record.horizon),
+        standing,
+        headline,
+        evidence: record.replays,
+    }
+}
+
+fn setup_row(verdict: &Verdict) -> ScoreRow {
+    let standing = if verdict.publishes {
+        Standing::Earned
+    } else if verdict.selection.trades < MIN_TRADES {
+        Standing::NotYet
+    } else {
+        Standing::Failed
+    };
+    let headline = if standing == Standing::NotYet {
+        format!(
+            "Needs {} trades; has {}.",
+            MIN_TRADES, verdict.selection.trades
+        )
+    } else {
+        verdict.reason.clone()
+    };
+    let side = verdict.selection.side;
+    ScoreRow {
+        key: format!(
+            "setup:{}:{}:{}",
+            setup_key(verdict.selection.setup),
+            side_key(side),
+            verdict.group
+        ),
+        family: Family::Setup,
+        name: format!(
+            "{} · {} · {}",
+            setup_name(verdict.selection.setup),
+            side_name(side),
+            verdict.group
+        ),
+        horizon_sessions: None,
+        standing,
+        headline,
+        evidence: verdict.selection.trades,
+    }
+}
+
+fn live_row(totals: &RecordTotals) -> ScoreRow {
+    let standing = if totals.closed >= 20 && totals.mean_r > 0.0 {
+        Standing::Earned
+    } else if totals.closed < 20 {
+        Standing::NotYet
+    } else {
+        Standing::Failed
+    };
+    let headline = match standing {
+        Standing::NotYet => format!("Needs 20 closed signals; has {}.", totals.closed),
+        _ => format!(
+            "{} closed: hit target 1 in {}%, mean {:+.2}R.",
+            totals.closed,
+            whole(totals.hit_target1 * 100.0),
+            totals.mean_r
+        ),
+    };
+    ScoreRow {
+        key: "live".to_string(),
+        family: Family::Live,
+        name: "Published signals (live)".to_string(),
+        horizon_sessions: None,
+        standing,
+        headline,
+        evidence: totals.closed,
+    }
+}
+
+/// A percentage rounded to a whole number.
+fn whole(value: f64) -> i64 {
+    (value).round() as i64
+}
+
+/// An integer with thousands separators.
+fn thousands(value: u32) -> String {
+    let digits = value.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+fn model_name(model: ModelId) -> &'static str {
+    match model {
+        ModelId::NoChange => "No change",
+        ModelId::TrailingDrift => "Trailing drift",
+        ModelId::EwmaVolatility => "EWMA volatility",
+        ModelId::EmpiricalHorizon => "Past returns",
+    }
+}
+
+fn model_key(model: ModelId) -> &'static str {
+    match model {
+        ModelId::NoChange => "no_change",
+        ModelId::TrailingDrift => "trailing_drift",
+        ModelId::EwmaVolatility => "ewma_volatility",
+        ModelId::EmpiricalHorizon => "empirical_horizon",
+    }
+}
+
+fn signal_name(signal: SignalId) -> &'static str {
+    match signal {
+        SignalId::Momentum12_1 => "12-1 momentum",
+        SignalId::ShortTermReversal => "Short-term reversal",
+        SignalId::LowVolatility => "Low volatility",
+        SignalId::Trend => "Trend",
+        SignalId::ChartPattern => "Chart patterns (YOLO)",
+        SignalId::ChartTrend => "Chart trend (YOLO)",
+        SignalId::FoundationForecast => "Foundation model (Chronos)",
+        SignalId::FilingSentiment => "Filing sentiment",
+        SignalId::InsiderBuying => "Insider buying",
+    }
+}
+
+fn signal_key(signal: SignalId) -> &'static str {
+    match signal {
+        SignalId::Momentum12_1 => "momentum12_1",
+        SignalId::ShortTermReversal => "short_term_reversal",
+        SignalId::LowVolatility => "low_volatility",
+        SignalId::Trend => "trend",
+        SignalId::ChartPattern => "chart_pattern",
+        SignalId::ChartTrend => "chart_trend",
+        SignalId::FoundationForecast => "foundation_forecast",
+        SignalId::FilingSentiment => "filing_sentiment",
+        SignalId::InsiderBuying => "insider_buying",
+    }
+}
+
+fn setup_name(setup: SetupId) -> &'static str {
+    match setup {
+        SetupId::TrendPullback => "Trend pullback",
+        SetupId::SqueezeBreakout => "Squeeze breakout",
+        SetupId::Donchian55 => "55-day breakout",
+        SetupId::BollingerReversion => "Bollinger reversion",
+        SetupId::InsideBarBreak => "Inside-bar break",
+        SetupId::ThreeDayReversal => "Three-day reversal",
+    }
+}
+
+fn setup_key(setup: SetupId) -> &'static str {
+    match setup {
+        SetupId::TrendPullback => "trend_pullback",
+        SetupId::SqueezeBreakout => "squeeze_breakout",
+        SetupId::Donchian55 => "donchian55",
+        SetupId::BollingerReversion => "bollinger_reversion",
+        SetupId::InsideBarBreak => "inside_bar_break",
+        SetupId::ThreeDayReversal => "three_day_reversal",
+    }
+}
+
+fn side_name(side: Side) -> &'static str {
+    match side {
+        Side::Long => "long",
+        Side::Short => "short",
+    }
+}
+
+fn side_key(side: Side) -> &'static str {
+    match side {
+        Side::Long => "long",
+        Side::Short => "short",
+    }
 }
