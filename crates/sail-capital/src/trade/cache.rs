@@ -12,7 +12,7 @@
 //! - [`prefix_hash`]: lowercase hex SHA-256 over the bars with `session < cut`, each fed
 //!   as `"{session}|{open:016x}|{high:016x}|{low:016x}|{close:016x}\n"` with the `f64`s as
 //!   `to_bits()`. Any change to any earlier bar changes the hash.
-//! - [`costs_tag`]: a stable string of the four `Costs` numbers' `to_bits()`, so a change
+//! - [`costs_tag`]: a stable string of the three `Costs` numbers' `to_bits()`, so a change
 //!   to the assumed costs invalidates the cache.
 //! - [`merge`]: cached trades with `signal_session < cut` followed by the fresh
 //!   [`super::replay_from`] trades, in the order [`super::replay`] would give
