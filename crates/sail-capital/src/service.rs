@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 mod dividends_run;
+mod markets;
 mod trade_run;
 pub use dividends_run::DividendRefresh;
 pub use trade_run::{

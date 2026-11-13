@@ -1,46 +1,324 @@
-/* SAIL Capital — Today tab. Shared components live in capital.css. */
+/* SAIL Capital — Dashboard. Shared components live in capital.css. */
+
+.cp-dash-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cp-dash-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--sail-text-muted);
+}
+
+.cp-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sail-text);
+  box-shadow: 0 0 0 4px rgb(255 255 255 / .1);
+}
+
+.cp-dash-title {
+  font-size: clamp(28px, 3.2vw, 40px);
+  font-weight: 600;
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+}
+
+.cp-bento {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.cp-span-3 { grid-column: span 3; }
+.cp-span-5 { grid-column: span 5; }
+.cp-span-6 { grid-column: span 6; }
+.cp-span-7 { grid-column: span 7; }
+.cp-span-12 { grid-column: span 12; }
+
+/* Hero: account value with the holdings line */
+.cp-hero {
+  display: flex;
+  flex-direction: column;
+  min-height: 250px;
+}
+
+.cp-hero-val {
+  margin-top: 8px;
+  font-size: clamp(30px, 3.6vw, 44px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-hero-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.cp-hero-spark {
+  flex: 1;
+  min-height: 110px;
+  margin: 14px -22px -20px;
+}
+
+/* Stacked figures */
+.cp-stats {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.cp-stat + .cp-stat {
+  padding-top: 14px;
+  border-top: 1px solid var(--cp-line);
+}
+
+.cp-dstat-val {
+  margin: 2px 0;
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-dstat-val.positive { color: var(--cp-up); }
+.cp-dstat-val.negative { color: var(--cp-down); }
+
+/* Breadth gauge */
+.cp-gauge-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.cp-gauge-card .cp-card-label {
+  align-self: stretch;
+  text-align: center;
+  color: var(--sail-text);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.cp-gauge {
+  position: relative;
+  width: 100%;
+  max-width: 230px;
+  margin-top: 8px;
+}
+
+.cp-gauge svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.cp-gauge-read {
+  position: absolute;
+  inset: auto 0 2px;
+  text-align: center;
+}
+
+.cp-gauge-num {
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-gauge-word {
+  font-size: 12px;
+  color: var(--sail-text-muted);
+}
+
+/* Holding price cards */
+.cp-price-cards {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(280px, 1fr);
+  gap: 16px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin;
+  padding-bottom: 4px;
+}
+
+.cp-price-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 270px;
+  overflow: hidden;
+  scroll-snap-align: start;
+}
+
+.cp-price-card::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 120px;
+  width: 3px;
+  height: 28px;
+  border-radius: 2px;
+  background: var(--cp-av, #8f8cff);
+}
+
+.cp-price-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cp-price-top .cp-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  font-size: 13px;
+}
+
+.cp-price-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cp-price-sym {
+  font-size: 13px;
+  color: var(--sail-text-muted);
+}
+
+.cp-price-name {
+  font-size: 17px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cp-price-held {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-price-label {
+  margin-top: 18px;
+  font-size: 13px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-price-val {
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-price-chg {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.cp-price-spark {
+  flex: 1;
+  min-height: 80px;
+  margin: 12px -22px -20px;
+}
+
+/* Index tiles */
+.cp-index-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.cp-index {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px;
+  overflow: hidden;
+  text-align: center;
+}
+
+.cp-index::after {
+  content: "";
+  position: absolute;
+  inset: auto 15% 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--cp-tone, rgb(255 255 255 / .2));
+  box-shadow: 0 0 18px 2px var(--cp-tone, transparent);
+}
+
+.cp-index[data-dir="up"] { --cp-tone: rgb(61 220 151 / .7); }
+.cp-index[data-dir="down"] { --cp-tone: rgb(255 107 107 / .7); }
+
+.cp-index-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.cp-index-px {
+  font-size: 12px;
+  color: var(--sail-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-index-chg {
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-index-chg[data-dir="up"] { color: var(--cp-up); }
+.cp-index-chg[data-dir="down"] { color: var(--cp-down); }
+
+/* What needs you */
+.cp-needs {
+  padding: 20px 0 8px;
+}
+
+.cp-needs .cp-card-head {
+  padding: 0 22px;
+}
 
 .cp-stance {
-  margin: 0;
-  padding: 16px 20px 14px;
-  border-left: 3px solid var(--sail-glass-border);
-  font-size: 15px;
+  margin: 0 22px 10px;
+  padding-left: 12px;
+  border-left: 3px solid var(--cp-line-strong);
+  font-size: 14px;
   line-height: 1.45;
-  color: var(--sail-text);
+  color: var(--sail-text-muted);
 }
 
-.cp-stance[data-stance="fix_limits"] {
-  border-left-color: #e8c27a;
-}
+.cp-stance[data-stance="fix_limits"] { border-left-color: #e8c27a; }
+.cp-stance[data-stance="consider_changes"] { border-left-color: var(--cp-accent-2); }
 
-.cp-stance[data-stance="consider_changes"] {
-  border-left-color: #7fb3e8;
-}
-
-.cp-today .cp-rows {
-  border-top: 1px solid var(--sail-glass-border);
-}
-
-.cp-today .cp-empty {
-  padding: 14px 20px;
+.cp-needs .cp-empty {
+  padding: 12px 22px;
   list-style: none;
 }
 
 .cp-sug {
-  border-top: 1px solid var(--sail-glass-border);
-}
-
-.cp-sug:first-child {
-  border-top: 0;
+  border-top: 1px solid var(--cp-line);
 }
 
 .cp-sug summary {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 2px 12px;
-  padding: 11px 20px;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 22px;
   cursor: pointer;
   list-style: none;
 }
@@ -58,31 +336,36 @@
   outline-offset: -2px;
 }
 
+.cp-sug-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--sail-text-subtle);
+}
+
+.cp-sug[data-severity="high"] .cp-sug-dot { background: var(--cp-down); box-shadow: 0 0 10px var(--cp-down); }
+.cp-sug[data-severity="medium"] .cp-sug-dot { background: #f0b45a; box-shadow: 0 0 10px #f0b45a; }
+
 .cp-sug-title {
+  flex: 1;
   min-width: 0;
   font-size: 14px;
   font-weight: 500;
-  color: var(--sail-text);
   overflow-wrap: anywhere;
 }
 
-/* Severity is the colour of one quiet word, not a dot or a chip. */
 .cp-sug-kind {
-  font-size: 12px;
-  color: var(--sail-text-subtle);
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
   white-space: nowrap;
-}
-
-.cp-sug[data-severity="high"] .cp-sug-kind {
-  color: #f0a08c;
-}
-
-.cp-sug[data-severity="medium"] .cp-sug-kind {
-  color: #e8c27a;
+  color: var(--sail-text-muted);
+  background: rgb(255 255 255 / .06);
 }
 
 .cp-sug-body {
-  padding: 0 20px 14px;
+  padding: 0 22px 14px 42px;
   font-size: 13px;
   color: var(--sail-text-muted);
 }
@@ -115,4 +398,205 @@
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 10px;
+}
+
+/* Calendar */
+.cp-cal-next {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / .04);
+  font-size: 13px;
+}
+
+.cp-cal-next strong {
+  display: block;
+  font-weight: 500;
+}
+
+.cp-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px 2px;
+  text-align: center;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-cal-dow {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-cal-day {
+  position: relative;
+  padding: 6px 0 10px;
+  border-radius: 9px;
+  color: var(--sail-text-muted);
+}
+
+.cp-cal-day[data-out] {
+  color: rgb(255 255 255 / .22);
+}
+
+.cp-cal-day[data-today] {
+  color: var(--sail-text);
+  background: rgb(255 255 255 / .09);
+  font-weight: 600;
+}
+
+.cp-cal-day[data-has] {
+  color: var(--sail-text);
+}
+
+.cp-cal-dots {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 3px;
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+}
+
+.cp-cal-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sail-text-subtle);
+}
+
+.cp-cal-dot[data-kind="earnings"] { background: #f0b45a; }
+.cp-cal-dot[data-kind="dividend"] { background: var(--cp-up); }
+.cp-cal-dot[data-kind="filing"] { background: var(--cp-accent); }
+
+.cp-cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 12px;
+  list-style: none;
+  font-size: 12px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-cal-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Market overview */
+.cp-market {
+  padding: 20px 0 6px;
+}
+
+.cp-market .cp-card-head {
+  padding: 0 22px;
+  margin-bottom: 14px;
+}
+
+.cp-market-table td {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  vertical-align: middle;
+}
+
+.cp-col-no {
+  width: 48px;
+}
+
+.cp-market-table .cp-no {
+  color: var(--sail-text-subtle);
+}
+
+.cp-inst {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cp-inst-name {
+  font-weight: 500;
+}
+
+.cp-inst-sym {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-inst-held {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--cp-accent);
+}
+
+.cp-col-spark {
+  width: 140px;
+}
+
+.cp-row-spark {
+  width: 120px;
+  height: 30px;
+}
+
+.cp-market .cp-note {
+  padding: 10px 22px 12px;
+}
+
+@media (max-width: 1180px) {
+  .cp-span-6 { grid-column: span 12; }
+  .cp-span-3 { grid-column: span 6; }
+  .cp-span-7,
+  .cp-span-5 { grid-column: span 12; }
+}
+
+@media (max-width: 640px) {
+  .cp-bento {
+    gap: 12px;
+  }
+
+  .cp-span-3 { grid-column: span 12; }
+
+  .cp-index-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .cp-price-cards {
+    grid-auto-columns: 84%;
+  }
+
+  .cp-hero-spark,
+  .cp-price-spark {
+    margin-left: -16px;
+    margin-right: -16px;
+    margin-bottom: -16px;
+  }
+
+  .cp-needs .cp-card-head,
+  .cp-market .cp-card-head {
+    flex-wrap: wrap;
+    padding: 0 16px;
+  }
+
+  .cp-sug summary { padding: 11px 16px; }
+  .cp-sug-body { padding: 0 16px 14px; }
+  .cp-stance { margin: 0 16px 10px; }
+
+  .cp-col-spark,
+  .cp-market-table td:nth-child(7),
+  .cp-market-table th:nth-child(5),
+  .cp-market-table td:nth-child(5),
+  .cp-col-no,
+  .cp-market-table td:nth-child(1) {
+    display: none;
+  }
+}
+
+.cp-market-more {
+  margin: 10px 22px 0;
 }

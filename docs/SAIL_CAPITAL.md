@@ -26,12 +26,14 @@ Polymarket, a risk engine and any neural or `.sea` model are not built yet.
 
 ## The page
 
-`/capital` has six tabs. Old links (`#holdings`, `#research`, `#signals`, `#forecasts`,
+`/capital` is a dashboard with a grouped sidebar (Overview, Account, Research, Others)
+and six sections; on a phone the sidebar becomes a top strip. A ticker of recent closes
+runs under the top bar. Old links (`#holdings`, `#research`, `#signals`, `#forecasts`,
 `#data`) still resolve.
 
 | Tab | Answers | Holds |
 |---|---|---|
-| Today | What needs me? | Stance and suggestions |
+| Dashboard | How is it doing, and what needs me? | Account value with the holdings line, figures, market breadth, holding price cards, index tiles, what needs you, calendar, market overview |
 | Portfolio | What do I own, and is the ledger right? | Positions with trailing stops, CFDs, allocation, reconciliation, received shares, SEC filings |
 | Income | What does it pay? | Dividend projection, dividends received, income summary |
 | Outlook | What could happen to a holding? | Holding outlook (fan and replay), trade signals, one-off asset check |
@@ -45,14 +47,17 @@ The scripts are classic `defer` scripts that share globals. Each tab registers
 `registerTab(id, { setup, load })`. The header (portfolio and Today's tiles) loads at
 start, and a tab loads its own data the first time it opens and again on Refresh.
 
-**House style.** The rules are written at the end of `capital.css`:
-- one panel per topic, with no panels inside panels;
-- lists are quiet rows;
-- a status is a coloured word, never a pill;
-- detail sits behind "Show …" disclosures;
-- each caveat appears once, as a note under what it qualifies;
-- empty sections are hidden;
-- nothing overflows at 390 px.
+**House style.** The owner chose a trading-dashboard look (dark glass cards, a bento
+grid, area sparklines, green/red change pills, instrument avatars). The rules are at the
+end of `capital.css`, and `capital-core.js` has the shared pieces: `sparklineSvg`,
+`changePill`, `instrumentAvatar`, `formatPrice` and `loadMarkets`. Detail sits behind
+"Show …" disclosures, each caveat appears once, empty sections are hidden, and nothing
+overflows at 390 px.
+
+**Market breadth, not sentiment.** The gauge is the share of tracked instruments whose
+last close is above their 200-day average: a measured number, not a mood score. The
+account-value line is today's holdings valued at past closes (deposits and trades
+ignored), and says so.
 
 ## ADR-0001: one crate, ledger first
 
@@ -678,6 +683,7 @@ scoreboard.
 | `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&top_n=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting, per-holding inputs and notes; allocation is `proportional`, `same_holding`, `top_value`, `equal_weight`, `top_yield` or `underweight` |
 | `POST /dividends/refresh?account=` | Fetches per-share payout histories for the holdings |
 | `GET /outlook/track-record?account=&horizon=` | Coverage, average percentile, skill and direction over monthly replays |
+| `GET /markets?account=` | The market board from stored closes: per holding and watchlist instrument the last close, 1D/1W/1M changes, a 30-session spark and whether it is above its 200-day average; breadth; and today's holdings valued over the last 30 sessions |
 | `GET /scorecard?account=` | The track record: one row per baseline, signal, outlook horizon, setup and the live record, each Earned / Not yet / Failed with a headline, plus a summary sentence |
 
 All amounts are decimal strings. Errors are `{"error": "..."}`, with these status codes:

@@ -18,75 +18,165 @@
 <body>
 <a class="cp-skip" href="#cpMain">Skip to portfolio</a>
 
-<header class="cp-bar">
-  <a class="cp-button cp-back" href="/" target="_top" aria-label="Back to SAIL home">← SAIL</a>
-  <div class="cp-heading">
-    <h1>Capital</h1>
-    <span class="cp-sub">portfolio &amp; suggestions</span>
+<div class="cp-app">
+<aside class="cp-side" aria-label="Capital">
+  <div class="cp-brand">
+    <svg class="cp-brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 24l7-9 5 5 8-12"/><circle cx="26" cy="8" r="2.4"/></svg>
+    <div class="cp-brand-text">
+      <span class="cp-brand-name">SAIL Capital</span>
+      <span class="cp-brand-sub">Private portfolio research</span>
+    </div>
+    <a class="cp-back" href="/" target="_top" aria-label="Back to SAIL home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6l-6 6 6 6"/></svg></a>
   </div>
 
-  <div class="cp-bar-meta">
-    <span class="cp-freshness" id="cpFreshness">XTB data as of — · imported —</span>
-    <select class="cp-select" id="cpAccountSelect" aria-label="Select Account" hidden></select>
+  <div class="cp-hello">
+    <p class="cp-hello-title" id="cpHello">Welcome back</p>
+    <p class="cp-freshness" id="cpFreshness">XTB data as of — · imported —</p>
   </div>
 
-  <p class="cp-pill" id="cpState" role="status" data-state="idle">
-    <span class="cp-dot" aria-hidden="true"></span>
-    <span id="cpStateText">Ready</span>
-  </p>
+  <nav class="cp-tab-nav" aria-label="Sections">
+    <div class="cp-tab-bar" role="tablist" aria-label="Capital sections" aria-orientation="vertical">
+      <p class="cp-nav-group">Overview</p>
+      <button type="button" class="cp-tab-btn cp-tab-active" role="tab" id="cpTab-today" aria-controls="cpPanel-today" aria-selected="true" tabindex="0"><svg class="cp-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="3.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="3.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg><span>Dashboard</span></button>
+      <p class="cp-nav-group">Account</p>
+      <button type="button" class="cp-tab-btn" role="tab" id="cpTab-portfolio" aria-controls="cpPanel-portfolio" aria-selected="false" tabindex="-1"><svg class="cp-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4v16M18 4v16"/><rect x="3.5" y="7" width="5" height="8" rx="1.2"/><rect x="15.5" y="9" width="5" height="7" rx="1.2"/><path d="M12 6v12"/><rect x="9.5" y="9.5" width="5" height="5" rx="1.2"/></svg><span>Portfolio</span></button>
+      <button type="button" class="cp-tab-btn" role="tab" id="cpTab-income" aria-controls="cpPanel-income" aria-selected="false" tabindex="-1"><svg class="cp-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.2c-.5-1-1.6-1.6-2.8-1.6-1.6 0-2.8.9-2.8 2.1 0 2.9 5.8 1.6 5.8 4.4 0 1.2-1.3 2.1-3 2.1-1.3 0-2.5-.6-3-1.7M12 6v1.6M12 16.4V18"/></svg><span>Income</span></button>
+      <p class="cp-nav-group">Research</p>
+      <button type="button" class="cp-tab-btn" role="tab" id="cpTab-outlook" aria-controls="cpPanel-outlook" aria-selected="false" tabindex="-1"><svg class="cp-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 18.5l5-6 4 3.5 7.5-9"/><path d="M15 7h5v5"/></svg><span>Outlook</span></button>
+      <button type="button" class="cp-tab-btn" role="tab" id="cpTab-record" aria-controls="cpPanel-record" aria-selected="false" tabindex="-1"><svg class="cp-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5h10v4a5 5 0 01-10 0z"/><path d="M7 6H4.5v1.5A3 3 0 007 10.4M17 6h2.5v1.5A3 3 0 0117 10.4M12 13.5v3M8.5 19.5h7M10 16.5h4"/></svg><span class="cp-tab-wide">Track record</span><span class="cp-tab-narrow" aria-hidden="true">Record</span></button>
+      <p class="cp-nav-group">Others</p>
+      <button type="button" class="cp-tab-btn" role="tab" id="cpTab-settings" aria-controls="cpPanel-settings" aria-selected="false" tabindex="-1"><svg class="cp-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4L18 18M6 18l1.6-1.6M16.4 7.6L18 6"/></svg><span>Settings</span></button>
+    </div>
+  </nav>
 
-  <div class="cp-actions">
+  <div class="cp-side-foot">
     <button class="cp-button cp-primary" id="cpUploadBtn" type="button">Upload report</button>
-    <button class="cp-button" id="cpRefreshBtn" type="button" aria-label="Refresh portfolio">Refresh</button>
+    <p class="cp-side-note">Private and local: statements stay on this host. SAIL never signs in to XTB and never places orders.</p>
   </div>
   <input type="file" id="cpFileInput" accept=".xlsx,.csv" hidden>
-</header>
+</aside>
 
-<p class="cp-banner" id="cpBanner" role="alert" hidden></p>
+<div class="cp-main-col">
+  <header class="cp-topbar">
+    <p class="cp-crumbs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-6.5 8 6.5V20H4z"/></svg><span>Capital</span><span class="cp-crumb-sep">/</span><strong id="cpCrumb">Dashboard</strong></p>
+    <div class="cp-topbar-actions">
+      <select class="cp-select" id="cpAccountSelect" aria-label="Select account" hidden></select>
+      <p class="cp-pill" id="cpState" role="status" data-state="idle">
+        <span class="cp-dot" aria-hidden="true"></span>
+        <span id="cpStateText">Ready</span>
+      </p>
+      <button class="cp-button" id="cpRefreshBtn" type="button" aria-label="Refresh">Refresh</button>
+    </div>
+  </header>
 
-<section class="cp-metrics" id="cpMetrics" aria-label="Account summary">
-  <div class="cp-tile">
-    <span class="cp-tile-label">Account Value</span>
-    <div class="cp-tile-val" id="cpAccountVal">—</div>
-    <span class="cp-tile-sub">Free funds + positions</span>
-  </div>
-  <div class="cp-tile">
-    <span class="cp-tile-label">Invested</span>
-    <div class="cp-tile-val" id="cpInvestedVal">—</div>
-    <span class="cp-tile-sub">What open positions cost</span>
-  </div>
-  <div class="cp-tile">
-    <span class="cp-tile-label">Free Funds</span>
-    <div class="cp-tile-val" id="cpFreeFundsVal">—</div>
-    <span class="cp-tile-sub">Cash in the account</span>
-  </div>
-  <div class="cp-tile">
-    <span class="cp-tile-label">Open Result</span>
-    <div class="cp-tile-val" id="cpOpenResultVal">—</div>
-    <span class="cp-tile-sub">Positions − invested</span>
+  <div class="cp-ticker" id="cpTicker" aria-label="Recent closes" hidden>
+    <div class="cp-ticker-track" id="cpTickerTrack"></div>
   </div>
 
-</section>
-
-<nav class="cp-tab-nav" aria-label="Sections">
-  <div class="cp-tab-bar" role="tablist" aria-label="Capital sections">
-    <button type="button" class="cp-tab-btn cp-tab-active" role="tab" id="cpTab-today" aria-controls="cpPanel-today" aria-selected="true" tabindex="0">Today</button>
-    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-portfolio" aria-controls="cpPanel-portfolio" aria-selected="false" tabindex="-1">Portfolio</button>
-    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-income" aria-controls="cpPanel-income" aria-selected="false" tabindex="-1">Income</button>
-    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-outlook" aria-controls="cpPanel-outlook" aria-selected="false" tabindex="-1">Outlook</button>
-    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-record" aria-controls="cpPanel-record" aria-selected="false" tabindex="-1"><span class="cp-tab-wide">Track record</span><span class="cp-tab-narrow" aria-hidden="true">Record</span></button>
-    <button type="button" class="cp-tab-btn" role="tab" id="cpTab-settings" aria-controls="cpPanel-settings" aria-selected="false" tabindex="-1">Settings</button>
-  </div>
-</nav>
+  <p class="cp-banner" id="cpBanner" role="alert" hidden></p>
 
 <main id="cpMain" tabindex="-1">
   <div class="cp-tab-pane cp-pane-active" id="cpPanel-today" role="tabpanel" aria-labelledby="cpTab-today">
-    <section class="cp-panel cp-fixed cp-today" id="cpTodayPanel" aria-labelledby="cpStanceSentence">
-      <p class="cp-stance" id="cpStanceSentence" data-stance="hold">Loading…</p>
-      <ul class="cp-rows" id="cpSuggestionsList"></ul>
-      <p class="cp-note" id="cpSuggestionsHidden" hidden></p>
-      <p class="cp-note">SAIL never places orders. Ideas appear only when a signal passed out-of-sample checks.</p>
-    </section>
+    <div class="cp-dash-head">
+      <p class="cp-dash-kicker"><span class="cp-live-dot" aria-hidden="true"></span><span id="cpDashUpdated">Last close —</span></p>
+      <h1 class="cp-dash-title">Your portfolio today</h1>
+    </div>
+
+    <div class="cp-bento">
+      <section class="cp-card cp-glow cp-span-6 cp-hero" id="cpHeroCard" aria-labelledby="cpHeroLabel">
+        <p class="cp-card-label" id="cpHeroLabel">Account value</p>
+        <p class="cp-hero-val" id="cpAccountVal">—</p>
+        <p class="cp-hero-sub"><span id="cpHeroChange"></span> <span class="cp-muted" id="cpHeroChangeNote">Free funds + positions</span></p>
+        <div class="cp-hero-spark" id="cpHeroSpark"></div>
+      </section>
+
+      <section class="cp-card cp-span-3 cp-stats" aria-label="Account figures">
+        <div class="cp-stat">
+          <p class="cp-card-label">Invested</p>
+          <p class="cp-dstat-val" id="cpInvestedVal">—</p>
+          <p class="cp-muted">What open positions cost</p>
+        </div>
+        <div class="cp-stat">
+          <p class="cp-card-label">Free funds</p>
+          <p class="cp-dstat-val" id="cpFreeFundsVal">—</p>
+          <p class="cp-muted">Cash in the account</p>
+        </div>
+        <div class="cp-stat">
+          <p class="cp-card-label">Open result</p>
+          <p class="cp-dstat-val" id="cpOpenResultVal">—</p>
+          <p class="cp-muted">Positions − invested</p>
+        </div>
+      </section>
+
+      <section class="cp-card cp-span-3 cp-gauge-card" aria-labelledby="cpBreadthTitle">
+        <p class="cp-card-label" id="cpBreadthTitle">Market breadth</p>
+        <div class="cp-gauge" id="cpBreadthGauge"></div>
+        <p class="cp-muted cp-center" id="cpBreadthNote">Share of tracked instruments above their 200-day average.</p>
+      </section>
+
+      <section class="cp-span-12 cp-price-row" aria-label="Your holdings">
+        <div class="cp-price-cards" id="cpPriceCards"></div>
+      </section>
+
+      <section class="cp-span-12 cp-index-row" aria-label="Markets">
+        <div class="cp-index-tiles" id="cpIndexTiles"></div>
+      </section>
+
+      <section class="cp-card cp-span-7 cp-needs" id="cpTodayPanel" aria-labelledby="cpNeedsTitle">
+        <header class="cp-card-head">
+          <h2 id="cpNeedsTitle">What needs you</h2>
+        </header>
+        <p class="cp-stance" id="cpStanceSentence" data-stance="hold">Loading…</p>
+        <ul class="cp-rows" id="cpSuggestionsList"></ul>
+        <p class="cp-note" id="cpSuggestionsHidden" hidden></p>
+      </section>
+
+      <section class="cp-card cp-span-5 cp-cal" aria-labelledby="cpCalTitle">
+        <header class="cp-card-head">
+          <h2 id="cpCalTitle">Calendar</h2>
+          <span class="cp-muted" id="cpCalToday"></span>
+        </header>
+        <div class="cp-cal-next" id="cpCalNext"></div>
+        <div class="cp-cal-grid" id="cpCalGrid"></div>
+        <ul class="cp-cal-legend">
+          <li><span class="cp-cal-dot" data-kind="earnings"></span>Earnings</li>
+          <li><span class="cp-cal-dot" data-kind="dividend"></span>Dividend paid</li>
+          <li><span class="cp-cal-dot" data-kind="filing"></span>SEC filing</li>
+        </ul>
+      </section>
+
+      <section class="cp-card cp-span-12 cp-market" aria-labelledby="cpMarketTitle">
+        <header class="cp-card-head">
+          <div>
+            <p class="cp-card-kicker">Recent closes</p>
+            <h2 id="cpMarketTitle">Market overview</h2>
+          </div>
+          <div class="cp-seg" role="group" aria-label="Show">
+            <button type="button" class="cp-seg-btn cp-seg-on" data-filter="all">All</button>
+            <button type="button" class="cp-seg-btn" data-filter="held">Holdings</button>
+            <button type="button" class="cp-seg-btn" data-filter="watch">Watchlist</button>
+          </div>
+        </header>
+        <div class="cp-table-wrap">
+          <table class="cp-table cp-market-table">
+            <thead>
+              <tr>
+                <th scope="col" class="cp-col-no">No</th>
+                <th scope="col">Instrument</th>
+                <th scope="col" class="num">Price</th>
+                <th scope="col" class="num">1D</th>
+                <th scope="col" class="num">1W</th>
+                <th scope="col" class="num">1M</th>
+                <th scope="col" class="cp-col-spark">30 sessions</th>
+              </tr>
+            </thead>
+            <tbody id="cpMarketBody"><tr><td colspan="7" class="cp-empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <button type="button" class="cp-button cp-btn-sm cp-market-more" id="cpMarketMore" hidden>Show all</button>
+        <p class="cp-note" id="cpMarketNote">Daily closes SAIL has stored for your holdings and watchlist. Past moves, not forecasts.</p>
+      </section>
+    </div>
   </div>
 
   <div class="cp-tab-pane" id="cpPanel-portfolio" role="tabpanel" aria-labelledby="cpTab-portfolio" hidden>
@@ -815,10 +905,8 @@
   </div>
 </main>
 
-<footer class="cp-foot">
-  <span>Private &amp; local-first: statements remain on this host. SAIL never signs in to XTB.</span>
-  <span>Evidence, not truth. Reconciled against official broker exports.</span>
-</footer>
+</div>
+</div>
 
 <dialog class="cp-dialog" id="cpUploadDialog" aria-labelledby="cpDialogTitle">
   <form method="dialog" class="cp-dialog-form" id="cpUploadForm">

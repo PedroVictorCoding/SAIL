@@ -604,7 +604,7 @@ impl CapitalService {
         Ok(out)
     }
 
-    fn account_currency(&self, account: &AccountId) -> Result<String, ServiceError> {
+    pub(super) fn account_currency(&self, account: &AccountId) -> Result<String, ServiceError> {
         Ok(self
             .insights(account, AsOf::now(), Utc::now())?
             .account
