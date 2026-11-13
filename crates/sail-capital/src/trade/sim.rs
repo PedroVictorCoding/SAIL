@@ -3,7 +3,7 @@
 use chrono::NaiveDate;
 
 use super::indicators::atr;
-use super::setups::fire;
+use super::setups::fire_from;
 use super::{Bar, Costs, Exit, HoldingGuard, Instrument, SetupId, Side, SignalCard, Trade};
 
 const ENTRY_ZONE_ATR: f64 = 0.25;
@@ -16,38 +16,19 @@ pub(super) fn replay_from(instrument: &Instrument, costs: Costs, from: NaiveDate
     replay_since(instrument, costs, Some(from))
 }
 
-/// Bars before `from` a setup needs to warm up its indicators.
-fn lookback(setup: SetupId) -> usize {
-    match setup {
-        SetupId::TrendPullback => 200,
-        SetupId::SqueezeBreakout => 80,
-        SetupId::Donchian55 => 200,
-        SetupId::BollingerReversion => 200,
-        SetupId::InsideBarBreak => 20,
-        SetupId::ThreeDayReversal => 200,
-    }
-}
-
 fn replay_since(instrument: &Instrument, costs: Costs, from: Option<NaiveDate>) -> Vec<Trade> {
     let bars = &instrument.bars;
     let atr = atr(bars, 14);
-    let from_index = from.map(|from| bars.partition_point(|bar| bar.session < from));
     let mut trades = Vec::new();
     for setup in SetupId::ALL {
-        let firings = match (from, from_index) {
-            (Some(_), Some(index)) => {
-                let start = index.saturating_sub(lookback(setup));
-                fire(setup, &bars[start..])
-                    .into_iter()
-                    .map(|(at, side)| (at + start, side))
-                    .collect()
-            }
-            _ => fire(setup, bars),
-        };
+        // Indicators always see every bar (the running sums in `sma` and `bollinger`
+        // would round differently from a shorter start and could flip a firing); only
+        // the per-session conditions before `from` are skipped.
+        let start = from.map_or(0, |from| bars.partition_point(|bar| bar.session < from));
+        let firings = fire_from(setup, bars, start);
         for (index, side) in firings {
-            if let Some(from) = from
-                && bars[index].session < from
-            {
+            // Only firings from `from` on are simulated; earlier ones come from the cache.
+            if from.is_some_and(|from| bars[index].session < from) {
                 continue;
             }
             let Some(entry_index) = index.checked_add(1) else {
