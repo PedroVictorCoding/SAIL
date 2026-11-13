@@ -864,3 +864,114 @@ main {
   padding: 4px 10px;
   font-size: 12px;
 }
+
+/* Controls and notes shared by Outlook, Income and Settings. */
+.cp-forecast-disclaimer {
+  padding: 12px 20px;
+  background: rgba(100, 160, 240, 0.05);
+  border-bottom: 1px solid var(--sail-glass-border);
+  color: var(--sail-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cp-forecast-disclaimer p {
+  margin: 0;
+}
+
+.cp-price-note,
+.cp-unmapped-note {
+  padding: 12px 20px;
+  background: rgba(222, 238, 255, 0.03);
+  border-bottom: 1px solid var(--sail-glass-border);
+  color: var(--sail-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cp-price-note code,
+.cp-unmapped-note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--sail-surface-raised);
+  color: var(--sail-text);
+  border: 1px solid var(--sail-glass-border);
+}
+
+.cp-forecast-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--sail-glass-border);
+  background: var(--sail-surface);
+  flex-wrap: wrap;
+}
+
+.cp-horizon-pills {
+  display: flex;
+  flex-wrap: wrap;
+  background: var(--sail-surface-raised);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 2px;
+  gap: 2px;
+}
+
+.cp-horizon-btn {
+  border: none;
+  background: transparent;
+  color: var(--sail-text-muted);
+  padding: 6px 12px;
+  border-radius: calc(var(--sail-radius-control) - 2px);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--sail-transition-fast), color var(--sail-transition-fast);
+  white-space: nowrap;
+}
+
+.cp-horizon-btn:hover {
+  color: var(--sail-text);
+}
+
+.cp-horizon-btn.cp-active {
+  background: var(--sail-glass-fill);
+  color: var(--sail-text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.cp-forecast-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+.cp-horizon-pills {
+    width: 100%;
+  }
+
+.cp-horizon-btn {
+    flex: 1;
+    text-align: center;
+  }
+
+@media (max-width: 700px) {
+  .cp-forecast-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .cp-horizon-pills {
+    width: 100%;
+  }
+
+  .cp-horizon-btn {
+    flex: 1;
+    text-align: center;
+  }
+}

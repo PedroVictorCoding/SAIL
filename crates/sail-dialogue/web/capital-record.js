@@ -1,518 +1,291 @@
-// SAIL Capital — record.
+// SAIL Capital — Track record: has anything earned trust, and the evidence behind it.
 "use strict";
 
-let currentHorizon = 20;
+const STANDING_WORDS = {
+  earned: ["Earned", "cp-word-good"],
+  not_yet: ["Not yet", "cp-word-wait"],
+  failed: ["Failed", "cp-word-bad"],
+};
 
-let currentModel = "no_change";
+function accountQuery(prefix = "?") {
+  return currentAccount ? `${prefix}account=${encodeURIComponent(currentAccount)}` : "";
+}
 
-async function loadForecasts() {
-  const list = document.getElementById("cpForecastsList");
-  const withoutPricesWrap = document.getElementById("cpWithoutPricesWrap");
+function signed(value, digits = 2, suffix = "") {
+  const n = Number(value || 0);
+  return `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(digits)}${suffix}`;
+}
+
+function pct(value, digits = 0) {
+  return `${(Number(value || 0) * 100).toFixed(digits)}%`;
+}
+
+function horizonLabel(sessions) {
+  if (!sessions) return "";
+  const named = { 5: "1 week", 20: "1 month", 21: "1 month", 60: "1 quarter", 63: "3 months", 126: "6 months", 252: "1 year" };
+  return named[sessions] || `${sessions} sessions`;
+}
+
+function renderNotes(container, notes) {
+  if (!container) return;
+  container.innerHTML = (notes || []).map((n) => `<p class="cp-note">${escapeHtml(n)}</p>`).join("");
+}
+
+// --- The scorecard ------------------------------------------------------------------
+
+async function loadScorecard() {
+  const summary = document.getElementById("cpScorecardSummary");
+  const list = document.getElementById("cpScorecardRows");
   if (!list) return;
-
   if (accountList.length === 0) {
-    list.innerHTML = `<p class="cp-empty">Fetch or upload prices to see forecasts</p>`;
-    if (withoutPricesWrap) withoutPricesWrap.hidden = true;
+    if (summary) summary.textContent = "Import a report to build a track record.";
+    list.innerHTML = "";
     return;
   }
-
   try {
-    const params = new URLSearchParams({
-      horizon: String(currentHorizon),
-      model: currentModel,
-    });
-    if (currentAccount) params.set("account", currentAccount);
-    const data = await fetchJson(`/api/capital/forecasts?${params.toString()}`);
-    renderForecasts(data);
-  } catch (err) {
-    if (String(err.message).includes("404") || String(err.message).toLowerCase().includes("not found")) {
-      list.innerHTML = `<p class="cp-empty">Fetch or upload prices to see forecasts</p>`;
-    } else {
-      list.innerHTML = `<p class="cp-empty" style="color:var(--sail-text-subtle)">Forecasts unavailable: ${escapeHtml(err.message)}</p>`;
+    const card = await fetchJson(`/api/capital/scorecard${accountQuery()}`);
+    if (summary) summary.textContent = card.summary || "";
+    const rows = Array.isArray(card.rows) ? card.rows : [];
+    if (rows.length === 0) {
+      list.innerHTML = `<li class="cp-empty">Nothing has been evaluated yet. Evaluations need daily prices (Settings → Prices) and a signals run (Outlook).</li>`;
+      return;
     }
-    if (withoutPricesWrap) withoutPricesWrap.hidden = true;
+    list.innerHTML = rows.map((row) => {
+      const [word, cls] = STANDING_WORDS[row.standing] || [row.standing, "cp-word-wait"];
+      const horizon = row.horizon_sessions ? ` · ${horizonLabel(row.horizon_sessions)}` : "";
+      return `<li class="cp-row" data-standing="${escapeHtml(row.standing)}">
+          <span class="cp-row-title">${escapeHtml(row.name)}<span class="cp-row-horizon">${escapeHtml(horizon)}</span></span>
+          <span class="cp-row-value ${cls}">${word}</span>
+          <span class="cp-row-meta">${escapeHtml(row.headline)}</span>
+        </li>`;
+    }).join("");
+  } catch (err) {
+    if (summary) summary.textContent = "The track record is unavailable.";
+    list.innerHTML = `<li class="cp-empty">${escapeHtml(err.message)}</li>`;
   }
 }
 
-function renderForecasts(data) {
-  const list = document.getElementById("cpForecastsList");
-  const withoutPricesWrap = document.getElementById("cpWithoutPricesWrap");
-  if (!list) return;
+// --- Trade setups (from the latest signals run) --------------------------------------
 
-  if (!data || !data.forecasts || data.forecasts.length === 0) {
-    list.innerHTML = `<p class="cp-empty">Fetch or upload prices to see forecasts</p>`;
-    if (withoutPricesWrap) withoutPricesWrap.hidden = true;
+function renderScoreboard(verdicts) {
+  const body = document.getElementById("cpScoreboardBody");
+  const count = document.getElementById("cpScoreboardCount");
+  if (count) {
+    const passing = verdicts.filter((v) => v.publishes).length;
+    count.textContent = verdicts.length ? `· ${passing} of ${verdicts.length} pass` : "";
+  }
+  if (!body) return;
+  if (verdicts.length === 0) {
+    body.innerHTML = `<tr><td colspan="8" class="cp-empty">No run yet. Run the signals on Outlook.</td></tr>`;
     return;
   }
+  body.innerHTML = verdicts.map((v) => {
+    const sel = v.selection || {};
+    const hold = v.holdout || {};
+    const hitCi = Array.isArray(sel.hit_target1_ci) ? `${pct(sel.hit_target1_ci[0])}–${pct(sel.hit_target1_ci[1])}` : "—";
+    const expCi = Array.isArray(sel.expectancy_ci) ? `${signed(sel.expectancy_ci[0])} to ${signed(sel.expectancy_ci[1])}` : "—";
+    return `<tr>
+        <td>${escapeHtml(formatSetupName(sel.setup))}</td>
+        <td>${escapeHtml(signalSideLabel(sel.side))}</td>
+        <td>${escapeHtml(v.group || "—")}</td>
+        <td class="num">${sel.trades || 0}</td>
+        <td class="num">${pct(sel.hit_target1)} <span class="cp-ci">${hitCi}</span></td>
+        <td class="num">${signed(sel.expectancy_r, 2, "R")} <span class="cp-ci">${expCi}</span></td>
+        <td class="num">${signed(hold.expectancy_r, 2, "R")} <span class="cp-ci">${hold.trades || 0} trades</span></td>
+        <td><span class="${v.publishes ? "cp-word-good" : "cp-word-wait"}">${v.publishes ? "Publishes" : "Doesn't"}</span> <span class="cp-ci">${escapeHtml(v.reason || "")}</span></td>
+      </tr>`;
+  }).join("");
+}
 
-  list.innerHTML = "";
-  for (const f of data.forecasts) {
-    const card = document.createElement("div");
-    card.className = "cp-forecast-card";
+// --- Published signals, graded live ---------------------------------------------------
 
-    // Symbol & Close header
-    const sym = escapeHtml(f.symbol);
-    const dateStr = formatDay(f.as_of_session);
-    const closeStr = f.reference_close ? `${groupDecimal(f.reference_close)}` : "—";
+const EXIT_WORDS = {
+  stop: "Stopped out",
+  target1: "Target 1",
+  target2: "Target 2",
+  target3: "Target 3",
+  time: "Time exit",
+  timeout: "Time exit",
+};
 
-    let calibratedHtml = "";
-    if (f.probability_positive !== null && f.probability_positive !== undefined) {
-      const probPct = (f.probability_positive * 100).toFixed(0);
-      calibratedHtml = `<span class="cp-badge-calibrated" title="Verified calibrated in evaluation">P(&gt;0): ${probPct}% (calibrated)</span>`;
+async function loadTradeRecord() {
+  const totalsEl = document.getElementById("cpRecordTotals");
+  const count = document.getElementById("cpRecordCount");
+  const body = document.getElementById("cpRecordBody");
+  if (!body) return;
+  try {
+    const res = await fetchJson(`/api/capital/signals/trade/record${accountQuery()}`);
+    const totals = res.totals || {};
+    const cards = Array.isArray(res.cards) ? res.cards : [];
+    if (count) count.textContent = cards.length ? `· ${cards.length} published` : "";
+    if (totalsEl) {
+      totalsEl.textContent = totals.closed
+        ? `${totals.closed} closed: reached target 1 in ${pct(totals.hit_target1)}, mean ${signed(totals.mean_r, 2, "R")}, cumulative ${signed(totals.cumulative_r, 2, "R")} after costs.`
+        : "No closed signals yet.";
     }
-
-    const headHtml = `
-      <div class="cp-forecast-card-head">
-        <div class="cp-forecast-card-sym">
-          <strong>${sym}</strong>
-          <span class="cp-forecast-card-close">Last close: ${closeStr} (${dateStr})</span>
-        </div>
-        <div class="cp-forecast-badges">
-          ${calibratedHtml}
-        </div>
-      </div>
-    `;
-
-    let bodyHtml = "";
-    if (f.status && f.status.status === "insufficient_evidence") {
-      const reason = f.status.reason || "Not enough observations for baseline calculation";
-      bodyHtml = `
-        <div class="cp-forecast-insufficient">
-          <span class="cp-badge-insufficient">insufficient evidence</span>
-          <span class="cp-forecast-reason">${escapeHtml(reason)}</span>
-        </div>
-      `;
-    } else if (f.quantiles && f.quantiles.length >= 2) {
-      // Find 5%, median (50%), and 95% quantiles
-      const q05 = f.quantiles.find(q => Math.abs(q.p - 0.05) < 0.01) || f.quantiles[0];
-      const q95 = f.quantiles.find(q => Math.abs(q.p - 0.95) < 0.01) || f.quantiles[f.quantiles.length - 1];
-      const q50 = f.quantiles.find(q => Math.abs(q.p - 0.50) < 0.01) || {
-        log_return: f.median_log_return !== null && f.median_log_return !== undefined ? f.median_log_return : 0,
-      };
-
-      const r05 = q05.log_return;
-      const r50 = q50.log_return;
-      const r95 = q95.log_return;
-
-      // Percent changes: exp(q) - 1
-      const pct05Val = (Math.exp(r05) - 1) * 100;
-      const pct50Val = (Math.exp(r50) - 1) * 100;
-      const pct95Val = (Math.exp(r95) - 1) * 100;
-
-      const fmtPct = (val) => `${val >= 0 ? "+" : ""}${val.toFixed(1)}%`;
-      const pct05Str = fmtPct(pct05Val);
-      const pct50Str = fmtPct(pct50Val);
-      const pct95Str = fmtPct(pct95Val);
-
-      // Price levels: close * exp(q)
-      const refCloseNum = parseFloat(f.reference_close);
-      const p05Val = !isNaN(refCloseNum) ? refCloseNum * Math.exp(r05) : null;
-      const p50Val = f.median_terminal_price !== null && f.median_terminal_price !== undefined
-        ? f.median_terminal_price
-        : (!isNaN(refCloseNum) ? refCloseNum * Math.exp(r50) : null);
-      const p95Val = !isNaN(refCloseNum) ? refCloseNum * Math.exp(r95) : null;
-
-      const fmtPrice = (val) => val !== null && !isNaN(val) ? val.toFixed(2) : "—";
-      const p05Str = fmtPrice(p05Val);
-      const p50Str = fmtPrice(p50Val);
-      const p95Str = fmtPrice(p95Val);
-
-      // Visual range bar calculations
-      const span = r95 - r05;
-      let medianPos = 50;
-      let zeroPos = null;
-      if (span > 0.000001) {
-        medianPos = Math.min(98, Math.max(2, ((r50 - r05) / span) * 100));
-        if (r05 <= 0 && r95 >= 0) {
-          zeroPos = ((0 - r05) / span) * 100;
+    if (cards.length === 0) {
+      body.innerHTML = `<tr><td colspan="5" class="cp-empty">Nothing has been published yet.</td></tr>`;
+      return;
+    }
+    body.innerHTML = cards.map((item) => {
+      const c = item.card || {};
+      const status = item.status || "open";
+      const graded = item.graded;
+      let outcome = status === "open" ? "Open" : status === "unfilled" ? "Not filled" : "Closed";
+      let result = "—";
+      let resultClass = "";
+      if (status === "closed" && graded) {
+        outcome = EXIT_WORDS[String(graded.exit || "").toLowerCase()] || outcome;
+        if (graded.r_multiple !== undefined) {
+          result = signed(graded.r_multiple, 2, "R");
+          resultClass = Number(graded.r_multiple) >= 0 ? "positive" : "negative";
         }
       }
-
-      const zeroTickHtml = zeroPos !== null
-        ? `<div class="cp-forecast-bar-zero" style="left: ${zeroPos.toFixed(1)}%" title="Reference price (0% change)"></div>`
-        : "";
-      const medianTickHtml = `<div class="cp-forecast-bar-median" style="left: ${medianPos.toFixed(1)}%" title="Median: ${pct50Str} (${p50Str})"></div>`;
-
-      bodyHtml = `
-        <div class="cp-forecast-range-wrap">
-          <div class="cp-forecast-bar-track">
-            <div class="cp-forecast-bar-fill"></div>
-            ${zeroTickHtml}
-            ${medianTickHtml}
-          </div>
-          <div class="cp-forecast-range-labels">
-            <div class="cp-forecast-label-col">
-              <span class="cp-forecast-val-pct ${pct05Val < 0 ? "neg" : "pos"}">5%: ${pct05Str}</span>
-              <span class="cp-forecast-val-price">${p05Str}</span>
-            </div>
-            <div class="cp-forecast-label-col center">
-              <span class="cp-forecast-val-pct ${pct50Val < 0 ? "neg" : "pos"}">Median: ${pct50Str}</span>
-              <span class="cp-forecast-val-price">${p50Str}</span>
-            </div>
-            <div class="cp-forecast-label-col right">
-              <span class="cp-forecast-val-pct ${pct95Val < 0 ? "neg" : "pos"}">95%: ${pct95Str}</span>
-              <span class="cp-forecast-val-price">${p95Str}</span>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    card.innerHTML = `${headHtml}${bodyHtml}`;
-    list.appendChild(card);
-  }
-
-  if (withoutPricesWrap) {
-    if (data.without_prices && data.without_prices.length > 0) {
-      withoutPricesWrap.hidden = false;
-      withoutPricesWrap.innerHTML = `Holdings without price history: <strong>${data.without_prices.map(escapeHtml).join(", ")}</strong> (import prices using <em>Upload price file</em>).`;
-    } else {
-      withoutPricesWrap.hidden = true;
-      withoutPricesWrap.innerHTML = "";
-    }
+      return `<tr>
+          <td>${formatDay(c.signal_session)}</td>
+          <td>${escapeHtml(c.symbol || "—")}</td>
+          <td>${escapeHtml(signalSideLabel(c.side))}</td>
+          <td>${escapeHtml(outcome)}</td>
+          <td class="num ${resultClass}">${result}</td>
+        </tr>`;
+    }).join("");
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="5" class="cp-empty">Record unavailable: ${escapeHtml(err.message)}</td></tr>`;
   }
 }
+
+// --- Baseline forecasts, walk-forward -------------------------------------------------
 
 function modelDisplayName(m) {
   switch (m) {
-    case "no_change": return "No Change (baseline)";
-    case "trailing_drift": return "Trailing Drift";
-    case "ewma_volatility": return "EWMA Volatility";
-    case "empirical_horizon": return "Empirical Horizon";
+    case "no_change": return "No change (benchmark)";
+    case "trailing_drift": return "Trailing drift";
+    case "ewma_volatility": return "EWMA volatility";
+    case "empirical_horizon": return "Past returns";
     default: return m;
   }
 }
 
 async function loadEvaluation() {
-  const wrap = document.getElementById("cpScorecardWrap");
-  const meta = document.getElementById("cpScorecardMeta");
-  const notesWrap = document.getElementById("cpScorecardNotes");
+  const wrap = document.getElementById("cpEvalWrap");
   if (!wrap) return;
-
   if (accountList.length === 0) {
-    wrap.innerHTML = `<p class="cp-empty">No evaluation available yet</p>`;
-    if (notesWrap) notesWrap.hidden = true;
+    wrap.innerHTML = `<p class="cp-empty">No evaluation yet.</p>`;
     return;
   }
-
   try {
-    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
-    const report = await fetchJson(`/api/capital/forecasts/evaluation${query}`);
-    renderEvaluation(report);
+    renderEvaluation(await fetchJson(`/api/capital/forecasts/evaluation${accountQuery()}`));
   } catch (err) {
-    if (String(err.message).includes("404") || String(err.message).toLowerCase().includes("not found")) {
-      wrap.innerHTML = `<p class="cp-empty">No evaluation available yet</p>`;
-    } else {
-      wrap.innerHTML = `<p class="cp-empty" style="color:var(--sail-text-subtle)">Evaluation unavailable: ${escapeHtml(err.message)}</p>`;
-    }
-    if (notesWrap) notesWrap.hidden = true;
+    wrap.innerHTML = /404|not found/i.test(String(err.message))
+      ? `<p class="cp-empty">No evaluation yet.</p>`
+      : `<p class="cp-empty">Evaluation unavailable: ${escapeHtml(err.message)}</p>`;
+    renderNotes(document.getElementById("cpEvalNotes"), []);
   }
 }
 
 function renderEvaluation(report) {
-  const wrap = document.getElementById("cpScorecardWrap");
-  const meta = document.getElementById("cpScorecardMeta");
-  const notesWrap = document.getElementById("cpScorecardNotes");
+  const wrap = document.getElementById("cpEvalWrap");
+  const meta = document.getElementById("cpEvalMeta");
+  const notes = document.getElementById("cpEvalNotes");
   if (!wrap) return;
-
   if (!report || !report.scores || report.scores.length === 0) {
-    wrap.innerHTML = `<p class="cp-empty">Evaluation needs at least 252 daily returns per instrument to score baselines.</p>`;
-    if (notesWrap) notesWrap.hidden = true;
-    if (meta) meta.textContent = "Out-of-sample backtest";
+    wrap.innerHTML = `<p class="cp-empty">Scoring needs at least 252 daily returns per instrument.</p>`;
+    if (meta) meta.textContent = "";
+    renderNotes(notes, []);
     return;
   }
-
   if (meta) {
-    const instCount = report.instruments ? report.instruments.length : 0;
-    const originsStr = report.origins && report.origins[0] && report.origins[1]
-      ? ` · ${report.origins[0]} to ${report.origins[1]}`
-      : "";
-    meta.textContent = `${instCount} instruments evaluated${originsStr}`;
+    const n = report.instruments ? report.instruments.length : 0;
+    meta.textContent = `· ${n} instrument${n === 1 ? "" : "s"}`;
   }
 
+  const rankIc = new Map((report.rank_ic || []).map((r) => [`${r.model}:${r.horizon_sessions}`, r]));
   const horizons = (report.config && report.config.horizons) || [5, 20, 60];
-  const rankIcMap = new Map();
-  if (report.rank_ic) {
-    for (const r of report.rank_ic) {
-      rankIcMap.set(`${r.model}:${r.horizon_sessions}`, r);
-    }
-  }
-
-  let html = `<div class="cp-scorecard-groups">`;
+  const rows = [];
   for (const h of horizons) {
-    const horizonScores = report.scores.filter(s => s.horizon_sessions === h);
-    if (horizonScores.length === 0) continue;
-
-    const horizonLabel = h === 5 ? "5 sessions (1 week)" : (h === 20 ? "20 sessions (1 month)" : `${h} sessions (1 quarter)`);
-
-    let rowsHtml = "";
-    for (const s of horizonScores) {
-      const name = modelDisplayName(s.model);
-      const count = s.forecasts;
-
-      // CRPS Skill vs NoChange
-      let skillHtml = "—";
-      if (s.model === "no_change") {
-        skillHtml = `<span class="cp-skill-zero">0.0% (base)</span>`;
-      } else {
-        const skillPct = (s.crps_skill * 100).toFixed(1);
-        if (s.crps_skill > 0.0005) {
-          skillHtml = `<span class="cp-skill-pos">+${skillPct}%</span>`;
-        } else if (s.crps_skill < -0.0005) {
-          skillHtml = `<span class="cp-skill-neg">${skillPct}%</span>`;
-        } else {
-          skillHtml = `<span class="cp-skill-zero">${skillPct}%</span>`;
-        }
-      }
-
-      // 90% coverage
-      const cov90Pct = (s.interval_90 * 100).toFixed(1);
-
-      // Direction hit rate
-      const dirPct = (s.direction_hit_rate * 100).toFixed(1);
-
-      // Calibrated tick
-      const calHtml = s.calibrated
-        ? `<span class="cp-scorecard-calibrated-yes" title="Calibrated (covers 85-95% & median 42-58%)">✓</span>`
-        : `<span class="cp-scorecard-calibrated-no">—</span>`;
-
-      // Rank IC
-      const icKey = `${s.model}:${h}`;
-      const ic = rankIcMap.get(icKey);
-      let icStr = "—";
-      if (ic && ic.origins > 0) {
-        icStr = ic.mean >= 0 ? `+${ic.mean.toFixed(3)}` : ic.mean.toFixed(3);
-      }
-
-      rowsHtml += `
-        <tr>
-          <td><strong>${escapeHtml(name)}</strong></td>
-          <td class="num">${count}</td>
-          <td class="num">${skillHtml}</td>
-          <td class="num">${cov90Pct}%</td>
-          <td class="num">${dirPct}%</td>
-          <td class="center">${calHtml}</td>
-          <td class="num">${icStr}</td>
-        </tr>
-      `;
-    }
-
-    html += `
-      <div class="cp-scorecard-group">
-        <h4 class="cp-scorecard-group-title">Horizon: ${horizonLabel}</h4>
-        <div class="cp-table-wrap">
-          <table class="cp-scorecard-table">
-            <thead>
-              <tr>
-                <th scope="col">Model</th>
-                <th scope="col" class="num">Forecasts</th>
-                <th scope="col" class="num">CRPS Skill</th>
-                <th scope="col" class="num">90% Coverage</th>
-                <th scope="col" class="num">Direction Hit</th>
-                <th scope="col" class="center">Calibrated</th>
-                <th scope="col" class="num">Rank IC</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rowsHtml}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    `;
-  }
-  html += `</div>`;
-  wrap.innerHTML = html;
-
-  // Notes and Skipped
-  if (notesWrap) {
-    const notes = [];
-    if (report.skipped && report.skipped.length > 0) {
-      const skippedStr = report.skipped.map(([sym, reason]) => `${sym} (${reason})`).join(", ");
-      notes.push(`Skipped from evaluation: ${skippedStr}`);
-    }
-    if (report.notes && report.notes.length > 0) {
-      for (const n of report.notes) {
-        notes.push(n);
-      }
-    }
-    if (notes.length > 0) {
-      notesWrap.hidden = false;
-      notesWrap.innerHTML = notes.map(n => `<div class="cp-scorecard-note">${escapeHtml(n)}</div>`).join("");
-    } else {
-      notesWrap.hidden = true;
-      notesWrap.innerHTML = "";
+    for (const s of report.scores.filter((x) => x.horizon_sessions === h)) {
+      const ic = rankIc.get(`${s.model}:${h}`);
+      const skill = s.model === "no_change"
+        ? `<span class="cp-word-wait">benchmark</span>`
+        : `<span class="${s.crps_skill > 0.0005 ? "cp-word-good" : s.crps_skill < -0.0005 ? "cp-word-bad" : "cp-word-wait"}">${signed(s.crps_skill * 100, 1, "%")}</span>`;
+      rows.push(`<tr>
+          <td>${escapeHtml(modelDisplayName(s.model))}</td>
+          <td>${horizonLabel(h)}</td>
+          <td class="num">${s.forecasts}</td>
+          <td class="num">${skill}</td>
+          <td class="num">${pct(s.interval_90, 1)}</td>
+          <td class="num">${pct(s.direction_hit_rate, 1)}</td>
+          <td>${s.calibrated ? `<span class="cp-word-good">Yes</span>` : `<span class="cp-word-wait">No</span>`}</td>
+          <td class="num">${ic && ic.origins > 0 ? signed(ic.mean, 3) : "—"}</td>
+        </tr>`);
     }
   }
+  wrap.innerHTML = `<div class="cp-table-wrap">
+      <table class="cp-table">
+        <thead><tr>
+          <th scope="col">Model</th><th scope="col">Horizon</th><th scope="col" class="num">Forecasts</th>
+          <th scope="col" class="num">Skill</th><th scope="col" class="num">Inside 90%</th>
+          <th scope="col" class="num">Direction</th><th scope="col">Calibrated</th><th scope="col" class="num">Rank IC</th>
+        </tr></thead>
+        <tbody>${rows.join("")}</tbody>
+      </table>
+    </div>`;
+
+  const lines = [];
+  if (report.skipped && report.skipped.length > 0) {
+    lines.push(`Skipped: ${report.skipped.map(([sym, why]) => `${sym} (${why})`).join(", ")}.`);
+  }
+  renderNotes(notes, lines.concat(report.notes || []));
 }
+
+// --- Signal skill ---------------------------------------------------------------------
 
 function formatSignalName(sig) {
   switch (sig) {
     case "momentum12_1":
-    case "momentum_12_1": return "12-1 Momentum";
+    case "momentum_12_1": return "12-1 momentum";
     case "short_term_reversal": return "Short-term reversal";
     case "low_volatility": return "Low volatility";
-    case "trend": return "Trend (200d)";
-    case "chart_pattern": return "Chart patterns";
-    case "foundation_forecast": return "Foundation forecast";
+    case "trend": return "Trend";
+    case "chart_pattern": return "Chart patterns (YOLO)";
+    case "chart_trend": return "Chart trend (YOLO)";
+    case "foundation_forecast": return "Foundation model (Chronos)";
     case "filing_sentiment": return "Filing sentiment";
     case "insider_buying": return "Insider buying";
-    case "chart_trend": return "Chart trend (YOLO)";
     default: return sig ? sig.replace(/_/g, " ") : "—";
   }
 }
 
 async function loadSignals() {
-  const tbody = document.getElementById("cpSignalsBody");
-  const notesWrap = document.getElementById("cpSignalsNotes");
-  if (!tbody) return;
-
-  if (accountList.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">Import a report to see signal skill.</td></tr>`;
-    if (notesWrap) notesWrap.hidden = true;
-    return;
-  }
-
+  const body = document.getElementById("cpSignalsBody");
+  const notes = document.getElementById("cpSignalsNotes");
+  if (!body) return;
+  const empty = (text) => {
+    body.innerHTML = `<tr><td colspan="6" class="cp-empty">${escapeHtml(text)}</td></tr>`;
+    renderNotes(notes, []);
+  };
+  if (accountList.length === 0) return empty("Import a report to see signal skill.");
   try {
-    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
-    const report = await fetchJson(`/api/capital/signals${query}`);
-
-    if (!report.skill || report.skill.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">No signal report yet.</td></tr>`;
-      if (notesWrap) notesWrap.hidden = true;
-      return;
-    }
-
-    tbody.innerHTML = report.skill.map(s => {
-      const isDimmed = s.weight === 0 || s.ic_used === 0;
-      const icStr = s.ic_mean >= 0 ? `+${s.ic_mean.toFixed(3)}` : s.ic_mean.toFixed(3);
-      const tStr = s.t_stat >= 0 ? `+${s.t_stat.toFixed(2)}` : s.t_stat.toFixed(2);
-      const icUsedStr = s.ic_used >= 0 ? `+${s.ic_used.toFixed(3)}` : s.ic_used.toFixed(3);
-      const weightStr = `${(s.weight * 100).toFixed(1)}%`;
-
-      return `
-        <tr class="${isDimmed ? "cp-signal-dimmed" : ""}">
-          <td><strong>${escapeHtml(formatSignalName(s.signal))}</strong></td>
-          <td>${s.horizon_sessions} sessions</td>
-          <td class="num">${icStr}</td>
-          <td class="num">${tStr}</td>
-          <td class="num">${icUsedStr}</td>
-          <td class="num">${weightStr}</td>
-        </tr>
-      `;
+    const report = await fetchJson(`/api/capital/signals${accountQuery()}`);
+    if (!report.skill || report.skill.length === 0) return empty("No signal report yet.");
+    body.innerHTML = report.skill.map((s) => {
+      const off = s.weight === 0 || s.ic_used === 0;
+      return `<tr class="${off ? "cp-row-off" : ""}">
+          <td>${escapeHtml(formatSignalName(s.signal))}</td>
+          <td>${horizonLabel(s.horizon_sessions)}</td>
+          <td class="num">${signed(s.ic_mean, 3)}</td>
+          <td class="num">${signed(s.t_stat, 2)}</td>
+          <td class="num">${signed(s.ic_used, 3)}</td>
+          <td class="num">${pct(s.weight, 1)}</td>
+        </tr>`;
     }).join("");
-
-    if (notesWrap) {
-      if (report.notes && report.notes.length > 0) {
-        notesWrap.hidden = false;
-        notesWrap.innerHTML = report.notes.map(n => `<div class="cp-scorecard-note">${escapeHtml(n)}</div>`).join("");
-      } else {
-        notesWrap.hidden = true;
-        notesWrap.innerHTML = "";
-      }
-    }
+    renderNotes(notes, report.notes);
   } catch (_) {
-    tbody.innerHTML = `<tr><td colspan="6" class="cp-empty">No signal report yet.</td></tr>`;
-    if (notesWrap) notesWrap.hidden = true;
-  }
-}
-
-function formatSetupName(setup) {
-  switch (setup) {
-    case "trend_pullback":
-    case "TrendPullback":
-      return "Trend Pullback";
-    case "squeeze_breakout":
-    case "SqueezeBreakout":
-      return "Squeeze Breakout";
-    case "donchian55":
-    case "Donchian55":
-      return "Donchian 55";
-    case "bollinger_reversion":
-    case "BollingerReversion":
-      return "Bollinger Reversion";
-    case "inside_bar_break":
-    case "InsideBarBreak":
-      return "Inside Bar Break";
-    case "three_day_reversal":
-    case "ThreeDayReversal":
-      return "3-Day Reversal";
-    default:
-      return setup ? String(setup).replace(/([A-Z])/g, " $1").replace(/_/g, " ").trim() : "—";
-  }
-}
-
-async function loadTradeRecord() {
-  const closedEl = document.getElementById("cpRecordTotalClosed");
-  const hitT1El = document.getElementById("cpRecordTotalHitT1");
-  const meanREl = document.getElementById("cpRecordTotalMeanR");
-  const cumREl = document.getElementById("cpRecordTotalCumR");
-  const tbody = document.getElementById("cpRecordBody");
-
-  if (!tbody) return;
-
-  try {
-    const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
-    const res = await fetchJson(`/api/capital/signals/trade/record${query}`);
-
-    const totals = res.totals || {};
-    if (closedEl) closedEl.textContent = totals.closed !== undefined ? String(totals.closed) : "0";
-    if (hitT1El) {
-      hitT1El.textContent = totals.hit_target1 !== undefined ? `${(totals.hit_target1 * 100).toFixed(1)}%` : "—";
-    }
-    if (meanREl) {
-      const m = Number(totals.mean_r || 0);
-      meanREl.textContent = totals.mean_r !== undefined ? `${m >= 0 ? "+" : ""}${m.toFixed(2)}R` : "—";
-      meanREl.className = `cp-stat-val ${m >= 0 ? "cp-val-pos" : "cp-val-neg"}`;
-    }
-    if (cumREl) {
-      const c = Number(totals.cumulative_r || 0);
-      cumREl.textContent = totals.cumulative_r !== undefined ? `${c >= 0 ? "+" : ""}${c.toFixed(2)}R` : "—";
-      cumREl.className = `cp-stat-val ${c >= 0 ? "cp-val-pos" : "cp-val-neg"}`;
-    }
-
-    const cards = Array.isArray(res.cards) ? res.cards : [];
-    if (cards.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="5" class="cp-empty">No past signals recorded yet.</td></tr>`;
-      return;
-    }
-
-    tbody.innerHTML = cards.map(item => {
-      const c = item.card || {};
-      const status = item.status || "open";
-      const graded = item.graded;
-
-      let exitLabel = status;
-      if (status === "closed" && graded && graded.exit) {
-        exitLabel = graded.exit.toUpperCase();
-      }
-
-      let rDisplay = "—";
-      let rClass = "";
-      if (status === "closed" && graded && graded.r_multiple !== undefined) {
-        const r = Number(graded.r_multiple);
-        rDisplay = `${r >= 0 ? "+" : ""}${r.toFixed(2)}R`;
-        rClass = r >= 0 ? "cp-r-pos" : "cp-r-neg";
-      }
-
-      const sideBadge = c.side === "long" ? "cp-side-long" : "cp-side-short";
-
-      return `
-        <tr>
-          <td>${formatDate(c.signal_session)}</td>
-          <td><strong>${escapeHtml(c.symbol || "—")}</strong></td>
-          <td><span class="cp-badge ${sideBadge}">${(c.side || "").toUpperCase()}</span></td>
-          <td><span class="cp-badge cp-badge-${status}">${escapeHtml(exitLabel)}</span></td>
-          <td class="num ${rClass}"><strong>${rDisplay}</strong></td>
-        </tr>
-      `;
-    }).join("");
-  } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5" class="cp-empty">Record data unavailable (${escapeHtml(err.message)}).</td></tr>`;
+    empty("No signal report yet.");
   }
 }
 
 registerTab("record", {
   load: () =>
-    Promise.all([loadTradeSignals(), loadTradeRecord(), loadSignals(), loadForecasts(), loadEvaluation()]),
+    Promise.all([loadScorecard(), loadTradeSignals(), loadTradeRecord(), loadSignals(), loadEvaluation()]),
 });

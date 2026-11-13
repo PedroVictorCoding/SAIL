@@ -31,14 +31,17 @@
 
 .cp-outlook-chart-wrap {
   position: relative;
-  width: calc(100% - 40px);
-  margin: 16px 20px 12px;
-  min-height: 280px;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid var(--sail-glass-border);
-  border-radius: var(--sail-radius-card, 16px);
-  padding: 10px;
+  margin: 12px 20px;
   overflow: hidden;
+}
+
+.cp-outlook-chart-wrap:has(svg) {
+  min-height: 280px;
+}
+
+.cp-outlook-chart-wrap > .cp-empty {
+  padding: 4px 0;
+  text-align: left;
 }
 
 .cp-outlook-chart-wrap svg {
@@ -363,35 +366,6 @@
   color: var(--sail-text-muted);
 }
 
-/* Trade Signals, Holding Guards & Universe Watchlist */
-
-/* Signals Header & Banner */
-.cp-signals-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.cp-signals-title-group h2 {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.cp-signals-banner {
-  background: rgba(45, 55, 72, 0.4);
-  border: 1px solid rgba(100, 160, 240, 0.2);
-  border-radius: var(--sail-radius-control, 8px);
-  padding: 12px 16px;
-  font-size: 13px;
-  color: var(--sail-text-muted);
-  line-height: 1.5;
-  margin-bottom: 20px;
-}
-
 /* Asset search & one-off signal check */
 .cp-signal-search {
   margin-bottom: 20px;
@@ -548,277 +522,8 @@
   color: var(--sail-text-muted);
 }
 
-/* Cards Grid */
-.cp-signals-cards-section {
-  margin-bottom: 24px;
-}
-
-.cp-signals-cards-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
-}
-
-/* Empty State */
-.cp-signals-empty {
-  background: var(--sail-surface-raised, #161b22);
-  border: 1px solid var(--sail-glass-border);
-  border-radius: var(--sail-radius-card, 12px);
-  padding: 32px 24px;
-  text-align: center;
-}
-
-.cp-empty-statement {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--sail-text);
-  margin-bottom: 8px;
-}
-
-.cp-empty-sub {
-  font-size: 13px;
-  color: var(--sail-text-muted);
-  max-width: 540px;
-  margin: 0 auto;
-  line-height: 1.5;
-}
-
-/* Signal Card — Telegram Dark Style */
-.cp-signal-card {
-  background: #111827;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: var(--sail-radius-card, 12px);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
-  position: relative;
-  overflow: hidden;
-}
-
-.cp-signal-card:hover {
-  border-color: rgba(100, 160, 240, 0.4);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-}
-
-.cp-card-highlight {
-  outline: 2px solid #38bdf8;
-  box-shadow: 0 0 24px rgba(56, 189, 248, 0.4);
-  animation: cp-pulse-highlight 2s ease;
-}
-
-@keyframes cp-pulse-highlight {
-  0% { transform: scale(1.02); }
-  50% { transform: scale(1.03); }
-  100% { transform: scale(1); }
-}
-
-.cp-card-head {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  padding-bottom: 10px;
-}
-
-.cp-card-symbol-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.cp-card-symbol {
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: #f8fafc;
-}
-
-.cp-side-badge {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-
-.cp-side-long {
-  background: rgba(34, 197, 94, 0.2);
-  color: #4ade80;
-  border: 1px solid rgba(34, 197, 94, 0.4);
-}
-
-.cp-side-short {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.4);
-}
-
-.cp-card-meta-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  font-size: 11px;
-}
-
-.cp-setup-badge {
-  background: rgba(255, 255, 255, 0.06);
-  color: #cbd5e1;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-weight: 500;
-}
-
-.cp-class-badge {
-  background: rgba(148, 163, 184, 0.15);
-  color: #94a3b8;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.cp-sessions-badge {
-  color: var(--sail-text-subtle);
-  font-size: 11px;
-  margin-left: auto;
-}
-
-/* Price Levels (Telegram Style Rows) */
-.cp-card-levels {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: rgba(0, 0, 0, 0.25);
-  border-radius: 8px;
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-.cp-level-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 13px;
-}
-
-.cp-level-label {
-  color: var(--sail-text-muted);
-  font-size: 12px;
-}
-
-.cp-level-val {
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: #f1f5f9;
-}
-
-.cp-level-dist {
-  font-size: 11px;
-  font-weight: 400;
-  margin-left: 4px;
-}
-
-.cp-level-stop .cp-level-val {
-  color: #f87171;
-}
-
-.cp-level-stop .cp-level-dist {
-  color: #ef4444;
-}
-
-.cp-level-targets {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.08);
-  padding-top: 6px;
-  margin-top: 2px;
-}
-
-.cp-level-target .cp-level-val {
-  color: #4ade80;
-}
-
-.cp-level-target .cp-level-dist {
-  color: #22c55e;
-}
-
-/* Sizing */
-.cp-card-size {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  padding: 0 4px;
-}
-
-.cp-size-label {
-  color: var(--sail-text-subtle);
-}
-
-.cp-size-val {
-  font-weight: 500;
-  color: #e2e8f0;
-}
-
-/* Evidence Line */
-.cp-card-evidence {
-  background: rgba(30, 41, 59, 0.5);
-  border-left: 3px solid #38bdf8;
-  border-radius: 0 6px 6px 0;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.cp-evidence-tag {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 700;
-  color: #38bdf8;
-}
-
-.cp-evidence-line {
-  font-size: 12px;
-  color: #cbd5e1;
-  line-height: 1.45;
-}
-
-/* Relation and Warnings */
-.cp-card-relation {
-  font-size: 12px;
-  color: #93c5fd;
-  background: rgba(59, 130, 246, 0.1);
-  padding: 6px 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(59, 130, 246, 0.2);
-}
-
-.cp-card-warnings {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.cp-warning-pill {
-  font-size: 11px;
-  color: #fcd34d;
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.3);
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-
-/* Mini SVG Chart */
-.cp-card-chart {
+/* The small price chart inside a signal row */
+.cp-sig-chart {
   width: 100%;
   height: 120px;
   background: #090d16;
@@ -832,4 +537,105 @@
   width: 100%;
   height: 100%;
   display: block;
+}
+
+/* Trade signals: one quiet row per published signal, detail on open. */
+.cp-sig {
+  border-top: 1px solid var(--sail-glass-border);
+}
+
+.cp-sig:first-child {
+  border-top: 0;
+}
+
+.cp-sig summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 11px 20px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.cp-sig summary::-webkit-details-marker {
+  display: none;
+}
+
+.cp-sig summary:hover {
+  background: rgb(255 255 255 / .025);
+}
+
+.cp-sig summary:focus-visible {
+  outline: 2px solid var(--sail-focus-ring);
+  outline-offset: -2px;
+}
+
+.cp-sig-title {
+  font-weight: 500;
+  color: var(--sail-text);
+}
+
+.cp-sig-entry {
+  margin-left: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sail-text-muted);
+}
+
+.cp-sig-meta {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-sig-body {
+  padding: 0 20px 14px;
+  font-size: 13px;
+  color: var(--sail-text-muted);
+}
+
+.cp-sig-levels {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px 16px;
+  margin: 0 0 10px;
+}
+
+.cp-sig-level dt {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-sig-level dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--sail-text);
+}
+
+.cp-sig-dist {
+  font-size: 11px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-sig-line {
+  margin: 0 0 6px;
+  line-height: 1.45;
+}
+
+.cp-sig-chart {
+  max-width: 420px;
+  margin-top: 8px;
+}
+
+.cp-signals-empty {
+  padding: 14px 20px;
+}
+
+.cp-signal-search .cp-signal-search-form,
+.cp-signal-search .cp-signal-search-status,
+.cp-signal-search .cp-signal-search-results,
+.cp-signal-search .cp-signal-check {
+  margin-left: 20px;
+  margin-right: 20px;
 }

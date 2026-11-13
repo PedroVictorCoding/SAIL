@@ -109,10 +109,7 @@ async function loadOutlook() {
     const reason = getStatusReason(outlook.status);
     if (reason && (!outlook.fan || outlook.fan.length === 0)) {
       wrap.innerHTML = `
-        <div class="cp-forecast-insufficient">
-          <span class="cp-badge-insufficient">insufficient evidence</span>
-          <span class="cp-forecast-reason">${escapeHtml(reason)}</span>
-        </div>
+        <p class="cp-empty"><span class="cp-word-wait">Not enough data:</span> ${escapeHtml(reason)}</p>
       `;
       hideSupportingPanels();
       return;
@@ -724,84 +721,51 @@ function renderMiniSvgChart(card, closes) {
   return svg;
 }
 
+
+function signalLevel(label, price, entryMid) {
+  const dist = entryMid ? ` <span class="cp-sig-dist">${formatDistPct(price, entryMid)}%</span>` : "";
+  return `<div class="cp-sig-level"><dt>${label}</dt><dd>${formatTradePrice(price)}${dist}</dd></div>`;
+}
+
 function renderSignalCardMarkup(c, idPrefix = "") {
   const entryLow = Math.min(c.entry_zone[0], c.entry_zone[1]);
   const entryHigh = Math.max(c.entry_zone[0], c.entry_zone[1]);
   const entryMid = (entryLow + entryHigh) / 2;
-  const sideClass = c.side === "long" ? "cp-side-long" : "cp-side-short";
-  const sideLabel = c.side === "long" ? "BUY / LONG" : "SELL / SHORT";
+  const meta = [formatSetupName(c.setup), `up to ${c.max_sessions} sessions`];
+  if (c.needs_cfd) meta.push("trades as a CFD");
+  const warnings = (c.warnings || [])
+    .map((w) => `<p class="cp-sig-line cp-word-warn">${escapeHtml(w)}</p>`)
+    .join("");
 
-  return `
-    <article class="cp-signal-card" id="${idPrefix}card-${c.id}">
-      <header class="cp-card-head">
-        <div class="cp-card-symbol-line">
-          <span class="cp-card-symbol">${escapeHtml(c.symbol)}</span>
-          <span class="cp-side-badge ${sideClass}">${sideLabel}</span>
-          ${c.needs_cfd ? '<span class="cp-badge cp-badge-cfd" title="Trades as CFD with leverage & overnight financing">Needs CFD</span>' : ''}
+  return `<li class="cp-sig" id="${idPrefix}card-${c.id}">
+      <details>
+        <summary>
+          <span class="cp-sig-title">${escapeHtml(c.symbol)} <span class="${c.side === "long" ? "cp-word-good" : "cp-word-bad"}">${signalSideLabel(c.side)}</span></span>
+          <span class="cp-sig-entry">entry ${formatTradePrice(entryLow)} – ${formatTradePrice(entryHigh)}</span>
+          <span class="cp-sig-meta">${escapeHtml(meta.join(" · "))}</span>
+        </summary>
+        <div class="cp-sig-body">
+          <dl class="cp-sig-levels">
+            <div class="cp-sig-level"><dt>Entry zone</dt><dd>${formatTradePrice(entryLow)} – ${formatTradePrice(entryHigh)}</dd></div>
+            ${signalLevel("Stop", c.stop, entryMid)}
+            ${signalLevel("Target 1 (1R)", c.targets[0], entryMid)}
+            ${signalLevel("Target 2 (2R)", c.targets[1], entryMid)}
+            ${signalLevel("Target 3 (3R)", c.targets[2], entryMid)}
+          </dl>
+          <p class="cp-sig-line"><span class="cp-sug-label">Size</span> ${escapeHtml(formatCardSize(c.size, c.risk_pct))}</p>
+          <p class="cp-sig-line"><span class="cp-sug-label">Record</span> ${escapeHtml(formatEvidenceLine(c.verdict))}</p>
+          ${c.relation ? `<p class="cp-sig-line">${escapeHtml(c.relation)}</p>` : ""}
+          ${warnings}
+          <div class="cp-sig-chart" id="chart-wrap-${idPrefix}${c.id}">${renderMiniSvgChart(c, null)}</div>
         </div>
-        <div class="cp-card-meta-line">
-          <span class="cp-setup-badge">${escapeHtml(formatSetupName(c.setup))}</span>
-          <span class="cp-class-badge">${escapeHtml((c.class || "").toUpperCase())}</span>
-          <span class="cp-sessions-badge">Max ${c.max_sessions} sessions</span>
-        </div>
-      </header>
-
-      <div class="cp-card-levels">
-        <div class="cp-level-row cp-level-entry">
-          <span class="cp-level-label">Entry zone</span>
-          <span class="cp-level-val">${formatTradePrice(entryLow)} – ${formatTradePrice(entryHigh)}</span>
-        </div>
-        <div class="cp-level-row cp-level-stop">
-          <span class="cp-level-label">Stop loss</span>
-          <span class="cp-level-val">${formatTradePrice(c.stop)} <span class="cp-level-dist">(${formatDistPct(c.stop, entryMid)}%)</span></span>
-        </div>
-        <div class="cp-level-targets">
-          <div class="cp-level-row cp-level-target">
-            <span class="cp-level-label">Target 1 (1R)</span>
-            <span class="cp-level-val">${formatTradePrice(c.targets[0])} <span class="cp-level-dist">(${formatDistPct(c.targets[0], entryMid)}%)</span></span>
-          </div>
-          <div class="cp-level-row cp-level-target">
-            <span class="cp-level-label">Target 2 (2R)</span>
-            <span class="cp-level-val">${formatTradePrice(c.targets[1])} <span class="cp-level-dist">(${formatDistPct(c.targets[1], entryMid)}%)</span></span>
-          </div>
-          <div class="cp-level-row cp-level-target">
-            <span class="cp-level-label">Target 3 (3R)</span>
-            <span class="cp-level-val">${formatTradePrice(c.targets[2])} <span class="cp-level-dist">(${formatDistPct(c.targets[2], entryMid)}%)</span></span>
-          </div>
-        </div>
-      </div>
-
-      <div class="cp-card-size">
-        <span class="cp-size-label">Suggested size:</span>
-        <span class="cp-size-val">${formatCardSize(c.size, c.risk_pct)}</span>
-      </div>
-
-      <div class="cp-card-evidence">
-        <span class="cp-evidence-tag">Verified Record</span>
-        <p class="cp-evidence-line">${escapeHtml(formatEvidenceLine(c.verdict))}</p>
-      </div>
-
-      ${c.relation ? `<div class="cp-card-relation"><span class="cp-info-icon" aria-hidden="true">ℹ</span> ${escapeHtml(c.relation)}</div>` : ''}
-
-      ${c.warnings && c.warnings.length > 0 ? `
-        <div class="cp-card-warnings">
-          ${c.warnings.map(w => `<span class="cp-warning-pill">⚠ ${escapeHtml(w)}</span>`).join("")}
-        </div>` : ''}
-
-      <div class="cp-card-chart" id="chart-wrap-${idPrefix}${c.id}">
-        ${renderMiniSvgChart(c, null)}
-      </div>
-    </article>
-  `;
+      </details>
+    </li>`;
 }
 
 async function loadTradeSignals() {
   const cardsGrid = document.getElementById("cpSignalsCardsGrid");
   const emptyWrap = document.getElementById("cpSignalsEmpty");
   const metaSpan = document.getElementById("cpSignalsSessionMeta");
-  const scoreboardBody = document.getElementById("cpScoreboardBody");
-  const scoreboardBadge = document.getElementById("cpScoreboardCountBadge");
-  const scoreboardContent = document.getElementById("cpScoreboardContent");
 
   if (!cardsGrid) return;
 
@@ -822,80 +786,27 @@ async function loadTradeSignals() {
     const sessionDate = res.session && res.session !== "1970-01-01" && !res.session.startsWith("-") ? formatDay(res.session) : "—";
     const lastRun = res.run_at ? formatDate(res.run_at) : (res.session ? formatDate(res.session) : "—");
     if (metaSpan) {
-      metaSpan.textContent = `Session: ${sessionDate} · Last run: ${lastRun}`;
+      metaSpan.textContent = `Session ${sessionDate} · last run ${lastRun}`;
     }
 
     const cards = Array.isArray(res.cards) ? res.cards : [];
-    if (cards.length === 0) {
-      cardsGrid.innerHTML = "";
-      if (emptyWrap) emptyWrap.hidden = false;
-      // When empty: expand scoreboard below empty state
-      if (scoreboardContent) {
-        scoreboardContent.hidden = false;
-        const toggle = document.getElementById("cpScoreboardToggle");
-        if (toggle) toggle.setAttribute("aria-expanded", "true");
-        const chev = document.getElementById("cpScoreboardChevron");
-        if (chev) chev.textContent = "▲";
-      }
-    } else {
-      if (emptyWrap) emptyWrap.hidden = true;
-      cardsGrid.innerHTML = cards.map(c => renderSignalCardMarkup(c)).join("");
+    if (emptyWrap) emptyWrap.hidden = cards.length > 0;
+    cardsGrid.innerHTML = cards.map((c) => renderSignalCardMarkup(c)).join("");
+    // Each card's chart gains its recent closes once they arrive.
+    cards.forEach((c) => {
+      fetchJson(`/api/capital/prices?symbol=${encodeURIComponent(c.symbol)}`)
+        .then((rows) => {
+          if (!Array.isArray(rows) || rows.length === 0) return;
+          const wrap = document.getElementById(`chart-wrap-${c.id}`);
+          if (wrap) wrap.innerHTML = renderMiniSvgChart(c, rows.slice(-60).map((r) => r.close));
+        })
+        .catch(() => {});
+    });
 
-      // Asynchronously fetch price history to update each mini SVG chart
-      cards.forEach(c => {
-        fetchJson(`/api/capital/prices?symbol=${encodeURIComponent(c.symbol)}`)
-          .then(rows => {
-            if (Array.isArray(rows) && rows.length > 0) {
-              const closes = rows.slice(-60).map(r => r.close);
-              const wrap = document.getElementById(`chart-wrap-${c.id}`);
-              if (wrap) {
-                wrap.innerHTML = renderMiniSvgChart(c, closes);
-              }
-            }
-          })
-          .catch(() => {});
-      });
-    }
-
-    // Render Scoreboard
-    const sb = Array.isArray(res.scoreboard) ? res.scoreboard : [];
-    if (scoreboardBadge) scoreboardBadge.textContent = `${sb.length} setups evaluated`;
-    if (scoreboardBody) {
-      if (sb.length === 0) {
-        scoreboardBody.innerHTML = `<tr><td colspan="9" class="cp-empty">No scoreboard data available.</td></tr>`;
-      } else {
-        scoreboardBody.innerHTML = sb.map(v => {
-          const sel = v.selection || {};
-          const hold = v.holdout || {};
-          const hitT1 = ((sel.hit_target1 || 0) * 100).toFixed(0);
-          const ciT1Min = Array.isArray(sel.hit_target1_ci) ? (sel.hit_target1_ci[0] * 100).toFixed(0) : "0";
-          const ciT1Max = Array.isArray(sel.hit_target1_ci) ? (sel.hit_target1_ci[1] * 100).toFixed(0) : "0";
-
-          const expR = Number(sel.expectancy_r || 0);
-          const expCiMin = Array.isArray(sel.expectancy_ci) ? Number(sel.expectancy_ci[0] || 0) : 0;
-          const expCiMax = Array.isArray(sel.expectancy_ci) ? Number(sel.expectancy_ci[1] || 0) : 0;
-
-          const holdMean = Number(hold.expectancy_r || 0);
-
-          return `
-            <tr>
-              <td><strong>${escapeHtml(formatSetupName(sel.setup))}</strong></td>
-              <td><span class="cp-badge ${sel.side === "long" ? "cp-side-long" : "cp-side-short"}">${(sel.side || "").toUpperCase()}</span></td>
-              <td>${escapeHtml((v.group || "").toUpperCase())}</td>
-              <td class="num">${sel.trades || 0}</td>
-              <td class="num">${hitT1}% [${ciT1Min}–${ciT1Max}%]</td>
-              <td class="num">${expR >= 0 ? "+" : ""}${expR.toFixed(2)}R [${expCiMin >= 0 ? "+" : ""}${expCiMin.toFixed(2)}, ${expCiMax >= 0 ? "+" : ""}${expCiMax.toFixed(2)}]</td>
-              <td class="num">${holdMean >= 0 ? "+" : ""}${holdMean.toFixed(2)}R (${hold.trades || 0})</td>
-              <td class="num">${v.publishes ? '<span class="cp-publishes-yes">✓</span>' : '<span class="cp-publishes-no">—</span>'}</td>
-              <td class="cp-scoreboard-reason">${escapeHtml(v.reason || "—")}</td>
-            </tr>
-          `;
-        }).join("");
-      }
-    }
+    renderScoreboard(Array.isArray(res.scoreboard) ? res.scoreboard : []);
   } catch (err) {
     if (cardsGrid) {
-      cardsGrid.innerHTML = `<p class="cp-empty">Signals data unavailable (${escapeHtml(err.message)}).</p>`;
+      cardsGrid.innerHTML = `<li class="cp-empty">Signals unavailable: ${escapeHtml(err.message)}</li>`;
     }
   }
 }
@@ -1079,15 +990,12 @@ function renderSignalCheck(check) {
         <strong>${heading}</strong>
         <span class="cp-signal-check-meta">${escapeHtml(check.exchange || "")}${check.currency ? ` · ${escapeHtml(check.currency)}` : ""} · ${escapeHtml((check.class || "").toUpperCase())} · ${check.bars_used || 0} bars · latest ${session} · close ${formatTradePrice(check.close)}</span>
       </div>
-      <div class="cp-signal-check-badges">
-        ${check.held ? '<span class="cp-badge cp-badge-confirmed">Held</span>' : ''}
-        ${check.on_watchlist ? '<span class="cp-badge">On watchlist</span>' : ''}
-      </div>
+      <span class="cp-signal-check-meta">${[check.held ? "You hold it" : "", check.on_watchlist ? "On the watchlist" : ""].filter(Boolean).join(" · ")}</span>
     </div>`;
 
   if (cards.length > 0) {
     html += `<p class="cp-signal-check-result cp-signal-check-yes">Potential verified signal on ${escapeHtml(check.symbol)}.</p>`;
-    html += `<div class="cp-signals-cards-grid">${cards.map((card) => renderSignalCardMarkup(card, "check-")).join("")}</div>`;
+    html += `<ul class="cp-rows">${cards.map((card) => renderSignalCardMarkup(card, "check-")).join("")}</ul>`;
   } else {
     html += `<p class="cp-signal-check-result">No verified setup fires today for ${escapeHtml(check.symbol)}.</p>`;
     if (suppressed.length === 0) {
@@ -1104,7 +1012,7 @@ function renderSignalCheck(check) {
             ${suppressed.map((item) => `
               <tr>
                 <td>${escapeHtml(formatSetupName(item.setup))}</td>
-                <td>${escapeHtml((item.side || "").toUpperCase())}</td>
+                <td>${escapeHtml(signalSideLabel(item.side))}</td>
                 <td>${escapeHtml(item.reason || "—")}</td>
               </tr>`).join("")}
           </tbody>
@@ -1119,7 +1027,7 @@ function renderSignalCheck(check) {
       : `No ${escapeHtml(check.class || "")} setup has passed validation yet.`}</p>`;
 
   if (check.notes && check.notes.length > 0) {
-    html += `<div class="cp-scorecard-notes">${check.notes.map((note) => `<div class="cp-scorecard-note">${escapeHtml(note)}</div>`).join("")}</div>`;
+    html += check.notes.map((note) => `<p class="cp-note">${escapeHtml(note)}</p>`).join("");
   }
 
   wrap.innerHTML = html;
@@ -1165,25 +1073,6 @@ function setupSignalsControls() {
         runBtn.disabled = false;
         runBtn.textContent = "Run now";
         setState("idle", "Ready");
-      }
-    });
-  }
-
-  const toggle = document.getElementById("cpScoreboardToggle");
-  const content = document.getElementById("cpScoreboardContent");
-  const chevron = document.getElementById("cpScoreboardChevron");
-  if (toggle && content) {
-    const handleToggle = () => {
-      const isExpanded = !content.hidden;
-      content.hidden = isExpanded;
-      toggle.setAttribute("aria-expanded", String(!isExpanded));
-      if (chevron) chevron.textContent = isExpanded ? "▼" : "▲";
-    };
-    toggle.addEventListener("click", handleToggle);
-    toggle.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        handleToggle();
       }
     });
   }

@@ -457,6 +457,32 @@ function ordinalSuffix(n) {
   return `${rounded}th`;
 }
 
+// Names shared by Outlook, Portfolio and Track record.
+const SETUP_NAMES = {
+  trend_pullback: "Trend pullback",
+  squeeze_breakout: "Squeeze breakout",
+  donchian55: "55-day breakout",
+  donchian_55: "55-day breakout",
+  bollinger_reversion: "Bollinger reversion",
+  inside_bar_break: "Inside-bar break",
+  three_day_reversal: "Three-day reversal",
+};
+
+function formatSetupName(setup) {
+  if (!setup) return "—";
+  const key = String(setup).replace(/([a-z])([A-Z0-9])/g, "$1_$2").toLowerCase();
+  return SETUP_NAMES[key] || key.replace(/_/g, " ");
+}
+
+function signalSideLabel(side) {
+  return side === "long" ? "Buy (long)" : "Sell (short)";
+}
+
+// Marks tabs to reload the next time they open (e.g. after new prices arrive).
+function invalidateTabs(...tabIds) {
+  for (const id of tabIds) loadedTabs.delete(id);
+}
+
 // Each tab registers what it loads. The header (portfolio and today's tiles) loads at
 // start; a tab's own data loads the first time it is opened, and again on Refresh.
 const TAB_LOADERS = {};
