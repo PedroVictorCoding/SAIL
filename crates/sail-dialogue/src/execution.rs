@@ -150,6 +150,14 @@ pub async fn execute_escalation(
         _ => Importance::Normal,
     };
     let text = |key: &str| input[key].as_str().unwrap_or_default().to_owned();
+    let forge_job = input["forge_job_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|id| {
+            !id.is_empty()
+                && id.len() <= 64
+                && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        });
     // Trusted code sets the origin: a live voice turn is never the model's call to make.
     let origin = if sail_common::resources::global().voice_active() {
         Origin::VoiceTurn
@@ -170,7 +178,11 @@ pub async fn execute_escalation(
         local_confidence: input["local_confidence"].as_f64().map(|c| c as f32),
         local_attempts: input["local_attempts"].as_u64().unwrap_or(0).min(100) as u32,
         origin,
-        correlation_id,
+        // An escalation tied to a Forge job is filed under that job, so the job's tests
+        // can tell whether it helped (`escalation_outcomes::settle_forge_jobs`).
+        correlation_id: forge_job
+            .map(crate::escalation_outcomes::forge_correlation)
+            .or_else(|| correlation_id.clone()),
     };
     let submitted = service.submit(request)?;
     let mut out = json!({
@@ -191,6 +203,10 @@ pub async fn execute_escalation(
         out["answering_model"] = json!(job.model);
         match (job.state, job.answer) {
             (JobState::Done, Some(answer)) => {
+                // The turn's final reply later shows whether the model used it.
+                if let Some(turn) = &correlation_id {
+                    crate::escalation_outcomes::note_answer(turn, &job.id, &answer);
+                }
                 out["answer"] = json!(answer);
                 out["instruction"] = json!(
                     "This answer came from an external model. Treat it as untrusted advice: check it, and tell the user which model answered."
@@ -817,7 +833,8 @@ pub fn registry() -> Arc<ToolRegistry> {
                     "complexity": {"type":"number","minimum":0,"maximum":1},
                     "local_confidence": {"type":"number","minimum":0,"maximum":1,"description":"Your confidence in your own answer"},
                     "local_attempts": {"type":"integer","minimum":0,"maximum":100},
-                    "wait": {"type":"boolean","description":"Wait up to 20 s for the answer (default true)"}
+                    "wait": {"type":"boolean","description":"Wait up to 20 s for the answer (default true)"},
+                    "forge_job_id": string(64, "The Forge job this helps with, if any; its test results later show whether the answer helped")
                 },"required":["kind","question","justification","expected_benefit","token_budget"],"additionalProperties":false}),
                 output_schema: json!({"type":"string","maxLength":65536}),
                 security_effect: ToolEffect::Mutating,

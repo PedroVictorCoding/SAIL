@@ -7,12 +7,22 @@
 //!
 //! Set `SAIL_PROACTIVE=0` to turn the loop off; `SAIL_PROACTIVE_TICK_SECS` (60–3600,
 //! default 300) sets the period.
+//!
+//! The one exception to "no model calls" is the Curiosity Engine (#453): after a tick, when
+//! [`sail_discovery::curiosity::admit`] allows it (Balanced or Proactive autonomy, owner
+//! idle, no voice, quiet hours or focus, daily allowance left), one bounded local-model
+//! investigation runs in the background. `SAIL_CURIOSITY=0` turns it off.
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, NaiveTime, Utc};
 use sail_discovery::agenda::AgendaStore;
-use sail_discovery::detect::{Observation, SchoolChangeKind, SchoolItemKind};
+use sail_discovery::curiosity::{
+    CuriosityLedger, CuriosityLimits, Gate, Investigator, Skip, admit, run_once,
+};
+use sail_discovery::detect::{ForgeJobState, Level, Observation, SchoolChangeKind, SchoolItemKind};
+use sail_discovery::github::{GhCliActivity, GithubActivity, GithubError, GithubPoller};
 use sail_discovery::initiative::{Initiative, TickReport};
 use sail_mind::escalation::service::{self as escalation, EscalationService};
 use sail_mind::escalation::{JobState, Origin};
@@ -29,6 +39,54 @@ pub struct Proactive {
     last_digest: Mutex<Option<DigestBatch>>,
     last_check: Mutex<DateTime<Utc>>,
     answered: Mutex<Vec<Observation>>,
+    curiosity: Mutex<Option<Arc<Curiosity>>>,
+    /// GitHub activity source and its pacing; set only by [`start`], so tests never run `gh`.
+    github: Mutex<Option<GithubWatch>>,
+    /// When Capital suggestions were last read (at most hourly).
+    last_capital: Mutex<Option<DateTime<Utc>>>,
+}
+
+struct GithubWatch {
+    source: Arc<dyn GithubActivity>,
+    poller: GithubPoller,
+    unavailable_logged: bool,
+}
+
+/// Capital's suggestions are recomputed from prices; reading them hourly is plenty.
+const CAPITAL_EVERY: ChronoDuration = ChronoDuration::hours(1);
+
+/// The Curiosity Engine's runtime state (#453).
+pub struct Curiosity {
+    pub ledger: CuriosityLedger,
+    pub limits: CuriosityLimits,
+    investigator: Arc<dyn Investigator>,
+    running: AtomicBool,
+    last_skip: Mutex<Option<Skip>>,
+}
+
+impl Curiosity {
+    pub fn running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    pub fn last_skip(&self) -> Option<Skip> {
+        *lock(&self.last_skip)
+    }
+}
+
+/// Unix millis of the last finished conversation turn (0 = none yet).
+static LAST_TURN_MS: AtomicI64 = AtomicI64::new(0);
+
+/// A conversation turn just finished: background curiosity waits for the owner to be idle.
+pub fn note_conversation_turn() {
+    LAST_TURN_MS.store(Utc::now().timestamp_millis(), Ordering::SeqCst);
+}
+
+fn idle_for(now: DateTime<Utc>) -> Option<ChronoDuration> {
+    match LAST_TURN_MS.load(Ordering::SeqCst) {
+        0 => None,
+        ms => Some(now - DateTime::from_timestamp_millis(ms).unwrap_or(now)),
+    }
 }
 
 static GLOBAL: OnceLock<Arc<Proactive>> = OnceLock::new();
@@ -79,6 +137,7 @@ pub fn start(pulse: Option<Arc<Pulse>>) -> Option<Arc<Proactive>> {
     let _ = sail_discovery::install_global(initiative.clone());
     let escalation = start_escalation();
     let proactive = Proactive::new(initiative, escalation, pulse);
+    proactive.watch_github(Arc::new(GhCliActivity::from_env()));
     let proactive = GLOBAL.get_or_init(|| proactive).clone();
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         let looping = proactive.clone();
@@ -136,7 +195,192 @@ impl Proactive {
             last_digest: Mutex::new(None),
             last_check: Mutex::new(Utc::now()),
             answered: Mutex::new(Vec::new()),
+            curiosity: Mutex::new(None),
+            github: Mutex::new(None),
+            last_capital: Mutex::new(None),
         })
+    }
+
+    /// Watch GitHub through `source` (production: the signed-in `gh`). Off by default in
+    /// tests; `SAIL_GITHUB_DETECTOR=0` turns it off.
+    pub fn watch_github(&self, source: Arc<dyn GithubActivity>) {
+        if std::env::var("SAIL_GITHUB_DETECTOR").is_ok_and(|v| v == "0" || v == "false") {
+            return;
+        }
+        *lock(&self.github) = Some(GithubWatch {
+            source,
+            poller: GithubPoller::default(),
+            unavailable_logged: false,
+        });
+    }
+
+    /// GitHub events, when the poller says it's time (at most every 15 min). Blocking.
+    fn github_observations(&self, now: DateTime<Utc>) -> Vec<Observation> {
+        let mut guard = lock(&self.github);
+        let Some(watch) = guard.as_mut() else {
+            return Vec::new();
+        };
+        if !watch.poller.due(now) {
+            return Vec::new();
+        }
+        let since = watch.poller.since(now);
+        match watch.source.fetch(since) {
+            Ok(events) => {
+                watch.poller.record(now, true);
+                watch.unavailable_logged = false;
+                events.into_iter().map(Observation::GitHub).collect()
+            }
+            Err(GithubError::Unavailable(reason)) => {
+                watch.poller.record(now, false);
+                if !watch.unavailable_logged {
+                    info!(%reason, "GitHub detector waiting for a signed-in gh");
+                    watch.unavailable_logged = true;
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    /// Active High and Medium Capital suggestions, at most hourly. Blocking.
+    fn capital_observations(&self, now: DateTime<Utc>) -> Vec<Observation> {
+        {
+            let mut last = lock(&self.last_capital);
+            if last.is_some_and(|at| now - at < CAPITAL_EVERY) {
+                return Vec::new();
+            }
+            *last = Some(now);
+        }
+        let Some(capital) = sail_capital::service::global() else {
+            return Vec::new();
+        };
+        let today = capital
+            .resolve_account(None)
+            .and_then(|account| capital.today(&account, now));
+        let today = match today {
+            Ok(today) => today,
+            Err(error) => {
+                tracing::debug!(%error, "capital suggestions unavailable");
+                return Vec::new();
+            }
+        };
+        today
+            .suggestions
+            .into_iter()
+            .filter_map(|s| {
+                let severity = match s.severity {
+                    sail_capital::suggest::Severity::High => Level::High,
+                    sail_capital::suggest::Severity::Medium => Level::Medium,
+                    sail_capital::suggest::Severity::Low => return None,
+                };
+                Some(Observation::CapitalSuggestion {
+                    id: s.id,
+                    severity,
+                    title: s.title,
+                    why: s.why,
+                })
+            })
+            .collect()
+    }
+
+    /// Turn on idle-time investigations with `investigator` (off when `SAIL_CURIOSITY=0`).
+    pub fn enable_curiosity(
+        &self,
+        investigator: Arc<dyn Investigator>,
+        ledger: CuriosityLedger,
+    ) -> bool {
+        if std::env::var("SAIL_CURIOSITY").is_ok_and(|v| v == "0" || v == "false") {
+            info!("Curiosity Engine is off (SAIL_CURIOSITY=0)");
+            return false;
+        }
+        *lock(&self.curiosity) = Some(Arc::new(Curiosity {
+            ledger,
+            limits: CuriosityLimits::default(),
+            investigator,
+            running: AtomicBool::new(false),
+            last_skip: Mutex::new(None),
+        }));
+        true
+    }
+
+    pub fn curiosity(&self) -> Option<Arc<Curiosity>> {
+        lock(&self.curiosity).clone()
+    }
+
+    /// The facts the Curiosity gate decides on, now.
+    pub fn curiosity_gate(&self, curiosity: &Curiosity, now: DateTime<Utc>) -> Gate {
+        let settings = self.initiative.attention().settings().unwrap_or_default();
+        let context = self.context(now, &settings);
+        Gate {
+            autonomy: settings.autonomy,
+            voice_active: context.voice_active,
+            quiet_hours: context.quiet_hours,
+            focus: context.focus_until.is_some(),
+            idle_for: idle_for(now),
+            runs_today: curiosity.ledger.runs_today(now).unwrap_or(u32::MAX),
+            running: curiosity.running(),
+        }
+    }
+
+    /// Start one investigation in the background when the gate allows it. Returns the
+    /// reason when it doesn't.
+    pub fn maybe_investigate(self: &Arc<Self>) -> Result<(), Skip> {
+        let Some(curiosity) = self.curiosity() else {
+            return Err(Skip::Autonomy);
+        };
+        let gate = self.curiosity_gate(&curiosity, Utc::now());
+        if let Err(skip) = admit(&gate, &curiosity.limits) {
+            *lock(&curiosity.last_skip) = Some(skip);
+            return Err(skip);
+        }
+        if curiosity.running.swap(true, Ordering::SeqCst) {
+            return Err(Skip::Running);
+        }
+        let this = self.clone();
+        let autonomy = gate.autonomy;
+        tokio::spawn(async move {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            // Live voice always wins: cancel the moment a voice turn starts.
+            let watch = {
+                let cancel = cancel.clone();
+                tokio::spawn(async move {
+                    loop {
+                        if sail_common::resources::global().voice_active() {
+                            cancel.cancel();
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                })
+            };
+            let result = run_once(
+                this.initiative.agenda(),
+                &curiosity.ledger,
+                curiosity.investigator.as_ref(),
+                autonomy,
+                &curiosity.limits,
+                cancel,
+            )
+            .await;
+            watch.abort();
+            match result {
+                Ok(report) => {
+                    info!(
+                        item = %report.receipt.item_id,
+                        outcome = ?report.receipt.outcome,
+                        tokens = report.receipt.tokens_used,
+                        steps = report.receipt.tool_steps,
+                        "curiosity run finished"
+                    );
+                    if let Some(observation) = report.observation {
+                        lock(&this.answered).push(observation);
+                    }
+                    *lock(&curiosity.last_skip) = None;
+                }
+                Err(skip) => *lock(&curiosity.last_skip) = Some(skip),
+            }
+            curiosity.running.store(false, Ordering::SeqCst);
+        });
+        Ok(())
     }
 
     async fn run(self: Arc<Self>) {
@@ -170,6 +414,7 @@ impl Proactive {
             }
             let this = self.clone();
             let _ = tokio::task::spawn_blocking(move || this.tick_now()).await;
+            let _ = self.maybe_investigate();
         }
     }
 
@@ -183,12 +428,16 @@ impl Proactive {
             .and_then(|p| p.settings().ok())
             .map_or(0, |s| s.utc_offset_minutes);
         observations.extend(moodle_observations(now, offset));
+        observations.extend(forge_observations());
+        observations.extend(self.capital_observations(now));
+        observations.extend(self.github_observations(now));
         if let Some(disk) = disk_observation() {
             observations.push(disk);
         }
         let settings = self.initiative.attention().settings().unwrap_or_default();
         let context = self.context(now, &settings);
         let report = self.initiative.tick(&observations, context);
+        crate::escalation_outcomes::settle_forge_jobs();
         *lock(&self.last_tick) = report.clone();
         let previous = std::mem::replace(&mut *lock(&self.last_check), now);
         if digest_due(&settings, offset, previous, now) {
@@ -276,6 +525,36 @@ pub fn digest_due(
             at > local_prev && at <= local_now
         })
     })
+}
+
+/// Forge jobs in a state the owner may care about. Dedupe keys include the state, so each
+/// state is news once.
+fn forge_observations() -> Vec<Observation> {
+    use sail_forge::ForgeTaskState as S;
+    let Ok(orchestrator) = sail_forge::global_orchestrator() else {
+        return Vec::new();
+    };
+    // Only recent activity is news; old finished or abandoned jobs stay quiet.
+    let recent = Utc::now() - ChronoDuration::days(2);
+    orchestrator
+        .list_all_jobs()
+        .into_iter()
+        .filter(|job| job.events.iter().any(|e| e.timestamp >= recent))
+        .filter_map(|job| {
+            let state = match job.state {
+                S::AwaitingUser => ForgeJobState::AwaitingUser,
+                S::ReviewPending => ForgeJobState::ReviewPending,
+                S::Blocked => ForgeJobState::Blocked,
+                S::Completed => ForgeJobState::Completed,
+                _ => return None,
+            };
+            Some(Observation::ForgeJob {
+                subject: format!("{}#{}", job.repo, job.issue_number),
+                job_id: job.job_id,
+                state,
+            })
+        })
+        .collect()
 }
 
 /// A readable course name: Moodle's full name, falling back to the short code.

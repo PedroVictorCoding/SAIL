@@ -15,7 +15,7 @@ use sail_guardian::authority::ApprovalAuthority;
 use sail_mind::escalation::provider::{ExternalProvider, ProviderError, ProviderReply};
 use sail_mind::escalation::service::{self, EscalationService};
 use sail_mind::escalation::store::EscalationStore;
-use sail_mind::escalation::{EscalationPolicy, ProviderConfig};
+use sail_mind::escalation::{EscalationPolicy, Outcome, ProviderConfig};
 use sail_pulse::attention::AttentionContext;
 use sail_pulse::attention::store::AttentionStore;
 
@@ -232,6 +232,8 @@ async fn escalate_reasoning_tool_redacts_answers_caches_and_reports() {
             input_price_micros_per_mtok: 1_000_000,
             output_price_micros_per_mtok: 2_000_000,
             enabled: true,
+            command: None,
+            cli_unverified_ok: false,
         }],
         route_threshold: 0.0,
         ..EscalationPolicy::default()
@@ -317,4 +319,187 @@ async fn escalate_reasoning_tool_redacts_answers_caches_and_reports() {
         .await
         .unwrap();
     assert_eq!(status["outcomes"]["by_kind"][0][1], 1);
+
+    // Tied to a Forge job: filed under `forge:<id>`, so the job's passing tests can
+    // record that the escalation helped (#450).
+    let forge_input = json!({
+        "kind": "coding",
+        "question": "Why does the borrow checker reject this closure capturing a guard?",
+        "justification": "Two local attempts failed to compile",
+        "expected_benefit": "The Forge job can finish",
+        "token_budget": 500,
+        "local_attempts": 2,
+        "complexity": 0.9,
+        "forge_job_id": "job-7"
+    });
+    let forged = sail_dialogue::execute_escalation(&forge_input, Some("turn-1".into()))
+        .await
+        .unwrap();
+    let forged_job = forged["job_id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        service
+            .observe_correlated("forge:job-7", Outcome::Improved, "forge_tests")
+            .unwrap(),
+        1
+    );
+    let job = service.store().job(&forged_job).unwrap().unwrap();
+    assert_eq!(job.correlation_id.as_deref(), Some("forge:job-7"));
+    assert_eq!(job.outcome, Some(Outcome::Improved));
+    // The owner's word beats the check.
+    service.feedback(&forged_job, Outcome::Worse).unwrap();
+    assert!(
+        !service
+            .observe_outcome(&forged_job, Outcome::Improved, "forge_tests")
+            .unwrap()
+    );
+}
+
+struct NotesInvestigator;
+
+#[async_trait::async_trait]
+impl sail_discovery::curiosity::Investigator for NotesInvestigator {
+    async fn investigate(
+        &self,
+        brief: &sail_discovery::curiosity::Brief,
+        _limits: &sail_discovery::curiosity::CuriosityLimits,
+        _cancel: CancellationToken,
+    ) -> Result<sail_discovery::curiosity::Finding, String> {
+        Ok(sail_discovery::curiosity::Finding {
+            summary: format!("Notes on {}: the course page lists it at 30%.", brief.title),
+            sources: vec!["moodle: avaliação".into()],
+            tokens_used: 300,
+            tool_steps: 1,
+            escalation_job: None,
+            conclusive: true,
+        })
+    }
+}
+
+#[tokio::test]
+async fn curiosity_respects_autonomy_and_reports_receipts() {
+    use sail_discovery::agenda::{AgendaKind, NewAgendaItem};
+    use sail_discovery::curiosity::{CuriosityLedger, Skip};
+    use sail_pulse::attention::{Autonomy, Provenance};
+
+    let proactive = engine(None);
+    assert!(proactive.enable_curiosity(
+        Arc::new(NotesInvestigator),
+        CuriosityLedger::open_in_memory().unwrap()
+    ));
+    proactive
+        .initiative
+        .agenda()
+        .upsert(
+            NewAgendaItem {
+                key: "investigate:fisica".into(),
+                kind: AgendaKind::Investigation,
+                title: "Física project weight".into(),
+                detail: String::new(),
+                provenance: Provenance::UserCommitment,
+                match_terms: vec![],
+                due: None,
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    let attention = proactive.initiative.attention();
+    let mut settings = attention.settings().unwrap();
+    settings.autonomy = Autonomy::Quiet;
+    attention.save_settings(&settings).unwrap();
+    assert_eq!(proactive.maybe_investigate(), Err(Skip::Autonomy));
+
+    settings.autonomy = Autonomy::Balanced;
+    attention.save_settings(&settings).unwrap();
+    assert_eq!(proactive.maybe_investigate(), Ok(()));
+    let curiosity = proactive.curiosity().unwrap();
+    for _ in 0..100 {
+        if !curiosity.running() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let base = serve(proactive_http::initiative_router(
+        proactive.clone(),
+        Some(ApprovalAuthority::new(TOKEN).unwrap()),
+    ))
+    .await;
+    let state: Value = reqwest::Client::new()
+        .get(format!("{base}/curiosity"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(state["enabled"], true, "{state}");
+    assert_eq!(state["runs_today"], 1, "{state}");
+    let receipt = &state["receipts"][0];
+    assert_eq!(receipt["outcome"], "finding", "{state}");
+    assert_eq!(receipt["tokens_used"], 300);
+    assert_eq!(receipt["item_title"], "Física project weight");
+
+    // The finding reaches the inbox on the next tick, as SAIL's hypothesis.
+    proactive.tick_now();
+    let items = attention.inbox(50).unwrap();
+    let finding = items
+        .iter()
+        .find(|i| i.signal.source == sail_pulse::attention::Source::Curiosity)
+        .expect("finding ingested");
+    assert_eq!(finding.signal.provenance, Provenance::Hypothesis);
+    assert!(finding.signal.body.starts_with("SAIL's unverified notes:"));
+}
+
+#[tokio::test]
+async fn escalation_status_exposes_every_field_read_by_usage_view() {
+    let service = EscalationService::new(
+        EscalationPolicy::default(),
+        Arc::new(EscalationStore::open_in_memory().unwrap()),
+    );
+    let proactive = engine(Some(service));
+    let esc = serve(proactive_http::escalation_router(
+        proactive,
+        Some(ApprovalAuthority::new(TOKEN).unwrap()),
+    ))
+    .await;
+    let status: Value = reqwest::Client::new()
+        .get(format!("{esc}/status"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert!(status.get("enabled").is_some_and(Value::is_boolean));
+    assert!(status.get("providers").is_some_and(Value::is_array));
+    assert!(status.get("daily_token_cap").is_some_and(Value::is_u64));
+    assert!(status.get("monthly_token_cap").is_some_and(Value::is_u64));
+    assert!(
+        status
+            .get("daily_cost_cap_micros")
+            .is_some_and(Value::is_u64)
+    );
+    assert!(
+        status
+            .get("monthly_cost_cap_micros")
+            .is_some_and(Value::is_u64)
+    );
+
+    let usage = &status["usage"];
+    assert!(usage.get("tokens_today").is_some_and(Value::is_u64));
+    assert!(usage.get("tokens_month").is_some_and(Value::is_u64));
+    assert!(usage.get("cost_today_micros").is_some_and(Value::is_u64));
+    assert!(usage.get("cost_month_micros").is_some_and(Value::is_u64));
+    assert!(usage.get("calls_today").is_some_and(Value::is_u64));
+    assert!(usage.get("blocked_until").is_some_and(Value::is_array));
+
+    assert!(
+        status["outcomes"]
+            .get("by_kind")
+            .is_some_and(Value::is_array)
+    );
+    assert!(status.get("recent_decisions").is_some_and(Value::is_array));
 }

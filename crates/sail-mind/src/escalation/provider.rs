@@ -236,6 +236,9 @@ pub fn build(
 ) -> Result<std::sync::Arc<dyn ExternalProvider>, ProviderError> {
     match config.adapter.as_str() {
         "openai_compatible" => Ok(std::sync::Arc::new(OpenAiCompatible::new(config.clone())?)),
+        adapter if super::cli::Vendor::from_adapter(adapter).is_some() => Ok(std::sync::Arc::new(
+            super::cli::CliProvider::new(config.clone())?,
+        )),
         other => Err(ProviderError::Unavailable(format!(
             "unknown adapter {other}"
         ))),

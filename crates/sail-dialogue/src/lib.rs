@@ -9,6 +9,8 @@ pub mod conversation_controller;
 #[cfg(test)]
 mod conversation_controller_tests;
 pub mod dictation_http;
+mod curiosity_runner;
+mod escalation_outcomes;
 mod execution;
 pub mod flow_http;
 pub mod learn_courses_http;

@@ -75,6 +75,51 @@ pub enum Observation {
         title: String,
         evidence: String,
     },
+    /// Activity on the owner's GitHub repositories (#451; see [`crate::github`]).
+    GitHub(crate::github::GithubEvent),
+    /// An active SAIL Capital suggestion (portfolio policy, idea, data problem).
+    CapitalSuggestion {
+        id: String,
+        severity: Level,
+        title: String,
+        why: String,
+    },
+    /// A Forge coding job reached a state the owner may care about.
+    ForgeJob {
+        job_id: String,
+        /// e.g. `owner/repo#12`.
+        subject: String,
+        state: ForgeJobState,
+    },
+    /// A Curiosity Engine run produced notes on an agenda item (#453).
+    CuriosityFinding {
+        run_id: String,
+        item_id: String,
+        title: String,
+        summary: String,
+        sources: Vec<String>,
+    },
+}
+
+/// How much a source says something matters (Capital's severity).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Level {
+    High,
+    Medium,
+    Low,
+}
+
+/// The Forge job states worth noticing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForgeJobState {
+    /// The job needs an answer from the owner.
+    AwaitingUser,
+    /// Tests passed; a review is waiting.
+    ReviewPending,
+    Blocked,
+    Completed,
 }
 
 /// Days before a school item when preparation starts to matter.
@@ -83,6 +128,25 @@ pub const SCHOOL_HORIZON_DAYS: i64 = 14;
 /// The signals one observation produces (zero or more).
 pub fn detect(observation: &Observation, now: DateTime<Utc>) -> Vec<Signal> {
     match observation {
+        Observation::GitHub(event) => crate::github::github_signal(event, now),
+        Observation::CapitalSuggestion {
+            id,
+            severity,
+            title,
+            why,
+        } => capital_suggestion(id, *severity, title, why, now),
+        Observation::ForgeJob {
+            job_id,
+            subject,
+            state,
+        } => forge_job(job_id, subject, *state, now),
+        Observation::CuriosityFinding {
+            run_id,
+            title,
+            summary,
+            sources,
+            ..
+        } => curiosity_finding(run_id, title, summary, sources, now),
         Observation::SchoolItem {
             id,
             course,
@@ -181,14 +245,21 @@ fn school_item(
     // Heavier items matter more; unknown weight is treated as moderate.
     let weight = weight_percent.map_or(0.5, |w| (w / 40.0).clamp(0.2, 1.0));
     let relevance = if assessed { 0.6 + 0.4 * weight } else { 0.4 };
+    // Two weeks out is preparation, not news: the digest, unless the item is heavy.
+    let early_relevance = if assessed { 0.3 + 0.3 * weight } else { 0.25 };
     // The stage decides the dedupe key, so one item yields at most one signal per stage:
     // two weeks out (prepare), three days out (plan), and the last day (now).
-    let (stage, urgency, what) = if until <= Duration::hours(24) {
-        ("day", 0.9, "is due within a day")
+    let (stage, urgency, what, relevance) = if until <= Duration::hours(24) {
+        ("day", 0.9, "is due within a day", relevance)
     } else if until <= Duration::days(3) {
-        ("3d", 0.6, "is due in under three days")
+        ("3d", 0.6, "is due in under three days", relevance)
     } else {
-        ("14d", 0.25, "is coming up in the next two weeks")
+        (
+            "14d",
+            0.15,
+            "is coming up in the next two weeks",
+            early_relevance,
+        )
     };
     let label = match kind {
         SchoolItemKind::Exam => "Exam",
@@ -214,7 +285,7 @@ fn school_item(
         body: format!("{label} for {} {what}.{weight_text}", excerpt(course, 60)),
         urgency,
         relevance,
-        novelty: if stage == "14d" { 0.8 } else { 0.6 },
+        novelty: if stage == "14d" { 0.4 } else { 0.6 },
         confidence: confidence.clamp(0.0, 1.0),
         deadline: Some(due),
         provenance: Provenance::UserCommitment,
@@ -235,13 +306,15 @@ fn school_change(
     if now - observed_at > Duration::days(7) {
         return Vec::new();
     }
-    let (kind_name, urgency, relevance) = match kind {
-        SchoolChangeKind::GradeReleased => ("grade", 0.5, 0.9),
-        SchoolChangeKind::DeadlineMoved => ("deadline_moved", 0.6, 0.9),
-        SchoolChangeKind::AnnouncementPosted => ("announcement", 0.35, 0.7),
-        SchoolChangeKind::AssignmentAdded => ("assignment", 0.4, 0.8),
-        SchoolChangeKind::EventAdded => ("event", 0.3, 0.6),
-        SchoolChangeKind::FileAdded => ("file", 0.1, 0.4),
+    // Only a released grade or a moved deadline is worth raising; the rest of the
+    // course's churn goes to the digest. Nothing here interrupts on its own.
+    let (kind_name, urgency, relevance, novelty, confidence) = match kind {
+        SchoolChangeKind::GradeReleased => ("grade", 0.5, 0.9, 1.0, 0.9),
+        SchoolChangeKind::DeadlineMoved => ("deadline_moved", 0.45, 0.8, 1.0, 0.9),
+        SchoolChangeKind::AnnouncementPosted => ("announcement", 0.15, 0.4, 0.5, 0.7),
+        SchoolChangeKind::AssignmentAdded => ("assignment", 0.2, 0.45, 0.6, 0.7),
+        SchoolChangeKind::EventAdded => ("event", 0.15, 0.4, 0.5, 0.7),
+        SchoolChangeKind::FileAdded => ("file", 0.1, 0.4, 0.5, 0.7),
     };
     vec![Signal {
         source: Source::Moodle,
@@ -251,16 +324,111 @@ fn school_change(
         body: excerpt(course, 80),
         urgency,
         relevance,
-        // A new file is routine; other changes are news.
-        novelty: if kind == SchoolChangeKind::FileAdded {
-            0.5
-        } else {
-            1.0
-        },
-        confidence: 0.9,
+        novelty,
+        confidence,
         deadline: None,
         provenance: Provenance::Observation,
         link: Some("/moodle".into()),
+        observed_at: now,
+    }]
+}
+
+/// High → worth raising; Medium → digest; Low → nothing.
+fn capital_suggestion(
+    id: &str,
+    severity: Level,
+    title: &str,
+    why: &str,
+    now: DateTime<Utc>,
+) -> Vec<Signal> {
+    let (urgency, relevance, novelty) = match severity {
+        Level::High => (0.5, 0.8, 0.9),
+        Level::Medium => (0.2, 0.45, 0.6),
+        Level::Low => return Vec::new(),
+    };
+    vec![Signal {
+        source: Source::Capital,
+        kind: "suggestion".into(),
+        dedupe_key: format!("capital:suggestion:{id}"),
+        title: excerpt(title, 120),
+        body: excerpt(why, 400),
+        urgency,
+        relevance,
+        novelty,
+        confidence: 0.7,
+        deadline: None,
+        provenance: Provenance::Suggestion,
+        link: Some("/capital".into()),
+        observed_at: now,
+    }]
+}
+
+/// One signal per job and state, so a job that moves on is news again.
+fn forge_job(job_id: &str, subject: &str, state: ForgeJobState, now: DateTime<Utc>) -> Vec<Signal> {
+    let (kind, title, urgency, relevance, novelty) = match state {
+        ForgeJobState::AwaitingUser => ("awaiting_user", "Forge needs your answer", 0.5, 0.8, 1.0),
+        ForgeJobState::ReviewPending => (
+            "review_pending",
+            "Forge job ready for review",
+            0.4,
+            0.7,
+            0.9,
+        ),
+        ForgeJobState::Blocked => ("blocked", "Forge job blocked", 0.35, 0.7, 0.9),
+        ForgeJobState::Completed => ("completed", "Forge job finished", 0.1, 0.4, 0.5),
+    };
+    vec![Signal {
+        source: Source::Projects,
+        kind: format!("forge_{kind}"),
+        dedupe_key: format!("forge:{job_id}:{kind}"),
+        title: format!("{title}: {}", excerpt(subject, 90)),
+        body: String::new(),
+        urgency,
+        relevance,
+        novelty,
+        confidence: 0.95,
+        deadline: None,
+        provenance: Provenance::Observation,
+        link: None,
+        observed_at: now,
+    }]
+}
+
+/// SAIL's own notes: a hypothesis for the digest, never the owner's words.
+fn curiosity_finding(
+    run_id: &str,
+    title: &str,
+    summary: &str,
+    sources: &[String],
+    now: DateTime<Utc>,
+) -> Vec<Signal> {
+    if summary.trim().is_empty() {
+        return Vec::new();
+    }
+    let sources = if sources.is_empty() {
+        "no sources".to_owned()
+    } else {
+        sources.join("; ")
+    };
+    vec![Signal {
+        source: Source::Curiosity,
+        kind: "finding".into(),
+        dedupe_key: format!("curiosity:{run_id}"),
+        title: format!("Looked into: {}", excerpt(title, 90)),
+        body: excerpt(
+            &format!(
+                "SAIL's unverified notes: {} Sources: {sources}.",
+                summary.trim()
+            ),
+            900,
+        ),
+        urgency: 0.1,
+        relevance: 0.6,
+        novelty: 0.8,
+        confidence: 0.5,
+        deadline: None,
+        provenance: Provenance::Hypothesis,
+        link: None,
         observed_at: now,
     }]
 }

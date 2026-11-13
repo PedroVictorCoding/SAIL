@@ -12,6 +12,7 @@ sail-pulse.workspace = true
 chrono.workspace = true
 rusqlite = { version = "0.37", features = ["bundled"] }
 tokio.workspace = true
+tokio-util.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

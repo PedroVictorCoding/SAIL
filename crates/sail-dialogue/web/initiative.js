@@ -62,6 +62,8 @@
     const trimmed = raw.trim();
     if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return trimmed;
     if (trimmed.startsWith('#')) return trimmed;
+    // The only external pages a signal may link to (see attention::ALLOWED_EXTERNAL_LINK_PREFIXES).
+    if (trimmed.startsWith('https://github.com/') && !/[\s"'<>\\]/.test(trimmed)) return trimmed;
     return null;
   }
 
@@ -264,7 +266,7 @@
     system: 'System',
     escalation: 'Escalation',
     curiosity: 'Curiosity',
-    projects: 'Projects',
+    projects: 'Forge',
   };
 
   let openMenuId = null;
@@ -294,7 +296,16 @@
     const actions = el(
       'div',
       { class: 'init-actions' },
-      link ? el('a', { class: 'init-act init-act-primary', href: link, text: 'Open' }) : null,
+      link
+        ? el('a', {
+            class: 'init-act init-act-primary',
+            href: link,
+            text: 'Open',
+            ...(link.startsWith('https://')
+              ? { target: '_blank', rel: 'noopener noreferrer' }
+              : {}),
+          })
+        : null,
       act('Useful', { feedback: 'useful' }, link ? '' : 'init-act-primary'),
       act('Later', { feedback: 'later', until: laterIso('1h') }),
       act('Dismiss', { feedback: 'dismiss' }),
@@ -409,12 +420,37 @@
     );
   }
 
+  // Variety over volume: take items round-robin by source (keeping each source's order),
+  // so one busy source can't fill the visible rows. Interrupts stay first.
+  function interleaveBySource(items) {
+    const urgent = items.filter((x) => deliveryOf(x) === 'interrupt');
+    const rest = items.filter((x) => deliveryOf(x) !== 'interrupt');
+    const queues = new Map();
+    for (const item of rest) {
+      const key = item.signal?.source || 'sail';
+      if (!queues.has(key)) queues.set(key, []);
+      queues.get(key).push(item);
+    }
+    const out = [...urgent];
+    let added = true;
+    while (added) {
+      added = false;
+      for (const queue of queues.values()) {
+        if (queue.length) {
+          out.push(queue.shift());
+          added = true;
+        }
+      }
+    }
+    return out;
+  }
+
   function render() {
     const deliverableIds = new Set(state.deliverable.map((x) => x.id));
-    const mergedInbox = [
+    const mergedInbox = interleaveBySource([
       ...state.deliverable,
       ...state.inbox.filter((x) => !deliverableIds.has(x.id) && isInboxWorthy(x)),
-    ];
+    ]);
     const waiting = state.inbox.filter(
       (x) => !deliverableIds.has(x.id) && !isInboxWorthy(x) && x.state === 'pending'
     );

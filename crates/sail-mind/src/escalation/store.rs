@@ -111,15 +111,27 @@ impl EscalationStore {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
-        if version > 1 {
+        if version > 2 {
             return Err(format!(
                 "escalation database schema version {version} is newer than this build"
             ));
         }
         conn.execute_batch(SCHEMA)
             .map_err(|error| error.to_string())?;
-        if version < 1 {
-            conn.pragma_update(None, "user_version", 1)
+        if version < 2 {
+            // v2: outcomes know who recorded them; the owner's word beats a check.
+            let has_source = conn
+                .prepare("SELECT 1 FROM pragma_table_info('outcomes') WHERE name = 'source'")
+                .and_then(|mut stmt| stmt.exists([]))
+                .map_err(|error| error.to_string())?;
+            if !has_source {
+                conn.execute_batch(
+                    "ALTER TABLE outcomes ADD COLUMN source TEXT NOT NULL DEFAULT 'owner';
+                     ALTER TABLE outcomes ADD COLUMN check_name TEXT;",
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            conn.pragma_update(None, "user_version", 2)
                 .map_err(|error| error.to_string())?;
         }
         Ok(Self {
@@ -534,8 +546,45 @@ impl EscalationStore {
         Ok(pending)
     }
 
-    /// Set (or replace) a job's outcome. Unknown job → error.
+    /// Set (or replace) a job's outcome as the owner. Unknown job → error.
     pub fn record_outcome(&self, id: &str, outcome: Outcome) -> Result<(), String> {
+        self.write_outcome(id, outcome, None).map(|_| ())
+    }
+
+    /// Record an outcome measured by an automatic check (`check` names it, e.g.
+    /// `forge_tests`, `adopted_in_reply`). Never replaces an outcome the owner gave; a later
+    /// check replaces an earlier check. Returns whether it was recorded.
+    pub fn record_check_outcome(
+        &self,
+        id: &str,
+        outcome: Outcome,
+        check: &str,
+    ) -> Result<bool, String> {
+        self.write_outcome(id, outcome, Some(check))
+    }
+
+    /// Job ids with this correlation id, newest first (at most 20).
+    pub fn jobs_by_correlation(&self, correlation_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM jobs WHERE correlation_id = ?1
+                 ORDER BY created_at DESC LIMIT 20",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = stmt
+            .query_map(params![correlation_id], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| error.to_string())
+    }
+
+    fn write_outcome(
+        &self,
+        id: &str,
+        outcome: Outcome,
+        check: Option<&str>,
+    ) -> Result<bool, String> {
         let mut conn = self.conn();
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let exists: Option<i64> = tx
@@ -547,12 +596,35 @@ impl EscalationStore {
         if exists.is_none() {
             return Err(format!("unknown escalation job {id}"));
         }
+        if check.is_some() {
+            let owner_said: Option<i64> = tx
+                .query_row(
+                    "SELECT 1 FROM outcomes WHERE job_id = ?1 AND source = 'owner'",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            if owner_said.is_some() {
+                return Ok(false);
+            }
+        }
+        let check_name = check.map(|c| c.chars().take(64).collect::<String>());
         tx.execute(
-            "INSERT INTO outcomes (job_id, outcome, at) VALUES (?1, ?2, ?3)
+            "INSERT INTO outcomes (job_id, outcome, at, source, check_name)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(job_id) DO UPDATE SET
                 outcome = excluded.outcome,
-                at = excluded.at",
-            params![id, outcome_str(outcome), Utc::now().timestamp_millis()],
+                at = excluded.at,
+                source = excluded.source,
+                check_name = excluded.check_name",
+            params![
+                id,
+                outcome_str(outcome),
+                Utc::now().timestamp_millis(),
+                if check.is_some() { "check" } else { "owner" },
+                check_name
+            ],
         )
         .map_err(|error| error.to_string())?;
         tx.execute(
@@ -561,7 +633,7 @@ impl EscalationStore {
         )
         .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
-        Ok(())
+        Ok(true)
     }
 
     pub fn log_decision(&self, record: &DecisionRecord) -> Result<(), String> {

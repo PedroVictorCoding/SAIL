@@ -479,7 +479,7 @@ fn store_survives_reopen() {
 }
 
 #[test]
-fn the_schema_version_is_one() {
+fn the_schema_version_is_two() {
     let path = std::env::temp_dir().join(format!(
         "sail-escalation-schema-{}.db",
         uuid::Uuid::new_v4()
@@ -489,8 +489,101 @@ fn the_schema_version_is_one() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("version");
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     drop(conn);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("db-wal"));
+    let _ = std::fs::remove_file(path.with_extension("db-shm"));
+}
+
+#[test]
+fn check_outcomes_never_override_the_owner() {
+    let store = EscalationStore::open_in_memory().expect("store");
+    let now = at(2026, 11, 13, 12);
+    finish(&store, "a", "fp-a", TaskKind::Coding, now, 1, 1, 1);
+    finish(&store, "b", "fp-b", TaskKind::Coding, now, 1, 1, 1);
+
+    // A check records; a later check replaces it.
+    assert!(
+        store
+            .record_check_outcome("a", Outcome::NoChange, "adopted_in_reply")
+            .unwrap()
+    );
+    assert!(
+        store
+            .record_check_outcome("a", Outcome::Improved, "forge_tests")
+            .unwrap()
+    );
+    assert_eq!(
+        store.job("a").unwrap().unwrap().outcome,
+        Some(Outcome::Improved)
+    );
+
+    // The owner's word wins and sticks.
+    store.record_outcome("b", Outcome::Worse).unwrap();
+    assert!(
+        !store
+            .record_check_outcome("b", Outcome::Improved, "forge_tests")
+            .unwrap()
+    );
+    assert_eq!(
+        store.job("b").unwrap().unwrap().outcome,
+        Some(Outcome::Worse)
+    );
+    // The owner may still replace a check's outcome.
+    store.record_outcome("a", Outcome::NoChange).unwrap();
+    assert_eq!(
+        store.job("a").unwrap().unwrap().outcome,
+        Some(Outcome::NoChange)
+    );
+
+    assert_eq!(store.outcomes().unwrap().tally(TaskKind::Coding), (0, 2));
+    assert!(
+        store
+            .record_check_outcome("missing", Outcome::Improved, "x")
+            .is_err()
+    );
+}
+
+#[test]
+fn jobs_are_found_by_correlation_id() {
+    let store = EscalationStore::open_in_memory().expect("store");
+    let now = at(2026, 11, 13, 12);
+    let mut j = job("a", "fp-a", TaskKind::Coding, now);
+    j.correlation_id = Some("forge:42".into());
+    store.insert_job(&j).unwrap();
+    store
+        .insert_job(&job("b", "fp-b", TaskKind::Coding, now))
+        .unwrap();
+    assert_eq!(store.jobs_by_correlation("forge:42").unwrap(), vec!["a"]);
+    assert!(store.jobs_by_correlation("forge:7").unwrap().is_empty());
+}
+
+#[test]
+fn a_version_one_database_is_migrated_and_keeps_owner_outcomes() {
+    let path = std::env::temp_dir().join(format!("sail-escalation-v1-{}.db", uuid::Uuid::new_v4()));
+    {
+        let conn = rusqlite::Connection::open(&path).expect("create");
+        conn.execute_batch(
+            "CREATE TABLE outcomes (job_id TEXT PRIMARY KEY, outcome TEXT NOT NULL, at INTEGER NOT NULL);
+             INSERT INTO outcomes VALUES ('old', 'improved', 1);
+             PRAGMA user_version = 1;",
+        )
+        .expect("v1 schema");
+    }
+    drop(EscalationStore::open(&path).expect("migrate"));
+    let conn = rusqlite::Connection::open(&path).expect("reopen");
+    let (version, source): (i64, String) = conn
+        .query_row(
+            "SELECT (SELECT user_version FROM pragma_user_version), source FROM outcomes WHERE job_id = 'old'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("row");
+    assert_eq!((version, source.as_str()), (2, "owner"));
+    drop(conn);
+    // Opening again is a no-op.
+    drop(EscalationStore::open(&path).expect("reopen store"));
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(path.with_extension("db-wal"));
     let _ = std::fs::remove_file(path.with_extension("db-shm"));
