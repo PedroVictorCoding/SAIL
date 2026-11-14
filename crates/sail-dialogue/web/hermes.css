@@ -102,6 +102,62 @@
 .hermes-pill-safe i { background: #5ccda4; }
 .hermes-pill-caution i { background: #e5be79; }
 .hermes-pill-dangerous i { background: #ed7275; }
+.hermes-pill-env-ready i { background: #5ccda4; }
+.hermes-pill-env-needed i, .hermes-pill-env-changed i, .hermes-pill-env-building i { background: #e5be79; }
+.hermes-pill-env-refused i, .hermes-pill-env-failed i { background: #ed7275; }
+
+.hermes-plugin-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sail-glass-border);
+}
+.hermes-plugin-section h6 {
+  margin: 0 0 8px;
+  font-size: .85em;
+  color: var(--sail-text-muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.hermes-hook-list,
+.hermes-env-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hermes-hook-item {
+  background: var(--sail-surface);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hermes-hook-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.hermes-hook-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.hermes-hook-toggle input { width: 20px; height: 20px; margin: 0; }
+.hermes-env-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .hermes-skill-files { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .hermes-link { background: none; border: 1px solid var(--sail-glass-border); border-radius: 999px; color: var(--sail-text); padding: 0 12px; font: inherit; font-size: .9em; }
 

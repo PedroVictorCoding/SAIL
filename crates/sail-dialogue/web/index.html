@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/flow.css">
 <link rel="stylesheet" href="/hermes.css">
 <link rel="stylesheet" href="/market.css">
+<link rel="stylesheet" href="/schedule.css">
 <link rel="stylesheet" href="/initiative.css">
 <link rel="stylesheet" href="/escalation-usage.css">
 </head>
@@ -293,6 +294,91 @@
               <summary id="marketInstalledSummary">Installed (0)</summary>
               <div id="marketInstalledList" class="market-installed-list"></div>
             </details>
+          </div>
+        </section>
+        <!-- Round 21: Antigravity owns everything inside #scheduleCard (schedule.js / schedule.css). -->
+        <section id="scheduleCard" class="workspace-card schedule-workspace" aria-label="Schedule">
+          <div class="schedule-toolbar">
+            <h3>Schedule</h3>
+            <button class="tm-btn" id="scheduleRefresh" type="button">Refresh</button>
+          </div>
+          <p class="schedule-intro">Recurring and one-time tasks SAIL runs for you on a schedule. Jobs SAIL suggests appear at the top for your approval.</p>
+          <p id="scheduleStrip" class="schedule-strip" role="status" aria-live="polite" hidden></p>
+          <p id="scheduleStatus" class="schedule-status" role="status" aria-live="polite">Open this section to load your schedule.</p>
+          <div id="scheduleProposalsWrap" class="schedule-proposals" hidden>
+            <h4>Proposed by SAIL</h4>
+            <div id="scheduleProposalList" class="schedule-list"></div>
+          </div>
+          <div class="schedule-layout">
+            <div class="schedule-main">
+              <div id="scheduleEmpty" class="schedule-empty" hidden>
+                <p><strong>No scheduled jobs yet.</strong> Try one of these examples to fill the form:</p>
+                <div class="schedule-examples" id="scheduleExamples"></div>
+              </div>
+              <div id="scheduleJobList" class="schedule-list" aria-live="polite"></div>
+              <article id="scheduleDetail" class="schedule-detail" aria-labelledby="scheduleDetailName" hidden>
+                <header class="schedule-detail-head">
+                  <div>
+                    <h4 id="scheduleDetailName" tabindex="-1"></h4>
+                    <p id="scheduleDetailDesc" class="schedule-meta"></p>
+                  </div>
+                  <button class="tm-btn" id="scheduleDetailClose" type="button">Close</button>
+                </header>
+                <p id="scheduleDetailMeta" class="schedule-meta"></p>
+                <div id="scheduleDetailActions" class="schedule-actions"></div>
+                <div class="schedule-runs-wrap">
+                  <h5>Run history</h5>
+                  <ul id="scheduleRunList" class="schedule-run-list"></ul>
+                </div>
+              </article>
+            </div>
+            <form id="scheduleForm" class="schedule-form" novalidate>
+              <h4>New job</h4>
+              <label for="scheduleName">Name
+                <input id="scheduleName" type="text" maxlength="80" autocomplete="off" placeholder="Morning summary" required>
+              </label>
+              <label for="scheduleWhen">When
+                <input id="scheduleWhen" type="text" maxlength="200" autocomplete="off" placeholder="every weekday at 9am" required>
+              </label>
+              <div id="schedulePreview" class="schedule-preview" aria-live="polite" hidden></div>
+              <label for="scheduleTz">Time zone
+                <input id="scheduleTz" type="text" maxlength="80" autocomplete="off" required>
+              </label>
+              <fieldset class="schedule-fieldset">
+                <legend>What should SAIL do?</legend>
+                <div class="schedule-kind-tabs" role="radiogroup" aria-label="Action type">
+                  <label class="schedule-radio"><input type="radio" name="scheduleActionKind" value="prompt" checked><span>Ask SAIL</span></label>
+                  <label class="schedule-radio"><input type="radio" name="scheduleActionKind" value="skill"><span>Use a skill</span></label>
+                  <label class="schedule-radio"><input type="radio" name="scheduleActionKind" value="workflow"><span>Run a workflow</span></label>
+                </div>
+                <div id="scheduleActionPromptWrap" class="schedule-action-panel">
+                  <label for="schedulePromptText">Prompt
+                    <textarea id="schedulePromptText" rows="3" maxlength="4000" placeholder="Summarise my day and open tasks"></textarea>
+                  </label>
+                </div>
+                <div id="scheduleActionSkillWrap" class="schedule-action-panel" hidden>
+                  <label for="scheduleSkillSelect">Skill
+                    <select id="scheduleSkillSelect"></select>
+                  </label>
+                  <label for="scheduleSkillInput">Input (optional)
+                    <input id="scheduleSkillInput" type="text" maxlength="4000" autocomplete="off" placeholder="Optional instructions or arguments">
+                  </label>
+                </div>
+                <div id="scheduleActionWorkflowWrap" class="schedule-action-panel" hidden>
+                  <label for="scheduleWorkflowSelect">Workflow
+                    <select id="scheduleWorkflowSelect"></select>
+                  </label>
+                </div>
+              </fieldset>
+              <label for="scheduleDeliver">Deliver
+                <select id="scheduleDeliver">
+                  <option value="web">Show in SAIL</option>
+                  <option value="silent">Keep silently</option>
+                </select>
+              </label>
+              <p id="scheduleFormError" class="schedule-error" role="alert" hidden></p>
+              <button class="tm-btn schedule-primary" id="scheduleCreateBtn" type="submit">Create job</button>
+            </form>
           </div>
         </section>
         <article class="workspace-card pulse-card" id="pulseCard" data-card="pulseCard">
@@ -1529,6 +1615,7 @@
 <script src="/flow.js" defer></script>
 <script src="/hermes.js" defer></script>
 <script src="/market.js" defer></script>
+<script src="/schedule.js" defer></script>
 <script src="/ui.js" defer></script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js" defer></script>

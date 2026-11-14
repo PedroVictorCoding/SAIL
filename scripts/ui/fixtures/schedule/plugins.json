@@ -1,0 +1,70 @@
+{
+  "sandbox": true,
+  "roots": [
+    {
+      "source": "hermes",
+      "path": "/tmp/hermes/plugins"
+    }
+  ],
+  "plugins": [
+    {
+      "id": "greeter",
+      "source": "hermes",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "skills_only": false,
+      "manifest": {
+        "name": "greeter",
+        "version": "1.2.0",
+        "description": "Greets people politely",
+        "requires_env": []
+      },
+      "status": {
+        "state": "enabled",
+        "detail": null
+      },
+      "approval": {
+        "approved_at": "2026-11-14T10:00:00Z",
+        "network": false,
+        "env": []
+      },
+      "registered": {
+        "tools": [
+          {
+            "name": "greet",
+            "available": true,
+            "description": "Greet someone"
+          }
+        ],
+        "commands": [],
+        "skills": {},
+        "hooks": [
+          "pre_llm_call",
+          "custom_event"
+        ],
+        "unsupported": []
+      },
+      "hooks": [
+        {
+          "name": "pre_llm_call",
+          "supported": true,
+          "enabled": false
+        },
+        {
+          "name": "custom_event",
+          "supported": false,
+          "enabled": false
+        }
+      ],
+      "environment": {
+        "state": "needed",
+        "source": "requirements.txt",
+        "requirements": [
+          "httpx>=0.27"
+        ],
+        "refused": [],
+        "locked": [],
+        "error": null
+      }
+    }
+  ]
+}

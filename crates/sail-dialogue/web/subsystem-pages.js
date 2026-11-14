@@ -6,7 +6,7 @@
 // tabs that belong to the page.
 const SETTINGS_ROUTES = {dialogue: 'voice', core: 'developer', system: 'developer', mind: 'models', guardian: 'guardian'};
 // Pages that became sections of SAIL Agents: old links and map stations land on the section.
-const SECTION_ROUTES = {flow: ['agents', 'workflows'], forge: ['agents', 'coding'], hermes: ['agents', 'skills'], skills: ['agents', 'skills'], market: ['agents', 'market']};
+const SECTION_ROUTES = {flow: ['agents', 'workflows'], forge: ['agents', 'coding'], hermes: ['agents', 'skills'], skills: ['agents', 'skills'], market: ['agents', 'market'], schedule: ['agents', 'schedule']};
 const SECTION_KEY = 'sail.agents.section';
 
 const subsystemPages = [
@@ -103,7 +103,8 @@ const subsystemPages = [
       {"id": "workflows", "label": "Workflows", "card": "flowCard"},
       {"id": "coding", "label": "Coding", "card": "forgeCard", "settings": "forge"},
       {"id": "skills", "label": "Skills & plugins", "card": "hermesCard"},
-      {"id": "market", "label": "Market", "card": "marketCard"}
+      {"id": "market", "label": "Market", "card": "marketCard"},
+      {"id": "schedule", "label": "Schedule", "card": "scheduleCard"}
     ],
     "details": [
       "Flow: versioned local workflows with saved execution results",

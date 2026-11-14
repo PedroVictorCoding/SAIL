@@ -5,7 +5,7 @@
   const card = document.getElementById('hermesCard');
   if (!card) return;
   const $ = s => card.querySelector(s);
-  let busy = false, loadedOnce = false, query = '', queryTimer = null;
+  let busy = false, loadedOnce = false, query = '', queryTimer = null, envPollTimer = null;
 
   function el(tag, attrs = {}, ...children) {
     const n = document.createElement(tag);
@@ -43,13 +43,104 @@
     invalid: ['Invalid', null],
   };
   const SOURCES = {hermes: 'Hermes home', sail: 'SAIL data'};
+  const HOOK_DESCRIPTIONS = {
+    pre_llm_call: 'Sees your message for this turn, not your history.',
+    post_llm_call: "Sees your message and SAIL's reply for this turn, not your history.",
+    pre_tool_call: 'Sees the tool name and arguments before the tool runs.',
+    post_tool_call: 'Sees the tool name, arguments, and a short preview of its result.',
+  };
+  const ENV_STATES = {
+    not_needed: 'Not needed',
+    needed: 'Needed',
+    building: 'Building…',
+    ready: 'Ready',
+    changed: 'Changed',
+    refused: 'Refused',
+    failed: 'Failed',
+  };
 
   function pill(state) {
     return el('span', {class: `hermes-pill hermes-pill-${state}`}, el('i', {'aria-hidden': 'true'}), STATES[state]?.[0] || state);
   }
+  function envPill(state) {
+    return el('span', {class: `hermes-pill hermes-pill-env-${state}`}, el('i', {'aria-hidden': 'true'}), ENV_STATES[state] || state);
+  }
   function names(title, items, render) {
     if (!items?.length) return null;
     return el('div', {class: 'hermes-registered'}, el('h6', {text: title}), el('ul', {}, items.map(render)));
+  }
+
+  function renderHooksSection(p) {
+    if (!Array.isArray(p.hooks) || !p.hooks.length) return null;
+    const list = el('ul', {class: 'hermes-hook-list'});
+    for (const h of p.hooks) {
+      const desc = HOOK_DESCRIPTIONS[h.name] || 'Not run in SAIL, so it sees nothing.';
+      const control = h.supported
+        ? (() => {
+            const toggle = el('input', {
+              type: 'checkbox',
+              checked: Boolean(h.enabled),
+              onchange: () => setHook(p.id, h.name, toggle.checked, toggle),
+            });
+            return el('label', {class: 'hermes-hook-toggle'}, toggle, 'Runs in SAIL');
+          })()
+        : el('span', {class: 'hermes-meta', text: 'Not run in SAIL'});
+      list.append(el('li', {class: 'hermes-hook-item', 'data-hook': h.name},
+        el('div', {class: 'hermes-hook-row'},
+          el('code', {text: h.name}),
+          control),
+        el('span', {class: 'hermes-meta', text: desc})));
+    }
+    return el('div', {class: 'hermes-plugin-section'},
+      el('h6', {text: 'Hooks'}),
+      list);
+  }
+
+  function renderEnvironmentSection(p) {
+    const env = p.environment;
+    if (!env) return null;
+    const st = env.state || 'not_needed';
+    const section = el('div', {class: 'hermes-plugin-section', 'data-env-state': st},
+      el('div', {class: 'hermes-env-head'},
+        el('h6', {text: 'Python environment'}),
+        envPill(st)));
+
+    if (env.source) {
+      section.append(el('p', {class: 'hermes-meta'}, 'From ', el('code', {text: env.source})));
+    }
+    if (env.error) {
+      section.append(el('p', {class: 'hermes-note hermes-error', text: env.error}));
+    }
+    if (env.requirements?.length) {
+      section.append(el('div', {class: 'hermes-registered'},
+        el('h6', {text: 'Requirements'}),
+        el('ul', {class: 'hermes-env-list'}, env.requirements.map(req => el('li', {}, el('code', {text: req}))))));
+    }
+    if (env.refused?.length) {
+      section.append(el('div', {class: 'hermes-registered'},
+        el('h6', {text: 'Refused requirements'}),
+        el('ul', {class: 'hermes-env-list'}, env.refused.map(ref => el('li', {class: 'hermes-error', text: ref})))));
+    }
+    if (st === 'ready' && env.locked?.length) {
+      section.append(el('div', {class: 'hermes-registered'},
+        el('h6', {text: 'Installed packages'}),
+        el('ul', {class: 'hermes-env-list'}, env.locked.map(pkg =>
+          el('li', {}, el('code', {text: `${pkg.name}==${pkg.version}` }))))));
+    }
+
+    const actions = [];
+    if (st === 'needed') {
+      actions.push(el('button', {class: 'tm-btn', type: 'button', onclick: () => envAction(p.id, 'build'), text: 'Build environment'}));
+    } else if (st === 'changed') {
+      actions.push(el('button', {class: 'tm-btn', type: 'button', onclick: () => envAction(p.id, 'build'), text: 'Rebuild environment'}));
+    } else if (st === 'failed') {
+      actions.push(el('button', {class: 'tm-btn', type: 'button', onclick: () => envAction(p.id, 'build'), text: 'Retry build'}));
+    }
+    if (st === 'ready' || st === 'changed' || st === 'failed') {
+      actions.push(el('button', {class: 'tm-btn', type: 'button', onclick: () => envAction(p.id, 'remove'), text: 'Remove environment'}));
+    }
+    if (actions.length) section.append(el('div', {class: 'hermes-actions'}, actions));
+    return section;
   }
 
   function pluginCard(p) {
@@ -78,15 +169,21 @@
           names('Tools', r.tools, t => el('li', {}, el('code', {text: `${p.id}.${t.name}`}), t.available ? '' : ' (unavailable)', t.description ? ` — ${t.description}` : '')),
           names('Commands', r.commands, c => el('li', {}, el('code', {text: `${p.id}./${c.name}`}), c.description ? ` — ${c.description}` : '')),
           names('Skills', Object.keys(r.skills || {}), s => el('li', {}, el('code', {text: `${p.id}:${s}`}))),
-          names('Hooks (listed, not run by SAIL)', r.hooks, h => el('li', {}, el('code', {text: h}))),
+          !Array.isArray(p.hooks) ? names('Hooks (listed, not run by SAIL)', r.hooks, h => el('li', {}, el('code', {text: h}))) : null,
           names('Registrations SAIL does not support', r.unsupported, u => el('li', {}, el('code', {text: u}))),
         ].filter(Boolean);
         body.push(regs.length ? el('div', {class: 'hermes-registered-grid'}, regs)
           : el('p', {class: 'hermes-meta', text: 'It registered no tools, commands or skills.'}));
       }
+      const hooksSection = renderHooksSection(p);
+      if (hooksSection) body.push(hooksSection);
+      const envSection = renderEnvironmentSection(p);
+      if (envSection) body.push(envSection);
       body.push(el('div', {class: 'hermes-actions'},
         el('button', {class: 'tm-btn', type: 'button', onclick: () => revoke(p), text: 'Revoke approval'})));
     } else if (state === 'quarantined' || state === 'changed') {
+      const envSection = renderEnvironmentSection(p);
+      if (envSection) body.push(envSection);
       const netId = `hermesNet-${p.id}`, envId = `hermesEnv-${p.id}`;
       const env = el('input', {id: envId, type: 'text', maxlength: '600', value: (m.requires_env || []).join(', '), autocomplete: 'off', spellcheck: 'false'});
       const net = el('input', {id: netId, type: 'checkbox'});
@@ -98,6 +195,17 @@
     return el('article', {class: `hermes-plugin hermes-plugin-${state}`, 'data-plugin': p.id, 'aria-label': `${m.name || p.id} plugin`}, body);
   }
 
+  function scheduleEnvPoll(pluginsList) {
+    clearTimeout(envPollTimer);
+    envPollTimer = null;
+    const anyBuilding = (pluginsList || []).some(p => p.environment?.state === 'building');
+    if (anyBuilding && shown()) {
+      envPollTimer = setTimeout(() => {
+        if (shown()) load();
+      }, 2000);
+    }
+  }
+
   function renderPlugins(data) {
     const list = $('#hermesPluginList');
     list.replaceChildren();
@@ -106,9 +214,11 @@
       list.append(el('div', {class: 'hermes-empty'},
         el('p', {text: 'No Hermes plugins found. Put a plugin folder (plugin.yaml and __init__.py) in one of these folders, then refresh:'}),
         el('ul', {}, data.roots.map(r => el('li', {}, el('code', {text: r.path}))))));
+      scheduleEnvPoll([]);
       return;
     }
     for (const p of data.plugins) list.append(pluginCard(p));
+    scheduleEnvPoll(data.plugins);
   }
 
   function renderSkills(data) {
@@ -261,6 +371,24 @@
       await api(`/plugins/${encodeURIComponent(p.id)}/approve`, {digest: p.digest, network, env});
       await load();
       status(`Approved ${p.id}. The model can list its tools; each call still asks you first.`);
+    } catch (error) { status(error.message, true); }
+  }
+  async function setHook(pluginId, hook, enabled, toggleEl) {
+    status(`${enabled ? 'Enabling' : 'Disabling'} hook ${hook} on ${pluginId}…`);
+    try {
+      await api(`/plugins/${encodeURIComponent(pluginId)}/hooks`, {hook, enabled});
+      await load();
+      status(`${enabled ? 'Enabled' : 'Disabled'} hook ${hook} on ${pluginId}.`);
+    } catch (error) {
+      if (toggleEl) toggleEl.checked = !enabled;
+      status(error.message, true);
+    }
+  }
+  async function envAction(pluginId, action) {
+    status(action === 'build' ? `Building Python environment for ${pluginId}…` : `Removing Python environment for ${pluginId}…`);
+    try {
+      await api(`/plugins/${encodeURIComponent(pluginId)}/environment`, {action});
+      await load();
     } catch (error) { status(error.message, true); }
   }
   async function revoke(p) {
