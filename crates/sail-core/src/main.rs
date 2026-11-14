@@ -48,6 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     tracing::debug!(root = %data_root.path.display(), "data migration checked");
 
+    if std::env::args().nth(1).as_deref() == Some("mesh") {
+        let code = sail_mind::mesh::cli::run(std::env::args().skip(2).collect()).await;
+        std::process::exit(code);
+    }
     if std::env::args().nth(1).as_deref() == Some("mind-status") {
         let status = status::read().await?;
         println!("{}", serde_json::to_string_pretty(&status)?);

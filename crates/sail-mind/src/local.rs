@@ -68,6 +68,9 @@ pub struct LocalGemmaBackend {
     parallel: usize,
     /// Whether a server persisted by a previous run has been checked against this config.
     persisted_checked: AtomicBool,
+    /// A SAIL Mesh worker's llama-server reached through its pinned TLS front, not a
+    /// process on this host: never started, adopted or hardware-probed here.
+    remote: bool,
 }
 fn unavailable(message: impl Into<String>) -> InferenceError {
     InferenceError::new(ErrorCode::BackendUnavailable, message)
@@ -127,6 +130,56 @@ impl LocalGemmaBackend {
             snapshot: Arc::new(Mutex::new(snapshot)),
             parallel,
             persisted_checked: AtomicBool::new(false),
+            remote: false,
+        })
+    }
+    /// The llama-server of a paired SAIL Mesh worker. `base` is the worker's
+    /// `https://host:port` base URL and `client` the certificate-pinned, authenticated client
+    /// for it ([`sail_mesh::tls::pinned_client`]). `config` names the worker's model:
+    /// `model_path` is its GGUF file name (which picks the chat template) and
+    /// `context_tokens` the context the worker reported. The host never starts or stops it.
+    pub fn remote(
+        mut config: LocalModelConfig,
+        client: reqwest::Client,
+        base: &str,
+    ) -> Result<Self> {
+        let endpoint = reqwest::Url::parse(base)
+            .and_then(|url| url.join("/v1/chat/completions"))
+            .map_err(|e| InferenceError::new(ErrorCode::InvalidConfiguration, e.to_string()))?;
+        if endpoint.scheme() != "https" {
+            return Err(InferenceError::new(
+                ErrorCode::ForbiddenEndpoint,
+                "Mesh workers are only reached over pinned TLS",
+            ));
+        }
+        config.managed = false;
+        config.persist = false;
+        config.endpoint = endpoint.to_string();
+        let snapshot = ModelStatus {
+            version: VERSION,
+            state: ModelState::Uninitialized,
+            model: config.name.clone(),
+            capabilities: None,
+            requested_backend: config.compute,
+            observed_backend: None,
+            owned_process: false,
+            process_id: None,
+            last_error: None,
+            active_profile: None,
+            hardware: None,
+            load: None,
+        };
+        Ok(Self {
+            config,
+            scheduler: resources::global(),
+            client,
+            endpoint,
+            process: AsyncMutex::new(None),
+            startup: AsyncMutex::new(()),
+            snapshot: Arc::new(Mutex::new(snapshot)),
+            parallel: 1,
+            persisted_checked: AtomicBool::new(true),
+            remote: true,
         })
     }
     /// The loaded model's family, from its weights file name: decides thinking and sampling
@@ -243,6 +296,14 @@ impl LocalGemmaBackend {
                     .is_some_and(|t| t.contains("tools") || t.contains("tool_calls")),
             context_tokens: context,
         };
+        if self.remote {
+            self.update(|s| {
+                s.state = ModelState::Ready;
+                s.capabilities = Some(caps);
+                s.last_error = None;
+            });
+            return Ok(self.snapshot());
+        }
         let hw = Some(crate::hardware::HardwareProbe::diagnose(&self.config.server_binary).await);
         let mut profile = self.config.to_profile();
         profile.context_tokens = caps.context_tokens;
@@ -283,6 +344,9 @@ impl LocalGemmaBackend {
             Err(_) => {}
         }
         self.update(|s| s.state = ModelState::Starting);
+        if self.remote {
+            return Err(unavailable("Mesh worker's model server is unavailable"));
+        }
         if !self.config.managed {
             return Err(unavailable(
                 "Configured external local model service is unavailable",

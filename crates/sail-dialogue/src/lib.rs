@@ -14,6 +14,7 @@ mod escalation_outcomes;
 mod execution;
 pub mod flow_http;
 pub mod gateway_http;
+pub mod mesh_http;
 pub mod gateway_service;
 pub mod hermes_http;
 pub mod hermes_tools;

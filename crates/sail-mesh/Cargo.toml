@@ -1,0 +1,37 @@
+[package]
+name = "sail-mesh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "SAIL Mesh: pairing, pinned TLS and the portable worker that runs inference for a SAIL host"
+
+# The worker runs on Windows and Linux machines that are not the SAIL host, so this crate
+# must stay portable: no libc, no sail-common/sail-guardian (Linux-only pieces), Unix-only
+# code behind cfg(unix).
+[[bin]]
+name = "sail-mesh-worker"
+path = "src/bin/sail-mesh-worker.rs"
+
+[dependencies]
+sail-protocol.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+base64.workspace = true
+futures-util.workspace = true
+bytes.workspace = true
+reqwest.workspace = true
+axum.workspace = true
+url.workspace = true
+ring.workspace = true
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
+
+[dev-dependencies]
+tempfile = "3"

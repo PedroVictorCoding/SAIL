@@ -335,6 +335,9 @@ pub struct MindStatus {
     pub limits: ResourceLimits,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hardware: Option<HardwareDiagnostics>,
+    /// Paired SAIL Mesh workers, when Mesh is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<mesh::MeshStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -448,6 +451,8 @@ impl Default for ResourceLimits {
 pub mod execution;
 
 pub mod memory;
+
+pub mod mesh;
 
 pub mod resources;
 

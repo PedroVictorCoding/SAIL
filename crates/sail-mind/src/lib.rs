@@ -6,6 +6,7 @@ pub mod escalation;
 pub mod gemma;
 pub mod hardware;
 pub mod local;
+pub mod mesh;
 pub mod persist;
 pub mod profile;
 pub use sail_common::request_body;
@@ -69,7 +70,9 @@ impl MindSubsystem {
         let path = model_path.into();
         let mut config = LocalModelConfig::from_env()?;
         config.model_path = path.clone();
-        let service = MindService::new(config, Default::default())?;
+        let service = MindService::new(config.clone(), Default::default())?;
+        // The daemon's resident model may share work with paired SAIL Mesh workers.
+        service.attach_mesh(mesh::MeshPool::new(mesh::MeshSettings::from_env(), config));
         Ok(Self {
             bus: None,
             model_path: path,

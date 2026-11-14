@@ -2,6 +2,7 @@ use crate::{
     backend::InferenceBackend,
     config::LocalModelConfig,
     local::{LocalGemmaBackend, emit},
+    mesh::{MeshLease, MeshPool, falls_back},
     validation::{validate_limits, validate_request},
 };
 use sail_common::resources::{self, ResourceClaim, ResourceScheduler};
@@ -26,6 +27,8 @@ struct Inner {
     semaphore: Arc<Semaphore>,
     state: Mutex<State>,
     lifecycle: CancellationToken,
+    /// Paired SAIL Mesh workers, when attached ([`MindService::attach_mesh`]).
+    mesh: std::sync::OnceLock<Arc<MeshPool>>,
 }
 struct State {
     accepting: bool,
@@ -116,6 +119,7 @@ impl MindService {
                 scheduler,
                 backends,
                 lifecycle: CancellationToken::new(),
+                mesh: std::sync::OnceLock::new(),
                 semaphore: Arc::new(Semaphore::new(limits.max_parallel)),
                 limits,
                 state: Mutex::new(State {
@@ -126,7 +130,20 @@ impl MindService {
             }),
         })
     }
+    /// Let this service run eligible requests on paired SAIL Mesh workers. Only the first
+    /// pool attached is used. The health monitor starts with [`MindService::start`].
+    pub fn attach_mesh(&self, pool: Arc<MeshPool>) {
+        if self.inner.mesh.set(pool).is_err() {
+            tracing::warn!("A SAIL Mesh pool is already attached; ignoring the second one");
+        }
+    }
+    pub fn mesh(&self) -> Option<&Arc<MeshPool>> {
+        self.inner.mesh.get()
+    }
     pub async fn start(&self) -> Result<()> {
+        if let Some(mesh) = self.inner.mesh.get() {
+            mesh.spawn_monitor(self.inner.lifecycle.clone());
+        }
         for backend in &self.inner.backends {
             tokio::select! {biased;_ = self.inner.lifecycle.cancelled()=>return Err(InferenceError::new(ErrorCode::ShuttingDown,"Mind startup cancelled by shutdown")),result=backend.start()=>{result?;}}
         }
@@ -170,6 +187,7 @@ impl MindService {
             metrics,
             limits: self.inner.limits.clone(),
             hardware,
+            mesh: self.inner.mesh.get().map(|mesh| mesh.status()),
         }
     }
     pub async fn infer(
@@ -251,6 +269,53 @@ impl MindService {
             done: false,
             started: None,
         };
+        let mut started_emitted = false;
+        if let Some(mesh) = self.inner.mesh.get() {
+            let host_busy = self.inner.semaphore.available_permits() == 0;
+            if let Some(lease) = mesh.acquire(
+                backend.name(),
+                &backend.aliases(),
+                &request,
+                priority,
+                host_busy,
+            ) {
+                self.set_running(request.request_id, true);
+                guard.started = Some(Instant::now());
+                let worker = lease.worker_name().to_owned();
+                match self
+                    .run_remote(lease, &request, &cancel, events.as_ref(), backend.name())
+                    .await
+                {
+                    RemoteOutcome::Finished(boxed) => {
+                        let result = *boxed;
+                        if result.is_ok() {
+                            mesh.record_offloaded();
+                        }
+                        if let Err(error) = &result {
+                            tracing::warn!(request_id=%request.request_id,%worker,code=?error.code,error=%error,"Mesh worker inference failed after output started");
+                            if let Some(events) = &events {
+                                let _ = events.try_send(InferenceEvent {
+                                    version: VERSION,
+                                    request_id: request.request_id,
+                                    payload: InferenceEventPayload::Failed {
+                                        error: error.clone(),
+                                    },
+                                });
+                            }
+                        }
+                        guard.finish(&result);
+                        return result;
+                    }
+                    RemoteOutcome::Fallback(error) => {
+                        mesh.record_fallback();
+                        tracing::info!(request_id=%request.request_id,%worker,error=%error,"Mesh worker unavailable before output; running on the host");
+                        self.set_running(request.request_id, false);
+                        guard.started = None;
+                        started_emitted = true;
+                    }
+                }
+            }
+        }
         let queued = Instant::now();
         let admission = loop {
             let mut claim = ResourceClaim::inference(priority);
@@ -300,14 +365,16 @@ impl MindService {
                     .running = true;
                 let queue_ms = queued.elapsed().as_millis() as u64;
                 let operation = async {
-                    emit(
-                        events.as_ref(),
-                        request.request_id,
-                        InferenceEventPayload::Started {
-                            model: backend.name().into(),
-                        },
-                    )
-                    .await?;
+                    if !started_emitted {
+                        emit(
+                            events.as_ref(),
+                            request.request_id,
+                            InferenceEventPayload::Started {
+                                model: backend.name().into(),
+                            },
+                        )
+                        .await?;
+                    }
                     let mut response = backend
                         .infer(&request, events.as_ref(), &cancel, &self.inner.limits)
                         .await?;
@@ -340,6 +407,119 @@ impl MindService {
         guard.finish(&result);
         result
     }
+    fn set_running(&self, id: Uuid, running: bool) {
+        if let Some(job) = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .jobs
+            .get_mut(&id)
+        {
+            job.running = running;
+        }
+    }
+    /// Run `request` on a Mesh worker. Events are forwarded to the caller as they arrive;
+    /// a failure before anything was forwarded asks the caller to run it on the host.
+    async fn run_remote(
+        &self,
+        lease: MeshLease,
+        request: &InferenceRequest,
+        cancel: &CancellationToken,
+        events: Option<&mpsc::Sender<InferenceEvent>>,
+        logical_model: &str,
+    ) -> RemoteOutcome {
+        if let Err(error) = emit(
+            events,
+            request.request_id,
+            InferenceEventPayload::Started {
+                model: logical_model.into(),
+            },
+        )
+        .await
+        {
+            lease.failed(&error);
+            return RemoteOutcome::Finished(Box::new(Err(error)));
+        }
+        let attempt = cancel.child_token();
+        let (tx, mut rx) = mpsc::channel::<InferenceEvent>(64);
+        let backend = lease.backend();
+        let limits = &self.inner.limits;
+        let infer = {
+            let attempt = attempt.clone();
+            async move {
+                let tx = tx;
+                backend.infer(request, Some(&tx), &attempt, limits).await
+            }
+        };
+        let forward = async {
+            let (mut delivered, mut closed) = (false, false);
+            while let Some(event) = rx.recv().await {
+                if closed {
+                    continue;
+                }
+                // Only output that reached a caller makes a host retry unsafe.
+                if let Some(out) = events {
+                    delivered = true;
+                    if out.send(event).await.is_err() {
+                        closed = true;
+                        attempt.cancel();
+                    }
+                }
+            }
+            (delivered, closed)
+        };
+        let deadline = inference_deadline(limits, &request.generation);
+        let outcome = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(InferenceError::new(ErrorCode::Cancelled, "Inference cancelled")),
+            joined = tokio::time::timeout(deadline, async { tokio::join!(infer, forward) }) => {
+                joined.map_err(|_| InferenceError::new(ErrorCode::DeadlineExceeded, "Mesh worker inference deadline exceeded"))
+            }
+        };
+        let (result, (delivered, closed)) = match outcome {
+            Ok(joined) => joined,
+            Err(error) => {
+                lease.failed(&error);
+                return RemoteOutcome::Finished(Box::new(Err(error)));
+            }
+        };
+        if closed {
+            let error = InferenceError::new(
+                ErrorCode::ConsumerClosed,
+                "Inference event consumer disconnected",
+            );
+            lease.failed(&error);
+            return RemoteOutcome::Finished(Box::new(Err(error)));
+        }
+        match result {
+            Ok(response) => {
+                if let Err(error) = emit(
+                    events,
+                    request.request_id,
+                    InferenceEventPayload::Completed {
+                        response: response.clone(),
+                    },
+                )
+                .await
+                {
+                    lease.succeeded();
+                    return RemoteOutcome::Finished(Box::new(Err(error)));
+                }
+                lease.succeeded();
+                RemoteOutcome::Finished(Box::new(Ok(response)))
+            }
+            Err(error) => {
+                let retry_locally = !delivered && !cancel.is_cancelled() && falls_back(&error);
+                lease.failed(&error);
+                if retry_locally {
+                    RemoteOutcome::Fallback(error)
+                } else {
+                    RemoteOutcome::Finished(Box::new(Err(error)))
+                }
+            }
+        }
+    }
     fn reject(&self) {
         self.inner
             .state
@@ -363,6 +543,11 @@ impl MindService {
         }
         Ok(())
     }
+}
+
+enum RemoteOutcome {
+    Finished(Box<Result<InferenceResponse>>),
+    Fallback(InferenceError),
 }
 
 /// Slowest thinking speed Mind plans for, in tokens per second. The host writes about 16;
