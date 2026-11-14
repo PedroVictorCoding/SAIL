@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/learn-factory.css">
 <link rel="stylesheet" href="/ambient-backdrop.css">
 <link rel="stylesheet" href="/flow.css">
+<link rel="stylesheet" href="/hermes.css">
 <link rel="stylesheet" href="/initiative.css">
 <link rel="stylesheet" href="/escalation-usage.css">
 </head>
@@ -215,6 +216,28 @@
             </div>
           </div>
           <h4>Executions</h4><div class="flow-runs" id="flowRuns"></div>
+        </section>
+        <section id="hermesCard" class="workspace-card hermes-workspace" aria-label="Skills and plugins">
+          <div class="hermes-toolbar"><h3>Skills &amp; plugins</h3><button class="tm-btn" id="hermesRefresh" type="button">Refresh</button></div>
+          <p class="hermes-intro">Hermes Agent plugins run only after you approve their exact files, and only inside SAIL’s sandbox. Every plugin call still asks you first. Skills are instructions the model can read; they grant no permissions.</p>
+          <p id="hermesStatus" class="hermes-status" role="status" aria-live="polite">Open this section to load plugins and skills.</p>
+          <div class="hermes-layout">
+            <section class="hermes-plugins" aria-labelledby="hermesPluginsTitle">
+              <h4 id="hermesPluginsTitle">Plugins</h4>
+              <div id="hermesPluginList" class="hermes-list"></div>
+            </section>
+            <section class="hermes-skills" aria-labelledby="hermesSkillsTitle">
+              <h4 id="hermesSkillsTitle">Skills</h4>
+              <label class="hermes-filter">Filter skills<input id="hermesSkillQuery" type="search" maxlength="200" autocomplete="off"></label>
+              <ul id="hermesSkillList" class="hermes-skill-list"></ul>
+              <details id="hermesRejected" class="hermes-rejected" hidden><summary></summary><ul></ul></details>
+              <article id="hermesSkillView" class="hermes-skill-view" aria-labelledby="hermesSkillName" hidden>
+                <header><h5 id="hermesSkillName" tabindex="-1"></h5><button class="tm-btn" id="hermesSkillClose" type="button">Close</button></header>
+                <pre id="hermesSkillBody"></pre>
+                <ul id="hermesSkillFiles" class="hermes-skill-files" aria-label="Skill files"></ul>
+              </article>
+            </section>
+          </div>
         </section>
         <article class="workspace-card pulse-card" id="pulseCard" data-card="pulseCard">
           <header class="card-heading">
@@ -744,6 +767,7 @@
         <button class="quiet-button" id="subsystemSettings" type="button" hidden>Open preferences</button>
       </header>
       <p class="subsystem-notice" id="subsystemNotice" role="status" hidden></p>
+      <div class="page-sections" id="subsystemSections" role="tablist" hidden></div>
       <div class="subsystem-content" id="subsystemContent"></div>
       <section class="subsystem-about" aria-labelledby="subsystemAboutTitle"><h2 id="subsystemAboutTitle">Responsibilities</h2><ul id="subsystemCapabilities"></ul></section>
     </section>
@@ -1447,6 +1471,7 @@
 <link rel="stylesheet" href="/toolsmap.css">
 <script src="/toolsmap.js" defer></script>
 <script src="/flow.js" defer></script>
+<script src="/hermes.js" defer></script>
 <script src="/ui.js" defer></script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js" defer></script>

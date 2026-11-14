@@ -28,13 +28,13 @@
       about: 'The host: CPU, GPU, memory, storage and throughput that every subsystem shares.'},
     {id: 'vision', name: 'Vision', sub: 'Camera · OCR · VLM', u: -9.4, v: 13.4, icon: 'vision', page: 'canvas',
       about: 'Camera and screen previews you choose to share, read by the vision model.'},
-    {id: 'flow', name: 'Flow', sub: 'Automation · Workflows', u: -7.8, v: 17.8, icon: 'flow', page: 'flow', endpoint: '/api/flow/status',
+    {id: 'flow', name: 'Flow', sub: 'Automation · Workflows', u: -7.8, v: 17.8, icon: 'flow', page: 'agents', section: 'workflows', endpoint: '/api/flow/status',
       about: 'Versioned local workflows with deterministic nodes, branches and saved execution results.'},
     {id: 'canvas', name: 'Canvas', sub: 'Projects · Notes', u: -5, v: 21.2, icon: 'canvas', page: 'canvas',
       about: 'Visual answers, diagrams and structured results from conversations.'},
     {id: 'arena', name: 'Arena', sub: 'Learn · Eval', u: -0.4, v: 21.6, icon: 'arena', page: 'arena',
       about: 'Arena Learn teaches step by step, from an assessment to a lesson map.'},
-    {id: 'forge', name: 'Forge', sub: 'Build · Agents · Tools', u: 4.2, v: 18.6, kind: 'forge', page: 'forge', endpoint: '/api/plans/',
+    {id: 'forge', name: 'Forge', sub: 'Build · Agents · Tools', u: 4.2, v: 18.6, kind: 'forge', page: 'agents', section: 'coding', endpoint: '/api/plans/',
       about: 'Development, build and tool orchestration: plans, agents, skills and system tools.'},
     {id: 'guardian', name: 'Guardian', sub: 'Safety · Policy', u: 10.6, v: 15.4, icon: 'guardian', page: 'guardian', endpoint: '/api/guardian/status',
       about: 'Approves or denies every effectful action and keeps a tamper-evident audit trail.'},
@@ -56,7 +56,7 @@
   ];
   const byId = Object.fromEntries(STATIONS.map((s) => [s.id, s]));
   // Router pages that are not a station's own page still get a matching status inspector.
-  const PAGE_STATION = {bridge: 'core', agents: 'forge', flow: 'flow', pulse: 'core'};
+  const PAGE_STATION = {bridge: 'core', agents: 'forge', pulse: 'core'};
   // Tabs of the right-hand Dialogue column: the conversation, and Context (the open
   // system's status), which has its own row of views.
   // Full-pane pages served on their own route and shown in a frame: the Tracker board
@@ -208,7 +208,7 @@
       el('div', {class: 'tm-brand'}, logo(), el('div', {}, el('strong', {text: 'SAIL'}), el('span', {class: 'tm-version', id: 'tmVersion', text: 'local'}))),
       el('ul', {class: 'tm-nav'},
         navItem('home', 'Home', 'home'), navItem('arena', 'Arena', 'arena'),
-        navItem('canvas', 'Canvas', 'canvas'), navItem('forge', 'Forge', 'forge'), navItem('flow', 'Flow', 'flow'),
+        navItem('canvas', 'Canvas', 'canvas'), navItem('agents', 'SAIL Agents', 'forge'),
         navItem('memory', 'Memory', 'mesh'),
         navItem('away', 'While You Were Away', 'away'),
         navItem('entertainment', 'Entertainment', 'entertainment')),
@@ -1039,7 +1039,7 @@
     const mobileAway = root.querySelector('.tm-away-mobile');
     if (current() === 'away') mobileAway?.setAttribute('aria-current', 'page');
     else mobileAway?.removeAttribute('aria-current');
-    $('#tmCrumb').textContent = current() === 'pulse' ? 'Reminders' : state.frame ? FRAMES[state.frame].title : state.route === 'terminal' ? 'Terminal' : state.popup ? byId[state.popup].name : state.mode === 'away' ? 'While You Were Away' : 'SAIL';
+    $('#tmCrumb').textContent = current() === 'pulse' ? 'Reminders' : state.frame ? FRAMES[state.frame].title : state.route === 'terminal' ? 'Terminal' : current() === 'agents' ? 'SAIL Agents' : state.popup ? byId[state.popup].name : state.mode === 'away' ? 'While You Were Away' : 'SAIL';
     svgRoot.querySelectorAll('.tm-station').forEach((g) => g.classList.toggle('selected', g.dataset.station === id));
     render();
   }
@@ -1085,11 +1085,12 @@
   }
   function navTo(target, trigger) {
     if (target === 'away' || target === 'home' || target === 'pulse' || target === 'terminal') { window.sailNavigate?.(target); return; }
+    if (target === 'agents') { state.trigger = trigger || document.activeElement; state.pending = null; window.sailNavigate?.('agents'); return; }
     if (FRAMES[target]) { state.trigger = trigger || document.activeElement; window.sailNavigate?.(target); return; }
     openStation(target, trigger);
   }
   // The sidebar entry for what the centre shows.
-  function current() { if (window.sailCurrentPage?.() === 'pulse') return 'pulse'; return state.frame ? state.frame : (state.route === 'terminal' ? 'terminal' : (state.popup || (state.mode === 'away' ? 'away' : 'home'))); }
+  function current() { if (window.sailCurrentPage?.() === 'pulse') return 'pulse'; if (window.sailCurrentPage?.() === 'agents') return 'agents'; return state.frame ? state.frame : (state.route === 'terminal' ? 'terminal' : (state.popup || (state.mode === 'away' ? 'away' : 'home'))); }
 
   // ------------------------------------------------------------------ centre pane
   // Stations with a page go through the router (#mind, #forge…) so links, reloads and
@@ -1105,7 +1106,7 @@
       showStation(id, false); $('#tmPaneTitle').focus({preventScroll: true}); return;
     }
     state.pending = id;
-    window.sailNavigate?.(s.page);
+    window.sailNavigate?.(s.page, s.section || null);
   }
   function showPane(mode) {
     const opening = pane.hidden;
@@ -1130,7 +1131,7 @@
     const activeRoute = state.route || window.sailCurrentPage?.();
     const mode = id === 'arena' || activeRoute === 'arena' ? 'arena'
       : id === 'terminal' || activeRoute === 'terminal' ? 'terminal'
-      : id === 'flow' || activeRoute === 'flow' ? 'flow'
+      : activeRoute === 'agents' ? 'agents'
       : 'station';
     showPane(mode);
     state.popup = id;

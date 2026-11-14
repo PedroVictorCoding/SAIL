@@ -1,0 +1,107 @@
+/* SAIL Agents: section tabs, the full-width Agents pane, and the Skills & plugins card.
+   Same material as Flow: an opaque surface with one weak bottom glow, no motion or blur
+   behind skill text. Status is always a text label; the dot only repeats it. */
+
+/* Section tabs (Workflows · Coding · Skills & plugins) */
+.page-sections { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-4); }
+.page-sections[hidden] { display: none; }
+.page-section-tab {
+  min-height: 44px; padding: 0 var(--space-4); border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--sail-glass-border); background: var(--sail-surface); color: var(--sail-text-muted);
+  font: inherit; font-weight: 600; transition: background var(--sail-transition-fast), color var(--sail-transition-fast);
+}
+.page-section-tab:hover { color: var(--sail-text); }
+.page-section-tab[aria-selected="true"] { background: var(--sail-surface-raised); color: var(--sail-text); border-color: rgb(222 238 255 / .34); box-shadow: inset 0 -2px 0 var(--sail-text); }
+.page-section-tab:focus-visible { outline: 2px solid var(--sail-focus-ring); outline-offset: 2px; }
+
+/* The Agents page takes the full centre pane, keeping its heading and section tabs. On
+   phones the pane already flows with the page, so only the width rules apply there. */
+@media (min-width: 861px) {
+  .tm-pane[data-mode="agents"] { padding: 0; overflow: hidden; }
+  .tm-pane[data-mode="agents"] .tm-pane-main { padding: var(--space-4); overflow-y: auto; height: 100%; box-sizing: border-box; }
+}
+.tm-pane[data-mode="agents"] .subsystem-page { max-width: none; }
+.tm-pane[data-mode="agents"] .subsystem-about { display: none; }
+.tm-pane[data-mode="agents"] .subsystem-content { display: flex; flex-direction: column; }
+
+/* Card */
+.hermes-workspace {
+  color: var(--sail-text); width: 100%; min-width: 0; box-sizing: border-box; padding: 20px;
+  background: radial-gradient(ellipse at 50% 100%, rgb(143 156 255 / .07), transparent 50%), var(--sail-surface);
+  background-repeat: no-repeat; border: 1px solid var(--sail-glass-border); border-radius: var(--sail-radius-card);
+}
+.hermes-toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.hermes-toolbar h3 { margin: 0; flex: 1; }
+.hermes-intro, .hermes-meta, .hermes-note { color: var(--sail-text-muted); }
+.hermes-meta { font-size: .9em; margin: 4px 0; overflow-wrap: anywhere; }
+.hermes-status { min-height: 1.5em; color: var(--sail-text-muted); }
+.hermes-error { color: #ffb4b4; }
+.hermes-workspace button { min-height: 44px; cursor: pointer; }
+.hermes-workspace code { font-size: .9em; overflow-wrap: anywhere; }
+.hermes-workspace h4 { margin: 8px 0 12px; }
+.hermes-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; align-items: start; }
+.hermes-list { display: flex; flex-direction: column; gap: 12px; }
+.hermes-plugin { background: var(--sail-base); border: 1px solid var(--sail-glass-border); border-radius: var(--sail-radius-control); padding: 16px; min-width: 0; }
+.hermes-plugin p { margin: 6px 0; }
+.hermes-plugin-head { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.hermes-plugin-head h5 { margin: 0; font-size: 1.05rem; }
+.hermes-plugin-head small { color: var(--sail-text-subtle); font-weight: 400; }
+
+.hermes-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: .85em; font-weight: 600; background: var(--sail-surface-raised); border: 1px solid var(--sail-glass-border); color: var(--sail-text); }
+.hermes-pill i { width: 8px; height: 8px; border-radius: 50%; background: #8592a6; }
+.hermes-pill-enabled i { background: #5ccda4; }
+.hermes-pill-quarantined i, .hermes-pill-changed i { background: #e5be79; }
+.hermes-pill-invalid i { background: #ed7275; }
+
+.hermes-registered-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-top: 8px; }
+.hermes-registered h6 { margin: 8px 0 4px; font-size: .85em; color: var(--sail-text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.hermes-registered ul { margin: 0; padding-left: 18px; }
+.hermes-registered li { margin: 2px 0; overflow-wrap: anywhere; }
+
+.hermes-approve { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.hermes-approve label, .hermes-filter { display: flex; flex-direction: column; gap: 6px; }
+.hermes-approve .hermes-check { flex-direction: row; align-items: center; gap: 10px; min-height: 44px; }
+.hermes-check input { width: 20px; height: 20px; }
+.hermes-workspace input[type="text"], .hermes-workspace input[type="search"] {
+  box-sizing: border-box; width: 100%; min-width: 0; background: var(--sail-base); color: var(--sail-text);
+  border: 1px solid var(--sail-glass-border); border-radius: var(--sail-radius-control); padding: 12px; font: inherit;
+}
+.hermes-workspace input:focus-visible, .hermes-workspace button:focus-visible, .hermes-workspace summary:focus-visible { outline: 2px solid var(--sail-focus-ring); outline-offset: 2px; }
+.hermes-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.hermes-primary { align-self: flex-start; }
+.hermes-empty { color: var(--sail-text-muted); }
+.hermes-empty ul { padding-left: 18px; }
+
+.hermes-skill-list { list-style: none; margin: 12px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; }
+.hermes-skill {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; width: 100%; text-align: left; font: inherit; color: var(--sail-text);
+  background: var(--sail-base); border: 1px solid var(--sail-glass-border); border-radius: var(--sail-radius-control); padding: 10px 12px;
+}
+.hermes-skill > span:last-child { grid-column: 1 / -1; color: var(--sail-text-muted); font-size: .92em; }
+.hermes-skill .hermes-meta { margin: 0; }
+.hermes-skill:hover { border-color: rgb(222 238 255 / .3); }
+.hermes-rejected { margin: 8px 0; color: var(--sail-text-muted); }
+.hermes-rejected summary { cursor: pointer; min-height: 32px; }
+.hermes-rejected li { overflow-wrap: anywhere; margin: 4px 0; }
+
+/* Skill reading pane: neutral, stable, no glow. */
+.hermes-skill-view { margin-top: 12px; background: var(--sail-base); border: 1px solid var(--sail-glass-border); border-radius: var(--sail-radius-control); padding: 16px; }
+.hermes-skill-view header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hermes-skill-view h5 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.hermes-skill-view pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.55; max-height: 480px; overflow-y: auto; margin: 12px 0; }
+.hermes-skill-files { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.hermes-link { background: none; border: 1px solid var(--sail-glass-border); border-radius: 999px; color: var(--sail-text); padding: 0 12px; font: inherit; font-size: .9em; }
+
+@media (max-width: 1180px) { .hermes-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 700px) {
+  .hermes-workspace { padding: 14px; }
+  .page-section-tab { flex: 1 1 auto; }
+  .hermes-primary, .hermes-actions .tm-btn { width: 100%; }
+}
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .hermes-workspace { background: var(--sail-surface); }
+}
+@media (forced-colors: active) {
+  .page-section-tab[aria-selected="true"] { outline: 2px solid CanvasText; }
+  .hermes-pill i { forced-color-adjust: none; }
+}

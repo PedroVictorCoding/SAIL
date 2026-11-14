@@ -22,11 +22,13 @@ with sync_playwright() as p:
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.add_init_script("localStorage.setItem('sail_owner_token', " + __import__('json').dumps(TOKEN) + ")")
         page.route("**/icons.svg", lambda r: r.fulfill(body=(ROOT / "assets/source/icons/sail-icons.svg").read_bytes(), content_type="image/svg+xml"))
+        # Flow is the Workflows section of SAIL Agents; the old #flow address still lands there.
         page.goto(BASE + "/#flow")
         expect(page.locator("#flowGraph .flow-node").first).to_be_visible()
+        assert page.evaluate("location.hash") == "#agents?section=workflows"
         expect(page.locator("#subsystemContent #flowCard")).to_be_visible()
         assert not page.locator("#pulseCard").is_visible()
-        expect(page.locator("#tmCrumb")).to_have_text("Flow")
+        expect(page.locator("#tmCrumb")).to_have_text("SAIL Agents")
         page.locator("#flowNew").click()
         page.locator("#flowName").fill(f"Browser workflow {width}")
         page.locator('[data-node="trim"]').click()
@@ -58,11 +60,11 @@ with sync_playwright() as p:
         page.evaluate("window.sailNavigate('pulse')")
         expect(page.locator("#pulseCard")).to_be_visible()
         if width > 860:
-            page.locator('[data-nav="flow"]').click()
+            page.locator('[data-nav="agents"]').click()
         else:
             page.evaluate("window.sailToolsMap.open('flow')")
         expect(page.locator("#flowCard")).to_be_visible()
-        assert page.evaluate("location.hash") == "#flow"
+        assert page.evaluate("location.hash") == "#agents?section=workflows"
         assert not page.locator("#pulseCard").is_visible()
         # Explicit service failure must appear, without fake successful activity.
         page.route("**/api/flow/**", lambda r: r.fulfill(status=503, json={"error": "Flow storage unavailable"}))

@@ -52,7 +52,16 @@ A Hermes portable package holds `plugin.json` and `skills/` and contains no Pyth
 ### Approving a plugin
 
 A plugin starts **quarantined**: SAIL has not run any of its code. The owner enables it
-from a terminal on the host. Build the command with
+in the web interface, under **SAIL Agents › Skills & plugins** (`#agents?section=skills`).
+That section lists each plugin with its status, its file hash and what it asks for. It
+approves the reviewed hash with or without network access and secrets, shows what an
+enabled plugin registered, and revokes approvals. It also lists and reads skills,
+including folders that were rejected and why. The approval request carries the hash the
+owner reviewed. If the files changed in the meantime, the request is refused, so the
+owner never approves code they did not see. The page uses the owner-token API
+`/api/hermes` (`crates/sail-dialogue/src/hermes_http.rs`).
+
+The same actions are available from a terminal on the host. Build the command with
 `cargo build --release -p sail-flow --bin sail-hermes`; it uses the same `SAIL_DATA` and
 `HERMES_HOME` as the daemon.
 
@@ -133,7 +142,6 @@ Hermes itself.
 
 ## Not yet done
 
-- No web UI. Plugins are approved from the `sail-hermes` terminal command.
 - Plugin hooks are not run inside SAIL's turn loop.
 - Self-created skills are not yet staged for approval.
 - The `/<skill>` command is not available in the gateway (P2, not yet built).
