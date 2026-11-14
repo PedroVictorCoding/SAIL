@@ -12,6 +12,7 @@ sail-arena.workspace = true
 sail-protocol.workspace = true
 sail-guardian = { path = "../sail-guardian" }
 chrono.workspace = true
+chrono-tz = { version = "0.10", features = ["serde"] }
 tokio.workspace = true
 async-trait.workspace = true
 serde.workspace = true
