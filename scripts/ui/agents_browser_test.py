@@ -62,7 +62,7 @@ with sync_playwright() as p:
         expect(page.locator("#subsystemTitle")).to_have_text("SAIL Agents")
         expect(page.locator("#tmCrumb")).to_have_text("SAIL Agents")
         tabs = page.locator("#subsystemSections [role=tab]")
-        expect(tabs).to_have_text(["Workflows", "Coding", "Skills & plugins", "Market", "Schedule"])
+        expect(tabs).to_have_text(["Workflows", "Coding", "Skills & plugins", "Market", "Schedule", "Messaging"])
         expect(page.locator("#section-coding")).to_have_attribute("aria-selected", "true")
         assert page.locator("#subsystemSettings").is_visible()  # Forge preferences
 
@@ -75,6 +75,8 @@ with sync_playwright() as p:
         assert page.evaluate("location.hash") == "#agents?section=workflows"
         expect(page.locator("#flowStatus")).not_to_have_text("Open Flow to load workflows.")
         page.keyboard.press("End")
+        expect(page.locator("#subsystemContent #gatewayCard")).to_be_visible()
+        page.keyboard.press("ArrowLeft")
         expect(page.locator("#subsystemContent #scheduleCard")).to_be_visible()
         page.keyboard.press("ArrowLeft")
         expect(page.locator("#subsystemContent #marketCard")).to_be_visible()

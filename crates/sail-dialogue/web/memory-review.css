@@ -1,0 +1,233 @@
+/* Memory › Review panel (round 22, Antigravity).
+   Opaque reading surfaces, high-contrast scan warnings, and 44px touch targets. */
+
+.mr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.mr-panel[hidden] {
+  display: none;
+}
+
+.mr-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mr-toggle-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border-radius: var(--sail-radius-control);
+  background: var(--sail-base);
+  border: 1px solid var(--sail-glass-border);
+}
+
+.mr-toggle-line {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+}
+
+.mr-toggle-line input[type="checkbox"] {
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  margin: 0;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.mr-toggle-label {
+  display: inline;
+  margin: 0;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mr-muted {
+  color: var(--sail-text-muted);
+  margin: 0;
+  font-size: .92em;
+  overflow-wrap: anywhere;
+}
+
+.mr-status {
+  min-height: 1.4em;
+  color: var(--sail-text-muted);
+  margin: 0;
+}
+
+.mr-error {
+  color: #ffb4b4;
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.mr-error[hidden] {
+  display: none;
+}
+
+.mr-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--sail-radius-control);
+  background: var(--sail-surface);
+  border: 1px solid var(--sail-glass-border);
+  min-width: 0;
+}
+
+.mr-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mr-section-head h3 {
+  margin: 0;
+}
+
+.mr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.mr-panel button {
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.mr-panel :focus-visible {
+  outline: 2px solid var(--sail-focus-ring);
+  outline-offset: 2px;
+}
+
+.mr-profile-preview {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--sail-radius-control);
+  background: var(--sail-base);
+  border: 1px solid var(--sail-glass-border);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--sail-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: .88rem;
+  line-height: 1.5;
+}
+
+.mr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mr-line-row,
+.mr-pending-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--sail-radius-control);
+  background: var(--sail-base);
+  border: 1px solid var(--sail-glass-border);
+  min-width: 0;
+}
+
+.mr-pending-card {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.mr-line-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.mr-line-text {
+  overflow-wrap: anywhere;
+}
+
+.mr-why-badge {
+  display: inline-block;
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: .8em;
+  background: rgb(255 255 255 / .08);
+  border: 1px solid var(--sail-glass-border);
+  color: var(--sail-text-muted);
+}
+
+.mr-why-badge[data-why="pinned"] {
+  background: rgb(31 165 255 / .16);
+  border-color: rgb(31 165 255 / .45);
+  color: #bae6fd;
+}
+
+.mr-summary-list {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+}
+
+.mr-findings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--sail-radius-control);
+  background: rgb(245 158 11 / .14);
+  border: 1px solid rgb(245 158 11 / .5);
+  color: #fde68a;
+}
+
+.mr-finding-item {
+  font-size: .9em;
+  overflow-wrap: anywhere;
+}
+
+.mr-finding-rule {
+  font-weight: 700;
+}
+
+.mr-danger {
+  border-color: rgb(239 68 68 / .45);
+  color: #fecaca;
+}
+
+@media (forced-colors: active) {
+  .mr-toggle-row,
+  .mr-section,
+  .mr-profile-preview,
+  .mr-line-row,
+  .mr-pending-card,
+  .mr-why-badge,
+  .mr-findings {
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+  }
+}
