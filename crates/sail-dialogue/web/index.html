@@ -14,6 +14,8 @@
 <link rel="stylesheet" href="/hermes.css">
 <link rel="stylesheet" href="/market.css">
 <link rel="stylesheet" href="/schedule.css">
+<link rel="stylesheet" href="/gateway.css">
+<link rel="stylesheet" href="/memory-review.css">
 <link rel="stylesheet" href="/initiative.css">
 <link rel="stylesheet" href="/escalation-usage.css">
 </head>
@@ -381,6 +383,89 @@
             </form>
           </div>
         </section>
+        <!-- Round 22: Antigravity owns everything inside #gatewayCard (gateway.js / gateway.css). -->
+        <section id="gatewayCard" class="workspace-card gateway-workspace" aria-label="Messaging">
+          <div class="gateway-toolbar">
+            <h3>Messaging</h3>
+            <button class="tm-btn" id="gatewayRefresh" type="button">Refresh</button>
+          </div>
+          <p class="gateway-intro">Talk to SAIL from Telegram. Only people you approve with a pairing code can chat with your assistant.</p>
+          <div id="gatewayStatusStrip" class="gateway-status-strip" data-state="disconnected">
+            <div class="gateway-status-info">
+              <span id="gatewayConnPill" class="gateway-pill" data-tone="disconnected">Not connected</span>
+              <span id="gatewayPollTime" class="gateway-meta">Last poll: never</span>
+              <span id="gatewayConnError" class="gateway-error" role="alert" hidden></span>
+            </div>
+            <div id="gatewayDisconnectWrap" class="gateway-actions"></div>
+          </div>
+          <p id="gatewayStatus" class="gateway-meta" role="status" aria-live="polite">Open Messaging to check Telegram status.</p>
+
+          <section id="gatewaySetup" class="gateway-setup" aria-labelledby="gatewaySetupTitle">
+            <h4 id="gatewaySetupTitle">Connect a Telegram bot</h4>
+            <ol class="gateway-steps">
+              <li>Open Telegram and talk to <strong>@BotFather</strong>.</li>
+              <li>Send <code>/newbot</code> and follow the steps to create your bot and get its token.</li>
+              <li>Paste the token below and press Connect.</li>
+            </ol>
+            <form id="gatewayConnectForm" class="gateway-inline-form" novalidate>
+              <label class="gateway-field" for="gatewayTokenInput">Bot token
+                <input id="gatewayTokenInput" type="password" autocomplete="off" placeholder="123456:ABC-DEF..." required>
+              </label>
+              <button id="gatewayConnectBtn" class="tm-btn gateway-primary" type="submit">Connect</button>
+            </form>
+            <p id="gatewayConnectError" class="gateway-error" role="alert" hidden></p>
+          </section>
+
+          <div class="gateway-grid">
+            <section class="gateway-section" aria-labelledby="gatewayPairingHeading">
+              <h4 id="gatewayPairingHeading">Pairing requests</h4>
+              <p id="gatewayLockout" class="gateway-warning" role="alert" hidden></p>
+              <div id="gatewayPendingList" class="gateway-list" aria-live="polite"></div>
+              <form id="gatewayCodeForm" class="gateway-inline-form" novalidate>
+                <label class="gateway-field" for="gatewayCodeInput">Type the code your contact received
+                  <input id="gatewayCodeInput" type="text" maxlength="20" autocomplete="off" placeholder="ABCD2345">
+                </label>
+                <button id="gatewayCodeSubmit" class="tm-btn" type="submit">Approve code</button>
+              </form>
+              <p id="gatewayCodeError" class="gateway-error" role="alert" hidden></p>
+            </section>
+
+            <section class="gateway-section" aria-labelledby="gatewayPairedHeading">
+              <h4 id="gatewayPairedHeading">Paired people</h4>
+              <div id="gatewayPairedList" class="gateway-list" aria-live="polite"></div>
+            </section>
+
+            <section class="gateway-section" aria-labelledby="gatewayPolicyHeading">
+              <h4 id="gatewayPolicyHeading">Unknown senders</h4>
+              <p class="gateway-meta">Choose what happens when someone new messages your bot.</p>
+              <div id="gatewayPolicyGroup" class="gateway-segmented" role="group" aria-labelledby="gatewayPolicyHeading">
+                <button type="button" class="tm-btn gateway-seg-btn" data-policy="pair" aria-pressed="true">Pair</button>
+                <button type="button" class="tm-btn gateway-seg-btn" data-policy="ignore" aria-pressed="false">Ignore</button>
+                <button type="button" class="tm-btn gateway-seg-btn" data-policy="decline" aria-pressed="false">Decline</button>
+              </div>
+            </section>
+
+            <section class="gateway-section" aria-labelledby="gatewayOutboxHeading">
+              <h4 id="gatewayOutboxHeading">Delivery</h4>
+              <div class="gateway-outbox-stats">
+                <div class="gateway-stat">
+                  <span id="gatewayOutboxQueued" class="gateway-stat-val">0</span>
+                  <span class="gateway-meta">Queued replies</span>
+                </div>
+                <div class="gateway-stat">
+                  <span id="gatewayOutboxFailed" class="gateway-stat-val">0</span>
+                  <span class="gateway-meta">Recent failures</span>
+                </div>
+              </div>
+              <button id="gatewayRetryOutbox" class="tm-btn" type="button">Retry now</button>
+            </section>
+
+            <section class="gateway-section" aria-labelledby="gatewayChatsHeading">
+              <h4 id="gatewayChatsHeading">Recent conversations</h4>
+              <div id="gatewayChatsList" class="gateway-list" aria-live="polite"></div>
+            </section>
+          </div>
+        </section>
         <article class="workspace-card pulse-card" id="pulseCard" data-card="pulseCard">
           <header class="card-heading">
             <div class="card-title"><span class="card-icon" aria-hidden="true">◷</span><div><h3 id="pulseCardHeading">Pulse</h3><p id="pulseCardSub">Local reminders and timing</p></div></div>
@@ -461,6 +546,7 @@
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelMain" id="memoryTab"><span>Memory</span></button>
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelTranscript" id="transcriptTab" tabindex="-1"><span class="lt-tab-dot" id="transcriptTabDot" hidden aria-hidden="true"></span><span>Live Transcript</span></button>
               <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelToolLog" id="toolLogTab" tabindex="-1"><span>Tool Log</span></button>
+              <button type="button" class="card-tab" role="tab" aria-selected="false" data-tab-card="memoryCard" data-tab-panel="memoryPanelReview" id="memoryReviewTab" tabindex="-1"><span>Review</span></button>
             </div>
           </div>
         </header>
@@ -896,6 +982,35 @@
           <div class="tl-footer" id="toolLogFooter" hidden>
             <button type="button" class="quiet-button" id="toolLogLoadMore">Load older</button>
           </div>
+        </div>
+        <div class="card-tab-panel mr-panel" id="memoryPanelReview" role="tabpanel" aria-labelledby="memoryReviewTab" hidden>
+          <div class="mr-toolbar">
+            <p id="mrStatus" class="mr-status" role="status" aria-live="polite">Open Review to inspect your profile and pending memory changes.</p>
+            <button type="button" class="quiet-button" id="mrRefresh">Refresh</button>
+          </div>
+          <div class="mr-toggle-row">
+            <div class="mr-toggle-line">
+              <input id="mrEnabledToggle" type="checkbox">
+              <label class="mr-toggle-label" for="mrEnabledToggle">Review memory changes before SAIL saves them</label>
+            </div>
+            <p class="mr-muted">When on, memories SAIL proposes from conversations wait here for you to save or discard.</p>
+          </div>
+          <section class="mr-section" aria-labelledby="mrProfileHeading">
+            <div class="mr-section-head">
+              <h3 id="mrProfileHeading">Profile block</h3>
+              <span id="mrProfileSize" class="mr-muted">0 / 1,400 characters</span>
+            </div>
+            <p class="mr-muted">This compact summary is included at the start of every conversation.</p>
+            <pre id="mrProfilePreview" class="mr-profile-preview"></pre>
+            <div id="mrProfileLines" class="mr-list"></div>
+          </section>
+          <section class="mr-section" aria-labelledby="mrPendingHeading">
+            <div class="mr-section-head">
+              <h3 id="mrPendingHeading">Waiting for review</h3>
+              <div id="mrBulkActions" class="mr-actions"></div>
+            </div>
+            <div id="mrPendingList" class="mr-list" aria-live="polite"></div>
+          </section>
         </div>
       </article>
     </div>
@@ -1616,6 +1731,8 @@
 <script src="/hermes.js" defer></script>
 <script src="/market.js" defer></script>
 <script src="/schedule.js" defer></script>
+<script src="/gateway.js" defer></script>
+<script src="/memory-review.js" defer></script>
 <script src="/ui.js" defer></script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js" defer></script>

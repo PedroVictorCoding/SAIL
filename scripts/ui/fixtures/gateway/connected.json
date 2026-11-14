@@ -1,0 +1,41 @@
+{
+  "status": {
+    "connected": true,
+    "bot_username": "sail_local_bot",
+    "error": null,
+    "last_poll_at": 1794660100
+  },
+  "pairing": {
+    "paired": [
+      {
+        "sender_id": 1001,
+        "chat_id": 1001,
+        "name": "Alice",
+        "paired_at": 1794650000
+      }
+    ],
+    "pending": [
+      {
+        "code": "ABCD2345",
+        "sender_id": 2002,
+        "chat_id": 2002,
+        "name": "Bob",
+        "requested_at": 1794660000
+      }
+    ],
+    "policy": "pair",
+    "locked_until": null
+  },
+  "chats": [
+    {
+      "chat_id": 1001,
+      "name": "Alice",
+      "last_message_at": 1794660050,
+      "turns": 4
+    }
+  ],
+  "outbox": {
+    "queued": 2,
+    "failed_recently": 1
+  }
+}
