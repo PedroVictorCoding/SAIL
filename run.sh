@@ -374,8 +374,8 @@ if [[ -z "${SAIL_MODEL_BACKEND:-}" && -f "$GPU_ENV" ]]; then
   GPU_ENV_LOADED=1
 fi
 
-# Set default context tokens (16k for Qwen 3.6 on 32GB systems)
-export SAIL_CONTEXT_TOKENS="${SAIL_CONTEXT_TOKENS:-16384}"
+# Request a 32k local context; Mind still scales it down if observed RAM is tight.
+export SAIL_CONTEXT_TOKENS="${SAIL_CONTEXT_TOKENS:-32768}"
 
 # 9. Startup summary banner
 LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")

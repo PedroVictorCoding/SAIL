@@ -1923,6 +1923,15 @@ async fn run_turn(
             .await?
         }
     };
+    // Generation has returned its complete text. Commit Arena's compacted context
+    // before yielding the completion notification: an immediate follow-up may cancel
+    // queued speech, and must already see this exchange.
+    if epoch.load(Ordering::SeqCst) != current {
+        return Ok(());
+    }
+    let compaction = state.arena.complete_response_context_at_epoch(
+        &session, current, &prompt, &reply, learning_epoch,
+    );
     emit(
         &tx,
         current,
@@ -1937,9 +1946,13 @@ async fn run_turn(
         }),
     )
     .await;
+    if let Some(receipt) = compaction {
+        debug!(?receipt, "Completed text response compacted by Arena");
+        emit(&tx, current, json!({"type":"context_compacted", "turn_id":current, "compaction":receipt})).await;
+    }
     info!(
         response_chars = reply.chars().count(),
-        "Model response finished; waiting for remaining speech synthesis"
+        "Model response finished and context compacted; waiting for remaining speech synthesis"
     );
     drop(speech_tx);
     // Wait for the final synthesized chunks before signalling completion.
@@ -1949,10 +1962,6 @@ async fn run_turn(
     if epoch.load(Ordering::SeqCst) != current {
         return Ok(());
     }
-    // Arena archives the exchange and keeps only a bounded hot window verbatim.
-    state
-        .arena
-        .record_turn_at_epoch(&session, current, &prompt, &reply, learning_epoch);
     // Did the reply use an answer a stronger model gave during this turn? (#450)
     crate::escalation_outcomes::settle_turn(&tool_correlation(&session, current).to_string(), &reply);
     crate::proactive::note_conversation_turn();

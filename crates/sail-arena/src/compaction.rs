@@ -74,6 +74,18 @@ impl ContextBudget {
     }
 }
 
+/// Receipt for deterministic compaction after a completed text response.
+/// No model call is made; the recent hot window and consented archive stay bounded.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct CompactionReceipt {
+    pub record_id: Option<i64>,
+    pub hot_turns_before: usize,
+    pub hot_turns_after: usize,
+    pub hot_chars_before: usize,
+    pub hot_chars_after: usize,
+    pub evicted_turns: usize,
+}
+
 /// A turn that left the hot window but is still referenced from the prompt.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Breadcrumb {

@@ -176,3 +176,93 @@ impl TestLearning for sail_arena::ArenaSubsystem {
         }
     }
 }
+
+#[test]
+fn every_completed_reply_compacts_before_the_next_query() {
+    let arena = ArenaSubsystem::new().with_budget(ContextBudget {
+        hot_turns: 1,
+        ..ContextBudget::default()
+    });
+    arena.ensure_test_learning("cycle");
+    let consent = arena.learning_epoch("cycle");
+    let first = arena
+        .complete_response_context_at_epoch(
+            "cycle",
+            1,
+            "The boat is Andorinha.",
+            "I will remember the boat name.",
+            consent,
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            first.hot_turns_before,
+            first.hot_turns_after,
+            first.evicted_turns
+        ),
+        (1, 1, 0)
+    );
+    let second = arena
+        .complete_response_context_at_epoch(
+            "cycle",
+            2,
+            "What is tomorrow's plan?",
+            "Check the weather before sailing.",
+            consent,
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            second.hot_turns_before,
+            second.hot_turns_after,
+            second.evicted_turns
+        ),
+        (2, 1, 1)
+    );
+    assert!(second.hot_chars_after < second.hot_chars_before);
+    let next = arena.conversation_context("cycle", "What is the boat called?");
+    assert_eq!(next.hot[0].turn, 2);
+    assert!(
+        next.memory
+            .recalled
+            .iter()
+            .any(|r| r.excerpt.contains("Andorinha"))
+    );
+    // Reading context is not the trigger, and does not change the retained hot turn.
+    assert_eq!(
+        arena.conversation_context("cycle", "anything").hot[0].turn,
+        2
+    );
+}
+
+#[test]
+fn post_reply_compaction_never_grants_learning_consent() {
+    let arena = ArenaSubsystem::new().with_budget(ContextBudget {
+        hot_turns: 1,
+        ..ContextBudget::default()
+    });
+    arena.begin_voice_session("private");
+    for turn in 1..=4 {
+        let result = arena
+            .complete_response_context_at_epoch(
+                "private",
+                turn,
+                "private prompt",
+                "private completed reply",
+                None,
+            )
+            .unwrap();
+        assert_eq!(result.record_id, None);
+        assert_eq!(result.hot_turns_after, 1);
+    }
+    assert_eq!(arena.store().stats().unwrap().records, 0);
+    assert_eq!(
+        arena.last_user_prompt("private").as_deref(),
+        Some("private prompt")
+    );
+    assert!(
+        arena
+            .complete_response_context_at_epoch("missing", 1, "query", "reply", None)
+            .is_none()
+    );
+}

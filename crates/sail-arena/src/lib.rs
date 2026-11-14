@@ -18,7 +18,7 @@ pub mod compaction;
 pub mod knowledge;
 pub mod store;
 
-pub use compaction::{Breadcrumb, ContextBudget, Recall, WorkingContext};
+pub use compaction::{Breadcrumb, CompactionReceipt, ContextBudget, Recall, WorkingContext};
 pub use store::{MemoryStore, NewRecord, NewToolLog, SearchHit, StoreStats, StoredRecord, ToolLogEntry};
 
 /// Scope for records that belong to live voice/text conversations.
@@ -417,6 +417,20 @@ impl ArenaSubsystem {
         assistant: &str,
         epoch: Option<u64>,
     ) -> Option<i64> {
+        self.complete_response_context_at_epoch(session, turn, user, assistant, epoch)
+            .and_then(|receipt| receipt.record_id)
+    }
+
+    /// Record generated text and immediately compact the session before speech drains.
+    /// Returns actual before/after counts even when learning is off (no durable record).
+    pub fn complete_response_context_at_epoch(
+        &self,
+        session: &str,
+        turn: u64,
+        user: &str,
+        assistant: &str,
+        epoch: Option<u64>,
+    ) -> Option<CompactionReceipt> {
         let Ok(mut sessions) = self.sessions.write() else {
             return None;
         };
@@ -453,6 +467,8 @@ impl ArenaSubsystem {
                 .map(|t| t.user.chars().count() + t.assistant.chars().count())
                 .sum::<usize>()
         };
+        let hot_turns_before = ledger.hot.len();
+        let hot_chars_before = hot_chars(&ledger.hot);
         while ledger.hot.len() > 1
             && (ledger.hot.len() > self.budget.hot_turns
                 || hot_chars(&ledger.hot) > self.budget.hot_chars)
@@ -469,7 +485,14 @@ impl ArenaSubsystem {
         while ledger.crumbs.len() > MAX_LEDGER_TURNS {
             ledger.crumbs.pop_front();
         }
-        id
+        Some(CompactionReceipt {
+            record_id: id,
+            hot_turns_before,
+            hot_turns_after: ledger.hot.len(),
+            hot_chars_before,
+            hot_chars_after: hot_chars(&ledger.hot),
+            evicted_turns: hot_turns_before - ledger.hot.len(),
+        })
     }
 
     /// Hot window, breadcrumbs and recalled excerpts for the next request, within budget.
