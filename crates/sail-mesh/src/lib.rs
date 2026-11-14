@@ -11,6 +11,7 @@
 //!   host proves it was paired). Prompts never cross the network in clear text.
 //! - The worker only forwards a fixed allowlist of llama-server routes; it is not a shell,
 //!   file or generic HTTP proxy.
+pub mod discovery;
 pub mod identity;
 pub mod pairing;
 pub mod registry;

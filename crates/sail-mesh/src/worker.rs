@@ -7,19 +7,20 @@ use crate::{FORWARDED_ROUTES, HELLO_ROUTE, MeshError, Result, identity::WorkerId
 use axum::{
     Router,
     body::Body,
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{HeaderMap, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
 use sail_protocol::mesh::{MESH_VERSION, MeshHello, MeshModel};
 use std::{
-    net::SocketAddr,
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::Semaphore;
 
@@ -27,6 +28,17 @@ use tokio::sync::Semaphore;
 pub const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 /// Largest non-streaming upstream reply (metadata, template, tokens).
 const MAX_METADATA_BYTES: usize = 4 * 1024 * 1024;
+/// Failed authentications from one address that trip the throttle.
+const AUTH_MAX_FAILURES: u32 = 20;
+/// Window in which those failures are counted.
+const AUTH_WINDOW: Duration = Duration::from_secs(60);
+/// How long an address that tripped the throttle is refused.
+const AUTH_LOCKOUT: Duration = Duration::from_secs(60);
+/// Most addresses the throttle remembers; the one idle longest is evicted.
+const AUTH_MAX_ADDRESSES: usize = 1024;
+
+/// Where the auth throttle gets the time; tests substitute a clock they control.
+pub(crate) type NowFn = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
@@ -45,6 +57,72 @@ struct Shared {
     slots: Arc<Semaphore>,
     max_parallel: usize,
     active: AtomicUsize,
+    auth: Mutex<AuthThrottle>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AuthEntry {
+    failures: u32,
+    window_start: Instant,
+    blocked_until: Option<Instant>,
+    last_seen: Instant,
+}
+
+/// Per-address failed-authentication tracker. Successful authentication says nothing here:
+/// the window only moves forward on failures, so guessing cannot be spread out by a paired
+/// host that happens to ask for the state in between.
+pub(crate) struct AuthThrottle {
+    now: NowFn,
+    addresses: HashMap<IpAddr, AuthEntry>,
+}
+
+impl AuthThrottle {
+    pub(crate) fn new(now: NowFn) -> Self {
+        Self {
+            now,
+            addresses: HashMap::new(),
+        }
+    }
+
+    /// Whether this address is inside a lockout right now.
+    pub(crate) fn is_blocked(&self, address: IpAddr) -> bool {
+        let now = (self.now)();
+        self.addresses
+            .get(&address)
+            .and_then(|entry| entry.blocked_until)
+            .is_some_and(|until| now < until)
+    }
+
+    /// Count one failed authentication and start a lockout when the window fills up.
+    pub(crate) fn record_failure(&mut self, address: IpAddr) {
+        let now = (self.now)();
+        if !self.addresses.contains_key(&address) && self.addresses.len() >= AUTH_MAX_ADDRESSES {
+            let oldest = self
+                .addresses
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_seen)
+                .map(|(address, _)| *address);
+            if let Some(oldest) = oldest {
+                self.addresses.remove(&oldest);
+            }
+        }
+        let entry = self.addresses.entry(address).or_insert(AuthEntry {
+            failures: 0,
+            window_start: now,
+            blocked_until: None,
+            last_seen: now,
+        });
+        if now.saturating_duration_since(entry.window_start) >= AUTH_WINDOW {
+            entry.window_start = now;
+            entry.failures = 0;
+            entry.blocked_until = None;
+        }
+        entry.failures = entry.failures.saturating_add(1);
+        entry.last_seen = now;
+        if entry.failures >= AUTH_MAX_FAILURES {
+            entry.blocked_until = Some(now + AUTH_LOCKOUT);
+        }
+    }
 }
 
 /// Check the upstream URL: plain HTTP(S) base URL, no credentials, query or path.
@@ -68,6 +146,15 @@ pub fn parse_upstream(raw: &str) -> Result<url::Url> {
 /// Build the worker's HTTP application (without TLS; [`serve`] adds it). Public so tests
 /// and embedders can drive it directly.
 pub fn router(identity: &WorkerIdentity, config: &WorkerConfig) -> Result<Router> {
+    router_with_clock(identity, config, Arc::new(Instant::now))
+}
+
+/// [`router`] with an injectable clock, so the auth throttle can be tested without waiting.
+pub(crate) fn router_with_clock(
+    identity: &WorkerIdentity,
+    config: &WorkerConfig,
+    now: NowFn,
+) -> Result<Router> {
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -84,6 +171,7 @@ pub fn router(identity: &WorkerIdentity, config: &WorkerConfig) -> Result<Router
         slots: Arc::new(Semaphore::new(max_parallel)),
         max_parallel,
         active: AtomicUsize::new(0),
+        auth: Mutex::new(AuthThrottle::new(now)),
     });
     Ok(Router::new()
         .fallback(handle)
@@ -108,7 +196,7 @@ pub async fn serve(
     });
     axum_server::bind_rustls(config.bind, tls)
         .handle(handle)
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .map_err(|e| MeshError::new(format!("Worker server stopped: {e}")))
 }
@@ -125,23 +213,52 @@ fn authorized(shared: &Shared, headers: &HeaderMap) -> bool {
         .is_some_and(|token| crate::same_secret(token.trim().as_bytes(), &shared.secret))
 }
 
+/// The address a request came from; only meaningful when the server ran with connect info.
+fn client_address(request: &Request) -> IpAddr {
+    request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|connect| connect.0.ip())
+        .unwrap_or(IpAddr::from([0, 0, 0, 0]))
+}
+
+/// The upstream route for an exactly matching method and raw path, if the worker forwards it.
+fn forwarded(method: &Method, path: &str) -> Option<&'static str> {
+    FORWARDED_ROUTES
+        .iter()
+        .find(|(allowed_method, route)| *route == path && method.as_str() == *allowed_method)
+        .map(|(_, route)| *route)
+}
+
 async fn handle(State(shared): State<Arc<Shared>>, request: Request) -> Response {
+    let address = client_address(&request);
+    {
+        let auth = shared
+            .auth
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if auth.is_blocked(address) {
+            return error(StatusCode::TOO_MANY_REQUESTS, "too many attempts");
+        }
+    }
     if !authorized(&shared, request.headers()) {
+        shared
+            .auth
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .record_failure(address);
         // Same answer for a wrong secret and a missing one; nothing about the worker leaks.
         return error(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    let path = request.uri().path().to_owned();
-    let method = request.method().clone();
-    if path == HELLO_ROUTE && method == Method::GET {
-        return axum::Json(hello(&shared).await).into_response();
-    }
+    let path = request.uri().path();
     if request.uri().query().is_some() {
         return error(StatusCode::BAD_REQUEST, "query strings are not forwarded");
     }
-    let Some(&(_, route)) = FORWARDED_ROUTES
-        .iter()
-        .find(|(m, p)| *p == path && method.as_str() == *m)
-    else {
+    if path == HELLO_ROUTE && request.method() == Method::GET {
+        return axum::Json(hello(&shared).await).into_response();
+    }
+    let method = request.method().clone();
+    let Some(route) = forwarded(&method, path) else {
         return error(StatusCode::NOT_FOUND, "route is not forwarded by SAIL Mesh");
     };
     let generation = route == "/v1/chat/completions";
@@ -194,7 +311,16 @@ async fn handle(State(shared): State<Arc<Shared>>, request: Request) -> Response
         if route == "/props" {
             data = redact_props(&data);
         }
-        return ([(header::CONTENT_TYPE, content_type)], data).into_response();
+        // Only these two headers ever leave the worker: upstream headers may describe its
+        // internals and must not reach the host.
+        return (
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, "no-store".to_owned()),
+            ],
+            data,
+        )
+            .into_response();
     }
     // Stream the generation through. The permit and active count live as long as the body.
     shared.active.fetch_add(1, Ordering::SeqCst);
@@ -303,6 +429,31 @@ async fn upstream_model(shared: &Shared) -> std::result::Result<MeshModel, Strin
 mod tests {
     use super::*;
 
+    struct FakeClock(Mutex<Instant>);
+
+    impl FakeClock {
+        fn new() -> Arc<Self> {
+            Arc::new(Self(Mutex::new(Instant::now())))
+        }
+
+        fn advance(&self, duration: Duration) {
+            *self
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += duration;
+        }
+
+        fn now_fn(self: &Arc<Self>) -> NowFn {
+            let clock = self.clone();
+            Arc::new(move || {
+                *clock
+                    .0
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+            })
+        }
+    }
+
     #[test]
     fn upstream_must_be_a_bare_base_url() {
         assert!(parse_upstream("http://127.0.0.1:8080").is_ok());
@@ -315,6 +466,90 @@ mod tests {
         ] {
             assert!(parse_upstream(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn forwarded_matches_only_the_exact_raw_path() {
+        assert_eq!(forwarded(&Method::GET, "/health"), Some("/health"));
+        assert_eq!(
+            forwarded(&Method::POST, "/v1/chat/completions"),
+            Some("/v1/chat/completions")
+        );
+        for path in [
+            "/v1/models",
+            "/slots",
+            "/metrics",
+            "/../health",
+            "/%2e%2e/health",
+            "//health",
+            "/health/",
+            "/health?x=1",
+        ] {
+            assert_eq!(forwarded(&Method::GET, path), None, "{path}");
+        }
+        assert_eq!(forwarded(&Method::POST, "/health"), None);
+        assert_eq!(forwarded(&Method::GET, "/v1/chat/completions"), None);
+    }
+
+    #[test]
+    fn throttle_blocks_after_twenty_failures_and_lifts() {
+        let clock = FakeClock::new();
+        let mut throttle = AuthThrottle::new(clock.now_fn());
+        let address = IpAddr::from([192, 0, 2, 1]);
+        for attempt in 1..=AUTH_MAX_FAILURES {
+            assert!(!throttle.is_blocked(address), "attempt {attempt}");
+            clock.advance(Duration::from_secs(1));
+            throttle.record_failure(address);
+        }
+        assert!(throttle.is_blocked(address));
+        clock.advance(AUTH_LOCKOUT - Duration::from_secs(1));
+        assert!(throttle.is_blocked(address), "lockout lasts a minute");
+        clock.advance(Duration::from_secs(2));
+        assert!(!throttle.is_blocked(address), "lockout ends");
+        assert!(!throttle.is_blocked(IpAddr::from([192, 0, 2, 2])));
+
+        // A new window starts after the lockout: it takes twenty more failures to trip again.
+        throttle.record_failure(address);
+        assert!(!throttle.is_blocked(address));
+        clock.advance(Duration::from_secs(1));
+        throttle.record_failure(address);
+        assert!(!throttle.is_blocked(address));
+    }
+
+    #[test]
+    fn throttle_counts_failures_across_a_quiet_minute() {
+        let clock = FakeClock::new();
+        let mut throttle = AuthThrottle::new(clock.now_fn());
+        let address = IpAddr::from([192, 0, 2, 1]);
+        for _ in 0..10 {
+            throttle.record_failure(address);
+        }
+        clock.advance(Duration::from_secs(30));
+        for _ in 0..10 {
+            throttle.record_failure(address);
+        }
+        assert!(throttle.is_blocked(address));
+    }
+
+    #[test]
+    fn throttle_keeps_at_most_1024_addresses() {
+        let clock = FakeClock::new();
+        let mut throttle = AuthThrottle::new(clock.now_fn());
+        let address = |index: u32| IpAddr::from(std::net::Ipv4Addr::from(index.to_be_bytes()));
+        for index in 0..(AUTH_MAX_ADDRESSES as u32) {
+            clock.advance(Duration::from_millis(1));
+            throttle.record_failure(address(index));
+        }
+        assert_eq!(throttle.addresses.len(), AUTH_MAX_ADDRESSES);
+        assert!(throttle.addresses.contains_key(&address(0)));
+        clock.advance(Duration::from_millis(1));
+        throttle.record_failure(address(AUTH_MAX_ADDRESSES as u32));
+        assert_eq!(throttle.addresses.len(), AUTH_MAX_ADDRESSES);
+        assert!(
+            !throttle.addresses.contains_key(&address(0)),
+            "the address idle longest is evicted"
+        );
+        assert!(throttle.addresses.contains_key(&address(1)));
     }
 
     #[test]
