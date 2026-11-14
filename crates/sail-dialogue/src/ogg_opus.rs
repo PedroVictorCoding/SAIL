@@ -140,12 +140,16 @@ pub fn decode(data: &[u8]) -> Result<Vec<i16>, String> {
         } else {
             pcm.extend(
                 buffer[..n * 2]
-                    .chunks_exact(2)
-                    .map(|lr| ((lr[0] as i32 + lr[1] as i32) / 2) as i16),
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|[l, r]| ((*l as i32 + *r as i32) / 2) as i16),
             );
         }
         if pcm.len() > MAX_SECONDS * RATE as usize {
-            failure = Some(format!("voice notes longer than {MAX_SECONDS} s are not transcribed"));
+            failure = Some(format!(
+                "voice notes longer than {MAX_SECONDS} s are not transcribed"
+            ));
             break;
         }
     }
@@ -202,5 +206,22 @@ mod tests {
         data.extend([255, 45]);
         data.extend(&long);
         assert_eq!(packets(&data).unwrap(), vec![long]);
+    }
+
+    /// Decodes a real voice note through libopus when `SAIL_TEST_OGG` names one (e.g. one
+    /// second of a 440 Hz tone); without it there is nothing to decode and it returns.
+    #[test]
+    fn a_real_voice_note_decodes_to_16khz() {
+        let Some(path) = std::env::var_os("SAIL_TEST_OGG") else {
+            return;
+        };
+        let pcm = decode(&std::fs::read(path).unwrap()).unwrap();
+        assert!(
+            (15_000..=17_000).contains(&pcm.len()),
+            "{} samples",
+            pcm.len()
+        );
+        let peak = pcm.iter().map(|s| s.unsigned_abs()).max().unwrap();
+        assert!(peak > 5_000, "audible: peak {peak}");
     }
 }

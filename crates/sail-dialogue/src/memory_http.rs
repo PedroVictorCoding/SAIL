@@ -297,7 +297,8 @@ async fn clear_tool_logs(
 /// The Dialogue grant: what the profile block may include (the same access a turn uses).
 fn profile_access() -> Option<Access> {
     let grant =
-        sail_guardian::memory::memory_grant(&sail_protocol::memory::MemoryPurpose::Dialogue).ok()?;
+        sail_guardian::memory::memory_grant(&sail_protocol::memory::MemoryPurpose::Dialogue)
+            .ok()?;
     Some(Access::from_grant(&grant))
 }
 
@@ -386,7 +387,10 @@ async fn review_decide(
         let report = sail_flow::memory::apply_reviewed(&store, &Access::owner(), &pending, now())
             .map_err(|e| (StatusCode::CONFLICT, e))?;
         match report.rejected {
-            Some(reason) => Err((StatusCode::CONFLICT, format!("Arena's validator rejected it: {reason}"))),
+            Some(reason) => Err((
+                StatusCode::CONFLICT,
+                format!("Arena's validator rejected it: {reason}"),
+            )),
             None => Ok(()),
         }
     })

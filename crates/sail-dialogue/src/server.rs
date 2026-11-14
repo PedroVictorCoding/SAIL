@@ -431,6 +431,7 @@ pub async fn run_dialogue_server_with_plans(
         active_token.clone(),
     );
     let proxy_guard = crate::proxy_guard::ProxyGuard::new(active_token.as_deref());
+    let gateway_authority = authority();
     let owner_token = active_token;
     let server_state = Arc::new(ServerState {
         live_context_authority,
@@ -443,17 +444,16 @@ pub async fn run_dialogue_server_with_plans(
         pulse,
         briefing: Some(briefing_engine),
     });
-    let gateway = crate::gateway_service::start(Arc::new(
-        crate::gateway_service::GatewayService::new(
+    let gateway =
+        crate::gateway_service::start(Arc::new(crate::gateway_service::GatewayService::new(
             sail_common::storage::data_path("gateway"),
             Arc::new(DaemonChat::new(server_state.clone())),
             Arc::new(|token: &sail_flow::gateway::BotToken| {
                 Arc::new(crate::gateway_service::ReqwestBot::new(token))
                     as Arc<dyn sail_flow::gateway::BotApi>
             }),
-        ),
-    ));
-    let gateway_routes = crate::gateway_http::router(gateway, authority());
+        )));
+    let gateway_routes = crate::gateway_http::router(gateway, gateway_authority);
     let mut app = Router::new()
         .nest_service("/api/guardian", approval_routes)
         .nest_service("/api/agents/gateway", gateway_routes)
@@ -2297,7 +2297,8 @@ pub(crate) struct DaemonChat {
 
 impl DaemonChat {
     pub(crate) fn new(state: Arc<ServerState>) -> Self {
-        let pipe = crate::RealtimeVoicePipeline::with_services(state.services.clone(), "telegram".into());
+        let pipe =
+            crate::RealtimeVoicePipeline::with_services(state.services.clone(), "telegram".into());
         Self {
             state,
             pipe,
@@ -2394,7 +2395,12 @@ impl crate::gateway_service::ChatRunner for DaemonChat {
         .await
         .unwrap_or_default();
         sail_flow::hermes::global().add_skills(&mut library).await;
-        library.skills.keys().filter(|k| !k.contains(':')).cloned().collect()
+        library
+            .skills
+            .keys()
+            .filter(|k| !k.contains(':'))
+            .cloned()
+            .collect()
     }
 
     async fn status(&self) -> String {
@@ -2410,7 +2416,11 @@ impl crate::gateway_service::ChatRunner for DaemonChat {
             .unwrap_or(0);
         format!(
             "SAIL is running. Active scheduled jobs: {jobs}. Approvals waiting: {pending}. Talking to you now: {}.",
-            if sail_common::resources::global().voice_active() { "yes, by voice too" } else { "here" }
+            if sail_common::resources::global().voice_active() {
+                "yes, by voice too"
+            } else {
+                "here"
+            }
         )
     }
 
@@ -2421,7 +2431,8 @@ impl crate::gateway_service::ChatRunner for DaemonChat {
         let now = chrono::Utc::now().timestamp();
         let jobs = service.store.jobs().unwrap_or_default();
         if jobs.is_empty() {
-            return "No scheduled jobs. Ask me to do something regularly and I'll propose one.".into();
+            return "No scheduled jobs. Ask me to do something regularly and I'll propose one."
+                .into();
         }
         jobs.iter()
             .map(|j| {
@@ -2438,7 +2449,8 @@ impl crate::gateway_service::ChatRunner for DaemonChat {
     }
 
     fn resolve(&self, session: uuid::Uuid, approved: bool) -> std::result::Result<(), String> {
-        let broker = sail_guardian::global_broker().map_err(|_| "Guardian is unavailable".to_string())?;
+        let broker =
+            sail_guardian::global_broker().map_err(|_| "Guardian is unavailable".to_string())?;
         let pending = broker
             .approval()
             .list_pending()

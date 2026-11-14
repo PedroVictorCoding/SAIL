@@ -28,7 +28,8 @@ pub struct MemoryMaintenance {
     idle: Arc<dyn Fn() -> bool + Send + Sync>,
     retention_ms: i64,
     proposer: Option<Proposer>,
-    review: Option<ReviewQueue>,
+    /// The review queue's folder (`ReviewQueue` itself is not `Clone`).
+    review: Option<std::path::PathBuf>,
 }
 impl MemoryMaintenance {
     pub fn new(
@@ -50,7 +51,7 @@ impl MemoryMaintenance {
     }
     /// Hold accepted proposals in the owner's review queue while review is turned on.
     pub fn with_review(mut self, queue: ReviewQueue) -> Self {
-        self.review = Some(queue);
+        self.review = Some(queue.dir);
         self
     }
     /// Let the local model propose knowledge from turns the deterministic grammar did not
@@ -132,8 +133,15 @@ impl MemoryMaintenance {
                     tracing::warn!(scope, findings = ?scan_set(&set), "Memory proposal dropped by the injection scan");
                     k.mark_offered(scope, &self.access, &turns)?;
                 }
-                Ok(set) if !set.operations.is_empty() && self.review.as_ref().is_some_and(|q| q.enabled().unwrap_or(false)) => {
-                    let queue = self.review.as_ref().expect("checked above");
+                Ok(set)
+                    if !set.operations.is_empty()
+                        && self.review.as_ref().is_some_and(|dir| {
+                            ReviewQueue { dir: dir.clone() }.enabled().unwrap_or(false)
+                        }) =>
+                {
+                    let queue = ReviewQueue {
+                        dir: self.review.clone().expect("checked above"),
+                    };
                     let pending = PendingChange {
                         id: uuid::Uuid::new_v4().simple().to_string(),
                         change: serde_json::json!({"scope": scope, "turns": turns, "set": set}),
@@ -147,7 +155,9 @@ impl MemoryMaintenance {
                             k.mark_offered(scope, &self.access, &turns)?;
                             tracing::info!(scope, "Memory proposal waiting for the owner's review");
                         }
-                        Err(error) => tracing::warn!(%error, scope, "Review queue unavailable; turns stay queued"),
+                        Err(error) => {
+                            tracing::warn!(%error, scope, "Review queue unavailable; turns stay queued")
+                        }
                     }
                 }
                 Ok(set) => match k.apply_changeset(scope, &self.access, generation, &turns, &set) {
@@ -208,7 +218,11 @@ pub fn summary(set: &MemoryChangeSet) -> Vec<String> {
                 value,
                 ..
             } => {
-                let who = if subject == changeset::OWNER { "you" } else { subject.as_str() };
+                let who = if subject == changeset::OWNER {
+                    "you"
+                } else {
+                    subject.as_str()
+                };
                 format!("Remember: {who} — {}: {value}", predicate.replace('_', " "))
             }
             ChangeOp::Correct { claim, value, .. } => {

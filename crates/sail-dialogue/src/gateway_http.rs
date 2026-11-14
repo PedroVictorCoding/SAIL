@@ -170,7 +170,11 @@ async fn pair_deny(
 ) -> Reply {
     authorize(&s, &h)?;
     let service = s.service.clone();
-    blocking(move || service.pairing.deny(&b.code), StatusCode::BAD_REQUEST).await?;
+    blocking(
+        move || service.pairing.deny(&b.code),
+        StatusCode::BAD_REQUEST,
+    )
+    .await?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -187,7 +191,11 @@ async fn pair_revoke(
 ) -> Reply {
     authorize(&s, &h)?;
     let service = s.service.clone();
-    blocking(move || service.pairing.revoke(b.sender_id), StatusCode::NOT_FOUND).await?;
+    blocking(
+        move || service.pairing.revoke(b.sender_id),
+        StatusCode::NOT_FOUND,
+    )
+    .await?;
     tracing::info!(sender = b.sender_id, "Telegram sender revoked by owner");
     Ok(Json(json!({"ok": true})))
 }
@@ -198,14 +206,14 @@ struct PolicyBody {
     policy: String,
 }
 
-async fn policy(
-    State(s): State<Arc<HttpState>>,
-    h: HeaderMap,
-    Json(b): Json<PolicyBody>,
-) -> Reply {
+async fn policy(State(s): State<Arc<HttpState>>, h: HeaderMap, Json(b): Json<PolicyBody>) -> Reply {
     authorize(&s, &h)?;
     let service = s.service.clone();
-    blocking(move || service.pairing.set_policy(&b.policy), StatusCode::BAD_REQUEST).await?;
+    blocking(
+        move || service.pairing.set_policy(&b.policy),
+        StatusCode::BAD_REQUEST,
+    )
+    .await?;
     Ok(Json(json!({"ok": true})))
 }
 

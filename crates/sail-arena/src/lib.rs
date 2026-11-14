@@ -19,7 +19,9 @@ pub mod knowledge;
 pub mod store;
 
 pub use compaction::{Breadcrumb, CompactionReceipt, ContextBudget, Recall, WorkingContext};
-pub use store::{MemoryStore, NewRecord, NewToolLog, SearchHit, StoreStats, StoredRecord, ToolLogEntry};
+pub use store::{
+    MemoryStore, NewRecord, NewToolLog, SearchHit, StoreStats, StoredRecord, ToolLogEntry,
+};
 
 /// Scope for records that belong to live voice/text conversations.
 const VOICE_SCOPE: &str = "voice";

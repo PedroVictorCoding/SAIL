@@ -220,7 +220,8 @@ impl GatewayService {
             .call("getMe", json!({}))
             .await
             .map_err(|e| format!("Telegram didn't accept the token: {e}"))?;
-        let me: Value = serde_json::from_slice(&me).map_err(|_| "Telegram's reply was unreadable")?;
+        let me: Value =
+            serde_json::from_slice(&me).map_err(|_| "Telegram's reply was unreadable")?;
         if me["ok"] != true {
             return Err(me["description"]
                 .as_str()
@@ -287,7 +288,13 @@ impl GatewayService {
             return;
         }
         for paired in view.paired {
-            self.queue(paired.chat_id, &format!("{key}:{}", paired.chat_id), body, None, Vec::new());
+            self.queue(
+                paired.chat_id,
+                &format!("{key}:{}", paired.chat_id),
+                body,
+                None,
+                Vec::new(),
+            );
         }
     }
 
@@ -319,7 +326,11 @@ impl GatewayService {
                 chat_id,
                 text: part,
                 reply_to: if i == 0 { reply_to } else { None },
-                buttons: if i == last { buttons.clone() } else { Vec::new() },
+                buttons: if i == last {
+                    buttons.clone()
+                } else {
+                    Vec::new()
+                },
                 attempts: 0,
                 next_attempt_at: now,
                 created_at: now,
@@ -491,7 +502,11 @@ impl GatewayService {
             self.queue(
                 update.chat_id,
                 &key,
-                if stopped { "Stopped." } else { "Nothing is running." },
+                if stopped {
+                    "Stopped."
+                } else {
+                    "Nothing is running."
+                },
                 Some(update.message_id),
                 Vec::new(),
             );
@@ -537,9 +552,8 @@ impl GatewayService {
 
     async fn text(self: &Arc<Self>, update: &Incoming, key: &str, input: &str) {
         let skills = self.runner.skills().await;
-        let reply = |s: &str| {
-            self.queue(update.chat_id, key, s, Some(update.message_id), Vec::new())
-        };
+        let reply =
+            |s: &str| self.queue(update.chat_id, key, s, Some(update.message_id), Vec::new());
         match commands::parse(input, &skills) {
             Command::New => {
                 self.new_conversation(update.chat_id);
@@ -595,7 +609,13 @@ impl GatewayService {
                 );
                 self.turn(update, key, &t).await;
             }
-            Ok(_) => self.queue(update.chat_id, key, "I couldn't hear any words in that voice note.", Some(update.message_id), Vec::new()),
+            Ok(_) => self.queue(
+                update.chat_id,
+                key,
+                "I couldn't hear any words in that voice note.",
+                Some(update.message_id),
+                Vec::new(),
+            ),
             Err(error) => self.queue(
                 update.chat_id,
                 key,
@@ -646,7 +666,13 @@ impl GatewayService {
             }
         }
         if !reply.text.trim().is_empty() {
-            self.queue(update.chat_id, key, &reply.text, Some(update.message_id), Vec::new());
+            self.queue(
+                update.chat_id,
+                key,
+                &reply.text,
+                Some(update.message_id),
+                Vec::new(),
+            );
         }
         for ask in reply.approvals {
             let short = commands::short_id(&ask.session_id);
@@ -664,7 +690,13 @@ impl GatewayService {
     }
 
     /// `/approve`, `/deny` and the card buttons.
-    async fn decide(self: &Arc<Self>, update: &Incoming, key: &str, short: Option<String>, approved: bool) {
+    async fn decide(
+        self: &Arc<Self>,
+        update: &Incoming,
+        key: &str,
+        short: Option<String>,
+        approved: bool,
+    ) {
         let found = {
             let chats = self.chats.lock().unwrap();
             chats.get(&update.chat_id).and_then(|c| match &short {
@@ -673,7 +705,11 @@ impl GatewayService {
                     .iter()
                     .find(|(_, (id, _))| commands::matches(s, id))
                     .map(|(k, v)| (k.clone(), v.clone())),
-                None if c.approvals.len() == 1 => c.approvals.iter().next().map(|(k, v)| (k.clone(), v.clone())),
+                None if c.approvals.len() == 1 => c
+                    .approvals
+                    .iter()
+                    .next()
+                    .map(|(k, v)| (k.clone(), v.clone())),
                 None => None,
             })
         };
@@ -700,8 +736,20 @@ impl GatewayService {
                 )
                 .await;
             }
-            Ok(()) => self.queue(update.chat_id, key, &format!("Denied: {tool}."), Some(update.message_id), Vec::new()),
-            Err(error) => self.queue(update.chat_id, key, &error, Some(update.message_id), Vec::new()),
+            Ok(()) => self.queue(
+                update.chat_id,
+                key,
+                &format!("Denied: {tool}."),
+                Some(update.message_id),
+                Vec::new(),
+            ),
+            Err(error) => self.queue(
+                update.chat_id,
+                key,
+                &error,
+                Some(update.message_id),
+                Vec::new(),
+            ),
         }
     }
 }
@@ -791,5 +839,192 @@ impl BotApi for ReqwestBot {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sail_flow::gateway::FakeBot;
+
+    const TOKEN: &str = "123456789:AAH-fake_token_for_tests_only_0123456789";
+
+    #[derive(Default)]
+    struct Runner {
+        resolved: Mutex<Vec<(uuid::Uuid, bool)>>,
+        prompts: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl ChatRunner for Runner {
+        async fn turn(&self, session: &str, text: &str) -> Result<ChatReply, String> {
+            self.prompts
+                .lock()
+                .unwrap()
+                .push((session.into(), text.into()));
+            let approvals = if text.contains("delete") {
+                vec![ApprovalAsk {
+                    session_id: uuid::Uuid::from_u128(0xabcdef12_0000_0000_0000_000000000001),
+                    tool: "fs:delete".into(),
+                    rationale: "Delete notes.txt".into(),
+                }]
+            } else {
+                Vec::new()
+            };
+            Ok(ChatReply {
+                text: format!("**Echo**: {text}"),
+                approvals,
+            })
+        }
+        async fn transcribe(&self, _pcm: Vec<i16>) -> Result<String, String> {
+            Ok("hello from voice".into())
+        }
+        async fn skills(&self) -> Vec<String> {
+            vec!["weekly-report".into()]
+        }
+        async fn status(&self) -> String {
+            "fine".into()
+        }
+        async fn jobs(&self) -> String {
+            "no jobs".into()
+        }
+        fn resolve(&self, session: uuid::Uuid, approved: bool) -> Result<(), String> {
+            self.resolved.lock().unwrap().push((session, approved));
+            Ok(())
+        }
+    }
+
+    fn update(id: i64, sender: i64, text: &str) -> Incoming {
+        Incoming {
+            update_id: id,
+            chat_id: sender,
+            sender_id: sender,
+            sender_name: "Ana".into(),
+            message_id: id * 10,
+            kind: IncomingKind::Text { text: text.into() },
+            date: 0,
+        }
+    }
+
+    async fn setup() -> (
+        tempfile::TempDir,
+        Arc<GatewayService>,
+        Arc<FakeBot>,
+        Arc<Runner>,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let bot = Arc::new(FakeBot::default());
+        let runner = Arc::new(Runner::default());
+        let shared = bot.clone();
+        let service = Arc::new(GatewayService::new(
+            tmp.path().to_path_buf(),
+            runner.clone(),
+            Arc::new(move |_t: &BotToken| shared.clone() as Arc<dyn BotApi>),
+        ));
+        bot.push_response(
+            "getMe",
+            json!({"ok": true, "result": {"username": "sail_test_bot"}}),
+        );
+        let status = service.connect(TOKEN).await.unwrap();
+        assert_eq!(status.bot_username.as_deref(), Some("sail_test_bot"));
+        (tmp, service, bot, runner)
+    }
+
+    fn sent(bot: &FakeBot) -> Vec<Value> {
+        bot.calls()
+            .into_iter()
+            .filter(|(m, _)| m == "sendMessage")
+            .map(|(_, b)| b)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn strangers_get_a_code_and_paired_chats_get_answers() {
+        let (tmp, service, bot, runner) = setup().await;
+        // The token is kept private and never shown.
+        let token_file = tmp.path().join("telegram.token");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&token_file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!format!("{:?}", service.status()).contains("AAH-fake"));
+
+        service.clone().handle(update(1, 42, "hi")).await;
+        service.deliver_once().await;
+        let code = service.pairing_view().unwrap().pending[0].code.clone();
+        assert!(sent(&bot)[0]["text"].as_str().unwrap().contains(&code));
+        assert!(
+            runner.prompts.lock().unwrap().is_empty(),
+            "no turn before pairing"
+        );
+
+        service
+            .pairing
+            .approve(&code, Utc::now().timestamp())
+            .unwrap();
+        service.clone().handle(update(2, 42, "hello")).await;
+        // The same update again (a redelivery) does not produce a second reply.
+        service.clone().handle(update(2, 42, "hello")).await;
+        service.deliver_once().await;
+        let replies: Vec<_> = sent(&bot)
+            .into_iter()
+            .filter(|b| b["text"] == "Echo: hello")
+            .collect();
+        assert_eq!(replies.len(), 1, "plain text, sent once");
+
+        // An approval card, then /approve with its short id continues the turn.
+        service
+            .clone()
+            .handle(update(3, 42, "please delete notes"))
+            .await;
+        service.deliver_once().await;
+        let card = sent(&bot)
+            .into_iter()
+            .find(|b| b["text"].as_str().is_some_and(|t| t.contains("/approve")))
+            .expect("approval card");
+        assert!(card.to_string().contains("ap:abcdef"));
+        service
+            .clone()
+            .handle(update(4, 42, "/approve abcdef"))
+            .await;
+        assert_eq!(runner.resolved.lock().unwrap().len(), 1);
+        assert!(runner.resolved.lock().unwrap()[0].1);
+        assert!(
+            runner
+                .prompts
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .1
+                .contains("approved fs:delete")
+        );
+
+        // /new starts a new session.
+        let before = runner.prompts.lock().unwrap()[0].0.clone();
+        service.clone().handle(update(5, 42, "/new")).await;
+        service.clone().handle(update(6, 42, "again")).await;
+        assert_ne!(runner.prompts.lock().unwrap().last().unwrap().0, before);
+
+        // A /skill runs a turn that loads the skill.
+        service
+            .clone()
+            .handle(update(7, 42, "/weekly_report this week"))
+            .await;
+        assert!(
+            runner
+                .prompts
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .1
+                .contains("\"weekly-report\"")
+        );
+
+        // Disconnect forgets the token.
+        service.disconnect();
+        assert!(!token_file.exists());
     }
 }
