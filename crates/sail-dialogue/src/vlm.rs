@@ -2109,7 +2109,7 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 47);
+        assert_eq!(tools.len(), 51);
 
         let names: Vec<_> = tools
             .iter()
@@ -2122,6 +2122,8 @@ mod schema_selection_tests {
         assert!(names.contains(&"fs_read"));
         assert!(names.contains(&"fs_write"));
         assert!(names.contains(&"canvas_publish"));
+        assert!(names.contains(&"skill_view"));
+        assert!(names.contains(&"hermes_call"));
         assert!(names.contains(&"local_time"));
         assert!(names.contains(&"command_execute"));
         assert!(names.contains(&"vision_frame"));

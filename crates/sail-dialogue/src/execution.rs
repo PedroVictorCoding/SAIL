@@ -393,7 +393,7 @@ impl Tool for Canvas {
 #[cfg(test)]
 pub(crate) const OWNER_GATED_TOOLS: [&str; 1] = ["escalate:reasoning"];
 
-pub(crate) const MODEL_TOOL_ORDER: [&str; 42] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 46] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -436,6 +436,10 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 42] = [
     "forge:list",
     "forge:cancel",
     "forge:clear",
+    "skill:list",
+    "skill:view",
+    "hermes:tools",
+    "hermes:call",
 ];
 
 /// Id, description, input properties, required inputs, effect, concurrency limit.
@@ -1017,6 +1021,7 @@ pub fn registry() -> Arc<ToolRegistry> {
         output_schema:json!({"type":"string","maxLength":1048576}),security_effect:ToolEffect::Sandbox,
         required_capabilities:vec!["command:execute".into()],timeout_ms:120000,resource_class:"sandbox".into(),concurrency_limit:1,
     },Arc::new(Command)).expect("command descriptor");
+    crate::hermes_tools::register(&registry).expect("skill and Hermes plugin descriptors");
     registry
 }
 

@@ -1,4 +1,6 @@
+pub mod hermes;
 pub mod memory;
+pub mod skills;
 pub mod workflows;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

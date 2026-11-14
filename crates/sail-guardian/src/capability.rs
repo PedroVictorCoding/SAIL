@@ -133,7 +133,10 @@ impl Capability {
                         || tool == "capital:forecast"
                         || tool == "capital:policy"
                         || tool == "capital:filings"
-                        || tool == "studio:audio_analyze" =>
+                        || tool == "studio:audio_analyze"
+                        || tool == "skill:list"
+                        || tool == "skill:view"
+                        || tool == "hermes:tools" =>
                 {
                     RiskLevel::Low
                 }
