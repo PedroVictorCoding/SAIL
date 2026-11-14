@@ -949,12 +949,13 @@ pub fn registry() -> Arc<ToolRegistry> {
         ),
         (
             "capital:dividends",
-            "Project dividend income from the holdings' payment histories: low, base and high yearly income, reinvestment, withholding and the optional Portuguese tax reserve. Use for 'how much dividend income?', 'when will I get paid?', 'what if I reinvest?'. A projection, not a promise. Read-only.",
+            "Project dividend income from the holdings' payment histories: low, base and high yearly income, reinvestment, a monthly allowance from salary, withholding and the optional Portuguese tax reserve. Use for 'how much dividend income?', 'when will I get paid?', 'what if I reinvest?', 'what if I add money each month?'. A projection, not a promise. Read-only.",
             json!({
                 "account": capital_account(),
                 "years": {"type":"integer","minimum":1,"maximum":30,"description":"Years to project; default 5"},
                 "reinvest_pct": {"type":"number","minimum":0,"maximum":100,"description":"Share of net dividends reinvested; default 100"},
                 "allocation": {"type":"string","maxLength":16,"enum":["same_holding","proportional"],"description":"Where reinvestment goes; default proportional"},
+                "monthly_contribution": {"type":"number","minimum":0,"maximum":10000,"description":"Monthly allowance from salary to invest, in the account currency; default 0"},
                 "reserve_pt_tax": {"type":"boolean","description":"Apply the simplified 28% Portuguese tax reserve"}
             }),
             &[],

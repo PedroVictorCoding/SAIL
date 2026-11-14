@@ -307,6 +307,12 @@
         </div>
 
         <div class="cp-control-group">
+          <label for="cpProjContrib" class="cp-control-label">Monthly allowance: <strong id="cpProjContribVal">€0</strong></label>
+          <input type="range" class="cp-range" id="cpProjContrib" min="0" max="10000" value="0" step="50" aria-label="Monthly investment allowance from salary">
+          <p class="cp-muted cp-proj-help">Salary you invest every month, on top of dividends, using the allocation below. It is not taxed as a dividend.</p>
+        </div>
+
+        <div class="cp-control-group">
           <span class="cp-control-label" id="cpProjAllocLabel">Allocation</span>
           <div class="cp-horizon-pills cp-proj-alloc-pills" role="radiogroup" aria-labelledby="cpProjAllocLabel">
             <button type="button" class="cp-horizon-btn cp-active" data-allocation="proportional" aria-checked="true">Proportional</button>
@@ -337,7 +343,7 @@
 
       <div class="cp-proj-compare" id="cpProjCompareWrap">
         <h3 class="cp-proj-subtitle">Compare your choices</h3>
-        <p class="cp-muted">Each way of reinvesting, with your reinvest share and tax setting, in the base scenario. Pick a row to use it.</p>
+        <p class="cp-muted">Each way of reinvesting, with your reinvest share, monthly allowance and tax setting, in the base scenario. Pick a row to use it.</p>
         <div class="cp-table-wrap">
           <table class="cp-table cp-proj-compare-table">
             <thead>
@@ -367,9 +373,9 @@
           <span class="cp-proj-tile-sub" id="cpProjTileFinalNetRange">Low — · High —</span>
         </div>
         <div class="cp-proj-tile">
-          <span class="cp-proj-tile-label">Total reinvested</span>
+          <span class="cp-proj-tile-label">Total invested</span>
           <span class="cp-proj-tile-val" id="cpProjTileTotalReinvested">—</span>
-          <span class="cp-proj-tile-sub" id="cpProjTileTotalReinvestedSub">Over projection period</span>
+          <span class="cp-proj-tile-sub" id="cpProjTileTotalReinvestedSub">Dividends + salary over the period</span>
         </div>
         <div class="cp-proj-tile">
           <span class="cp-proj-tile-label">Income doubling</span>
@@ -406,13 +412,14 @@
                   <th scope="col" class="num">PT Reserve</th>
                   <th scope="col" class="num">Net</th>
                   <th scope="col" class="num">Reinvested</th>
+                  <th scope="col" class="num">Contributed</th>
                   <th scope="col" class="num">Cash</th>
                   <th scope="col" class="num">Portfolio value</th>
                   <th scope="col" class="num">Yield on cost</th>
                 </tr>
               </thead>
               <tbody id="cpProjYearsBody">
-                <tr><td colspan="9" class="cp-empty">Loading projection...</td></tr>
+                <tr><td colspan="10" class="cp-empty">Loading projection...</td></tr>
               </tbody>
             </table>
           </div>

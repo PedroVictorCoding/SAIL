@@ -40,7 +40,25 @@ fn settings_top(
         reinvest_pct,
         allocation,
         top_n,
+        monthly_contribution: 0.0,
         reserve_pt_tax,
+        start: date(2027, 1, 1),
+    }
+}
+
+fn settings_with_contribution(
+    years: u32,
+    reinvest_pct: f64,
+    allocation: Allocation,
+    monthly_contribution: f64,
+) -> Settings {
+    Settings {
+        years,
+        reinvest_pct,
+        allocation,
+        top_n: DEFAULT_TOP_N,
+        monthly_contribution,
+        reserve_pt_tax: false,
         start: date(2027, 1, 1),
     }
 }
@@ -540,5 +558,111 @@ fn a_falling_price_pulls_a_growing_payout_down_instead_of_exploding() {
         "year 30 income {} ran away from year 1 {}",
         last.net,
         base.years[0].net
+    );
+}
+
+#[test]
+fn monthly_allowance_buys_units_every_month_without_being_a_dividend() {
+    // 100 units at 10; no dividend reinvestment; 120 a month buys 12 units a month.
+    // The June payment uses the units held before June's allowance is invested.
+    let outlook = project(
+        &[annual_payer("AAA", 100.0, 10.0, 1.0)],
+        &settings_with_contribution(2, 0.0, Allocation::SameHolding, 120.0),
+        Some(1000.0),
+    );
+    let base = scenario(&outlook, Scenario::Base);
+
+    assert_close(base.years[0].net, 160.0, "year 1 net");
+    assert_close(base.years[0].contributed, 1440.0, "year 1 contributed");
+    assert_close(base.years[0].reinvested, 0.0, "no dividend reinvestment");
+    assert_close(base.years[0].cash, 160.0, "dividends stay as cash");
+    assert_close(base.years[0].value, 2440.0, "year 1 value");
+    assert_close(base.years[1].net, 304.0, "year 2 net");
+    assert_close(base.years[1].contributed, 1440.0, "year 2 contributed");
+    assert_close(base.years[1].value, 3880.0, "year 2 value");
+    assert_close(
+        base.years[0].yield_on_cost.expect("cost is known"),
+        160.0 / 2440.0,
+        "yield on cost includes the allowance",
+    );
+
+    let row = holding_row(&outlook, "AAA");
+    assert_close(row.end_units, 388.0, "end units");
+    assert!(
+        outlook
+            .notes
+            .iter()
+            .any(|note| note.contains("A monthly allowance of 120.00"))
+    );
+}
+
+#[test]
+fn the_comparison_without_reinvestment_still_invests_the_allowance() {
+    let outlook = project(
+        &[annual_payer("AAA", 100.0, 10.0, 1.0)],
+        &settings_with_contribution(1, 100.0, Allocation::SameHolding, 120.0),
+        None,
+    );
+    let with = scenario(&outlook, Scenario::Base);
+    let without = &outlook.without_reinvestment;
+
+    assert!(with.years[0].reinvested > 0.0);
+    assert_close(without.years[0].reinvested, 0.0, "nothing reinvested");
+    assert_close(without.years[0].contributed, 1440.0, "allowance invested");
+    assert_close(
+        without.years[0].value,
+        2440.0,
+        "the allowance still buys units",
+    );
+    assert!(without.years[0].value < with.years[0].value);
+}
+
+#[test]
+fn a_zero_allowance_changes_nothing() {
+    let holdings = [annual_payer("AAA", 100.0, 10.0, 1.0)];
+    for allocation in [
+        Allocation::Proportional,
+        Allocation::SameHolding,
+        Allocation::TopValue,
+        Allocation::EqualWeight,
+        Allocation::TopYield,
+        Allocation::Underweight,
+    ] {
+        let zero = project(
+            &holdings,
+            &settings_with_contribution(5, 100.0, allocation, 0.0),
+            Some(1000.0),
+        );
+        let old = project(
+            &holdings,
+            &settings(5, 100.0, allocation, false),
+            Some(1000.0),
+        );
+        assert_eq!(zero, old, "{allocation:?}");
+    }
+}
+
+#[test]
+fn the_same_holding_mode_spreads_the_allowance_by_value() {
+    // Two holdings worth 1,000 and 500. The allowance is split 2:1, while dividends
+    // would stay in the holding that paid them.
+    let outlook = project(
+        &[
+            annual_payer("AAA", 100.0, 10.0, 1.0),
+            annual_payer("BBB", 50.0, 10.0, 1.0),
+        ],
+        &settings_with_contribution(1, 0.0, Allocation::SameHolding, 120.0),
+        None,
+    );
+
+    assert_close(
+        holding_row(&outlook, "AAA").end_units,
+        196.0,
+        "AAA units from allowance",
+    );
+    assert_close(
+        holding_row(&outlook, "BBB").end_units,
+        98.0,
+        "BBB units from allowance",
     );
 }

@@ -37,6 +37,8 @@ struct SimConfig {
     scenario: Scenario,
     /// Share of each net payment reinvested.
     reinvest_pct: f64,
+    /// Money added from salary and invested every month.
+    monthly_contribution: f64,
     /// Cost of the starting holdings, for yield on cost.
     original_cost: Option<f64>,
 }
@@ -64,8 +66,10 @@ struct Totals {
     pt_tax: f64,
     /// Net after withholding and reserve.
     net: f64,
-    /// Reinvested.
+    /// Reinvested from dividends.
     reinvested: f64,
+    /// Added from salary and invested.
+    contributed: f64,
     /// Kept as cash.
     cash: f64,
 }
@@ -89,6 +93,7 @@ pub fn project(
         &SimConfig {
             scenario: Scenario::Low,
             reinvest_pct: settings.reinvest_pct,
+            monthly_contribution: settings.monthly_contribution,
             original_cost,
         },
     );
@@ -99,6 +104,7 @@ pub fn project(
         &SimConfig {
             scenario: Scenario::Base,
             reinvest_pct: settings.reinvest_pct,
+            monthly_contribution: settings.monthly_contribution,
             original_cost,
         },
     );
@@ -109,6 +115,7 @@ pub fn project(
         &SimConfig {
             scenario: Scenario::High,
             reinvest_pct: settings.reinvest_pct,
+            monthly_contribution: settings.monthly_contribution,
             original_cost,
         },
     );
@@ -119,6 +126,7 @@ pub fn project(
         &SimConfig {
             scenario: Scenario::Base,
             reinvest_pct: 0.0,
+            monthly_contribution: settings.monthly_contribution,
             original_cost,
         },
     );
@@ -167,6 +175,9 @@ fn simulate(
     let years = settings.years.clamp(1, MAX_YEARS);
     let months_total = years * 12;
     let pct = config.reinvest_pct.clamp(0.0, 100.0);
+    let contribution = config
+        .monthly_contribution
+        .clamp(0.0, super::MAX_MONTHLY_CONTRIBUTION);
     let mut sims: Vec<SimHolding<'_>> = holdings
         .iter()
         .zip(growths)
@@ -189,6 +200,7 @@ fn simulate(
     let mut rows: Vec<YearRow> = Vec::with_capacity(years as usize);
     let mut monthly_net: Vec<f64> = Vec::with_capacity(months_total as usize);
     let mut year_totals = Totals::default();
+    let mut contributed_to_date = 0.0;
 
     for month_index in 0..months_total {
         let elapsed = month_index as f64 / 12.0;
@@ -233,11 +245,19 @@ fn simulate(
             month.cash += (net - amount).max(0.0);
         }
 
-        if pct > 0.0 {
-            reinvest(
+        // The allowance can only buy holdings the projection simulates. With none, it
+        // stays out of the projection and the notes say why.
+        let month_contribution = if sims.iter().any(|sim| sim.scheduled) {
+            contribution
+        } else {
+            0.0
+        };
+        if pct > 0.0 || month_contribution > 0.0 {
+            month.contributed = reinvest(
                 &mut sims,
                 &prices,
                 &reinvested,
+                month_contribution,
                 settings.allocation,
                 settings.top_n,
                 elapsed,
@@ -250,6 +270,7 @@ fn simulate(
         year_totals.pt_tax += month.pt_tax;
         year_totals.net += month.net;
         year_totals.reinvested += month.reinvested;
+        year_totals.contributed += month.contributed;
         year_totals.cash += month.cash;
 
         if (month_index + 1) % 12 == 0 {
@@ -263,14 +284,16 @@ fn simulate(
             }
 
             let end_elapsed = (month_index + 1) as f64 / 12.0;
+            contributed_to_date += year_totals.contributed;
             let value: f64 = sims
                 .iter()
                 .filter(|sim| sim.scheduled)
                 .map(|sim| sim.units * price_at(sim, end_elapsed) * sim.holding.fx)
                 .sum();
-            let yield_on_cost = config
-                .original_cost
-                .and_then(|cost| (cost > 0.0).then(|| year_totals.net / cost));
+            let yield_on_cost = config.original_cost.and_then(|cost| {
+                let invested = cost + contributed_to_date;
+                (invested > 0.0).then(|| year_totals.net / invested)
+            });
 
             rows.push(YearRow {
                 year,
@@ -279,6 +302,7 @@ fn simulate(
                 pt_tax: year_totals.pt_tax,
                 net: year_totals.net,
                 reinvested: year_totals.reinvested,
+                contributed: year_totals.contributed,
                 cash: year_totals.cash,
                 value,
                 yield_on_cost,
@@ -347,20 +371,25 @@ fn high_yield(sim: &SimHolding<'_>) -> bool {
     sim.holding.price > 0.0 && sim.growth.ttm_per_share / sim.holding.price > super::HIGH_YIELD
 }
 
-/// Buys units with the month's reinvestment. The top-N, equal-weight and underweight
-/// modes spread every month's pool across the paying holdings, not only the ones that
-/// paid this month.
+/// Buys units with the month's reinvested dividends and salary allowance. The top-N,
+/// equal-weight and underweight modes spread every month's whole pool across the paying
+/// holdings, not only the ones that paid this month. With `SameHolding`, dividends stay
+/// in the holding that paid them and the allowance is spread by current value, because
+/// it has no payer. Returns the allowance actually invested (zero when no holding could
+/// be bought).
 fn reinvest(
     sims: &mut [SimHolding<'_>],
     prices: &[f64],
     reinvested: &[f64],
+    contribution: f64,
     allocation: Allocation,
     top_n: u32,
     elapsed: f64,
-) {
-    let total: f64 = reinvested.iter().sum();
+) -> f64 {
+    let dividends: f64 = reinvested.iter().sum();
+    let total = dividends + contribution;
     if total <= 0.0 {
-        return;
+        return 0.0;
     }
     let top_n = top_n.clamp(1, super::MAX_TOP_N) as usize;
     let values: Vec<f64> = sims
@@ -377,14 +406,32 @@ fn reinvest(
     let scheduled: Vec<usize> = (0..sims.len())
         .filter(|index| sims[*index].scheduled)
         .collect();
+    if scheduled.is_empty() {
+        return 0.0;
+    }
     let mut amounts = vec![0.0; sims.len()];
 
     match allocation {
-        Allocation::SameHolding => amounts.copy_from_slice(reinvested),
+        Allocation::SameHolding => {
+            amounts.copy_from_slice(reinvested);
+            if contribution > 0.0 {
+                let total_value: f64 = values.iter().sum();
+                if total_value > 0.0 {
+                    for index in scheduled {
+                        amounts[index] += contribution * values[index] / total_value;
+                    }
+                } else {
+                    let each = contribution / scheduled.len() as f64;
+                    for index in scheduled {
+                        amounts[index] += each;
+                    }
+                }
+            }
+        }
         Allocation::Proportional => {
             let total_value: f64 = values.iter().sum();
             if total_value <= 0.0 {
-                return;
+                return 0.0;
             }
             for index in scheduled {
                 amounts[index] = total * values[index] / total_value;
@@ -392,7 +439,7 @@ fn reinvest(
         }
         Allocation::EqualWeight => {
             if scheduled.is_empty() {
-                return;
+                return 0.0;
             }
             let each = total / scheduled.len() as f64;
             for index in scheduled {
@@ -407,11 +454,11 @@ fn reinvest(
             ranked.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(&right.0)));
             ranked.truncate(top_n);
             if ranked.is_empty() {
-                return;
+                return 0.0;
             }
             let selected_value: f64 = ranked.iter().map(|(_, value)| value).sum();
             if selected_value <= 0.0 {
-                return;
+                return 0.0;
             }
             for (index, value) in ranked {
                 amounts[index] = total * value / selected_value;
@@ -438,7 +485,7 @@ fn reinvest(
             ranked.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(&right.0)));
             ranked.truncate(top_n);
             if ranked.is_empty() {
-                return;
+                return 0.0;
             }
             let selected_value: f64 = ranked.iter().map(|(index, _)| values[*index]).sum();
             if selected_value <= 0.0 {
@@ -454,7 +501,7 @@ fn reinvest(
         }
         Allocation::Underweight => {
             if scheduled.is_empty() {
-                return;
+                return 0.0;
             }
             let total_value: f64 = scheduled.iter().map(|index| values[*index]).sum();
             let target = total_value / scheduled.len() as f64;
@@ -476,6 +523,7 @@ fn reinvest(
         }
     }
 
+    let mut bought = false;
     for (sim, (price, amount)) in sims.iter_mut().zip(prices.iter().zip(&amounts)) {
         if !sim.scheduled || *amount <= 0.0 {
             continue;
@@ -483,8 +531,10 @@ fn reinvest(
         let unit_price = price * sim.holding.fx;
         if unit_price > 0.0 {
             sim.units += amount / unit_price;
+            bought = true;
         }
     }
+    if bought { contribution } else { 0.0 }
 }
 
 /// The scenario's growth for one holding, capped.
@@ -552,6 +602,18 @@ fn notes(holdings: &[Holding], growths: &[Growth], settings: &Settings) -> Vec<S
             ));
         }
     }
+    if settings.monthly_contribution > 0.0 {
+        notes.push(format!(
+            "A monthly allowance of {:.2} is added from salary and invested every month, after that month's dividends. It is not taxed as a dividend.",
+            settings.monthly_contribution.clamp(0.0, super::MAX_MONTHLY_CONTRIBUTION)
+        ));
+        if settings.allocation == Allocation::SameHolding {
+            notes.push(
+                "The allowance is spread across the paying holdings by current value because it isn't tied to a dividend payer; dividends themselves stay in the holding that paid them."
+                    .to_string(),
+            );
+        }
+    }
     let top_n = settings.top_n.clamp(1, super::MAX_TOP_N);
     notes.push(match settings.allocation {
         Allocation::Proportional => {
@@ -577,7 +639,8 @@ fn notes(holdings: &[Holding], growths: &[Growth], settings: &Settings) -> Vec<S
         }
     });
     notes.push(
-        "Reinvestment assumes fractional units, no commissions and no price impact.".to_string(),
+        "Reinvestment and the monthly allowance assume fractional units, no commissions and no price impact."
+            .to_string(),
     );
     notes
 }
