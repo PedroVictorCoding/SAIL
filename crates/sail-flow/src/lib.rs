@@ -1,3 +1,4 @@
+pub mod gateway;
 pub mod hermes;
 pub mod market;
 pub mod memory;
