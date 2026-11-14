@@ -144,6 +144,93 @@
     } catch (error) { status(error.message, true); }
   }
 
+  function renderProposals(data) {
+    const wrap = $('#hermesProposalsWrap');
+    const list = $('#hermesProposalList');
+    const proposals = data?.proposals || [];
+    list.replaceChildren();
+    wrap.hidden = !proposals.length;
+    if (!proposals.length) return;
+
+    const VERDICTS = { safe: 'Safe', caution: 'Caution', dangerous: 'Dangerous' };
+    for (const pr of proposals) {
+      const verdict = pr.report?.verdict || 'caution';
+      const findings = pr.report?.findings || [];
+      const cardEl = el('article', { class: 'hermes-proposal', 'data-proposal': pr.id, 'aria-label': `Proposed skill ${pr.name}` },
+        el('header', { class: 'hermes-proposal-head' },
+          el('h5', { text: pr.name }),
+          el('span', { class: `hermes-pill hermes-pill-${verdict}` }, el('i', { 'aria-hidden': 'true' }), VERDICTS[verdict] || verdict)),
+        pr.description ? el('p', { text: pr.description }) : null,
+        el('p', { class: 'hermes-note' }, el('strong', { text: "SAIL's reason: " }), pr.reason || '—'));
+
+      const fBox = el('div', { class: 'hermes-proposal-findings' },
+        el('strong', { text: findings.length ? `Scan findings (${findings.length})` : 'Scan: no findings' }));
+      if (findings.length) {
+        fBox.append(el('ul', {}, findings.map(f =>
+          el('li', {},
+            el('strong', { text: f.rule }), ` (${f.severity}) · `,
+            el('code', { text: `${f.file}:${f.line}` }),
+            f.excerpt ? [' — ', el('code', { text: f.excerpt })] : null))));
+      }
+      cardEl.append(fBox);
+
+      if (pr.body != null) {
+        cardEl.append(el('div', { class: 'hermes-proposal-body' },
+          el('strong', { text: 'SKILL.md' }),
+          el('pre', { text: pr.body })));
+      }
+
+      if (pr.conflict) {
+        cardEl.append(el('p', { class: 'hermes-note hermes-error', text: 'A skill with this name already exists.' }));
+      }
+      if (pr.decision === 'block') {
+        cardEl.append(el('p', { class: 'hermes-note hermes-error', text: pr.decision_reason || 'Blocked by security policy.' }));
+      }
+
+      const actions = el('div', { class: 'hermes-actions' });
+      if (pr.decision === 'allow') {
+        actions.append(el('button', {
+          type: 'button', class: 'tm-btn', disabled: Boolean(pr.conflict),
+          onclick: () => approveProposal(pr.id, false), text: 'Approve',
+        }));
+      } else if (pr.decision === 'needs_ack') {
+        const ackId = `hermesPropAck-${pr.id}`;
+        const ack = el('input', { id: ackId, type: 'checkbox', disabled: Boolean(pr.conflict) });
+        const btn = el('button', {
+          type: 'button', class: 'tm-btn', disabled: true,
+          onclick: () => approveProposal(pr.id, true), text: 'Approve anyway',
+        });
+        ack.addEventListener('change', () => { btn.disabled = Boolean(pr.conflict) || !ack.checked; });
+        cardEl.append(el('label', { class: 'hermes-check', for: ackId }, ack, 'I have read the findings and want to approve it anyway'));
+        actions.append(btn);
+      }
+      actions.append(el('button', {
+        type: 'button', class: 'tm-btn',
+        onclick: () => rejectProposal(pr.id), text: 'Reject',
+      }));
+      cardEl.append(actions);
+      list.append(cardEl);
+    }
+  }
+
+  async function approveProposal(id, acknowledgeCaution) {
+    status('Approving proposed skill…');
+    try {
+      const res = await api(`/proposals/${encodeURIComponent(id)}/approve`, { acknowledge_caution: Boolean(acknowledgeCaution) });
+      await load();
+      status(`Approved proposed skill ${res.skill || id}.`);
+    } catch (error) { status(error.message, true); }
+  }
+
+  async function rejectProposal(id) {
+    status('Rejecting proposed skill…');
+    try {
+      await api(`/proposals/${encodeURIComponent(id)}/reject`, {});
+      await load();
+      status('Rejected proposed skill.');
+    } catch (error) { status(error.message, true); }
+  }
+
   async function loadSkills() {
     const data = await api(`/skills${query ? `?query=${encodeURIComponent(query)}` : ''}`);
     renderSkills(data);
@@ -154,8 +241,13 @@
     busy = true; $('#hermesRefresh').disabled = true;
     status(loadedOnce ? 'Refreshing…' : 'Loading plugins and skills…');
     try {
-      const [plugins, skills] = await Promise.all([api('/plugins'), loadSkills()]);
+      const [plugins, skills, proposals] = await Promise.all([
+        api('/plugins'),
+        loadSkills(),
+        api('/proposals').catch(() => ({ proposals: [] })),
+      ]);
       renderPlugins(plugins);
+      renderProposals(proposals);
       const enabled = plugins.plugins.filter(p => p.status.state === 'enabled').length;
       status(`${plugins.plugins.length} plugin${plugins.plugins.length === 1 ? '' : 's'} found, ${enabled} enabled · ${skills.skills.length} skill${skills.skills.length === 1 ? '' : 's'}`);
       loadedOnce = true;

@@ -27,8 +27,7 @@
 /* Card */
 .hermes-workspace {
   color: var(--sail-text); width: 100%; min-width: 0; box-sizing: border-box; padding: 20px;
-  background: radial-gradient(ellipse at 50% 100%, rgb(143 156 255 / .07), transparent 50%), var(--sail-surface);
-  background-repeat: no-repeat; border: 1px solid var(--sail-glass-border); border-radius: var(--sail-radius-card);
+  background: var(--sail-surface); border: 1px solid var(--sail-glass-border); border-radius: var(--sail-radius-card);
 }
 .hermes-toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 .hermes-toolbar h3 { margin: 0; flex: 1; }
@@ -84,11 +83,25 @@
 .hermes-rejected summary { cursor: pointer; min-height: 32px; }
 .hermes-rejected li { overflow-wrap: anywhere; margin: 4px 0; }
 
-/* Skill reading pane: neutral, stable, no glow. */
-.hermes-skill-view { margin-top: 12px; background: var(--sail-base); border: 1px solid var(--sail-glass-border); border-radius: var(--sail-radius-control); padding: 16px; }
+/* Skill reading pane: neutral, stable, opaque --sail-surface, no glow, no blur. */
+.hermes-skill-view,
+.hermes-proposal-findings,
+.hermes-proposal-body { margin-top: 12px; background: var(--sail-surface); border: 1px solid var(--sail-glass-border); border-radius: var(--sail-radius-control); padding: 16px; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .hermes-skill-view header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.hermes-skill-view h5 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
-.hermes-skill-view pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.55; max-height: 480px; overflow-y: auto; margin: 12px 0; }
+.hermes-skill-view h5, .hermes-proposal-head h5 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.hermes-skill-view pre, .hermes-proposal-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.55; max-height: 480px; overflow-y: auto; margin: 12px 0; }
+.hermes-proposal-body pre { max-height: 300px; margin: 8px 0 0; }
+.hermes-proposals { margin-bottom: 18px; }
+.hermes-proposals[hidden] { display: none; }
+.hermes-proposal { background: var(--sail-base); border: 1px solid var(--sail-glass-border); border-radius: var(--sail-radius-control); padding: 16px; min-width: 0; }
+.hermes-proposal p { margin: 6px 0; }
+.hermes-proposal-head { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.hermes-proposal-findings ul { margin: 6px 0 0; padding-left: 18px; }
+.hermes-proposal-findings li { margin: 4px 0; overflow-wrap: anywhere; }
+.hermes-proposal .hermes-check { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; margin-top: 8px; cursor: pointer; }
+.hermes-pill-safe i { background: #5ccda4; }
+.hermes-pill-caution i { background: #e5be79; }
+.hermes-pill-dangerous i { background: #ed7275; }
 .hermes-skill-files { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .hermes-link { background: none; border: 1px solid var(--sail-glass-border); border-radius: 999px; color: var(--sail-text); padding: 0 12px; font: inherit; font-size: .9em; }
 
