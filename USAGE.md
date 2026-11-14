@@ -306,6 +306,12 @@ while this machine is busy, `SAIL_MESH=off` disables them, and
 `SAIL_MESH_PRIORITIES=background,interactive` also offloads chat turns. Details and the
 Windows steps are in [SAIL Mesh](docs/SAIL_MESH.md).
 
+The worker keeps out of its owner's way. Its llama-server runs at below-normal priority on
+half the CPU threads (`--threads`, `--priority`). While a game or music software runs it
+stops the model completely to free the GPU; while the PC is otherwise busy it pauses new
+work for 1 min, then 2, 4… up to 30. Add your own programs with `--pause-for game.exe`, or
+turn this off with `--no-rest`. A resting worker shows as **Resting** in Settings → Models.
+
 ## Follow what the runner is doing
 
 The runner prints detailed diagnostics by default and appends the same events to **`.local/runner.log`**. Each voice session and assistant turn has an ID, so you can follow a request through context retrieval, Gemma inference, tool authorization/execution, speech synthesis, Canvas delivery and cancellation. Logs include prompts, transcripts, bounded tool arguments/results, worker startup/output, timings and errors. Audio and image payloads are omitted.

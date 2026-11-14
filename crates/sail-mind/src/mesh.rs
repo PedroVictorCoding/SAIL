@@ -159,6 +159,13 @@ impl RemoteWorker {
             Ok(hello) => {
                 state.last_rtt_ms = Some(rtt);
                 state.last_seen = Some(chrono::Utc::now().to_rfc3339());
+                if hello.busy.is_some() {
+                    // Its owner is using the PC (gaming, music, or just busy): leave it
+                    // alone. The model may even be stopped; keep the backend for later.
+                    state.status = MeshWorkerState::Busy;
+                    state.hello = Some(hello);
+                    return;
+                }
                 match &hello.model {
                     Some(model) => {
                         if state.backend_model.as_deref() != Some(&model.file_name) {
@@ -236,6 +243,9 @@ impl RemoteWorker {
             last_rtt_ms: state.last_rtt_ms,
             last_seen: state.last_seen.clone(),
             last_error: state.last_error.clone(),
+            busy: (state.status == MeshWorkerState::Busy)
+                .then(|| hello.and_then(|h| h.busy.clone()))
+                .flatten(),
         }
     }
 }
@@ -318,6 +328,15 @@ impl MeshLease {
             Some(error)
                 if error.code == ErrorCode::Cancelled
                     || error.code == ErrorCode::ConsumerClosed => {}
+            // The worker started resting between its last health check and this request
+            // (it answers 429). That is not a failure: skip it until the next check.
+            Some(error)
+                if error.code == ErrorCode::BackendUnavailable
+                    && (error.message.contains("429")
+                        || error.message.contains("worker is resting")) =>
+            {
+                state.skip_until = Some(Instant::now() + FAILURE_BACKOFF);
+            }
             Some(error) => {
                 state.failed += 1;
                 state.last_error = Some(error.message.clone());
@@ -772,7 +791,10 @@ A running SAIL picks up changes within 15 seconds.";
                         s.address,
                         format!("{:?}", s.state).to_lowercase(),
                         model,
-                        s.last_error.unwrap_or_default()
+                        s.busy
+                            .map(|b| format!("resting: {}", b.reason))
+                            .or(s.last_error)
+                            .unwrap_or_default()
                     );
                 }
                 Ok(())
@@ -845,6 +867,12 @@ A running SAIL picks up changes within 15 seconds.";
                 worker.check(&LocalModelConfig::default()).await;
                 let backend = {
                     let state = worker.lock();
+                    if let Some(busy) = state.hello.as_ref().and_then(|h| h.busy.as_ref()) {
+                        return Err(format!(
+                            "worker is resting while its owner uses the PC: {}",
+                            busy.reason
+                        ));
+                    }
                     if state.status != MeshWorkerState::Ready {
                         return Err(format!(
                             "worker is {:?}: {}",

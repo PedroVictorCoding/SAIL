@@ -341,6 +341,13 @@ impl LocalGemmaBackend {
                 return Ok(status);
             }
             Err(error) if error.code == ErrorCode::UnknownModel => return Err(error),
+            // A Mesh worker resting while its owner uses the PC says so; keep that reason.
+            Err(error) if self.remote && error.message.contains("worker is resting") => {
+                return Err(unavailable(format!(
+                    "Mesh worker is resting (429): {}",
+                    error.message
+                )));
+            }
             Err(_) => {}
         }
         self.update(|s| s.state = ModelState::Starting);

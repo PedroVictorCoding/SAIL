@@ -29,6 +29,24 @@ pub struct MeshHello {
     /// Why the worker's model server is not usable, when it is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_error: Option<String>,
+    /// Set while the worker is resting because its owner is using the PC. Older workers
+    /// never send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub busy: Option<MeshBusy>,
+}
+
+/// Why a worker refuses new work for now (`MeshHello::busy`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MeshBusy {
+    /// Plain-language reason, for example `gaming (full-screen game)` or
+    /// `other programs use 72% CPU`.
+    pub reason: String,
+    /// The worker stepped aside completely (gaming, making music): its model server is
+    /// stopped to free the GPU, CPU and memory, and it comes back on its own afterwards.
+    pub full: bool,
+    /// Seconds until the worker checks again whether it can take work, while backing off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_secs: Option<u64>,
 }
 
 /// The model a worker serves.
@@ -64,6 +82,8 @@ pub enum MeshWorkerState {
     Ready,
     /// Reachable, but its model server is down or loading.
     ModelUnavailable,
+    /// Reachable, but resting while its owner uses the PC (see `MeshWorkerStatus::busy`).
+    Busy,
     /// Not reachable, or the TLS pin/secret did not match.
     Unreachable,
     /// Paired but switched off by the owner.
@@ -93,6 +113,9 @@ pub struct MeshWorkerStatus {
     pub last_seen: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// Why the worker is resting, when its state is `busy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub busy: Option<MeshBusy>,
 }
 
 /// Mesh section of Mind's status.

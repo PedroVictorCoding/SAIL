@@ -53,6 +53,7 @@ def install_mocks(page):
     empty_tmpl = load_fixture("empty.json")
     mode_off_tmpl = load_fixture("mode_off.json")
     three_tmpl = load_fixture("three_workers.json")
+    resting_tmpl = load_fixture("resting_workers.json")
     pair_200_tmpl = load_fixture("pair_200.json")
     err_400 = load_fixture("error_400.json")
     err_502 = load_fixture("error_502.json")
@@ -135,7 +136,7 @@ def install_mocks(page):
     page.route("**/api/guardian/token", handle_token)
     page.route("**/api/mind/mesh", handle_mesh)
     page.route("**/api/mind/mesh/**", handle_mesh)
-    return state, mode_off_tmpl, three_tmpl
+    return state, mode_off_tmpl, three_tmpl, resting_tmpl
 
 
 def open_models_settings(page):
@@ -152,7 +153,7 @@ with sync_playwright() as p:
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.add_init_script(f"localStorage.setItem('sail_owner_token', {json.dumps(TOKEN)});")
         route_static_assets(page)
-        state, mode_off_tmpl, three_tmpl = install_mocks(page)
+        state, mode_off_tmpl, three_tmpl, resting_tmpl = install_mocks(page)
 
         page.goto(BASE + "/")
         open_models_settings(page)
@@ -196,6 +197,25 @@ with sync_playwright() as p:
 
         if width in (1440, 390):
             page.screenshot(path=str(SHOTS / f"mesh-{width}.png"), full_page=True)
+
+        # 3b. Workers resting while their owners use the PC (full rest and a backoff)
+        state["mesh"] = copy.deepcopy(resting_tmpl)
+        page.locator("#meshRefreshBtn").click()
+        expect(page.locator(".mesh-worker-row")).to_have_count(2)
+        gamer = page.locator('.mesh-worker-row[data-worker-name="windows"]')
+        expect(gamer.locator(".mesh-pill")).to_have_text("Resting")
+        expect(gamer.locator(".mesh-worker-rest")).to_have_text(
+            "Stepped aside: gaming (full-screen game) · back when it ends"
+        )
+        studio = page.locator('.mesh-worker-row[data-worker-name="studio"]')
+        expect(studio.locator(".mesh-worker-rest")).to_have_text(
+            "Stepped aside: other programs use 72% CPU · checks again in 4 min"
+        )
+        if width in (1440, 390):
+            page.screenshot(path=str(SHOTS / f"mesh-resting-{width}.png"), full_page=True)
+        state["mesh"] = copy.deepcopy(three_tmpl)
+        page.locator("#meshRefreshBtn").click()
+        expect(page.locator(".mesh-worker-row")).to_have_count(3)
 
         # 4. Pairing: password masking, show toggle, 400, 502, 200, secret never persisted
         expect(page.locator("#meshCodeInput")).to_have_attribute("type", "password")

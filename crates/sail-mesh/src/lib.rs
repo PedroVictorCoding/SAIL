@@ -11,10 +11,16 @@
 //!   host proves it was paired). Prompts never cross the network in clear text.
 //! - The worker only forwards a fixed allowlist of llama-server routes; it is not a shell,
 //!   file or generic HTTP proxy.
+//!
+//! The worker's PC belongs to someone who also uses it: [`rest`] decides when the worker
+//! steps aside (fully while gaming or making music, with exponential backoff while the PC
+//! is otherwise busy), measured by [`probe`].
 pub mod discovery;
 pub mod identity;
 pub mod pairing;
+pub mod probe;
 pub mod registry;
+pub mod rest;
 pub mod tls;
 pub mod worker;
 

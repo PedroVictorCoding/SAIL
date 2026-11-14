@@ -99,6 +99,46 @@ across machines.
   file, so CLI changes reach a running SAIL without a restart.
 - Status: `GET /api/mind/status` → `mesh`, `sail-core mind-status`, `sail-core mesh list`.
 
+### Sharing the PC with its owner (resource caps and stepping aside)
+
+A worker PC is someone's own computer, so the worker keeps out of the way.
+
+**Hard caps** (for the llama-server that `serve --llama-server` starts):
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--threads N` | half the PC's threads | llama-server `--threads`/`--threads-batch` |
+| `--priority P` | `below-normal` | `low`, `below-normal` or `normal`; Windows priority class, `nice` on Linux, so the owner's programs always win the CPU |
+| `--gpu-layers N` | 99 | fewer layers leave VRAM for other programs (0 = CPU only) |
+| `--ctx N` | 16384 | smaller context uses less memory |
+| `--max-parallel N` | 1 | generations at once |
+
+**Stepping aside.** Every 5 s the worker measures how the PC is used by *other* programs
+(its own llama-server is left out): CPU, free memory, the process list, NVIDIA GPU load when
+the driver's `nvml.dll`/`libnvidia-ml` is present, and on Windows whether a full-screen game
+is in front.
+
+- **Gaming or making music: full rest.** A full-screen Direct3D game, other programs using
+  ≥ 50 % GPU for two readings, music software (Ableton Live, FL Studio, REAPER, Cubase,
+  Nuendo, Studio One, Bitwig, Pro Tools, Reason, Ardour, LMMS, Renoise, Cakewalk, Waveform,
+  Audition, Maschine, Serato, rekordbox, Traktor) or a program named with `--pause-for`
+  makes the worker refuse all work **and stop its llama-server** to free the GPU, CPU and
+  memory. A running generation is cut and the host handles the next one. When the program
+  closes, the worker waits one backoff before loading the model again.
+- **Busy PC: exponential backoff.** Other programs using ≥ 50 % CPU (`--busy-cpu`) or
+  ≥ 20 % GPU (`--busy-gpu`), less than 2 GiB free memory (`--min-free-ram`) or a full-screen
+  window, for two readings in a row, pause new work for 1 min. If the PC is still busy when
+  the pause ends, the next pause doubles (2, 4, 8 … up to `--max-backoff`, 30 min). Running
+  work finishes. Ten calm minutes reset the pause to 1 min.
+- `--no-rest` turns this off. With `--upstream` (a llama-server you run yourself) the worker
+  still refuses work but cannot stop that server.
+
+The host sees a resting worker as **Busy** (`hello.busy`: reason, `full`, seconds until the
+next check), skips it, and shows "Resting — Stepped aside: …" in Settings → Models. A worker
+that started resting between two health checks answers generations with **429** and
+`Retry-After`; the host runs that request itself without counting a failure (503 still
+means the worker's llama-server is broken).
+
 ### Finding and pairing a worker
 
 `sail-core mesh discover` lists workers announcing on the LAN (the host must receive UDP
@@ -127,6 +167,10 @@ Linux workers use the same steps with the Linux binaries.
 - [x] Live check with the real binaries on the host (loopback worker in front of the running
   llama-server): pair, list, test and a forged fingerprint refused (2026-11-14).
 - [ ] Record measured latency against a real worker PC (needs the owner's second machine).
+- [x] Resource caps and stepping aside: policy tests (`rest.rs`), resting worker refused
+  with 429 (`worker_http.rs`), host skips it without a failure (`mesh_e2e.rs`), live run
+  with `--pause-for` stopping and restarting llama-server after the backoff (2026-11-14).
+- [ ] Full-screen game detection and NVML GPU readings on the owner's Windows PC.
 - [x] Show worker status and pairing in Settings → Models.
 - [x] Focused tests and a reviewable PR without automatic merge.
 
