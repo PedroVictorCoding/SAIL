@@ -21,6 +21,11 @@ uuid.workspace = true
 ring.workspace = true
 libc = "0.2"
 serde_norway = "0.9.42"
+reqwest.workspace = true
+# Already in the lockfile (calamine): ClawHub skills download as zips.
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
+# Already in the lockfile: the market scanner's patterns.
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"

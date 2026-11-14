@@ -1,5 +1,6 @@
 //! Owner transport authentication. Event-bus source fields are not authority.
 use ring::hmac;
+#[derive(Clone)]
 pub struct ApprovalAuthority {
     verifier: hmac::Tag,
 }

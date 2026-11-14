@@ -117,7 +117,7 @@
     if (!data.skills.length) {
       list.append(el('li', {class: 'hermes-empty'}, query
         ? `No skill matches “${query}”.`
-        : el('span', {}, 'No skills yet. Add SKILL.md folders to ', data.roots.map((r, i) => [i ? ' or ' : '', el('code', {text: r.path})]), '.')));
+        : el('span', {}, 'No skills yet. Add SKILL.md folders to ', data.roots.flatMap((r, i) => [i ? ' or ' : '', el('code', {text: r.path})]), '.')));
     }
     for (const s of data.skills) {
       list.append(el('li', {}, el('button', {type: 'button', class: 'hermes-skill', 'data-skill': s.name, onclick: () => openSkill(s.name)},

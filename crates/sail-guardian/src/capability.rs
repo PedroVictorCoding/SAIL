@@ -136,6 +136,8 @@ impl Capability {
                         || tool == "studio:audio_analyze"
                         || tool == "skill:list"
                         || tool == "skill:view"
+                        // Staging only: the owner's approval installs a proposed skill.
+                        || tool == "skill:propose"
                         || tool == "hermes:tools" =>
                 {
                     RiskLevel::Low

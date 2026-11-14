@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="/ambient-backdrop.css">
 <link rel="stylesheet" href="/flow.css">
 <link rel="stylesheet" href="/hermes.css">
+<link rel="stylesheet" href="/market.css">
 <link rel="stylesheet" href="/initiative.css">
 <link rel="stylesheet" href="/escalation-usage.css">
 </head>
@@ -238,6 +239,12 @@
               </article>
             </section>
           </div>
+        </section>
+        <!-- Round 20: Antigravity owns everything inside #marketCard (market.js / market.css). -->
+        <section id="marketCard" class="workspace-card market-workspace" aria-label="Market">
+          <div class="market-toolbar"><h3>Market</h3></div>
+          <p id="marketStatus" class="market-status" role="status" aria-live="polite">Open this section to load the market.</p>
+          <div id="marketBody"></div>
         </section>
         <article class="workspace-card pulse-card" id="pulseCard" data-card="pulseCard">
           <header class="card-heading">
@@ -1472,6 +1479,7 @@
 <script src="/toolsmap.js" defer></script>
 <script src="/flow.js" defer></script>
 <script src="/hermes.js" defer></script>
+<script src="/market.js" defer></script>
 <script src="/ui.js" defer></script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js" defer></script>
