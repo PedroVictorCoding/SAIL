@@ -73,6 +73,8 @@ assets![
     ("/initiative.css", "web/initiative.css", CSS),
     ("/escalation-usage.js", "web/escalation-usage.js", JS),
     ("/escalation-usage.css", "web/escalation-usage.css", CSS),
+    ("/mesh.js", "web/mesh.js", JS),
+    ("/mesh.css", "web/mesh.css", CSS),
     ("/capital", "web/capital.html", HTML),
     ("/capital.css", "web/capital.css", CSS),
     ("/capital-core.js", "web/capital-core.js", JS),

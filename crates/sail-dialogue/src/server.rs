@@ -432,6 +432,7 @@ pub async fn run_dialogue_server_with_plans(
     );
     let proxy_guard = crate::proxy_guard::ProxyGuard::new(active_token.as_deref());
     let gateway_authority = authority();
+    let mesh_routes = crate::mesh_http::router(inference.clone(), authority());
     let owner_token = active_token;
     let server_state = Arc::new(ServerState {
         live_context_authority,
@@ -469,6 +470,7 @@ pub async fn run_dialogue_server_with_plans(
         .nest_service("/api/hermes", hermes_routes)
         .nest_service("/api/agents/schedule", schedule_routes)
         .nest_service("/api/mind/models", model_routes)
+        .nest_service("/api/mind/mesh", mesh_routes)
         .nest_service("/api/spotify", spotify_routes)
         .nest_service("/api/briefing", briefing_routes)
         .route("/api/health", get(health))

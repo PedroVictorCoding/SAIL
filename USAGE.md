@@ -279,6 +279,33 @@ Open **https://192.168.1.101:8088** on the other device, then follow the same se
 
 The generated certificate lasts 365 days. Regenerating it also replaces its key, so clients must trust the replacement certificate. This listener has no user login; use it only on a trusted network and do not forward it to the public internet.
 
+## Share the work with another PC (SAIL Mesh)
+
+A Windows or Linux PC with a better GPU can run SAIL's background model work, which keeps
+this machine free for conversation. On that PC, build `sail-mesh-worker`
+(`cargo build --release -p sail-mesh`), then:
+
+```sh
+sail-mesh-worker init --name desktop
+sail-mesh-worker serve --llama-server <path to llama-server> --model <model.gguf>
+```
+
+It prints a `sailmesh://…` pairing code (it contains a secret). Paste it in Settings →
+Models → Worker PCs, or on the SAIL host:
+
+```sh
+sail-core mesh pair '<code>'
+sail-core mesh test desktop     # one short answer from the worker
+sail-core mesh list             # health of every paired worker
+sail-core mesh discover         # workers announcing on this network
+```
+
+Voice always stays on this machine. Background work goes to a free worker first, and if
+the worker is off or busy SAIL runs it here instead. `SAIL_MESH=overflow` uses workers only
+while this machine is busy, `SAIL_MESH=off` disables them, and
+`SAIL_MESH_PRIORITIES=background,interactive` also offloads chat turns. Details and the
+Windows steps are in [SAIL Mesh](docs/SAIL_MESH.md).
+
 ## Follow what the runner is doing
 
 The runner prints detailed diagnostics by default and appends the same events to **`.local/runner.log`**. Each voice session and assistant turn has an ID, so you can follow a request through context retrieval, Gemma inference, tool authorization/execution, speech synthesis, Canvas delivery and cancellation. Logs include prompts, transcripts, bounded tool arguments/results, worker startup/output, timings and errors. Audio and image payloads are omitted.

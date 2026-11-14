@@ -10,6 +10,7 @@ publish.workspace = true
 sail-common.workspace = true
 sail-protocol.workspace = true
 sail-guardian.workspace = true
+sail-mesh.workspace = true
 chrono.workspace = true
 sha2 = "0.11"
 rusqlite = { version = "0.37", features = ["bundled"] }
