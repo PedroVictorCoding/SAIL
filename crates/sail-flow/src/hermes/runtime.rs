@@ -304,7 +304,8 @@ impl Manager {
             self.run_build_step(&new, &build, &argv).await?;
         }
         let locked = pyenv::parse_report(
-            &fs::read(build.join("report.json")).map_err(|e| format!("pip wrote no report: {e}"))?,
+            &fs::read(build.join("report.json"))
+                .map_err(|e| format!("pip wrote no report: {e}"))?,
         )?;
         let record = EnvRecord {
             plan_hash: plan.hash.clone(),
@@ -338,7 +339,12 @@ impl Manager {
 
     /// One build command in bubblewrap: network on, the new venv and the build folder
     /// writable, nothing else from the host but read-only system files.
-    async fn run_build_step(&self, venv: &Path, build: &Path, argv: &[String]) -> Result<(), String> {
+    async fn run_build_step(
+        &self,
+        venv: &Path,
+        build: &Path,
+        argv: &[String],
+    ) -> Result<(), String> {
         let args = build_args(venv, build, argv);
         let mut command = tokio::process::Command::new(&self.sandbox.bwrap);
         command
@@ -367,7 +373,10 @@ impl Manager {
             .rev()
             .collect::<Vec<_>>()
             .join("\n");
-        Err(format!("{} failed: {tail}", argv.get(3).map_or("build", |s| s.as_str())))
+        Err(format!(
+            "{} failed: {tail}",
+            argv.get(3).map_or("build", |s| s.as_str())
+        ))
     }
 
     /// Enabled plugins that registered `hook` and for which the owner turned it on.
@@ -376,7 +385,11 @@ impl Manager {
         let Ok(settings) = self.paths.load_hooks() else {
             return Vec::new();
         };
-        if settings.plugins.values().all(|h| !h.iter().any(|n| n == hook)) {
+        if settings
+            .plugins
+            .values()
+            .all(|h| !h.iter().any(|n| n == hook))
+        {
             return Vec::new();
         }
         let mut out = Vec::new();

@@ -371,8 +371,8 @@ pub async fn run_dialogue_server_with_plans(
     let system_routes = crate::system_http::router(authority());
     let flow_routes = crate::flow_http::router(authority());
     let hermes_routes = crate::hermes_http::router(authority());
-    let schedule = crate::schedule_runner::start(Arc::new(
-        crate::schedule_runner::ScheduleService::new(
+    let schedule =
+        crate::schedule_runner::start(Arc::new(crate::schedule_runner::ScheduleService::new(
             sail_common::storage::data_path("schedule"),
             Arc::new(DaemonExecutor {
                 services: services.clone(),
@@ -381,8 +381,7 @@ pub async fn run_dialogue_server_with_plans(
             Arc::new(crate::schedule_runner::DaemonPresence {
                 pulse: pulse.clone(),
             }),
-        ),
-    ));
+        )));
     let schedule_routes = crate::schedule_http::router(schedule, authority());
     // The model Mind started with (SAIL_MODEL_PATH, else the saved default, else Qwen).
     let model_routes =
@@ -1942,7 +1941,11 @@ async fn run_turn(
         return Ok(());
     }
     let compaction = state.arena.complete_response_context_at_epoch(
-        &session, current, &prompt, &reply, learning_epoch,
+        &session,
+        current,
+        &prompt,
+        &reply,
+        learning_epoch,
     );
     emit(
         &tx,
@@ -1960,7 +1963,12 @@ async fn run_turn(
     .await;
     if let Some(receipt) = compaction {
         debug!(?receipt, "Completed text response compacted by Arena");
-        emit(&tx, current, json!({"type":"context_compacted", "turn_id":current, "compaction":receipt})).await;
+        emit(
+            &tx,
+            current,
+            json!({"type":"context_compacted", "turn_id":current, "compaction":receipt}),
+        )
+        .await;
     }
     info!(
         response_chars = reply.chars().count(),
@@ -2203,7 +2211,6 @@ async fn take_snapshot(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Hermes plugin hooks the owner turned on (round 21). Each call is bounded and a slow or
 /// failing plugin is skipped; with no hooks turned on these return immediately.
 mod plugin_hooks {
@@ -2352,6 +2359,7 @@ impl crate::schedule_runner::RunExecutor for DaemonExecutor {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn reason_turn(
     vlm: &VoiceVlm,
     messages: &mut Vec<Value>,

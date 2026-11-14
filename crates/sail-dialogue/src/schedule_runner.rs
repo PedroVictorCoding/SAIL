@@ -119,7 +119,12 @@ impl ScheduleService {
             Err(e) => format!("unreadable schedule: {e}"),
         });
         out["next_run"] = json!(next);
-        out["last_run"] = json!(self.store.runs(&job.id).ok().and_then(|r| r.into_iter().next()));
+        out["last_run"] = json!(
+            self.store
+                .runs(&job.id)
+                .ok()
+                .and_then(|r| r.into_iter().next())
+        );
         out
     }
 
@@ -186,7 +191,10 @@ impl ScheduleService {
             }
             ("approve", JobState::Proposed) => JobState::Active,
             (_, state) => {
-                return Err(format!("can't {action} a job that is {}", state_name(state)));
+                return Err(format!(
+                    "can't {action} a job that is {}",
+                    state_name(state)
+                ));
             }
         };
         self.store.update(&job)?;
@@ -326,7 +334,10 @@ pub fn start(service: Arc<ScheduleService>) -> Arc<ScheduleService> {
     let service = GLOBAL.get_or_init(|| service).clone();
     match service.store.recover(Utc::now().timestamp()) {
         Ok(0) => {}
-        Ok(n) => warn!(runs = n, "scheduled runs interrupted by a restart were marked failed"),
+        Ok(n) => warn!(
+            runs = n,
+            "scheduled runs interrupted by a restart were marked failed"
+        ),
         Err(error) => warn!(%error, "scheduled runs not recovered"),
     }
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -380,9 +391,8 @@ impl Presence for DaemonPresence {
         let minute = i64::from(settings.local_minute(now));
         let end = i64::from(settings.quiet_end_minute);
         let wait = (end - minute).rem_euclid(24 * 60);
-        let until = now + chrono::Duration::minutes(wait) - chrono::Duration::seconds(i64::from(
-            chrono::Timelike::second(&now),
-        ));
+        let until = now + chrono::Duration::minutes(wait)
+            - chrono::Duration::seconds(i64::from(chrono::Timelike::second(&now)));
         (true, Some(until))
     }
 
@@ -526,7 +536,16 @@ mod tests {
         let (service, exec, owner) = service(tmp.path());
         let t0 = 1_800_000_000;
         let job = service
-            .create("Ping", "every 5 minutes", "UTC", prompt("hi"), Deliver::Web, Creator::Owner, None, t0)
+            .create(
+                "Ping",
+                "every 5 minutes",
+                "UTC",
+                prompt("hi"),
+                Deliver::Web,
+                Creator::Owner,
+                None,
+                t0,
+            )
             .unwrap();
 
         // Voice live: nothing starts.
@@ -549,7 +568,11 @@ mod tests {
         owner.quiet.store(false, Ordering::SeqCst);
         service.tick(t0 + 303);
         assert_eq!(owner.delivered.load(Ordering::SeqCst), 1);
-        assert!(service.store.runs(&job.id).unwrap()[0].delivered_at.is_some());
+        assert!(
+            service.store.runs(&job.id).unwrap()[0]
+                .delivered_at
+                .is_some()
+        );
         let view = service.view(&service.store.get(&job.id).unwrap(), t0 + 303);
         assert_eq!(view["describe"], "every 5 minutes (UTC)");
         assert!(view["next_run"].is_string());
@@ -561,28 +584,61 @@ mod tests {
         let (service, exec, owner) = service(tmp.path());
         let t0 = 1_800_000_000;
         let proposed = service
-            .create("Later", "every 5 minutes", "UTC", prompt("x"), Deliver::Web, Creator::Model, Some("asked".into()), t0)
+            .create(
+                "Later",
+                "every 5 minutes",
+                "UTC",
+                prompt("x"),
+                Deliver::Web,
+                Creator::Model,
+                Some("asked".into()),
+                t0,
+            )
             .unwrap();
         assert_eq!(proposed.state, JobState::Proposed);
         assert_eq!(service.tick(t0 + 600), 0, "a proposed job never runs");
         assert!(service.run_now(&proposed.id, t0 + 600).is_err());
-        assert_eq!(service.set_state(&proposed.id, "approve").unwrap().state, JobState::Active);
+        assert_eq!(
+            service.set_state(&proposed.id, "approve").unwrap().state,
+            JobState::Active
+        );
 
         let failing = service
-            .create("Bad", "every 5 minutes", "UTC", prompt("fail"), Deliver::Silent, Creator::Owner, None, t0)
+            .create(
+                "Bad",
+                "every 5 minutes",
+                "UTC",
+                prompt("fail"),
+                Deliver::Silent,
+                Creator::Owner,
+                None,
+                t0,
+            )
             .unwrap();
         for k in 1..=3 {
             service.run_now(&failing.id, t0 + 1000 * k).unwrap();
             settle(&service).await;
         }
-        assert_eq!(service.store.get(&failing.id).unwrap().state, JobState::Paused);
+        assert_eq!(
+            service.store.get(&failing.id).unwrap().state,
+            JobState::Paused
+        );
         assert_eq!(owner.paused.load(Ordering::SeqCst), 1);
         assert!(exec.runs.load(Ordering::SeqCst) >= 3);
 
         // Inside a run, the model can't propose jobs.
         let blocked = IN_SCHEDULED_RUN
             .scope((), async {
-                service.create("Nested", "in 30m", "UTC", prompt("x"), Deliver::Web, Creator::Model, None, t0)
+                service.create(
+                    "Nested",
+                    "in 30m",
+                    "UTC",
+                    prompt("x"),
+                    Deliver::Web,
+                    Creator::Model,
+                    None,
+                    t0,
+                )
             })
             .await;
         assert!(blocked.is_err());

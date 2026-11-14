@@ -195,8 +195,12 @@ async fn environment(
             let building = plugin.clone();
             tokio::spawn(async move {
                 match manager.build_env(&building).await {
-                    Ok(record) => tracing::info!(plugin = %building.id, packages = record.locked.len(), "Hermes plugin environment built"),
-                    Err(error) => tracing::warn!(plugin = %building.id, %error, "Hermes plugin environment build failed"),
+                    Ok(record) => {
+                        tracing::info!(plugin = %building.id, packages = record.locked.len(), "Hermes plugin environment built")
+                    }
+                    Err(error) => {
+                        tracing::warn!(plugin = %building.id, %error, "Hermes plugin environment build failed")
+                    }
                 }
             });
             tracing::info!(plugin = %plugin.id, "Hermes plugin environment build started by owner");
@@ -209,9 +213,17 @@ async fn environment(
                 .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "remove failed"))?
                 .map_err(|e| error(StatusCode::CONFLICT, e))?;
         }
-        _ => return Err(error(StatusCode::BAD_REQUEST, "action must be build or remove")),
+        _ => {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "action must be build or remove",
+            ));
+        }
     }
-    Ok((StatusCode::ACCEPTED, Json(plugin_json(s.manager, plugin).await)))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(plugin_json(s.manager, plugin).await),
+    ))
 }
 
 async fn plugins(State(s): State<Arc<HttpState>>, h: HeaderMap) -> Reply {
