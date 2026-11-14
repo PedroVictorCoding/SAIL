@@ -39,7 +39,7 @@ fn cpu_tuned_profile_decouples_batch_threads_and_sets_optimal_defaults() {
     assert_eq!(profile.cache_type_v, "q4_0");
     assert!(profile.flash_attn);
     assert_eq!(profile.cache_reuse, 256);
-    assert_eq!(profile.context_tokens, 16384);
+    assert_eq!(profile.context_tokens, 32768);
     assert_eq!(profile.batch_size, 2048);
     assert_eq!(profile.ubatch_size, 512);
 
@@ -152,4 +152,22 @@ fn config_conversion_to_and_from_profile_preserves_tuning() {
     assert_eq!(roundtrip.ubatch_size, profile.ubatch_size);
     assert_eq!(roundtrip.cache_type_k, profile.cache_type_k);
     assert_eq!(roundtrip.cache_type_v, profile.cache_type_v);
+}
+
+#[test]
+fn larger_context_reaches_llama_server_and_parallel_slots() {
+    let profile = InferenceProfileManager::cpu_tuned("local");
+    let config = LocalModelConfig::from_profile(
+        &profile,
+        "/tmp/context-fixture.gguf".into(),
+        "/tmp/llama-server".into(),
+        "http://127.0.0.1:8081/v1/chat/completions".into(),
+    );
+    for parallel in [1, 2] {
+        let args = config.launch_args(parallel).unwrap();
+        let ctx = args.windows(2).find(|w| w[0] == "--ctx-size").unwrap();
+        assert_eq!(ctx[1], (32_768 * parallel).to_string());
+    }
+    // The shell launcher must agree with the native/profile defaults.
+    assert!(include_str!("../../../run.sh").contains("SAIL_CONTEXT_TOKENS:-32768"));
 }

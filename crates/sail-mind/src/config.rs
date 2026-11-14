@@ -1,6 +1,9 @@
 use sail_protocol::*;
 use std::{net::IpAddr, path::PathBuf, time::Duration};
 
+/// Default per-request local model context; admission may reduce it to fit observed RAM.
+pub const DEFAULT_CONTEXT_TOKENS: usize = 32_768;
+
 /// Where a mixture-of-experts model's expert weights live when offloading to the GPU.
 ///
 /// For MoE models such as Qwen3-Coder-30B-A3B or Qwen3.6-35B-A3B, most of the weights are
@@ -154,7 +157,7 @@ impl Default for LocalModelConfig {
             context_tokens: std::env::var("SAIL_CONTEXT_TOKENS")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(16384),
+                .unwrap_or(DEFAULT_CONTEXT_TOKENS),
             cache_type_k: std::env::var("SAIL_CACHE_TYPE_K").unwrap_or_else(|_| "q4_0".into()),
             cache_type_v: std::env::var("SAIL_CACHE_TYPE_V").unwrap_or_else(|_| "q4_0".into()),
             flash_attn: std::env::var("SAIL_FLASH_ATTN")

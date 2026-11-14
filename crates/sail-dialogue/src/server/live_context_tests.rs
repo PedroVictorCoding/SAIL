@@ -334,7 +334,34 @@ for line in sys.stdin:
         receive_type(&mut socket, "response_delta").await["text"],
         "The launch is on Tuesday."
     );
+    receive_type(&mut socket, "response_finished").await;
+    let prepared = arena.conversation_context(socket_session, "follow-up");
+    assert_eq!(prepared.hot[0].user, "What date was agreed?");
+    assert_eq!(prepared.hot[0].assistant, "The launch is on Tuesday.");
+    // Follow up immediately on text completion, without waiting for speech or the
+    // compaction notification. The preceding exchange must already be available.
+    socket
+        .send(WsMessage::Text(
+            json!({"action":"text","text":"Repeat that date please."}).to_string(),
+        ))
+        .await
+        .unwrap();
+    receive_type(&mut socket, "response_finished").await;
+    let compacted = receive_type(&mut socket, "context_compacted").await;
+    assert_eq!(compacted["compaction"]["hot_turns_after"], 2);
     receive_type(&mut socket, "turn_finished").await;
+    let follow_up = requests.lock().await[1].clone();
+    let messages = follow_up["messages"].as_array().unwrap();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["role"] == "user" && m["content"] == "What date was agreed?")
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["role"] == "assistant" && m["content"] == "The launch is on Tuesday.")
+    );
     let observed_request = requests.lock().await[0].clone();
     let system = observed_request["messages"][0]["content"].as_str().unwrap();
     assert!(!system.contains("The launch is on Tuesday."));
@@ -418,16 +445,16 @@ for line in sys.stdin:
     let recorded = requests.lock().await;
     assert_eq!(
         recorded.len(),
-        2,
+        3,
         "late speech must never trigger reasoning"
     );
     assert!(
-        !recorded[1]["messages"][0]["content"]
+        !recorded[2]["messages"][0]["content"]
             .as_str()
             .unwrap()
             .contains("Live conversation observations")
     );
-    assert!(!recorded[1].to_string().contains("late after reset"));
+    assert!(!recorded[2].to_string().contains("late after reset"));
     drop(recorded);
     socket.close(None).await.unwrap();
     drop(server);
