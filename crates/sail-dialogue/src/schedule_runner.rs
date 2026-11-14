@@ -445,3 +445,153 @@ fn signal(kind: &str, key: &str, title: &str, body: &str) -> bool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct Counting {
+        runs: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl RunExecutor for Counting {
+        async fn run(&self, job: &Job) -> Result<String, String> {
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            assert!(in_scheduled_run());
+            match &job.action {
+                Action::Prompt { text } if text == "fail" => Err("boom".into()),
+                _ => Ok(format!("done: {}", job.name)),
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct Owner {
+        voice: AtomicBool,
+        quiet: AtomicBool,
+        delivered: AtomicUsize,
+        paused: AtomicUsize,
+    }
+
+    impl Presence for Owner {
+        fn voice_active(&self) -> bool {
+            self.voice.load(Ordering::SeqCst)
+        }
+        fn quiet(&self, _now: DateTime<Utc>) -> (bool, Option<DateTime<Utc>>) {
+            (self.quiet.load(Ordering::SeqCst), None)
+        }
+        fn timezone(&self) -> String {
+            "Europe/Lisbon".into()
+        }
+        fn deliver(&self, _job: &Job, _run: &Run) -> bool {
+            self.delivered.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+        fn notify_paused(&self, _job: &Job) {
+            self.paused.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn service(dir: &std::path::Path) -> (Arc<ScheduleService>, Arc<Counting>, Arc<Owner>) {
+        let exec = Arc::new(Counting::default());
+        let owner = Arc::new(Owner::default());
+        let service = Arc::new(ScheduleService::new(
+            dir.to_path_buf(),
+            exec.clone(),
+            owner.clone(),
+        ));
+        (service, exec, owner)
+    }
+
+    async fn settle(service: &ScheduleService) {
+        for _ in 0..200 {
+            if !service.busy() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("run did not finish");
+    }
+
+    fn prompt(text: &str) -> Action {
+        Action::Prompt { text: text.into() }
+    }
+
+    #[tokio::test]
+    async fn a_due_slot_runs_once_and_quiet_hours_hold_the_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, exec, owner) = service(tmp.path());
+        let t0 = 1_800_000_000;
+        let job = service
+            .create("Ping", "every 5 minutes", "UTC", prompt("hi"), Deliver::Web, Creator::Owner, None, t0)
+            .unwrap();
+
+        // Voice live: nothing starts.
+        owner.voice.store(true, Ordering::SeqCst);
+        assert_eq!(service.tick(t0 + 300), 0);
+        owner.voice.store(false, Ordering::SeqCst);
+
+        // Quiet hours: it runs, but the result waits.
+        owner.quiet.store(true, Ordering::SeqCst);
+        assert_eq!(service.tick(t0 + 301), 1);
+        assert_eq!(service.tick(t0 + 302), 0, "the same slot never runs twice");
+        settle(&service).await;
+        assert_eq!(exec.runs.load(Ordering::SeqCst), 1);
+        assert_eq!(owner.delivered.load(Ordering::SeqCst), 0);
+        let runs = service.store.runs(&job.id).unwrap();
+        assert_eq!(runs[0].outcome, Outcome::Ok);
+        assert!(runs[0].delivered_at.is_none());
+
+        // Quiet hours end: the held result is delivered on the next tick.
+        owner.quiet.store(false, Ordering::SeqCst);
+        service.tick(t0 + 303);
+        assert_eq!(owner.delivered.load(Ordering::SeqCst), 1);
+        assert!(service.store.runs(&job.id).unwrap()[0].delivered_at.is_some());
+        let view = service.view(&service.store.get(&job.id).unwrap(), t0 + 303);
+        assert_eq!(view["describe"], "every 5 minutes (UTC)");
+        assert!(view["next_run"].is_string());
+    }
+
+    #[tokio::test]
+    async fn proposed_jobs_wait_and_failures_pause() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, exec, owner) = service(tmp.path());
+        let t0 = 1_800_000_000;
+        let proposed = service
+            .create("Later", "every 5 minutes", "UTC", prompt("x"), Deliver::Web, Creator::Model, Some("asked".into()), t0)
+            .unwrap();
+        assert_eq!(proposed.state, JobState::Proposed);
+        assert_eq!(service.tick(t0 + 600), 0, "a proposed job never runs");
+        assert!(service.run_now(&proposed.id, t0 + 600).is_err());
+        assert_eq!(service.set_state(&proposed.id, "approve").unwrap().state, JobState::Active);
+
+        let failing = service
+            .create("Bad", "every 5 minutes", "UTC", prompt("fail"), Deliver::Silent, Creator::Owner, None, t0)
+            .unwrap();
+        for k in 1..=3 {
+            service.run_now(&failing.id, t0 + 1000 * k).unwrap();
+            settle(&service).await;
+        }
+        assert_eq!(service.store.get(&failing.id).unwrap().state, JobState::Paused);
+        assert_eq!(owner.paused.load(Ordering::SeqCst), 1);
+        assert!(exec.runs.load(Ordering::SeqCst) >= 3);
+
+        // Inside a run, the model can't propose jobs.
+        let blocked = IN_SCHEDULED_RUN
+            .scope((), async {
+                service.create("Nested", "in 30m", "UTC", prompt("x"), Deliver::Web, Creator::Model, None, t0)
+            })
+            .await;
+        assert!(blocked.is_err());
+    }
+
+    #[test]
+    fn preview_lists_the_next_runs() {
+        let v = ScheduleService::preview("daily at 9am", "UTC", 1_800_000_000).unwrap();
+        assert_eq!(v["next"].as_array().unwrap().len(), 5);
+        assert!(ScheduleService::preview("evry day", "UTC", 0).is_err());
+    }
+}

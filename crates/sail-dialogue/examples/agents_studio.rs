@@ -9,7 +9,11 @@
 //! The Market is **offline** by default: a fake network serves small catalogs in the
 //! Hermes formats, one GitHub skill, one ClawHub skill, one plugin and one skill the
 //! scanner blocks. Set SAIL_AGENTS_DEMO_MARKET=live to use the real catalogs instead.
-//! SAIL_AGENTS_DEMO_PROPOSAL=1 stages one model-proposed skill for review.
+//! SAIL_AGENTS_DEMO_PROPOSAL=1 stages one model-proposed skill for review, and one
+//! model-proposed scheduled job.
+//!
+//! The Schedule section is real (`/api/agents/schedule`, the scheduler ticking every 30 s),
+//! but runs use a demo executor that answers without a model.
 use axum::Router;
 use sail_flow::market::{
     Market, MarketPaths,
@@ -138,8 +142,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             chrono::Utc::now().timestamp(),
         )?;
     }
+    let schedule = sail_dialogue::schedule_runner::start(Arc::new(
+        sail_dialogue::schedule_runner::ScheduleService::new(
+            sail_common::storage::data_path("schedule"),
+            Arc::new(DemoExecutor),
+            Arc::new(DemoPresence),
+        ),
+    ));
+    if std::env::var("SAIL_AGENTS_DEMO_PROPOSAL").as_deref() == Ok("1")
+        && schedule.store.jobs()?.is_empty()
+    {
+        schedule.create(
+            "Friday weekly report",
+            "fridays at 5pm",
+            "Europe/Lisbon",
+            sail_flow::schedule::Action::Skill {
+                name: "weekly-report".into(),
+                input: "This week".into(),
+            },
+            sail_flow::schedule::Deliver::Web,
+            sail_flow::schedule::Creator::Model,
+            Some("You asked for the weekly report three Fridays in a row.".into()),
+            chrono::Utc::now().timestamp(),
+        )?;
+    }
     let app = Router::new()
         .merge(sail_dialogue::ui_assets::router())
+        .nest_service(
+            "/api/agents/schedule",
+            sail_dialogue::schedule_http::router(schedule, Some(authority()?)),
+        )
         .nest_service(
             "/api/flow",
             sail_dialogue::flow_http::router(Some(authority()?)),
@@ -158,4 +190,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("SAIL Agents demo: http://127.0.0.1:18809/#agents");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Answers scheduled runs without a model, so the demo works offline.
+struct DemoExecutor;
+
+#[async_trait::async_trait]
+impl sail_dialogue::schedule_runner::RunExecutor for DemoExecutor {
+    async fn run(&self, job: &sail_flow::schedule::Job) -> Result<String, String> {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        match &job.action {
+            sail_flow::schedule::Action::Prompt { text } if text.contains("fail") => {
+                Err("The demo executor was asked to fail.".into())
+            }
+            _ => Ok(format!("Demo result for \"{}\".", job.name)),
+        }
+    }
+}
+
+/// No voice, no quiet hours, no inbox in the demo.
+struct DemoPresence;
+
+impl sail_dialogue::schedule_runner::Presence for DemoPresence {
+    fn voice_active(&self) -> bool {
+        false
+    }
+    fn quiet(
+        &self,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> (bool, Option<chrono::DateTime<chrono::Utc>>) {
+        (false, None)
+    }
+    fn timezone(&self) -> String {
+        "Europe/Lisbon".into()
+    }
+    fn deliver(&self, _job: &sail_flow::schedule::Job, _run: &sail_flow::schedule::Run) -> bool {
+        false
+    }
+    fn notify_paused(&self, _job: &sail_flow::schedule::Job) {}
 }

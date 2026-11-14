@@ -117,7 +117,7 @@ The host implements this part of Hermes' `PluginContext`:
 | `register_tool(name, toolset, schema, handler, check_fn, override)` | The tool becomes `<plugin>.<tool>`. `check_fn` marks it unavailable. |
 | `register_command(name, handler, description, args_hint)` | Callable as `<plugin>./<name>` with raw text. |
 | `register_skill(name, path)` | Added to the skill index as `<plugin>:<name>`. |
-| `register_hook(...)` | Recorded and listed by `describe`. The hook is **not run**. |
+| `register_hook(name, callback)` | Listed by `describe`. Four hooks can run, once you turn them on (see [Hooks](#hooks)). |
 | `dispatch_tool`, `get_config`, `set_config`, `state.get/set/delete`, `plugin_data_dir`, `profile_name`, `plugin_id`, `has_capability` (always false), `has_plugin` (true only for itself), `redact_text`, `session_cwd`, `session_surface` | As in Hermes. State is a JSON file in the plugin's home, at most 10 MiB. |
 | `hermes_constants.get_hermes_home()`, `plugins.<id>` and `hermes_plugins.<id>` imports | Shims for helpers that plugins commonly import. |
 
@@ -139,6 +139,41 @@ Hermes itself.
 - `hermes_call` runs one tool or command. Guardian treats it as a high-risk invocation,
   so **each call asks the owner to approve the exact plugin, tool and arguments**. The
   result is returned to the model labelled as untrusted data.
+
+### Hooks
+
+883 of the 2,309 catalog plugins register hooks: code Hermes calls around each model
+call or tool call. SAIL runs four of them, **only for hooks you turn on**, per plugin,
+in the plugin's detail on **Skills & plugins** (all are off by default):
+
+| Hook | What the plugin sees | What it can do |
+| --- | --- | --- |
+| `pre_llm_call` | Your message for this turn, whether it is the first turn | Add up to 2,000 characters of context. It is scanned first; anything that looks like an injected instruction, an exfiltration link or hidden Unicode is dropped. The model is told it is data, not instructions. |
+| `pre_tool_call` | The tool's name and arguments | Block the call, with a short message the model sees. |
+| `post_tool_call` | The tool's name, arguments, success and a 1,000-character preview of the result | Nothing (it only observes). |
+| `post_llm_call` | Your message and SAIL's reply | Nothing (it only observes). |
+
+Plugins never see the conversation history or memory. Each hook call runs in the same
+sandbox as tools, with a 3-second budget; a slow or failing plugin is skipped and the
+turn continues. Other hooks (`on_session_start`, gateway and middleware hooks) are listed
+as "Not run in SAIL". The settings are kept in `$SAIL_DATA/plugins/hermes-hooks.json`.
+
+### Python environments
+
+A plugin that lists packages in `requirements.txt` (or `pyproject.toml`'s
+`[project] dependencies`) gets its own virtual environment when you ask for it: **Build**
+in the plugin's detail. The packages are part of the files you approved, so the plugin
+must be approved first.
+
+- The build runs in bubblewrap with network on, only during the build, and installs
+  **wheels only** (`pip --only-binary=:all:`), so no package build scripts run.
+- Lines SAIL can't install safely are refused and shown: editable installs, `-r`
+  includes, options, URLs and VCS links, local paths, more than 50 requirements.
+- What was installed (name, version, wheel SHA-256 and URL) is recorded in
+  `$SAIL_DATA/plugins/hermes-pyenv/<id>/env.json`, and shown under the plugin.
+- The plugin then runs with that environment's interpreter, mounted read-only. When its
+  requirements change, the environment shows **Changed** and the plugin runs without it
+  until you rebuild.
 
 ## Market
 
@@ -202,7 +237,5 @@ proposal approve|reject <id>`.
 
 ## Not yet done
 
-- Plugin hooks are not run inside SAIL's turn loop (round 21).
-- Plugins cannot use a per-plugin Python environment (round 21).
 - The `/<skill>` command is not available in the gateway (P2, round 22).
 - Market: no update notifications, no custom GitHub taps, and no installs from GitLab, LobeHub or browse.sh.
