@@ -41,16 +41,71 @@ fn authorize(s: &HttpState, h: &HeaderMap) -> Result<Arc<Store>, (StatusCode, Js
     }
     s.store.clone().ok_or_else(|| fail(Error::Storage))
 }
+/// The daemon's one Flow store, shared by these routes and the scheduler.
+fn shared_store() -> Option<Arc<Store>> {
+    static STORE: std::sync::OnceLock<Option<Arc<Store>>> = std::sync::OnceLock::new();
+    STORE
+        .get_or_init(|| {
+            match Store::open(sail_common::storage::data_path("flow").join("workflows-v1.json")) {
+                Ok(s) => Some(Arc::new(s)),
+                Err(e) => {
+                    tracing::error!(error=%e,"Flow store unavailable");
+                    None
+                }
+            }
+        })
+        .clone()
+}
 pub fn router(authority: Option<ApprovalAuthority>) -> Router {
-    let store = match Store::open(sail_common::storage::data_path("flow").join("workflows-v1.json"))
-    {
-        Ok(s) => Some(Arc::new(s)),
-        Err(e) => {
-            tracing::error!(error=%e,"Flow store unavailable");
-            None
+    router_with_store(shared_store(), authority)
+}
+/// Run a saved workflow to the end (scheduled runs) and summarise its receipts.
+pub async fn run_workflow(id: &str) -> Result<String, String> {
+    let store = shared_store().ok_or("Flow is unavailable")?;
+    let workflow_id = Uuid::parse_str(id).map_err(|_| format!("no workflow {id}"))?;
+    tokio::task::spawn_blocking(move || {
+        let (workflows, _) = store.list().map_err(|e| e.to_string())?;
+        let workflow = workflows
+            .into_iter()
+            .find(|w| w.id == workflow_id)
+            .ok_or_else(|| "the workflow was deleted".to_string())?;
+        let run = store
+            .start(StartRun {
+                id: Uuid::new_v4(),
+                workflow_id,
+                revision: workflow.revision,
+                input: String::new(),
+            })
+            .map_err(|e| e.to_string())?;
+        // Nodes are pure, bounded text operations; a workflow has at most a few hundred.
+        for _ in 0..10_000 {
+            if !store.step(run.id).map_err(|e| e.to_string())? {
+                break;
+            }
         }
-    };
-    router_with_store(store, authority)
+        let (_, runs) = store.list().map_err(|e| e.to_string())?;
+        let run = runs
+            .into_iter()
+            .find(|r| r.id == run.id)
+            .ok_or_else(|| "the run disappeared".to_string())?;
+        let last = run
+            .receipts
+            .iter()
+            .rev()
+            .find(|r| !r.skipped)
+            .map(|r| r.output.clone())
+            .unwrap_or_default();
+        match run.state {
+            RunState::Completed => Ok(format!("{} finished.\n{last}", workflow.name)),
+            state => Err(format!(
+                "{} stopped ({state:?}): {}",
+                workflow.name,
+                run.error.unwrap_or_default()
+            )),
+        }
+    })
+    .await
+    .map_err(|_| "the workflow worker failed".to_string())?
 }
 fn router_with_store(store: Option<Arc<Store>>, authority: Option<ApprovalAuthority>) -> Router {
     Router::new()

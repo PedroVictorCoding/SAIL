@@ -393,7 +393,7 @@ impl Tool for Canvas {
 #[cfg(test)]
 pub(crate) const OWNER_GATED_TOOLS: [&str; 1] = ["escalate:reasoning"];
 
-pub(crate) const MODEL_TOOL_ORDER: [&str; 47] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 48] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -439,6 +439,7 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 47] = [
     "skill:list",
     "skill:view",
     "skill:propose",
+    "schedule:create",
     "hermes:tools",
     "hermes:call",
 ];

@@ -1,0 +1,26 @@
+{
+  "runs": [
+    {
+      "id": "22222222222222222222222222222222:1794646800",
+      "job_id": "22222222222222222222222222222222",
+      "slot": 1794646800,
+      "started_at": 1794646801,
+      "finished_at": 1794646812,
+      "outcome": "ok",
+      "summary": "3 tasks due today.",
+      "delivered_at": null,
+      "catch_up": false
+    },
+    {
+      "id": "22222222222222222222222222222222:1794474000",
+      "job_id": "22222222222222222222222222222222",
+      "slot": 1794474000,
+      "started_at": null,
+      "finished_at": 1794560400,
+      "outcome": "missed",
+      "summary": "missed 2 runs between 2026-11-11T09:00:00Z and 2026-11-12T09:00:00Z",
+      "delivered_at": null,
+      "catch_up": false
+    }
+  ]
+}

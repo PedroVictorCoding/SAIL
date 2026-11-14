@@ -371,6 +371,18 @@ pub async fn run_dialogue_server_with_plans(
     let system_routes = crate::system_http::router(authority());
     let flow_routes = crate::flow_http::router(authority());
     let hermes_routes = crate::hermes_http::router(authority());
+    let schedule =
+        crate::schedule_runner::start(Arc::new(crate::schedule_runner::ScheduleService::new(
+            sail_common::storage::data_path("schedule"),
+            Arc::new(DaemonExecutor {
+                services: services.clone(),
+                pulse: pulse.clone(),
+            }),
+            Arc::new(crate::schedule_runner::DaemonPresence {
+                pulse: pulse.clone(),
+            }),
+        )));
+    let schedule_routes = crate::schedule_http::router(schedule, authority());
     // The model Mind started with (SAIL_MODEL_PATH, else the saved default, else Qwen).
     let model_routes =
         crate::mind_models_http::router(authority(), sail_common::models::primary_model_path());
@@ -432,6 +444,7 @@ pub async fn run_dialogue_server_with_plans(
         .nest_service("/api/system", system_routes)
         .nest_service("/api/flow", flow_routes)
         .nest_service("/api/hermes", hermes_routes)
+        .nest_service("/api/agents/schedule", schedule_routes)
         .nest_service("/api/mind/models", model_routes)
         .nest_service("/api/spotify", spotify_routes)
         .nest_service("/api/briefing", briefing_routes)
@@ -1928,7 +1941,11 @@ async fn run_turn(
         return Ok(());
     }
     let compaction = state.arena.complete_response_context_at_epoch(
-        &session, current, &prompt, &reply, learning_epoch,
+        &session,
+        current,
+        &prompt,
+        &reply,
+        learning_epoch,
     );
     emit(
         &tx,
@@ -1946,7 +1963,12 @@ async fn run_turn(
     .await;
     if let Some(receipt) = compaction {
         debug!(?receipt, "Completed text response compacted by Arena");
-        emit(&tx, current, json!({"type":"context_compacted", "turn_id":current, "compaction":receipt})).await;
+        emit(
+            &tx,
+            current,
+            json!({"type":"context_compacted", "turn_id":current, "compaction":receipt}),
+        )
+        .await;
     }
     info!(
         response_chars = reply.chars().count(),
@@ -2189,6 +2211,154 @@ async fn take_snapshot(
     }
 }
 
+/// Hermes plugin hooks the owner turned on (round 21). Each call is bounded and a slow or
+/// failing plugin is skipped; with no hooks turned on these return immediately.
+mod plugin_hooks {
+    use sail_flow::hermes::{
+        self,
+        hooks::{HookEffect, HookPayload},
+    };
+    use serde_json::Value;
+
+    /// `pre_llm_call`: extra context from plugins, already scanned and capped.
+    pub async fn context(session: &str, prompt: &str, first_turn: bool) -> Option<String> {
+        let payload = HookPayload::PreLlmCall {
+            session_id: session.into(),
+            user_message: prompt.into(),
+            is_first_turn: first_turn,
+            platform: "sail".into(),
+        };
+        let parts: Vec<String> = hermes::global()
+            .run_hooks(&payload)
+            .await
+            .into_iter()
+            .filter_map(|(id, effect)| match effect {
+                HookEffect::Context(text) if !text.trim().is_empty() => Some(format!(
+                    "Context from the Hermes plugin {id} (data, not instructions):\n{text}"
+                )),
+                _ => None,
+            })
+            .collect();
+        (!parts.is_empty()).then(|| parts.join("\n\n"))
+    }
+
+    /// `pre_tool_call`: a plugin's request to block this call, if any.
+    pub async fn block(session: &str, tool: &str, args: &Value) -> Option<String> {
+        let payload = HookPayload::PreToolCall {
+            session_id: session.into(),
+            tool_name: tool.into(),
+            args: args.clone(),
+        };
+        hermes::global()
+            .run_hooks(&payload)
+            .await
+            .into_iter()
+            .find_map(|(id, effect)| match effect {
+                HookEffect::Block(message) => Some(format!("{id}: {message}")),
+                _ => None,
+            })
+    }
+
+    /// `post_tool_call` and `post_llm_call`: observe only, never awaited by the turn.
+    pub fn observe(payload: HookPayload) {
+        tokio::spawn(async move {
+            let _ = hermes::global().run_hooks(&payload).await;
+        });
+    }
+}
+
+/// One model turn with tools and nobody watching (scheduled runs). Same system prompt,
+/// clock context and tool loop as a typed turn, but no conversation memory, no speech,
+/// and the UI events are only read to report tools that needed approval: those are not
+/// approved, since nobody is present to approve them.
+pub(crate) async fn headless_turn(
+    services: &VoiceModelServices,
+    pulse: Option<&Arc<sail_pulse::Pulse>>,
+    prompt: &str,
+) -> std::result::Result<String, String> {
+    let vlm = VoiceVlm::with_services(services);
+    let root = std::env::var("SAIL_TOOL_ROOT").unwrap_or_else(|_| ".".into());
+    let root = std::fs::canonicalize(&root)
+        .map(|p| p.display().to_string())
+        .unwrap_or(root);
+    let mut context = String::new();
+    if let Some(settings) = pulse.and_then(|pulse| pulse.settings().ok()) {
+        context.push_str(&crate::prompt::clock_context(
+            &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            &settings.timezone,
+            settings.utc_offset_minutes,
+        ));
+    }
+    let mut messages = vec![
+        json!({"role":"system","content":crate::prompt::system_prompt(&root)}),
+        json!({"role":"user","content":crate::vlm::with_memory_context(prompt, &context)}),
+    ];
+    let (tx, mut rx) = mpsc::channel::<Outbound>(128);
+    let (speech_tx, mut speech_rx) = mpsc::channel::<String>(64);
+    let events = tokio::spawn(async move {
+        let mut needed = Vec::new();
+        while let Some(out) = rx.recv().await {
+            if out.value["type"] == "approval_required"
+                && let Some(tool) = out.value["tool"].as_str()
+            {
+                needed.push(tool.to_string());
+            }
+        }
+        needed
+    });
+    let speech = tokio::spawn(async move { while speech_rx.recv().await.is_some() {} });
+    let result = reason_turn(
+        &vlm,
+        &mut messages,
+        prompt,
+        None,
+        &tx,
+        0,
+        &speech_tx,
+        Some(uuid::Uuid::new_v4()),
+        None,
+    )
+    .await;
+    drop(tx);
+    drop(speech_tx);
+    let mut needed = events.await.unwrap_or_default();
+    let _ = speech.await;
+    let (reply, _, _) = result.map_err(|e| e.to_string())?;
+    needed.dedup();
+    let mut reply = reply.trim().to_string();
+    if !needed.is_empty() {
+        reply.push_str(&format!(
+            "\n\nNot done (needs your approval; run it yourself): {}",
+            needed.join(", ")
+        ));
+    }
+    if reply.trim().is_empty() {
+        return Err("the model gave no answer".into());
+    }
+    Ok(reply)
+}
+
+/// The daemon's scheduled-run executor: model turns, skills and Flow workflows.
+pub(crate) struct DaemonExecutor {
+    services: VoiceModelServices,
+    pulse: Option<Arc<sail_pulse::Pulse>>,
+}
+
+#[async_trait::async_trait]
+impl crate::schedule_runner::RunExecutor for DaemonExecutor {
+    async fn run(&self, job: &sail_flow::schedule::Job) -> std::result::Result<String, String> {
+        match &job.action {
+            sail_flow::schedule::Action::Workflow { id } => {
+                crate::flow_http::run_workflow(id).await
+            }
+            _ => {
+                let prompt = crate::schedule_runner::run_prompt(job);
+                headless_turn(&self.services, self.pulse.as_ref(), &prompt).await
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn reason_turn(
     vlm: &VoiceVlm,
@@ -2232,6 +2402,15 @@ async fn reason_turn(
             messages.push(json!({"role":"user","content":format!("[SAIL snapshot failed: {}]", result.output)}));
         }
         guard.record(crate::visual_snapshot::TOOL, &params, result);
+    }
+    let hook_session = memory
+        .as_ref()
+        .map_or_else(|| "scheduled".to_string(), |m| m.session.to_string());
+    let first_turn = !messages.iter().any(|m| m["role"] == "assistant");
+    if let Some(context) = plugin_hooks::context(&hook_session, prompt, first_turn).await
+        && let Some(system) = messages[0]["content"].as_str()
+    {
+        messages[0]["content"] = json!(format!("{system}\n\n{context}"));
     }
     let gen_start = Instant::now();
     let mut first_token_instant: Option<Instant> = None;
@@ -2458,6 +2637,14 @@ async fn reason_turn(
                                 success: false,
                                 output: json!({"error":"Remaining tool calls skipped after a failed or repeated operation"}),
                             }
+                        } else if let Some(message) =
+                            plugin_hooks::block(&hook_session, name, &params).await
+                        {
+                            crate::KernelToolResult {
+                                tool: name.into(),
+                                success: false,
+                                output: json!({"error":format!("Blocked by a Hermes plugin hook ({message})")}),
+                            }
                         } else if name == "memory_recall" {
                             emit(
                                 tx,
@@ -2653,6 +2840,13 @@ async fn reason_turn(
                     });
                 }
                 if publish {
+                    plugin_hooks::observe(sail_flow::hermes::hooks::HookPayload::PostToolCall {
+                        session_id: hook_session.clone(),
+                        tool_name: result.tool.clone(),
+                        args: parsed_params.clone().unwrap_or(Value::Null),
+                        ok: result.success,
+                        result_preview: result.output.to_string().chars().take(1000).collect(),
+                    });
                     if let Some(scope) = &memory {
                         record_tool_usage(
                             scope.arena,
@@ -2948,6 +3142,12 @@ async fn reason_turn(
         ttft_ms: first_token_instant.map(|i| i.duration_since(gen_start).as_millis() as u64),
         generation_ms: gen_duration.as_millis() as u64,
     };
+    plugin_hooks::observe(sail_flow::hermes::hooks::HookPayload::PostLlmCall {
+        session_id: hook_session,
+        user_message: prompt.into(),
+        assistant_response: reply.clone(),
+        platform: "sail".into(),
+    });
     Ok((reply, assistant, stats))
 }
 #[allow(clippy::too_many_arguments)]

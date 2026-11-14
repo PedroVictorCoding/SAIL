@@ -62,7 +62,7 @@ with sync_playwright() as p:
         expect(page.locator("#subsystemTitle")).to_have_text("SAIL Agents")
         expect(page.locator("#tmCrumb")).to_have_text("SAIL Agents")
         tabs = page.locator("#subsystemSections [role=tab]")
-        expect(tabs).to_have_text(["Workflows", "Coding", "Skills & plugins", "Market"])
+        expect(tabs).to_have_text(["Workflows", "Coding", "Skills & plugins", "Market", "Schedule"])
         expect(page.locator("#section-coding")).to_have_attribute("aria-selected", "true")
         assert page.locator("#subsystemSettings").is_visible()  # Forge preferences
 
@@ -75,6 +75,8 @@ with sync_playwright() as p:
         assert page.evaluate("location.hash") == "#agents?section=workflows"
         expect(page.locator("#flowStatus")).not_to_have_text("Open Flow to load workflows.")
         page.keyboard.press("End")
+        expect(page.locator("#subsystemContent #scheduleCard")).to_be_visible()
+        page.keyboard.press("ArrowLeft")
         expect(page.locator("#subsystemContent #marketCard")).to_be_visible()
         page.keyboard.press("ArrowLeft")
         expect(page.locator("#subsystemContent #hermesCard")).to_be_visible()
@@ -100,7 +102,17 @@ with sync_playwright() as p:
         expect(plugin).to_contain_text("Enabled", timeout=20000)
         expect(plugin).to_contain_text("greeter.greet")
         expect(plugin).to_contain_text("greeter./wave")
-        expect(plugin).to_contain_text("Hooks (listed, not run by SAIL)")
+        # Hooks (round 21): post_tool_call is supported; turning it on is saved for real.
+        expect(plugin).to_contain_text("post_tool_call")
+        hook_toggle = plugin.locator(".hermes-hook-toggle input")
+        expect(hook_toggle).not_to_be_checked()
+        hook_toggle.check()
+        expect(plugin.locator(".hermes-hook-toggle input")).to_be_checked(timeout=10000)
+        hooks_file = APPROVALS.with_name("hermes-hooks.json")
+        assert json.loads(hooks_file.read_text())["plugins"]["greeter"] == ["post_tool_call"]
+        plugin.locator(".hermes-hook-toggle input").uncheck()
+        expect(plugin.locator(".hermes-hook-toggle input")).not_to_be_checked(timeout=10000)
+        expect(plugin).to_contain_text("Python environment")
         expect(plugin).to_contain_text("no network")
         expect(page.locator('#hermesSkillList [data-skill="greeter:greeting-etiquette"]')).to_be_visible()
         assert json.loads(APPROVALS.read_text())["plugins"]["greeter"]["env"] == ["GREETER_KEY"]

@@ -138,6 +138,8 @@ impl Capability {
                         || tool == "skill:view"
                         // Staging only: the owner's approval installs a proposed skill.
                         || tool == "skill:propose"
+                        // Proposal only: the owner approves a job before it ever runs.
+                        || tool == "schedule:create"
                         || tool == "hermes:tools" =>
                 {
                     RiskLevel::Low

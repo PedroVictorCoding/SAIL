@@ -14,8 +14,13 @@
 //! * Execution: [`Sandbox`] starts `host.py` under `bwrap`; see that file for the
 //!   supported `PluginContext` subset. The model reaches plugin tools only through the
 //!   Dialogue tool `hermes:call`, which Guardian gates with exact owner approval.
+//! * Hooks and Python environments (round 21): see [`runtime`]. The owner turns on
+//!   individual hooks; a plugin with requirements runs with its own venv once built.
 //! * Not supported: gateway platforms, memory and model providers, other provider
-//!   registrars, `ctx.llm`, `ctx.call_mcp` and messaging. Hooks are reported, not run.
+//!   registrars, `ctx.llm`, `ctx.call_mcp` and messaging.
+pub mod hooks;
+pub mod pyenv;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -28,6 +33,8 @@ use std::{
     time::Duration,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+pub mod runtime;
 
 pub const HOST_PY: &str = include_str!("host.py");
 const MAX_PLUGIN_FILES: usize = 2000;
@@ -503,6 +510,20 @@ impl Sandbox {
         data: &Path,
         env: &[(String, String)],
     ) -> Vec<String> {
+        self.args_with(plugin, approval, host, data, env, None)
+    }
+
+    /// [`Sandbox::args`], running with the plugin's own Python environment when given
+    /// (mounted read-only at [`runtime::VENV_MOUNT`]).
+    pub fn args_with(
+        &self,
+        plugin: &Plugin,
+        approval: &Approval,
+        host: &Path,
+        data: &Path,
+        env: &[(String, String)],
+        venv: Option<&Path>,
+    ) -> Vec<String> {
         let s = |p: &Path| p.to_string_lossy().to_string();
         let mut args: Vec<String> = [
             "--unshare-all",
@@ -552,6 +573,9 @@ impl Sandbox {
         args.extend(["--ro-bind".into(), s(&plugin.dir), plugin_dir.clone()]);
         args.extend(["--ro-bind".into(), s(host), "/opt/hermes/host.py".into()]);
         args.extend(["--bind".into(), s(data), "/home/plugin".into()]);
+        if let Some(venv) = venv {
+            args.extend(["--ro-bind".into(), s(venv), runtime::VENV_MOUNT.into()]);
+        }
         for (key, value) in [
             ("HOME", "/home/plugin"),
             ("HERMES_HOME", "/home/plugin"),
@@ -565,8 +589,12 @@ impl Sandbox {
             args.extend(["--setenv".into(), key, value]);
         }
         args.extend(["--chdir".into(), "/home/plugin".into(), "--".into()]);
+        let python = match venv {
+            Some(_) => format!("{}/bin/python", runtime::VENV_MOUNT),
+            None => s(&self.python),
+        };
         args.extend([
-            s(&self.python),
+            python,
             "-I".into(),
             "-B".into(),
             "/opt/hermes/host.py".into(),
@@ -602,12 +630,13 @@ impl Sandbox {
         let data = paths.data.join(&plugin.id);
         fs::create_dir_all(&data).map_err(|e| e.to_string())?;
         let env = paths.env_for(&plugin.id, &approval);
+        let venv = paths.ready_venv(plugin);
         request["plugin_id"] = json!(plugin.id);
         request["plugin_dir"] = json!(format!("/opt/hermes/plugins/{}", plugin.id));
         request["settings"] = Value::Object(approval.settings.clone());
         let mut command = tokio::process::Command::new(&self.bwrap);
         command
-            .args(self.args(plugin, &approval, &host, &data, &env))
+            .args(self.args_with(plugin, &approval, &host, &data, &env, venv.as_deref()))
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -702,6 +731,8 @@ pub struct Manager {
     pub paths: Paths,
     pub sandbox: Sandbox,
     described: Mutex<DescribeCache>,
+    /// Environment builds in progress or failed, per plugin id.
+    building: Mutex<BTreeMap<String, runtime::BuildState>>,
 }
 
 impl Manager {
@@ -710,6 +741,7 @@ impl Manager {
             paths,
             sandbox,
             described: Mutex::new(BTreeMap::new()),
+            building: Mutex::new(BTreeMap::new()),
         }
     }
 
