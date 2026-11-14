@@ -148,6 +148,8 @@ async fn generate(State(s): State<Arc<Fake>>, Json(_): Json<Value>) -> axum::res
 struct Worker {
     identity: WorkerIdentity,
     address: String,
+    /// The worker's usage-monitor gate, so tests can make it rest.
+    gate: sail_mesh::rest::RestGate,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     _dir: tempfile::TempDir,
 }
@@ -171,7 +173,9 @@ async fn start_worker(upstream: &str, max_parallel: usize) -> Worker {
         bind: ([127, 0, 0, 1], port).into(),
         upstream: parse_upstream(upstream).unwrap(),
         max_parallel,
+        gate: sail_mesh::rest::RestGate::default(),
     };
+    let gate = config.gate.clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let served = WorkerIdentity::load(dir.path()).unwrap();
     tokio::spawn(async move {
@@ -190,6 +194,7 @@ async fn start_worker(upstream: &str, max_parallel: usize) -> Worker {
     Worker {
         identity,
         address,
+        gate,
         stop: Some(stop),
         _dir: dir,
     }
@@ -570,4 +575,54 @@ async fn pairing_proves_the_code_against_the_running_worker() {
         Err(MeshOpError::BadInput(_))
     ));
     assert_eq!(Registry::load(&path).unwrap().workers.len(), 1);
+}
+
+#[tokio::test]
+async fn a_resting_worker_is_skipped_without_counting_as_failed() {
+    let s = setup(MeshMode::Offload, paired).await;
+    assert_eq!(worker_status(&s.pool).state, MeshWorkerState::Ready);
+
+    // The owner starts a game between two health checks: the worker refuses (429) and the
+    // host runs the work itself.
+    s.worker.gate.set_busy(Some(sail_protocol::mesh::MeshBusy {
+        reason: "gaming (full-screen game)".into(),
+        full: true,
+        retry_after_secs: None,
+    }));
+    let response = infer(&s.service, WorkPriority::Background, None)
+        .await
+        .unwrap();
+    assert_eq!(text(&response), "host");
+    let status = worker_status(&s.pool);
+    assert_eq!(
+        status.failed, 0,
+        "resting is not a failure: {:?}",
+        status.last_error
+    );
+    assert_eq!(s.pool.status().fell_back, 1);
+
+    // The next health check sees the rest and explains it.
+    s.pool.refresh().await;
+    let status = worker_status(&s.pool);
+    assert_eq!(status.state, MeshWorkerState::Busy);
+    let busy = status.busy.expect("reason is shown");
+    assert!(busy.full);
+    assert_eq!(busy.reason, "gaming (full-screen game)");
+    let before = s.remote.state.generations.load(Ordering::SeqCst);
+    let response = infer(&s.service, WorkPriority::Background, None)
+        .await
+        .unwrap();
+    assert_eq!(text(&response), "host");
+    assert_eq!(
+        s.remote.state.generations.load(Ordering::SeqCst),
+        before,
+        "a resting worker is not even asked"
+    );
+
+    // Game over: the worker is used again after the next check.
+    s.worker.gate.set_busy(None);
+    s.pool.refresh().await;
+    let status = worker_status(&s.pool);
+    assert_eq!(status.state, MeshWorkerState::Ready);
+    assert_eq!(status.busy, None);
 }

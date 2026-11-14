@@ -10,8 +10,9 @@ use axum::{
 };
 use bytes::Bytes;
 use sail_mesh::{
-    FORWARDED_ROUTES, HELLO_ROUTE, MESH_VERSION, MeshHello,
+    FORWARDED_ROUTES, HELLO_ROUTE, MESH_VERSION, MeshBusy, MeshHello,
     identity::WorkerIdentity,
+    rest::RestGate,
     tls::pinned_client,
     worker::{MAX_BODY_BYTES, WorkerConfig, serve},
 };
@@ -287,6 +288,25 @@ async fn start_worker_on(
     upstream: url::Url,
     max_parallel: usize,
 ) -> Worker {
+    start_worker_with_gate(
+        identity,
+        dir,
+        address,
+        upstream,
+        max_parallel,
+        Default::default(),
+    )
+    .await
+}
+
+async fn start_worker_with_gate(
+    identity: WorkerIdentity,
+    dir: tempfile::TempDir,
+    address: SocketAddr,
+    upstream: url::Url,
+    max_parallel: usize,
+    gate: RestGate,
+) -> Worker {
     let worker_id = identity.worker_id.clone();
     let fingerprint = identity.fingerprint();
     let secret = identity.secret.clone();
@@ -294,6 +314,7 @@ async fn start_worker_on(
         bind: address,
         upstream,
         max_parallel,
+        gate,
     };
     let (stop, wait) = oneshot::channel::<()>();
     let task = tokio::spawn(async move {
@@ -1079,4 +1100,87 @@ fn the_forwarded_allowlist_is_the_contract() {
             "/v1/chat/completions"
         ]
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_resting_worker_refuses_generations_and_says_why() {
+    let fake = start_fake().await;
+    let dir = tempfile::tempdir().expect("worker identity dir");
+    let identity = WorkerIdentity::create(dir.path(), "gaming-pc").expect("worker identity");
+    let upstream = url::Url::parse(&format!("http://{}", fake.address)).expect("upstream URL");
+    let gate = RestGate::default();
+    let worker = start_worker_with_gate(
+        identity,
+        dir,
+        SocketAddr::from(([127, 0, 0, 1], free_port())),
+        upstream,
+        1,
+        gate.clone(),
+    )
+    .await;
+    let client = worker.client();
+    let chat = || async {
+        client
+            .post(format!("{}/v1/chat/completions", worker.base()))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(r#"{"messages":[]}"#)
+            .send()
+            .await
+            .expect("chat")
+    };
+    let hello = || async {
+        client
+            .get(format!("{}{HELLO_ROUTE}", worker.base()))
+            .send()
+            .await
+            .expect("hello")
+            .json::<MeshHello>()
+            .await
+            .expect("hello JSON")
+    };
+    assert_eq!(chat().await.status(), StatusCode::OK);
+    assert_eq!(hello().await.busy, None);
+
+    gate.set_busy(Some(MeshBusy {
+        reason: "other programs use 80% CPU".into(),
+        full: false,
+        retry_after_secs: Some(120),
+    }));
+    fake.clear();
+    let refused = chat().await;
+    assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(refused.headers().get(header::RETRY_AFTER).unwrap(), "120");
+    let text = refused.text().await.unwrap();
+    assert!(
+        text.contains("resting: other programs use 80% CPU"),
+        "{text}"
+    );
+    let health = client
+        .get(format!("{}/health", worker.base()))
+        .send()
+        .await
+        .expect("health");
+    assert_eq!(health.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        fake.seen()
+            .iter()
+            .all(|seen| seen.path != "/v1/chat/completions"),
+        "nothing reaches llama-server while resting"
+    );
+    let busy = hello().await.busy.expect("hello reports the rest");
+    assert_eq!(busy.retry_after_secs, Some(120));
+    assert!(!busy.full);
+
+    gate.set_busy(Some(MeshBusy {
+        reason: "gaming (full-screen game)".into(),
+        full: true,
+        retry_after_secs: None,
+    }));
+    let refused = chat().await;
+    assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(refused.headers().get(header::RETRY_AFTER).is_none());
+    assert!(hello().await.busy.unwrap().full);
+
+    gate.set_busy(None);
+    assert_eq!(chat().await.status(), StatusCode::OK);
 }

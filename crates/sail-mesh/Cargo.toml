@@ -32,6 +32,13 @@ ring.workspace = true
 axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
+# Usage monitor: CPU, memory and process list (portable), NVIDIA GPU load when the driver
+# library is present (loaded at run time, so machines without NVIDIA still work).
+sysinfo = { version = "=0.40.1", default-features = false, features = ["system"] }
+nvml-wrapper = "0.13.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile = "3"

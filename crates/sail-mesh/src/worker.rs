@@ -3,7 +3,9 @@
 //! It forwards only [`crate::FORWARDED_ROUTES`] to one configured upstream, caps concurrent
 //! generations, and answers `/mesh/v1/hello`. Closing the host connection drops the upstream
 //! request, which makes llama-server stop generating (that is how cancellation reaches it).
-use crate::{FORWARDED_ROUTES, HELLO_ROUTE, MeshError, Result, identity::WorkerIdentity};
+use crate::{
+    FORWARDED_ROUTES, HELLO_ROUTE, MeshError, Result, identity::WorkerIdentity, rest::RestGate,
+};
 use axum::{
     Router,
     body::Body,
@@ -16,10 +18,7 @@ use sail_protocol::mesh::{MESH_VERSION, MeshHello, MeshModel};
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::sync::Semaphore;
@@ -46,6 +45,9 @@ pub struct WorkerConfig {
     /// llama-server base URL on this machine, for example `http://127.0.0.1:8080`.
     pub upstream: url::Url,
     pub max_parallel: usize,
+    /// Set by the usage monitor while the owner needs the PC; the worker then refuses new
+    /// generations. The default gate is never busy.
+    pub gate: RestGate,
 }
 
 struct Shared {
@@ -56,7 +58,7 @@ struct Shared {
     client: reqwest::Client,
     slots: Arc<Semaphore>,
     max_parallel: usize,
-    active: AtomicUsize,
+    gate: RestGate,
     auth: Mutex<AuthThrottle>,
 }
 
@@ -170,7 +172,7 @@ pub(crate) fn router_with_clock(
         client,
         slots: Arc::new(Semaphore::new(max_parallel)),
         max_parallel,
-        active: AtomicUsize::new(0),
+        gate: config.gate.clone(),
         auth: Mutex::new(AuthThrottle::new(now)),
     });
     Ok(Router::new()
@@ -262,6 +264,24 @@ async fn handle(State(shared): State<Arc<Shared>>, request: Request) -> Response
         return error(StatusCode::NOT_FOUND, "route is not forwarded by SAIL Mesh");
     };
     let generation = route == "/v1/chat/completions";
+    // While the owner uses the PC, new generations are refused and health says so; the host
+    // runs the work itself. 429 + Retry-After (not 503, which means llama-server is broken)
+    // tells the host this is a rest, not a failure. Metadata routes still answer when the
+    // model server is up.
+    if (generation || route == "/health")
+        && let Some(busy) = shared.gate.busy()
+    {
+        let mut response = error(
+            StatusCode::TOO_MANY_REQUESTS,
+            &format!("worker is resting: {}", busy.reason),
+        );
+        if let Some(seconds) = busy.retry_after_secs
+            && let Ok(value) = header::HeaderValue::from_str(&seconds.to_string())
+        {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        return response;
+    }
     let permit = if generation {
         match shared.slots.clone().try_acquire_owned() {
             Ok(permit) => Some(permit),
@@ -323,7 +343,7 @@ async fn handle(State(shared): State<Arc<Shared>>, request: Request) -> Response
             .into_response();
     }
     // Stream the generation through. The permit and active count live as long as the body.
-    shared.active.fetch_add(1, Ordering::SeqCst);
+    shared.gate.started();
     let guard = ActiveGuard {
         shared: shared.clone(),
         _permit: permit,
@@ -346,7 +366,7 @@ struct ActiveGuard {
 }
 impl Drop for ActiveGuard {
     fn drop(&mut self) {
-        self.shared.active.fetch_sub(1, Ordering::SeqCst);
+        self.shared.gate.finished();
     }
 }
 
@@ -380,9 +400,10 @@ async fn hello(shared: &Shared) -> MeshHello {
         os: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),
         max_parallel: shared.max_parallel,
-        active: shared.active.load(Ordering::SeqCst),
+        active: shared.gate.active(),
         model,
         upstream_error,
+        busy: shared.gate.busy(),
     }
 }
 

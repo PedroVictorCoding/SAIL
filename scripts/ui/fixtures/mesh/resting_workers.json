@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "mode": "offload",
+  "offloaded": 21,
+  "fell_back": 3,
+  "workers": [
+    {
+      "name": "windows",
+      "address": "192.168.1.64:7710",
+      "state": "busy",
+      "os": "windows x86_64",
+      "max_parallel": 1,
+      "active": 0,
+      "completed": 5,
+      "failed": 0,
+      "last_rtt_ms": 6,
+      "last_seen": "2026-11-14T16:45:00.000Z",
+      "busy": { "reason": "gaming (full-screen game)", "full": true }
+    },
+    {
+      "name": "studio",
+      "address": "192.168.1.70:7710",
+      "state": "busy",
+      "os": "windows x86_64",
+      "model": {
+        "file_name": "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+        "context_tokens": 32768,
+        "vision": false,
+        "tools": true
+      },
+      "max_parallel": 1,
+      "active": 0,
+      "completed": 2,
+      "failed": 0,
+      "busy": { "reason": "other programs use 72% CPU", "full": false, "retry_after_secs": 240 }
+    }
+  ]
+}

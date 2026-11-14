@@ -72,6 +72,7 @@ async fn start_worker(
         bind: worker_address,
         upstream: url::Url::parse(&format!("http://{upstream}")).expect("upstream URL"),
         max_parallel: 1,
+        gate: Default::default(),
     };
     let (stop, wait) = tokio::sync::oneshot::channel::<()>();
     let task = tokio::spawn(async move {

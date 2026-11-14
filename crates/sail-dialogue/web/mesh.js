@@ -14,6 +14,7 @@
   const STATE_LABELS = {
     ready: 'Ready',
     model_unavailable: 'Model not loaded',
+    busy: 'Resting',
     unreachable: 'Unreachable',
     unknown: 'Checking…',
     disabled: 'Off',
@@ -330,7 +331,21 @@
       })
     );
 
-    if (w.last_error) {
+    if (stateKey === 'busy' && w.busy) {
+      // The worker stepped aside because its owner is using that PC.
+      let when = '';
+      if (w.busy.full) when = ' · back when it ends';
+      else if (Number(w.busy.retry_after_secs) > 0) {
+        const s = Number(w.busy.retry_after_secs);
+        when = s < 90 ? ` · checks again in ${s} s` : ` · checks again in ${Math.round(s / 60)} min`;
+      }
+      details.push(
+        el('p', {
+          class: 'mesh-worker-rest',
+          text: `Stepped aside: ${w.busy.reason}${when}`,
+        })
+      );
+    } else if (w.last_error) {
       details.push(
         el('p', {
           class: 'mesh-worker-error',
