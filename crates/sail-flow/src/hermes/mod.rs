@@ -18,6 +18,9 @@
 //!   individual hooks; a plugin with requirements runs with its own venv once built.
 //! * Not supported: gateway platforms, memory and model providers, other provider
 //!   registrars, `ctx.llm`, `ctx.call_mcp` and messaging.
+pub mod hooks;
+pub mod pyenv;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

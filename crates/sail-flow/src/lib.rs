@@ -2,6 +2,7 @@ pub mod hermes;
 pub mod market;
 pub mod memory;
 pub mod proposals;
+pub mod schedule;
 pub mod skills;
 pub mod workflows;
 use async_trait::async_trait;
