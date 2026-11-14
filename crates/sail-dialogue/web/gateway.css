@@ -1,0 +1,327 @@
+/* SAIL Agents › Messaging (round 22, Antigravity).
+   Plain fallback surface; weak-glow material comes from ambient-backdrop.css under html.sail-backdrop-on.
+   Reading/form surfaces stay opaque --sail-surface with no glow and no blur. */
+
+.gateway-workspace {
+  color: var(--sail-text);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 20px;
+  background: var(--sail-surface);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-card);
+}
+
+.gateway-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.gateway-toolbar h3 {
+  margin: 0;
+  flex: 1;
+}
+
+.gateway-intro,
+.gateway-meta {
+  color: var(--sail-text-muted);
+}
+
+.gateway-meta {
+  font-size: .9em;
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+.gateway-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  margin: 10px 0 14px;
+  border-radius: var(--sail-radius-control);
+  background: var(--sail-base);
+  border: 1px solid var(--sail-glass-border);
+}
+
+.gateway-status-strip[data-state="connected"] {
+  border-color: rgb(42 171 238 / .45);
+}
+
+.gateway-status-strip[data-state="error"] {
+  border-color: rgb(255 120 120 / .5);
+}
+
+.gateway-status-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.gateway-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: .85em;
+  font-weight: 600;
+  background: rgb(255 255 255 / .08);
+  border: 1px solid var(--sail-glass-border);
+}
+
+.gateway-pill[data-tone="connected"] {
+  background: rgb(42 171 238 / .18);
+  border-color: rgb(42 171 238 / .5);
+  color: #bae6fd;
+}
+
+.gateway-pill[data-tone="error"] {
+  background: rgb(239 68 68 / .18);
+  border-color: rgb(239 68 68 / .45);
+  color: #fecaca;
+}
+
+.gateway-error {
+  color: #ffb4b4;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+
+.gateway-error[hidden] {
+  display: none;
+}
+
+.gateway-warning {
+  padding: 10px 12px;
+  border-radius: var(--sail-radius-control);
+  background: rgb(245 158 11 / .12);
+  border: 1px solid rgb(245 158 11 / .4);
+  color: #fde68a;
+  margin: 8px 0;
+}
+
+.gateway-warning[hidden] {
+  display: none;
+}
+
+.gateway-workspace button,
+.gateway-workspace input,
+.gateway-workspace select {
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+.gateway-workspace button {
+  cursor: pointer;
+}
+
+.gateway-workspace :focus-visible {
+  outline: 2px solid var(--sail-focus-ring);
+  outline-offset: 2px;
+}
+
+.gateway-setup {
+  background: var(--sail-surface);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 16px;
+  margin-bottom: 18px;
+}
+
+.gateway-setup[hidden] {
+  display: none;
+}
+
+.gateway-setup h4 {
+  margin: 0 0 8px;
+}
+
+.gateway-steps {
+  margin: 0 0 14px;
+  padding-left: 20px;
+  color: var(--sail-text-muted);
+  display: grid;
+  gap: 6px;
+}
+
+.gateway-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.gateway-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.gateway-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--sail-radius-control);
+  border: 1px solid var(--sail-glass-border);
+  background: var(--sail-base);
+  color: var(--sail-text);
+  font: inherit;
+}
+
+.gateway-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.gateway-section {
+  background: var(--sail-surface);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 16px;
+  min-width: 0;
+}
+
+.gateway-section h4 {
+  margin: 0 0 8px;
+}
+
+.gateway-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  min-width: 0;
+}
+
+.gateway-card {
+  background: var(--sail-base);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 12px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.gateway-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.gateway-card-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.gateway-code {
+  display: inline-block;
+  font-family: var(--sail-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: .12em;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgb(42 171 238 / .12);
+  border: 1px solid rgb(42 171 238 / .35);
+  color: #e0f2fe;
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.gateway-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.gateway-primary {
+  background: rgb(42 171 238 / .22);
+  border-color: rgb(42 171 238 / .55);
+}
+
+.gateway-danger {
+  border-color: rgb(239 68 68 / .45);
+  color: #fecaca;
+}
+
+.gateway-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.gateway-seg-btn[aria-pressed="true"] {
+  background: rgb(42 171 238 / .24);
+  border-color: rgb(42 171 238 / .65);
+  color: #e0f2fe;
+  font-weight: 600;
+}
+
+.gateway-outbox-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  margin: 10px 0;
+}
+
+.gateway-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gateway-stat-val {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .gateway-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .gateway-workspace {
+    padding: 14px;
+  }
+}
+
+@media (forced-colors: active) {
+  .gateway-workspace,
+  .gateway-status-strip,
+  .gateway-setup,
+  .gateway-section,
+  .gateway-card,
+  .gateway-code,
+  .gateway-pill,
+  .gateway-seg-btn[aria-pressed="true"] {
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+}

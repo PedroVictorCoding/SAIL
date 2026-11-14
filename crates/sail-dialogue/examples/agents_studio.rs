@@ -14,6 +14,11 @@
 //!
 //! The Schedule section is real (`/api/agents/schedule`, the scheduler ticking every 30 s),
 //! but runs use a demo executor that answers without a model.
+//!
+//! Messaging (`/api/agents/gateway`) is the real gateway service over a fake Telegram:
+//! any token of the right shape connects, and with SAIL_AGENTS_DEMO_PROPOSAL=1 a stranger
+//! has already asked to pair. Memory review (`/api/memory/review`) runs on an in-memory
+//! Arena store; with SAIL_AGENTS_DEMO_PROPOSAL=1 review is on and one change is waiting.
 use axum::Router;
 use sail_flow::market::{
     Market, MarketPaths,
@@ -166,8 +171,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             chrono::Utc::now().timestamp(),
         )?;
     }
+    let bot = Arc::new(sail_flow::gateway::FakeBot::default());
+    let gateway_bot = bot.clone();
+    let gateway = Arc::new(sail_dialogue::gateway_service::GatewayService::new(
+        sail_common::storage::data_path("gateway"),
+        Arc::new(DemoChat),
+        Arc::new(move |_t: &sail_flow::gateway::BotToken| {
+            gateway_bot.push_response(
+                "getMe",
+                serde_json::json!({"ok": true, "result": {"username": "sail_demo_bot"}}),
+            );
+            gateway_bot.clone() as Arc<dyn sail_flow::gateway::BotApi>
+        }),
+    ));
+    if std::env::var("SAIL_AGENTS_DEMO_PROPOSAL").as_deref() == Ok("1") {
+        gateway.pairing.admit(
+            777,
+            777,
+            "Ana (demo)",
+            chrono::Utc::now().timestamp(),
+            *b"DEMOCODE",
+        )?;
+        let queue = sail_dialogue::memory_profile::review_queue();
+        queue.set_enabled(true)?;
+        if queue.list()?.is_empty() {
+            queue.push(sail_arena::knowledge::review::PendingChange {
+                id: "0123456789abcdef0123456789abcdef".into(),
+                change: serde_json::json!({}),
+                summary: vec!["Remember: you — prefers replies in: Portuguese".into()],
+                findings: Vec::new(),
+                session: "conversation".into(),
+                proposed_at: chrono::Utc::now().timestamp(),
+            })?;
+        }
+    }
+    let memory = Arc::new(sail_arena::MemoryStore::open_in_memory()?);
     let app = Router::new()
         .merge(sail_dialogue::ui_assets::router())
+        .nest_service(
+            "/api/agents/gateway",
+            sail_dialogue::gateway_http::router(gateway, Some(authority()?)),
+        )
+        .nest_service(
+            "/api/memory",
+            sail_dialogue::memory_http::router(memory, Some(authority()?)),
+        )
         .nest_service(
             "/api/agents/schedule",
             sail_dialogue::schedule_http::router(schedule, Some(authority()?)),
@@ -228,4 +276,36 @@ impl sail_dialogue::schedule_runner::Presence for DemoPresence {
         false
     }
     fn notify_paused(&self, _job: &sail_flow::schedule::Job) {}
+}
+
+/// Answers Telegram chats without a model, so the demo works offline.
+struct DemoChat;
+
+#[async_trait::async_trait]
+impl sail_dialogue::gateway_service::ChatRunner for DemoChat {
+    async fn turn(
+        &self,
+        _session: &str,
+        text: &str,
+    ) -> Result<sail_dialogue::gateway_service::ChatReply, String> {
+        Ok(sail_dialogue::gateway_service::ChatReply {
+            text: format!("Demo reply to: {text}"),
+            approvals: Vec::new(),
+        })
+    }
+    async fn transcribe(&self, _pcm: Vec<i16>) -> Result<String, String> {
+        Ok("demo voice note".into())
+    }
+    async fn skills(&self) -> Vec<String> {
+        Vec::new()
+    }
+    async fn status(&self) -> String {
+        "Demo SAIL is running.".into()
+    }
+    async fn jobs(&self) -> String {
+        "No jobs in the demo.".into()
+    }
+    fn resolve(&self, _session: uuid::Uuid, _approved: bool) -> Result<(), String> {
+        Err("Approvals are not available in the demo.".into())
+    }
 }

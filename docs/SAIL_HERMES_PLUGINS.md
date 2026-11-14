@@ -237,5 +237,4 @@ proposal approve|reject <id>`.
 
 ## Not yet done
 
-- The `/<skill>` command is not available in the gateway (P2, round 22).
 - Market: no update notifications, no custom GitHub taps, and no installs from GitLab, LobeHub or browse.sh.

@@ -405,6 +405,12 @@ impl Presence for DaemonPresence {
     }
 
     fn deliver(&self, job: &Job, run: &Run) -> bool {
+        if let Some(gateway) = crate::gateway_service::global() {
+            gateway.broadcast(
+                &format!("schedule:{}", run.id),
+                &format!("{}\n\n{}", job.name, run.summary),
+            );
+        }
         signal(
             "scheduled_run",
             &format!("schedule:{}", run.id),

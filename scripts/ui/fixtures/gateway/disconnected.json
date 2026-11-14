@@ -1,0 +1,19 @@
+{
+  "status": {
+    "connected": false,
+    "bot_username": null,
+    "error": null,
+    "last_poll_at": null
+  },
+  "pairing": {
+    "paired": [],
+    "pending": [],
+    "policy": "pair",
+    "locked_until": null
+  },
+  "chats": [],
+  "outbox": {
+    "queued": 0,
+    "failed_recently": 0
+  }
+}

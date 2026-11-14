@@ -20,9 +20,15 @@ pub mod changeset;
 pub mod consolidation;
 pub mod jobs;
 pub mod learning;
+/// The injection scan for candidate memory text.
+pub mod memory_scan;
 pub mod model;
+/// The always-in-context profile block.
+pub mod profile;
 mod read;
 pub mod retrieval;
+/// The owner's review queue for proposed memory changes.
+pub mod review;
 pub(crate) mod schema;
 mod write;
 

@@ -421,3 +421,23 @@ for the broader always-on ambient collection described by master vision §4.2. L
 off is the default; this change does not enable ambient/background microphone capture,
 speaker attribution, Sense ingestion, Life planning, Discovery suggestions, or model
 weight training. It establishes the consent boundary for the existing interactive path.
+
+## Profile block, memory review and the injection scan (Hermes P5, round 22)
+
+- **Profile block.** Every conversation carries a short "About the owner" block (at most
+  1,400 characters), built from the owner's active claims under the Dialogue grant: only
+  normal-sensitivity facts, preferences and capabilities that are verified or reported by
+  the owner (inferred ones only when explicit or supported twice). Lines the owner pinned
+  come first, then explicit preferences, then the best-supported facts. It is built on a
+  conversation's first turn and then frozen, so the prompt prefix stays stable; retrieval
+  still adds task-specific facts every turn. Code: `sail_arena::knowledge::profile`,
+  `crates/sail-dialogue/src/memory_profile.rs`; pins in `$SAIL_DATA/memory/profile-pins.json`.
+- **Injection scan.** Every model-proposed change set is scanned before validation
+  (`sail_arena::knowledge::memory_scan`): instructions aimed at the model, exfiltration
+  links, hidden or bidirectional Unicode and credential-shaped strings, in English and
+  Portuguese. A flagged set is dropped and its turns are not offered again.
+- **Review queue.** In **Memory › Review** the owner can turn on "Review memory changes
+  before SAIL saves them". Accepted proposals then wait (`$SAIL_DATA/memory/memory-review.json`,
+  at most 100, 14 days) with one plain line per change; **Save** commits through Arena's
+  validator against current memory (it can still refuse), **Discard** drops it. SAIL only
+  says something was remembered from a commit, never from a proposal.

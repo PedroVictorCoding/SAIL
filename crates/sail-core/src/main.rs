@@ -142,6 +142,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if std::env::var("SAIL_MEMORY_MODEL_PROPOSALS").is_ok_and(|v| v == "1" || v == "true") {
             info!("Memory model proposals enabled; the validator gates every change");
             maintenance = maintenance.with_proposer(memory_proposer(model_service.clone()));
+            // P5: the owner can hold model-proposed memory changes for review.
+            maintenance = maintenance.with_review(sail_arena::knowledge::review::ReviewQueue {
+                dir: sail_common::storage::data_path("memory"),
+            });
         }
         flow = flow.with_memory(maintenance);
     }

@@ -431,9 +431,32 @@ pub async fn run_dialogue_server_with_plans(
         active_token.clone(),
     );
     let proxy_guard = crate::proxy_guard::ProxyGuard::new(active_token.as_deref());
+    let gateway_authority = authority();
     let owner_token = active_token;
+    let server_state = Arc::new(ServerState {
+        live_context_authority,
+        bus,
+        services,
+        arena,
+        inference,
+        owner_token,
+        plans,
+        pulse,
+        briefing: Some(briefing_engine),
+    });
+    let gateway =
+        crate::gateway_service::start(Arc::new(crate::gateway_service::GatewayService::new(
+            sail_common::storage::data_path("gateway"),
+            Arc::new(DaemonChat::new(server_state.clone())),
+            Arc::new(|token: &sail_flow::gateway::BotToken| {
+                Arc::new(crate::gateway_service::ReqwestBot::new(token))
+                    as Arc<dyn sail_flow::gateway::BotApi>
+            }),
+        )));
+    let gateway_routes = crate::gateway_http::router(gateway, gateway_authority);
     let mut app = Router::new()
         .nest_service("/api/guardian", approval_routes)
+        .nest_service("/api/agents/gateway", gateway_routes)
         .nest_service("/api/memory", memory_routes)
         .nest_service("/api/speech", dictation_routes)
         .nest_service(
@@ -452,17 +475,7 @@ pub async fn run_dialogue_server_with_plans(
         .route("/api/mind/status", get(mind_status))
         .route("/ws/voice", get(ws_handler))
         .route("/ws/terminal", get(ws_terminal_handler))
-        .with_state(Arc::new(ServerState {
-            live_context_authority,
-            bus,
-            services,
-            arena,
-            inference,
-            owner_token,
-            plans,
-            pulse,
-            briefing: Some(briefing_engine),
-        }));
+        .with_state(server_state.clone());
     if let Some(routes) = plan_routes {
         app = app.nest_service("/api/plans", routes);
     }
@@ -1765,6 +1778,13 @@ async fn run_turn(
             settings.utc_offset_minutes,
         ));
     }
+    // P5: the owner's profile, built on the conversation's first turn and then frozen.
+    if let Some(access) = dialogue_access()
+        && let Some(profile) =
+            crate::memory_profile::for_session(state.arena.store(), &access, &session)
+    {
+        memory_block.push_str(&profile);
+    }
     if !memory_lines.is_empty() {
         memory_block.push_str(&format!(
             "Earlier in this conversation (JSON list):\n{}\n",
@@ -2264,6 +2284,187 @@ mod plugin_hooks {
         tokio::spawn(async move {
             let _ = hermes::global().run_hooks(&payload).await;
         });
+    }
+}
+
+/// Telegram chats (round 22): the same turn path as a typed web turn, without speech
+/// synthesis, collecting the reply and any approval requests from the turn's events.
+pub(crate) struct DaemonChat {
+    state: Arc<ServerState>,
+    pipe: crate::RealtimeVoicePipeline,
+    turns: std::sync::Mutex<std::collections::BTreeMap<String, u64>>,
+}
+
+impl DaemonChat {
+    pub(crate) fn new(state: Arc<ServerState>) -> Self {
+        let pipe =
+            crate::RealtimeVoicePipeline::with_services(state.services.clone(), "telegram".into());
+        Self {
+            state,
+            pipe,
+            turns: Default::default(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::gateway_service::ChatRunner for DaemonChat {
+    async fn turn(
+        &self,
+        session: &str,
+        text: &str,
+    ) -> std::result::Result<crate::gateway_service::ChatReply, String> {
+        let current = {
+            let mut turns = self.turns.lock().unwrap();
+            let entry = turns.entry(session.to_string()).or_insert(0);
+            if *entry == 0 {
+                self.state.arena.begin_voice_session(session);
+            }
+            *entry += 1;
+            *entry
+        };
+        let (tx, mut rx) = mpsc::channel::<Outbound>(256);
+        let collector = tokio::spawn(async move {
+            let mut reply = crate::gateway_service::ChatReply::default();
+            let mut error = None;
+            while let Some(out) = rx.recv().await {
+                let v = out.value;
+                match v["type"].as_str() {
+                    Some("turn_finished") => {
+                        if let Some(text) = v["reply"].as_str() {
+                            reply.text = text.to_string();
+                        }
+                    }
+                    Some("approval_required") => {
+                        if let Some(id) = v["session_id"]
+                            .as_str()
+                            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                        {
+                            reply.approvals.push(crate::gateway_service::ApprovalAsk {
+                                session_id: id,
+                                tool: v["tool"].as_str().unwrap_or("a tool").to_string(),
+                                rationale: v["rationale"].as_str().unwrap_or_default().to_string(),
+                            });
+                        }
+                    }
+                    Some("error") => error = v["message"].as_str().map(String::from),
+                    _ => {}
+                }
+            }
+            (reply, error)
+        });
+        let live_context = Arc::new(std::sync::Mutex::new(
+            crate::live_context::LiveContext::default(),
+        ));
+        let result = run_turn(
+            self.state.clone(),
+            session.to_string(),
+            current,
+            tx,
+            self.pipe.stt.clone(),
+            self.pipe.tts.clone(),
+            self.pipe.vlm.clone(),
+            TurnInput::Text(text.to_string(), None, None, None),
+            Arc::new(AtomicU64::new(current)),
+            live_context,
+            0,
+            SpeechOutput::Client,
+        )
+        .await;
+        let (reply, error) = collector.await.map_err(|e| e.to_string())?;
+        result.map_err(|e| e.to_string())?;
+        if reply.text.trim().is_empty() && reply.approvals.is_empty() {
+            return Err(error.unwrap_or_else(|| "SAIL gave no answer".into()));
+        }
+        Ok(reply)
+    }
+
+    async fn transcribe(&self, pcm: Vec<i16>) -> std::result::Result<String, String> {
+        self.pipe
+            .stt
+            .transcribe(&pcm, false)
+            .await
+            .map(|(text, _)| text)
+            .map_err(|e| e.to_string())
+    }
+
+    async fn skills(&self) -> Vec<String> {
+        let mut library = tokio::task::spawn_blocking(|| {
+            sail_flow::skills::SkillLibrary::scan(&sail_flow::skills::SkillLibrary::default_roots())
+        })
+        .await
+        .unwrap_or_default();
+        sail_flow::hermes::global().add_skills(&mut library).await;
+        library
+            .skills
+            .keys()
+            .filter(|k| !k.contains(':'))
+            .cloned()
+            .collect()
+    }
+
+    async fn status(&self) -> String {
+        let jobs = crate::schedule_runner::global()
+            .and_then(|s| s.store.jobs().ok())
+            .map_or(0, |j| {
+                j.iter()
+                    .filter(|j| j.state == sail_flow::schedule::JobState::Active)
+                    .count()
+            });
+        let pending = sail_guardian::global_broker()
+            .map(|b| b.approval().list_pending().len())
+            .unwrap_or(0);
+        format!(
+            "SAIL is running. Active scheduled jobs: {jobs}. Approvals waiting: {pending}. Talking to you now: {}.",
+            if sail_common::resources::global().voice_active() {
+                "yes, by voice too"
+            } else {
+                "here"
+            }
+        )
+    }
+
+    async fn jobs(&self) -> String {
+        let Some(service) = crate::schedule_runner::global() else {
+            return "The scheduler is not running.".into();
+        };
+        let now = chrono::Utc::now().timestamp();
+        let jobs = service.store.jobs().unwrap_or_default();
+        if jobs.is_empty() {
+            return "No scheduled jobs. Ask me to do something regularly and I'll propose one."
+                .into();
+        }
+        jobs.iter()
+            .map(|j| {
+                let v = service.view(j, now);
+                format!(
+                    "• {} — {} ({})",
+                    j.name,
+                    v["describe"].as_str().unwrap_or_default(),
+                    v["state"].as_str().unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn resolve(&self, session: uuid::Uuid, approved: bool) -> std::result::Result<(), String> {
+        let broker =
+            sail_guardian::global_broker().map_err(|_| "Guardian is unavailable".to_string())?;
+        let pending = broker
+            .approval()
+            .list_pending()
+            .into_iter()
+            .find(|p| p.session_id == session)
+            .ok_or("That approval expired or was already answered.")?;
+        if approved && pending.risk_level == sail_guardian::RiskLevel::Critical {
+            return Err("This action is too sensitive to approve from chat. Approve it in the SAIL web app.".into());
+        }
+        match broker.approval().resolve_session(session, approved) {
+            Ok(_) => Ok(()),
+            Err(sail_guardian::ApprovalError::Denied) if !approved => Ok(()),
+            Err(e) => Err(format!("The approval could not be recorded: {e}")),
+        }
     }
 }
 

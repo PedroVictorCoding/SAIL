@@ -1,0 +1,54 @@
+{
+  "enabled": false,
+  "pending": [
+    {
+      "id": "0123456789abcdef0123456789abcdef",
+      "change": {
+        "ops": []
+      },
+      "summary": [
+        "Remember: Prefers dark mode in editor",
+        "Forget: Old office address"
+      ],
+      "findings": [
+        {
+          "rule": "prompt_injection",
+          "excerpt": "ignore previous instructions and ..."
+        }
+      ],
+      "session": "telegram-1001",
+      "proposed_at": 1794660050
+    },
+    {
+      "id": "fedcba9876543210fedcba9876543210",
+      "change": {
+        "ops": []
+      },
+      "summary": [
+        "Remember: Lives in Lisbon"
+      ],
+      "findings": [],
+      "session": "web-main",
+      "proposed_at": 1794659000
+    }
+  ],
+  "profile": {
+    "text": "About the owner (from SAIL's memory):\n- Prefers replies in Portuguese\n- Uses Arch Linux on a ThinkPad",
+    "chars": 112,
+    "budget": 1400,
+    "lines": [
+      {
+        "claim_id": 101,
+        "text": "Prefers replies in Portuguese",
+        "why": "pinned",
+        "pinned": true
+      },
+      {
+        "claim_id": 102,
+        "text": "Uses Arch Linux on a ThinkPad",
+        "why": "verified",
+        "pinned": false
+      }
+    ]
+  }
+}
