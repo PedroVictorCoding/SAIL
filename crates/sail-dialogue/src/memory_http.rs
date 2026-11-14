@@ -36,6 +36,10 @@ fn build_router(
         .route("/read", post(read))
         .route("/change", post(change))
         .route("/tool-logs/clear", post(clear_tool_logs))
+        .route("/review", axum::routing::get(review))
+        .route("/review/enabled", post(review_enabled))
+        .route("/review/pin", post(review_pin))
+        .route("/review/:id/:action", post(review_decide))
         .layer(axum::extract::DefaultBodyLimit::max(64000))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
@@ -288,4 +292,107 @@ async fn clear_tool_logs(
         .clear_tool_logs()
         .map_err(|e| error(KnowledgeError::Invalid(e.to_string())))?;
     Ok(Json(json!({"ok": true, "deleted": deleted})))
+}
+
+/// The Dialogue grant: what the profile block may include (the same access a turn uses).
+fn profile_access() -> Option<Access> {
+    let grant =
+        sail_guardian::memory::memory_grant(&sail_protocol::memory::MemoryPurpose::Dialogue).ok()?;
+    Some(Access::from_grant(&grant))
+}
+
+type Reply = Result<Json<Value>, (StatusCode, Json<Value>)>;
+
+fn fail(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
+    (status, Json(json!({"error": message.into()})))
+}
+
+fn owner(s: &MemoryState, h: &HeaderMap) -> Result<(), (StatusCode, Json<Value>)> {
+    authorize(s, h).map_err(|code| fail(code, "Owner authentication required"))
+}
+
+/// Memory › Review: the switch, pending changes and the profile block.
+async fn review(State(s): State<Arc<MemoryState>>, h: HeaderMap) -> Reply {
+    owner(&s, &h)?;
+    let store = s.store.clone();
+    let view = tokio::task::spawn_blocking(move || {
+        let access = profile_access().ok_or("the memory grant is unavailable")?;
+        crate::memory_profile::review_view(&store, &access)
+    })
+    .await
+    .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "review failed"))?
+    .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnabledBody {
+    enabled: bool,
+}
+
+async fn review_enabled(
+    State(s): State<Arc<MemoryState>>,
+    h: HeaderMap,
+    Json(b): Json<EnabledBody>,
+) -> Reply {
+    owner(&s, &h)?;
+    crate::memory_profile::review_queue()
+        .set_enabled(b.enabled)
+        .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    tracing::info!(enabled = b.enabled, "Memory review changed by owner");
+    Ok(Json(json!({"enabled": b.enabled})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PinBody {
+    claim_id: i64,
+    pinned: bool,
+}
+
+async fn review_pin(
+    State(s): State<Arc<MemoryState>>,
+    h: HeaderMap,
+    Json(b): Json<PinBody>,
+) -> Reply {
+    owner(&s, &h)?;
+    crate::memory_profile::set_pin(b.claim_id, b.pinned)
+        .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(json!({"ok": true})))
+}
+
+async fn review_decide(
+    State(s): State<Arc<MemoryState>>,
+    h: HeaderMap,
+    axum::extract::Path((id, action)): axum::extract::Path<(String, String)>,
+) -> Reply {
+    owner(&s, &h)?;
+    if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(fail(StatusCode::BAD_REQUEST, "invalid id"));
+    }
+    let store = s.store.clone();
+    let save = match action.as_str() {
+        "save" => true,
+        "discard" => false,
+        _ => return Err(fail(StatusCode::NOT_FOUND, "unknown action")),
+    };
+    tokio::task::spawn_blocking(move || {
+        let queue = crate::memory_profile::review_queue();
+        if !save {
+            return queue.reject(&id).map_err(|e| (StatusCode::NOT_FOUND, e));
+        }
+        let pending = queue.take(&id).map_err(|e| (StatusCode::NOT_FOUND, e))?;
+        let report = sail_flow::memory::apply_reviewed(&store, &Access::owner(), &pending, now())
+            .map_err(|e| (StatusCode::CONFLICT, e))?;
+        match report.rejected {
+            Some(reason) => Err((StatusCode::CONFLICT, format!("Arena's validator rejected it: {reason}"))),
+            None => Ok(()),
+        }
+    })
+    .await
+    .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "review failed"))?
+    .map_err(|(code, e)| fail(code, e))?;
+    tracing::info!(save, "Memory change reviewed by owner");
+    Ok(Json(json!({"ok": true})))
 }
