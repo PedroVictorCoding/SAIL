@@ -114,13 +114,12 @@ impl Engine {
         let mut job = std::fs::read(dir.join("latest.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<Job>(&b).ok());
-        if let Some(j) = &mut job {
-            if j.state == JobState::Running {
-                j.state = JobState::Interrupted;
-                j.error =
-                    Some("SAIL restarted before this forecast finished. Run it again.".into());
-                j.finished_at = Some(Utc::now());
-            }
+        if let Some(j) = &mut job
+            && j.state == JobState::Running
+        {
+            j.state = JobState::Interrupted;
+            j.error = Some("SAIL restarted before this forecast finished. Run it again.".into());
+            j.finished_at = Some(Utc::now());
         }
         Self {
             dir,

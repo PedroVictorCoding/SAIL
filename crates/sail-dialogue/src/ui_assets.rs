@@ -106,6 +106,8 @@ assets![
     ("/flow.css", "web/flow.css", CSS),
     ("/hermes.js", "web/hermes.js", JS),
     ("/hermes.css", "web/hermes.css", CSS),
+    ("/market.js", "web/market.js", JS),
+    ("/market.css", "web/market.css", CSS),
     ("/toolsmap.css", "web/toolsmap.css", CSS),
     ("/card-modal.js", "web/card-modal.js", JS),
     ("/markdown.js", "web/markdown.js", JS),

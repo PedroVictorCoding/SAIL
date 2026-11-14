@@ -54,3 +54,4 @@ chrono.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.24"
 tempfile = "3"
+zip = { version = "9.0", default-features = false, features = ["deflate"] }

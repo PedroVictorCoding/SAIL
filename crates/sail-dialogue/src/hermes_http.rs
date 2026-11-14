@@ -13,6 +13,7 @@ use axum::{
 };
 use sail_flow::{
     hermes::{self, Manager, Status},
+    proposals::Proposals,
     skills::SkillLibrary,
 };
 use sail_guardian::authority::ApprovalAuthority;
@@ -23,6 +24,7 @@ use std::sync::Arc;
 struct HttpState {
     manager: &'static Manager,
     skill_roots: Vec<(String, std::path::PathBuf)>,
+    proposals: Proposals,
     authority: Option<ApprovalAuthority>,
 }
 type Reply = Result<Json<Value>, (StatusCode, Json<Value>)>;
@@ -50,21 +52,43 @@ fn authorize(s: &HttpState, h: &HeaderMap) -> Result<(), (StatusCode, Json<Value
 }
 
 pub fn router(authority: Option<ApprovalAuthority>) -> Router {
-    router_with(hermes::global(), SkillLibrary::default_roots(), authority)
+    router_with(
+        hermes::global(),
+        SkillLibrary::default_roots(),
+        Proposals::default_paths(),
+        Some(sail_flow::market::global()),
+        authority,
+    )
 }
 
-/// For tests and demos: a specific manager and skill roots.
+/// For tests and demos: a specific manager, skill roots and market (`None` = no
+/// `/market` routes).
 pub fn router_with(
     manager: &'static Manager,
     skill_roots: Vec<(String, std::path::PathBuf)>,
+    proposals: Proposals,
+    market: Option<Arc<sail_flow::market::Market>>,
     authority: Option<ApprovalAuthority>,
 ) -> Router {
-    Router::new()
+    let mut router = Router::new()
         .route("/plugins", get(plugins))
         .route("/plugins/:id/approve", post(approve))
         .route("/plugins/:id/revoke", post(revoke))
         .route("/skills", get(skills))
         .route("/skill", get(skill))
+        .route("/proposals", get(proposals_list))
+        .route("/proposals/:id/approve", post(proposal_approve))
+        .route("/proposals/:id/reject", post(proposal_reject))
+        .with_state(Arc::new(HttpState {
+            manager,
+            skill_roots,
+            proposals,
+            authority: authority.clone(),
+        }));
+    if let Some(market) = market {
+        router = router.nest("/market", crate::market_http::router(market, authority));
+    }
+    router
         .layer(axum::extract::DefaultBodyLimit::max(32_000))
         .layer(axum::middleware::map_response(
             |mut r: axum::response::Response| async move {
@@ -75,11 +99,6 @@ pub fn router_with(
                 r
             },
         ))
-        .with_state(Arc::new(HttpState {
-            manager,
-            skill_roots,
-            authority,
-        }))
 }
 
 async fn plugin_json(manager: &Manager, plugin: hermes::Plugin) -> Value {
@@ -231,6 +250,53 @@ async fn skill(
         .map_err(|e| error(StatusCode::NOT_FOUND, e))
 }
 
+async fn proposals_list(State(s): State<Arc<HttpState>>, h: HeaderMap) -> Reply {
+    authorize(&s, &h)?;
+    let proposals = s.proposals.clone();
+    let list = tokio::task::spawn_blocking(move || proposals.list())
+        .await
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "listing failed"))?
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(json!({"proposals": list})))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct ProposalApproveBody {
+    acknowledge_caution: bool,
+}
+
+async fn proposal_approve(
+    State(s): State<Arc<HttpState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    body: Option<Json<ProposalApproveBody>>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let acknowledge = body.map(|b| b.acknowledge_caution).unwrap_or(false);
+    let proposals = s.proposals.clone();
+    let name = tokio::task::spawn_blocking(move || proposals.approve(&id, acknowledge))
+        .await
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "approval failed"))?
+        .map_err(|e| error(StatusCode::CONFLICT, e))?;
+    tracing::info!(skill = %name, "Proposed skill approved by owner");
+    Ok(Json(json!({"skill": name})))
+}
+
+async fn proposal_reject(
+    State(s): State<Arc<HttpState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let proposals = s.proposals.clone();
+    tokio::task::spawn_blocking(move || proposals.reject(&id))
+        .await
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "reject failed"))?
+        .map_err(|e| error(StatusCode::NOT_FOUND, e))?;
+    Ok(Json(json!({"ok": true})))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,6 +344,11 @@ mod tests {
         router_with(
             manager,
             vec![("hermes".into(), tmp.join("skills"))],
+            Proposals {
+                dir: tmp.join("proposed"),
+                skills: tmp.join("skills"),
+            },
+            None,
             Some(ApprovalAuthority::new(TOKEN).unwrap()),
         )
     }

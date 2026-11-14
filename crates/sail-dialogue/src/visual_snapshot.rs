@@ -70,7 +70,7 @@ pub fn dialogue_source(text: &str) -> Option<Source> {
             "screenshot" | "screen" | "desktop" | "ecrã" => Some(Source::Screen),
             _ => None,
         })
-        .last()
+        .next_back()
 }
 
 /// Current user wording overrides a model's mistaken source. For omitted sources,

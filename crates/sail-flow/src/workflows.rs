@@ -64,10 +64,10 @@ pub fn validate(w: &Workflow) -> Result<Vec<String>> {
         {
             return Err(invalid("Node IDs must be unique alphanumeric identifiers"));
         }
-        if let Operation::Prefix { text } | Operation::Contains { text } = &n.operation {
-            if text.len() > 1024 {
-                return Err(invalid("Node text exceeds 1024 bytes"));
-            }
+        if let Operation::Prefix { text } | Operation::Contains { text } = &n.operation
+            && text.len() > 1024
+        {
+            return Err(invalid("Node text exceeds 1024 bytes"));
         }
     }
     if w.nodes

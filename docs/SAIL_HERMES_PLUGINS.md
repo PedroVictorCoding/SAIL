@@ -1,6 +1,6 @@
 # Hermes Agent plugins and Agent Skills in SAIL
 
-**Status:** implemented, first slice of phase P4 in
+**Status:** implemented: skills, sandboxed plugins, the Market and proposed skills, phase P4 in
 [External models, gateway, skills and scheduling](SAIL_EXTERNAL_MODELS_GATEWAY_SKILLS.md#5-skills-flow--skillsmith)
 · **Code:** `crates/sail-flow/src/skills.rs`, `crates/sail-flow/src/hermes/`,
 `crates/sail-dialogue/src/hermes_tools.rs`
@@ -140,9 +140,69 @@ Hermes itself.
   so **each call asks the owner to approve the exact plugin, tool and arguments**. The
   result is returned to the model labelled as untrusted data.
 
+## Market
+
+**SAIL Agents › Market** (`#agents?section=market`) installs skills and plugins from the
+public catalogs that Hermes Agent publishes, so nothing has to be copied by hand. From a
+terminal: `sail-hermes market refresh | search | stage | install | discard | installed |
+uninstall`. The code is `crates/sail-flow/src/market/`.
+
+| Catalog | Source | Contents |
+| --- | --- | --- |
+| Skills index | `hermes-agent.nousresearch.com/docs/api/skills-index.json` | About 104,000 skills: Hermes' optional skills, curated GitHub repositories, skills.sh, ClawHub, LobeHub and browse.sh |
+| Plugin catalog | `hermes-agent.nousresearch.com/docs/api/plugin-catalog.json` | About 2,300 human-reviewed plugins, each pinned to an exact commit |
+
+1. **Download the market.** SAIL downloads both catalogs (about 50 MB), keeps a compact
+   copy in `$SAIL_DATA/market/catalog.json` and refreshes it when it is older than six
+   hours. If a refresh fails, the cached copy stays.
+2. **Search.** Search runs on the local copy, so no search text leaves the machine.
+3. **Review.** SAIL downloads the item into `$SAIL_DATA/market/quarantine/` and shows its
+   files, its content hash, a scan report and its `SKILL.md` or README. Files come from:
+   - GitHub, at a fixed commit: a plugin's reviewed SHA, or for skills the head commit at
+     the time of review;
+   - ClawHub, where each file must match the SHA-256 that ClawHub publishes.
+
+   No downloaded file is run. Skills from LobeHub and browse.sh, and plugins hosted
+   outside GitHub, are listed but cannot be installed yet.
+4. **Scan.** The scanner looks for exfiltration of secrets, prompt injection, destructive
+   commands, `curl | sh` and other remote execution, reverse shells, persistence,
+   obfuscation, embedded credentials and binaries. Its verdict and the item's trust level
+   decide what happens next:
+
+   | Trust | Safe | Caution | Dangerous |
+   | --- | --- | --- | --- |
+   | Hermes built-in | install | install | install after confirming |
+   | Trusted | install | install | blocked |
+   | Community | install | install after confirming | blocked |
+   | Proposed by SAIL | install | install after confirming | blocked |
+
+5. **Install.** SAIL hashes the quarantined files again and moves them into place:
+   - a skill goes to `$SAIL_DATA/skills/<name>/`;
+   - a plugin goes to `$SAIL_DATA/plugins/hermes/<id>/`.
+
+   **An installed plugin is still quarantined.** Approve it under Skills & plugins, as
+   described above, before any of its code runs. The hash shown at review is the one you
+   approve.
+
+`$SAIL_DATA/market/lock.json` records where each install came from. Uninstall removes
+only what the market installed. If you edited the files after installing, you must
+confirm the uninstall. Requests send only the item's public identifier and the
+user agent `SAIL-market/1`. To raise GitHub's anonymous limit of 60 requests an hour,
+set `SAIL_MARKET_GITHUB_TOKEN`.
+
+## Skills proposed by SAIL
+
+After a task that took several steps, the model can write the procedure down as a new
+skill with `skill_propose`. The proposal is scanned like a community item and waits in
+`$SAIL_DATA/skills-proposed/`. It appears under **Skills & plugins → Proposed by SAIL**
+with SAIL's reason, and it becomes a skill only when you approve it. The model is told
+that the skill is waiting for review, not that it was saved. A proposal never
+overwrites an existing skill. From a terminal: `sail-hermes proposals` and `sail-hermes
+proposal approve|reject <id>`.
+
 ## Not yet done
 
-- Plugin hooks are not run inside SAIL's turn loop.
-- Self-created skills are not yet staged for approval.
-- The `/<skill>` command is not available in the gateway (P2, not yet built).
-- Plugins cannot use a per-plugin Python environment.
+- Plugin hooks are not run inside SAIL's turn loop (round 21).
+- Plugins cannot use a per-plugin Python environment (round 21).
+- The `/<skill>` command is not available in the gateway (P2, round 22).
+- Market: no update notifications, no custom GitHub taps, and no installs from GitLab, LobeHub or browse.sh.

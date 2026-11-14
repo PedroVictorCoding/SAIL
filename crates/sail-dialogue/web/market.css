@@ -1,0 +1,347 @@
+/* SAIL Agents › Market (round 20, Antigravity).
+   Plain fallback surface; weak-glow material comes from ambient-backdrop.css under html.sail-backdrop-on.
+   Reading surfaces (findings, preview) stay opaque --sail-surface with no glow and no blur. */
+
+.market-workspace {
+  color: var(--sail-text);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 20px;
+  background: var(--sail-surface);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-card);
+}
+.market-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.market-toolbar h3 { margin: 0; flex: 1; }
+.market-intro, .market-meta, .market-catalog-line { color: var(--sail-text-muted); }
+.market-meta, .market-catalog-line { font-size: .9em; margin: 4px 0; overflow-wrap: anywhere; }
+.market-status { min-height: 1.5em; color: var(--sail-text-muted); margin: 6px 0; }
+.market-error { color: #ffb4b4; }
+.market-workspace button,
+.market-workspace select,
+.market-workspace summary {
+  min-height: 44px;
+}
+.market-workspace button { cursor: pointer; }
+.market-workspace code { font-size: .9em; overflow-wrap: anywhere; }
+.market-workspace :focus-visible {
+  outline: 2px solid var(--sail-focus-ring);
+  outline-offset: 2px;
+}
+
+.market-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) minmax(120px, 1fr) minmax(150px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin: 14px 0 18px;
+}
+.market-control-search,
+.market-control-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: .9em;
+  color: var(--sail-text-muted);
+  min-width: 0;
+}
+.market-workspace input[type="search"],
+.market-workspace select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  background: var(--sail-base);
+  color: var(--sail-text);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 10px 12px;
+  font: inherit;
+}
+.market-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+  color: var(--sail-text);
+  white-space: nowrap;
+}
+.market-check input { width: 20px; height: 20px; margin: 0; }
+
+.market-first-run {
+  background: var(--sail-base);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 18px;
+  margin: 12px 0;
+}
+.market-first-run p { margin: 0 0 8px; }
+.market-first-run[hidden] { display: none; }
+
+.market-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.market-row {
+  background: var(--sail-base);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 16px;
+  min-width: 0;
+}
+.market-row-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.market-row-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+.market-row-title h4 {
+  margin: 0;
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+.market-row-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.market-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: .82em;
+  font-weight: 600;
+  background: var(--sail-surface-raised);
+  border: 1px solid var(--sail-glass-border);
+  color: var(--sail-text);
+}
+.market-pill i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #8592a6;
+}
+.market-pill-builtin i,
+.market-pill-safe i,
+.market-pill-installed i,
+.market-pill-ok i { background: #5ccda4; }
+.market-pill-trusted i { background: #1fa5ff; }
+.market-pill-community i,
+.market-pill-caution i,
+.market-pill-modified i { background: #e5be79; }
+.market-pill-dangerous i,
+.market-pill-missing i { background: #ed7275; }
+
+.market-desc {
+  margin: 8px 0;
+  color: var(--sail-text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.market-row-foot {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.market-row-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.market-unsupported-reason {
+  color: var(--sail-text-muted);
+  font-size: .88em;
+  overflow-wrap: anywhere;
+}
+
+/* Staged report panel: sits directly below the row it belongs to */
+.market-stage-panel {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--sail-glass-border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.market-stage-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: .9em;
+  color: var(--sail-text-muted);
+}
+.market-files-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: .88em;
+  color: var(--sail-text-muted);
+}
+/* Reading surfaces: neutral, opaque --sail-surface, no glow, no blur */
+.market-findings,
+.market-preview {
+  background: var(--sail-surface);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 14px;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.market-findings h5,
+.market-preview h5 {
+  margin: 0 0 8px;
+  font-size: .95rem;
+}
+.market-finding-group {
+  margin-top: 8px;
+}
+.market-finding-group h6 {
+  margin: 6px 0 4px;
+  font-size: .82em;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--sail-text-muted);
+}
+.market-finding-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.market-finding-list li { overflow-wrap: anywhere; }
+.market-preview pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.55;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.market-stage-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.market-stage-buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.market-notice {
+  background: var(--sail-surface);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.market-more-wrap {
+  margin: 14px 0;
+  display: flex;
+  justify-content: center;
+}
+.market-more-wrap[hidden] { display: none; }
+
+.market-installed-section {
+  margin-top: 20px;
+  border-top: 1px solid var(--sail-glass-border);
+  padding-top: 12px;
+}
+.market-installed-section summary {
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+}
+.market-installed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.market-installed-item {
+  background: var(--sail-base);
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.market-installed-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.market-installed-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .market-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+  .market-control-search {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 700px) {
+  .market-workspace { padding: 14px; }
+  .market-controls { grid-template-columns: 1fr; }
+  .market-stage-buttons .tm-btn,
+  .market-installed-actions .tm-btn { width: 100%; }
+}
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .market-workspace,
+  .market-findings,
+  .market-preview {
+    background: var(--sail-surface);
+  }
+}
+@media (forced-colors: active) {
+  .market-pill i { forced-color-adjust: none; }
+}

@@ -97,14 +97,13 @@ fn parse(bytes: &[u8], interval: &str, now: DateTime<Utc>) -> Result<Data, Strin
             .as_i64()
             .and_then(|s| DateTime::from_timestamp(s, 0))
             .zip(p.as_f64());
-        if let Some((time, close)) = row {
-            if close.is_finite()
-                && close > 0.
-                && calendar_time(time, interval, 1).is_some_and(|end| end <= now)
-            {
-                bars.insert(time, Observation { time, close });
-                continue;
-            }
+        if let Some((time, close)) = row
+            && close.is_finite()
+            && close > 0.
+            && calendar_time(time, interval, 1).is_some_and(|end| end <= now)
+        {
+            bars.insert(time, Observation { time, close });
+            continue;
         }
         skipped += 1;
     }

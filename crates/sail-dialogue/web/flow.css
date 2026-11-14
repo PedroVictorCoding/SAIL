@@ -1,5 +1,5 @@
 /* Stable editing surface; no motion or blur over workflow text. */
-.flow-workspace { --flow-tint: #5ccda4; color: var(--sail-text); width:100%; min-width:0; background:radial-gradient(ellipse at 50% 100%,rgb(92 205 164 / .07),transparent 50%),var(--sail-surface); background-repeat:no-repeat; border:1px solid var(--sail-glass-border); border-radius:var(--sail-radius-card); padding:20px; }
+.flow-workspace { --flow-tint: #5ccda4; color: var(--sail-text); width:100%; min-width:0; background:var(--sail-surface); border:1px solid var(--sail-glass-border); border-radius:var(--sail-radius-card); padding:20px; }
 .flow-toolbar,.flow-actions {display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px;}
 .flow-toolbar h3 {margin:0; flex:1;}
 .flow-status {min-height:1.5em;color:var(--sail-text-muted);}

@@ -2,6 +2,8 @@
 //!
 //! * `skill:list` and `skill:view`: progressive disclosure of `SKILL.md` skills (SAIL's,
 //!   the owner's Hermes skills and enabled plugins' skills). Read-only text.
+//! * `skill:propose`: stage a new skill the model wrote. It becomes a skill only after the
+//!   owner approves it on the Skills & plugins section; until then nothing reads it.
 //! * `hermes:tools`: what the owner's enabled Hermes plugins registered.
 //! * `hermes:call`: run one plugin tool or slash command in the plugin sandbox. Guardian
 //!   treats it as a high-risk invocation, so every call needs the owner's approval of the
@@ -13,7 +15,13 @@ use sail_protocol::execution::{ToolDescriptor, ToolEffect};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-pub const TOOL_IDS: [&str; 4] = ["skill:list", "skill:view", "hermes:tools", "hermes:call"];
+pub const TOOL_IDS: [&str; 5] = [
+    "skill:list",
+    "skill:view",
+    "skill:propose",
+    "hermes:tools",
+    "hermes:call",
+];
 
 fn fail(message: impl Into<String>) -> ToolFailure {
     ToolFailure {
@@ -53,6 +61,32 @@ impl Tool for HermesTool {
                     .view(name, input["file"].as_str())
                     .map_err(fail)?;
                 json!(view)
+            }
+            "skill:propose" => {
+                let field = |k: &str| input[k].as_str().unwrap_or_default().to_string();
+                let (name, description, instructions, reason) = (
+                    field("name"),
+                    field("description"),
+                    field("instructions"),
+                    field("reason"),
+                );
+                let proposal = tokio::task::spawn_blocking(move || {
+                    sail_flow::proposals::Proposals::default_paths().propose(
+                        &name,
+                        &description,
+                        &instructions,
+                        &reason,
+                        chrono::Utc::now().timestamp(),
+                    )
+                })
+                .await
+                .map_err(|e| fail(e.to_string()))?
+                .map_err(fail)?;
+                json!({
+                    "proposed": proposal.name,
+                    "scan": proposal.report.verdict,
+                    "instruction": "The skill is staged, not installed. Tell the owner it is waiting for their review in SAIL Agents › Skills & plugins. Do not say it was saved as a skill.",
+                })
             }
             "hermes:tools" => {
                 let mut tools = Vec::new();
@@ -107,7 +141,7 @@ type Spec = (
 
 pub fn register(registry: &ToolRegistry) -> Result<(), String> {
     let s = |max: u64, description: &str| json!({"type":"string","maxLength":max,"description":description});
-    let tools: [Spec; 4] = [
+    let tools: [Spec; 5] = [
         (
             "skill:list",
             "List the skills SAIL knows (Agent Skills / Hermes SKILL.md instructions for specific tasks), optionally filtered by words. Use before a specialised task to find instructions to follow.",
@@ -122,6 +156,19 @@ pub fn register(registry: &ToolRegistry) -> Result<(), String> {
             json!({"name":s(130, "Skill name from skill_list"),"file":s(512, "Optional file inside the skill, e.g. references/api.md")}),
             &["name"],
             ToolEffect::ReadOnly,
+            30_000,
+        ),
+        (
+            "skill:propose",
+            "Propose a new skill: reusable step-by-step instructions for a task you just completed after several steps, recovered errors or owner corrections. It is staged for the owner's review and is not a skill until they approve it.",
+            json!({
+                "name":s(64, "Lowercase letters, digits and single hyphens, e.g. weekly-report"),
+                "description":s(1024, "One or two sentences: what the skill does and when to use it"),
+                "instructions":s(32768, "The skill's Markdown instructions"),
+                "reason":s(500, "Why this is worth keeping, for the owner"),
+            }),
+            &["name", "description", "instructions", "reason"],
+            ToolEffect::Mutating,
             30_000,
         ),
         (
@@ -172,7 +219,7 @@ mod tests {
 
     #[test]
     fn reading_skills_is_free_but_running_plugin_code_needs_the_owner() {
-        for tool in ["skill:list", "skill:view", "hermes:tools"] {
+        for tool in ["skill:list", "skill:view", "skill:propose", "hermes:tools"] {
             assert_eq!(risk(tool), RiskLevel::Low, "{tool}");
         }
         assert_eq!(risk("hermes:call"), RiskLevel::High);
