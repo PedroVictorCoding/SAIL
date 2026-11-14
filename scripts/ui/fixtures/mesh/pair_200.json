@@ -1,0 +1,21 @@
+{
+  "worker": {
+    "name": "gaming-pc",
+    "address": "192.168.1.77:7710",
+    "state": "ready",
+    "os": "windows x86_64",
+    "model": {
+      "file_name": "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+      "context_tokens": 32768,
+      "vision": false,
+      "tools": true
+    },
+    "max_parallel": 2,
+    "active": 0,
+    "completed": 0,
+    "failed": 0,
+    "last_rtt_ms": 6,
+    "last_seen": "2026-11-14T16:46:00.000Z"
+  },
+  "replaced": false
+}

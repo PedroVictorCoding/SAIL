@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "mode": "offload",
+  "offloaded": 21,
+  "fell_back": 3,
+  "workers": [
+    {
+      "name": "desktop",
+      "address": "192.168.1.40:7710",
+      "state": "ready",
+      "os": "windows x86_64",
+      "model": {
+        "file_name": "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+        "context_tokens": 32768,
+        "vision": true,
+        "tools": true
+      },
+      "max_parallel": 2,
+      "active": 1,
+      "completed": 11,
+      "failed": 1,
+      "last_rtt_ms": 4,
+      "last_seen": "2026-11-14T16:45:00.000Z"
+    },
+    {
+      "name": "laptop",
+      "address": "192.168.1.55:7710",
+      "state": "unreachable",
+      "os": "linux x86_64",
+      "max_parallel": 1,
+      "active": 0,
+      "completed": 3,
+      "failed": 2,
+      "last_error": "not reachable (connection refused)"
+    },
+    {
+      "name": "workstation",
+      "address": "192.168.1.60:7710",
+      "state": "disabled",
+      "os": "linux x86_64",
+      "model": {
+        "file_name": "Llama-3.3-70B-Q4_K_M.gguf",
+        "context_tokens": 16384,
+        "vision": false,
+        "tools": false
+      },
+      "max_parallel": 1,
+      "active": 0,
+      "completed": 7,
+      "failed": 0
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "mode": "offload",
+  "offloaded": 0,
+  "fell_back": 0,
+  "workers": []
+}
