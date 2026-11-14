@@ -280,6 +280,7 @@ fn moodle_routes(
 /// (and the failure logged) if its store can't be opened.
 fn capital_routes(
     authority: Option<sail_guardian::authority::ApprovalAuthority>,
+    inference: &sail_mind::MindService,
 ) -> Option<Router> {
     let dir = sail_capital::service::default_dir();
     match sail_capital::service::CapitalService::open(&dir) {
@@ -287,7 +288,15 @@ fn capital_routes(
             let service = Arc::new(service);
             service.start();
             sail_capital::service::set_global(service.clone());
-            Some(crate::capital_http::router(service, authority))
+            let research = Arc::new(crate::capital_retirement::ResearchEngine::open(
+                inference.clone(),
+                &dir,
+            ));
+            Some(crate::capital_http::router_with_research(
+                service,
+                authority,
+                Some(research),
+            ))
         }
         Err(error) => {
             warn!(%error, "Capital store unavailable; Capital disabled");
@@ -365,7 +374,7 @@ pub async fn run_dialogue_server_with_plans(
     );
     let tracker_routes = tracker_routes(authority());
     let moodle_routes = moodle_routes(&inference, authority());
-    let capital_routes = capital_routes(authority());
+    let capital_routes = capital_routes(authority(), &inference);
     let reader_routes = crate::reader_http::routes(authority(), services.clone());
     let music_routes = crate::music_http::routes(authority());
     let system_routes = crate::system_http::router(authority());

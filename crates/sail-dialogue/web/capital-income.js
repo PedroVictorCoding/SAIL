@@ -460,6 +460,9 @@ async function loadDividendProjection(compare = false) {
     if (statusEl) statusEl.hidden = true;
     currentProjectionData = data;
     renderDividendProjection(data);
+    if (!compare && typeof CapitalRetirement !== "undefined") {
+      CapitalRetirement.reloadFromControls();
+    }
   } catch (err) {
     if (statusEl) {
       statusEl.hidden = false;
@@ -841,8 +844,16 @@ function renderProjAssumptions(data) {
 }
 
 registerTab("income", {
-  setup: setupDividendProjectionControls,
-  load: () => Promise.all([loadDividendProjection(true), loadInsights()]),
+  setup: () => {
+    setupDividendProjectionControls();
+    if (typeof CapitalRetirement !== "undefined") CapitalRetirement.setup();
+  },
+  load: () =>
+    Promise.all([
+      loadDividendProjection(true),
+      loadInsights(),
+      typeof CapitalRetirement !== "undefined" ? CapitalRetirement.load() : Promise.resolve(),
+    ]),
 });
 
 // --- Choosing how to reinvest ---------------------------------------------------------

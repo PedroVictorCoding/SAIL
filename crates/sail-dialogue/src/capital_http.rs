@@ -4,6 +4,7 @@
 //! `POST /import/xtb`, which books a report file the owner exported and uploaded. Nothing
 //! here contacts a broker, and amounts are serialized as decimal strings. See
 //! `docs/SAIL_CAPITAL.md`.
+use crate::capital_retirement::ResearchEngine;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -14,6 +15,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use sail_capital::AsOf;
+use sail_capital::dividends::retirement;
 use sail_capital::service::{CapitalService, GrantInput, ServiceError};
 use sail_guardian::authority::ApprovalAuthority;
 use serde::Deserialize;
@@ -26,13 +28,24 @@ const MAX_UPLOAD_BYTES: usize = sail_capital::MAX_REPORT_BYTES;
 struct CapitalState {
     service: Arc<CapitalService>,
     authority: Option<ApprovalAuthority>,
+    research: Option<Arc<ResearchEngine>>,
 }
 
 type Failure = (StatusCode, Json<Value>);
 
 /// Builds the router. `authority` is the owner-token check; without one, every route
-/// answers 503.
+/// answers 503. Retirement research answers 503 unless [`router_with_research`] supplies
+/// the local model.
 pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>) -> Router {
+    router_with_research(service, authority, None)
+}
+
+/// [`router`] with the live-web retirement researcher.
+pub fn router_with_research(
+    service: Arc<CapitalService>,
+    authority: Option<ApprovalAuthority>,
+    research: Option<Arc<ResearchEngine>>,
+) -> Router {
     Router::new()
         .route("/accounts", get(accounts))
         .route("/portfolio", get(portfolio))
@@ -73,12 +86,21 @@ pub fn router(service: Arc<CapitalService>, authority: Option<ApprovalAuthority>
         .route("/signals/trade/health", get(trade_health))
         .route("/universe/watchlist", get(watchlist).post(change_watchlist))
         .route("/dividends/projection", get(dividend_projection))
+        .route("/dividends/retirement", get(dividend_retirement))
+        .route(
+            "/dividends/retirement/research",
+            get(retirement_research_status).post(retirement_research_start),
+        )
         .route("/dividends/refresh", post(dividend_refresh))
         .route("/outlook/track-record", get(track_record))
         .route("/scorecard", get(scorecard))
         .route("/markets", get(markets))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1))
-        .with_state(Arc::new(CapitalState { service, authority }))
+        .with_state(Arc::new(CapitalState {
+            service,
+            authority,
+            research,
+        }))
 }
 
 fn authorize(s: &CapitalState, h: &HeaderMap) -> Result<(), Failure> {
@@ -949,6 +971,37 @@ async fn change_watchlist(
 }
 
 #[derive(Deserialize)]
+struct RetirementQuery {
+    account: Option<String>,
+    years: Option<u32>,
+    reinvest_pct: Option<f64>,
+    allocation: Option<sail_capital::dividends::Allocation>,
+    monthly_contribution: Option<f64>,
+    top_n: Option<u32>,
+    reserve_pt_tax: Option<bool>,
+    current_age: Option<u32>,
+    retire_age: Option<u32>,
+    target_monthly: Option<f64>,
+    inflation_pct: Option<f64>,
+    withdrawal_rate_pct: Option<f64>,
+}
+
+impl RetirementQuery {
+    fn assumptions(&self) -> retirement::Assumptions {
+        let defaults = retirement::Assumptions::default();
+        retirement::Assumptions {
+            current_age: self.current_age.unwrap_or(defaults.current_age),
+            retire_age: self.retire_age.unwrap_or(defaults.retire_age),
+            target_monthly_net: self.target_monthly.unwrap_or(defaults.target_monthly_net),
+            inflation_pct: self.inflation_pct.unwrap_or(defaults.inflation_pct),
+            withdrawal_rate_pct: self
+                .withdrawal_rate_pct
+                .unwrap_or(defaults.withdrawal_rate_pct),
+        }
+    }
+}
+
+#[derive(Deserialize)]
 struct ProjectionQuery {
     account: Option<String>,
     years: Option<u32>,
@@ -980,6 +1033,82 @@ async fn dividend_projection(
     })
     .await?;
     Ok(no_store(to_json(&outlook)?))
+}
+
+async fn dividend_retirement(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<RetirementQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let assumptions = q.assumptions();
+    let plan = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.dividend_retirement_with(
+            &account,
+            q.years.unwrap_or(10),
+            q.reinvest_pct.unwrap_or(100.0),
+            q.allocation
+                .unwrap_or(sail_capital::dividends::Allocation::Proportional),
+            q.monthly_contribution.unwrap_or(0.0),
+            q.top_n.unwrap_or(sail_capital::dividends::DEFAULT_TOP_N),
+            q.reserve_pt_tax.unwrap_or(false),
+            assumptions,
+        )
+        .map(|(_, plan)| plan)
+    })
+    .await?;
+    Ok(no_store(to_json(&plan)?))
+}
+
+async fn retirement_research_status(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let Some(research) = &s.research else {
+        return Err(research_unavailable());
+    };
+    let snapshot = research.snapshot().await;
+    Ok(no_store(to_json(&snapshot)?))
+}
+
+async fn retirement_research_start(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<RetirementQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let Some(research) = &s.research else {
+        return Err(research_unavailable());
+    };
+    let assumptions = q.assumptions();
+    let (outlook, plan) = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.dividend_retirement_with(
+            &account,
+            q.years.unwrap_or(10),
+            q.reinvest_pct.unwrap_or(100.0),
+            q.allocation
+                .unwrap_or(sail_capital::dividends::Allocation::Proportional),
+            q.monthly_contribution.unwrap_or(0.0),
+            q.top_n.unwrap_or(sail_capital::dividends::DEFAULT_TOP_N),
+            q.reserve_pt_tax.unwrap_or(false),
+            assumptions,
+        )
+    })
+    .await?;
+    let started = research.start(outlook, plan).await;
+    let snapshot = research.snapshot().await;
+    let body = json!({ "started": started, "research": snapshot });
+    Ok((StatusCode::ACCEPTED, Json(body)).into_response())
+}
+
+fn research_unavailable() -> Failure {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"error": "Research needs the local SAIL model in this process."})),
+    )
 }
 
 async fn dividend_refresh(

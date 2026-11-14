@@ -157,31 +157,7 @@ impl CapitalService {
         top_n: u32,
         reserve_pt_tax: bool,
     ) -> Result<DividendOutlook, ServiceError> {
-        if !(1..=crate::dividends::MAX_YEARS).contains(&years) {
-            return Err(ServiceError::BadRequest(format!(
-                "Years must be between 1 and {}.",
-                crate::dividends::MAX_YEARS
-            )));
-        }
-        if !(0.0..=100.0).contains(&reinvest_pct) || !reinvest_pct.is_finite() {
-            return Err(ServiceError::BadRequest(
-                "The reinvested share must be between 0 and 100.".into(),
-            ));
-        }
-        if !(0.0..=crate::dividends::MAX_MONTHLY_CONTRIBUTION).contains(&monthly_contribution)
-            || !monthly_contribution.is_finite()
-        {
-            return Err(ServiceError::BadRequest(format!(
-                "The monthly allowance must be between 0 and {}.",
-                crate::dividends::MAX_MONTHLY_CONTRIBUTION
-            )));
-        }
-        if !(1..=crate::dividends::MAX_TOP_N).contains(&top_n) {
-            return Err(ServiceError::BadRequest(format!(
-                "Top N must be between 1 and {}.",
-                crate::dividends::MAX_TOP_N
-            )));
-        }
+        check_dividend_controls(years, reinvest_pct, monthly_contribution, top_n)?;
         let now = Utc::now();
         let today = now.date_naive();
         let (holdings, original_cost, mut notes) = self.cached_dividend_inputs(account, now)?;
@@ -199,6 +175,43 @@ impl CapitalService {
         notes.append(&mut outlook.notes);
         outlook.notes = notes;
         Ok(outlook)
+    }
+
+    /// The projection together with the early-retirement plan built from the same inputs.
+    /// The plan's own horizon is extended to the retirement year when that is later than
+    /// `years`, so the year it compares against always exists.
+    #[allow(clippy::too_many_arguments)] // One argument per projection control in the API.
+    pub fn dividend_retirement_with(
+        &self,
+        account: &AccountId,
+        years: u32,
+        reinvest_pct: f64,
+        allocation: Allocation,
+        monthly_contribution: f64,
+        top_n: u32,
+        reserve_pt_tax: bool,
+        assumptions: crate::dividends::retirement::Assumptions,
+    ) -> Result<(DividendOutlook, crate::dividends::retirement::Plan), ServiceError> {
+        check_dividend_controls(years, reinvest_pct, monthly_contribution, top_n)?;
+        assumptions.validate().map_err(ServiceError::BadRequest)?;
+        let now = Utc::now();
+        let (holdings, original_cost, mut notes) = self.cached_dividend_inputs(account, now)?;
+        let settings = Settings {
+            years,
+            reinvest_pct,
+            allocation,
+            top_n,
+            monthly_contribution,
+            reserve_pt_tax,
+            start: first_of_next_month(now.date_naive()),
+        };
+        let mut outlook = crate::dividends::project(&holdings, &settings, original_cost);
+        let plan =
+            crate::dividends::retirement::plan(&holdings, &settings, original_cost, &assumptions)
+                .map_err(ServiceError::BadRequest)?;
+        notes.append(&mut outlook.notes);
+        outlook.notes = notes;
+        Ok((outlook, plan))
     }
 
     /// [`Self::dividend_inputs`], reused while the ledger, prices, payout histories and the
@@ -459,6 +472,41 @@ fn first_of_next_month(day: NaiveDate) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, 1).expect("valid date")
 }
 
+/// The projection controls shared by the projection and the retirement plan.
+fn check_dividend_controls(
+    years: u32,
+    reinvest_pct: f64,
+    monthly_contribution: f64,
+    top_n: u32,
+) -> Result<(), ServiceError> {
+    if !(1..=crate::dividends::MAX_YEARS).contains(&years) {
+        return Err(ServiceError::BadRequest(format!(
+            "Years must be between 1 and {}.",
+            crate::dividends::MAX_YEARS
+        )));
+    }
+    if !(0.0..=100.0).contains(&reinvest_pct) || !reinvest_pct.is_finite() {
+        return Err(ServiceError::BadRequest(
+            "The reinvested share must be between 0 and 100.".into(),
+        ));
+    }
+    if !(0.0..=crate::dividends::MAX_MONTHLY_CONTRIBUTION).contains(&monthly_contribution)
+        || !monthly_contribution.is_finite()
+    {
+        return Err(ServiceError::BadRequest(format!(
+            "The monthly allowance must be between 0 and {}.",
+            crate::dividends::MAX_MONTHLY_CONTRIBUTION
+        )));
+    }
+    if !(1..=crate::dividends::MAX_TOP_N).contains(&top_n) {
+        return Err(ServiceError::BadRequest(format!(
+            "Top N must be between 1 and {}.",
+            crate::dividends::MAX_TOP_N
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,6 +571,35 @@ mod tests {
             },
         ];
         assert_eq!(calibrate("A", &history, &mixed, 1.0, &mut notes), history);
+    }
+
+    #[test]
+    fn retirement_assumptions_are_rejected_before_any_data_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = CapitalService::open(dir.path()).unwrap();
+        let account = crate::contracts::AccountId::new(crate::contracts::Broker::Xtb, "test");
+        let bad = crate::dividends::retirement::Assumptions {
+            current_age: 60,
+            retire_age: 50,
+            ..crate::dividends::retirement::Assumptions::default()
+        };
+        let outcome = service.dividend_retirement_with(
+            &account,
+            30,
+            100.0,
+            Allocation::Proportional,
+            0.0,
+            crate::dividends::DEFAULT_TOP_N,
+            false,
+            bad,
+        );
+        match outcome {
+            Err(ServiceError::BadRequest(message)) => {
+                assert!(message.contains("later than the current age"), "{message}");
+            }
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("an impossible retirement age must be refused"),
+        }
     }
 
     #[test]
