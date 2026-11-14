@@ -1,6 +1,6 @@
 # External models, messaging gateway, skills and scheduling
 
-**Status:** decided design; P1 escalation core (policy, ledger, redaction, OpenAI-compatible adapter, `escalate_reasoning`) implemented — see [Proactive intelligence](SAIL_PROACTIVE.md) · **Decided:** 2026-11-03 by the owner ·
+**Status:** decided design; P1 escalation core (policy, ledger, redaction, OpenAI-compatible adapter, `escalate_reasoning`) implemented — see [Proactive intelligence](SAIL_PROACTIVE.md); P4 skill loader, index, `skill:view` and sandboxed Hermes plugins implemented — see [Hermes plugins and skills](SAIL_HERMES_PLUGINS.md) · **Decided:** 2026-11-03 by the owner ·
 **Vision:** [decisions 12–15](SAIL_MASTER_VISION.md#decisions-requiring-explicit-migration-rather-than-assumptions) ·
 **Reference:** [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT) and the
 [Agent Skills specification](https://agentskills.io/specification)
@@ -191,7 +191,7 @@ Each phase is one vertical slice with its own PR and tests.
 | P1 | Providers (Codex, Claude, Gemini CLIs and an OpenAI-compatible key adapter), quota ledger, egress guard, escalation for Forge | A Forge job that fails its local attempts is retried on an external model with quota. The PR names the model. The egress receipt shows only shareable, redacted context. An out-of-quota provider is skipped. A missing CLI means "unavailable", never a fake answer. |
 | P2 | Telegram gateway: pairing, sessions, commands, approvals, local transcription of voice notes, outbox delivery | An unpaired sender gets a code and nothing else. After approval in the web UI, a text and a voice note get answers. `/approve` executes exactly one pending action. A restart neither loses nor duplicates replies. |
 | P3 | Scheduler: schedule grammar, job store on Continuity, delivery targets, quiet hours, catch-up | "Every weekday at 9" runs once per day across a restart, delivers to Telegram, respects quiet hours, and pauses for voice. |
-| P4 | Skills: loader and validator, index and `skill:view`, `/<skill>`, staged self-created skills, import with quarantine | A Hermes skill imports and runs. A self-proposed skill appears only after approval. `allowed-tools` cannot widen a grant. |
+| P4 | Skills: loader and validator, index and `skill:view`, `/<skill>`, staged self-created skills, import with quarantine | A Hermes skill imports and runs. A self-proposed skill appears only after approval. `allowed-tools` cannot widen a grant. **Done:** loader, validator, index, `skill:view`, Hermes skills and plugins with hash-bound approval and a bubblewrap sandbox ([details](SAIL_HERMES_PLUGINS.md)). **Open:** `/<skill>`, staged self-created skills. |
 | P5 | Memory: core profile block, review queue, injection scan | The profile block stays under budget and is frozen per session. A queued change commits only after approval. An injected instruction in a candidate is rejected. |
 
 Open risks: CLI output formats and permission flags change between versions (pin and

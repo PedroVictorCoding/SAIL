@@ -22,7 +22,7 @@ What works end to end today (merged and tested), as opposed to specified:
 | Continuity | Durable task records, leases, recovery (Forge only) | General consumers: agent plans, scheduled jobs |
 | Bridge | Chromium CDP worker with site grants | Web research tool (#40) on top of it |
 | Agents | Goal → plan → approve → execute → verify → re-plan, durable across restarts; "Plan: …" by voice or text and a plan card ([design](SAIL_AGENT_PLANNING.md)) | Long-lived approvals, planner quality on the local model, chat and scheduled plans |
-| Pulse, Relay, Flow, Skills | Specs; Flow runs one scheduled safety review | Scheduler (P3), gateway (P2), skills (P4) |
+| Pulse, Relay, Flow, Skills | Specs; Flow runs one scheduled safety review; skills index and sandboxed Hermes plugins (P4, partial) | Scheduler (P3), gateway (P2), staged self-created skills (P4) |
 | Studio, Life, Health, Entertainment, Sense, Mesh, Lab | Specs | Later waves |
 
 The largest gap against the vision's north-star test ("ask SAIL to carry forward a
