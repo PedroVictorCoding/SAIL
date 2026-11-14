@@ -193,3 +193,39 @@ Not done yet: per-model profiles in the router (`InferenceProfile` has no expert
 - [Roadmap and subsystem taxonomy](https://github.com/PedroVictorCoding/SAIL/issues/15)
 - [Documentation index](README.md)
 - [SAIL Studio](SAIL_STUDIO.md) for persistent editable artifacts (distinct from Canvas)
+
+## Local context and post-reply compaction
+
+The native configuration, tuned CPU/Hybrid/Vulkan profiles and `run.sh` request
+**32,768 tokens per local inference slot** by default (previously 16,384).
+`SAIL_CONTEXT_TOKENS` still overrides the native/launcher setting within the existing
+512–65,536 range. Baseline recovery stays at 8,192. Mind retains observed-RAM
+admission, context downscaling, actual server capability probing, rendered prompt
+accounting and response headroom; a requested 32k window is not a claim that an
+already-running or resource-constrained server has 32k available.
+
+The conversational cycle is **query → generated reply → compact → optional next
+query**. After `reason_turn` produces complete text, Dialogue synchronously commits
+the exchange to Arena and performs bounded context compaction. It does this before
+sending `response_finished`, so a follow-up submitted as soon as that event arrives
+can use the preceding exchange even if its speech is interrupted. The wire events
+are `response_finished` → `context_compacted` → `turn_finished`; the compaction
+receipt reports actual retained/evicted turn and character counts. The final event
+still waits for queued speech synthesis. No next user query is needed to trigger
+compaction. Empty input, listen-only observations, failed generation and superseded
+turns do not take this completion path.
+
+This uses Arena's existing deterministic compaction: recent exchanges remain
+verbatim within the hot budget (by default three turns / 8,000 characters), older
+consented exchanges become bounded breadcrumbs and can be recalled. No second
+model inference or idle summarization job is introduced. Increasing the model's
+window gives the current question, tools, images and answer more room; it does not
+retain an unbounded transcript. Learning consent and its epoch are still checked
+when a completed turn is recorded; compaction never enables durable recording.
+
+After merging, restart SAIL **and its persistent managed llama-server** to apply a
+larger allocation. `./run.sh --stop`, followed by
+`SAIL_CONTEXT_TOKENS=32768 ./run.sh`, uses the new requested size. A separately
+managed server (`SAIL_LLM_URL`) must be restarted with its own context setting;
+SAIL will continue honoring the capacity it actually reports. This change does
+not restart or reconfigure a running server automatically.

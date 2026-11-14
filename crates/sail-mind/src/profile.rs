@@ -18,7 +18,7 @@ impl InferenceProfileManager {
             backend: ComputeBackend::Cpu,
             threads: gen_threads,
             threads_batch: batch_threads,
-            context_tokens: 16384,
+            context_tokens: crate::config::DEFAULT_CONTEXT_TOKENS,
             cache_type_k: "q4_0".into(),
             cache_type_v: "q4_0".into(),
             flash_attn: true,
