@@ -22,7 +22,14 @@ fn out_of_range_settings_are_refused() {
     ] {
         assert!(
             matches!(
-                svc.dividend_projection(&account, years, pct, Allocation::Proportional, false),
+                svc.dividend_projection(
+                    &account,
+                    years,
+                    pct,
+                    Allocation::Proportional,
+                    0.0,
+                    false,
+                ),
                 Err(ServiceError::BadRequest(_))
             ),
             "{years} {pct}"
@@ -36,6 +43,7 @@ fn out_of_range_settings_are_refused() {
                     5,
                     100.0,
                     Allocation::TopValue,
+                    0.0,
                     top_n,
                     false,
                 ),
@@ -45,16 +53,34 @@ fn out_of_range_settings_are_refused() {
         );
     }
     let top = svc
-        .dividend_projection_with(&account, 5, 100.0, Allocation::TopValue, 3, false)
+        .dividend_projection_with(&account, 5, 100.0, Allocation::TopValue, 0.0, 3, false)
         .unwrap();
     assert_eq!(top.settings.top_n, 3);
 
+    for monthly in [-1.0, 10_000.01, f64::NAN] {
+        assert!(
+            matches!(
+                svc.dividend_projection(
+                    &account,
+                    5,
+                    100.0,
+                    Allocation::Proportional,
+                    monthly,
+                    false,
+                ),
+                Err(ServiceError::BadRequest(_))
+            ),
+            "monthly {monthly}"
+        );
+    }
+
     // Without stored prices the holdings are left out, and the notes say so.
     let outlook = svc
-        .dividend_projection(&account, 5, 100.0, Allocation::SameHolding, true)
+        .dividend_projection(&account, 5, 100.0, Allocation::SameHolding, 250.0, true)
         .unwrap();
     assert!(outlook.notes.iter().any(|n| n.contains("no stored price")));
     assert_eq!(outlook.settings.years, 5);
+    assert_eq!(outlook.settings.monthly_contribution, 250.0);
 }
 
 #[test]

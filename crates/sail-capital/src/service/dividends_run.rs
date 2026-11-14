@@ -130,6 +130,7 @@ impl CapitalService {
         years: u32,
         reinvest_pct: f64,
         allocation: Allocation,
+        monthly_contribution: f64,
         reserve_pt_tax: bool,
     ) -> Result<DividendOutlook, ServiceError> {
         self.dividend_projection_with(
@@ -137,6 +138,7 @@ impl CapitalService {
             years,
             reinvest_pct,
             allocation,
+            monthly_contribution,
             crate::dividends::DEFAULT_TOP_N,
             reserve_pt_tax,
         )
@@ -144,12 +146,14 @@ impl CapitalService {
 
     /// The dividend projection with an explicit top-N count for the top-value and
     /// top-yield strategies.
+    #[allow(clippy::too_many_arguments)] // One argument per projection control in the API.
     pub fn dividend_projection_with(
         &self,
         account: &AccountId,
         years: u32,
         reinvest_pct: f64,
         allocation: Allocation,
+        monthly_contribution: f64,
         top_n: u32,
         reserve_pt_tax: bool,
     ) -> Result<DividendOutlook, ServiceError> {
@@ -163,6 +167,14 @@ impl CapitalService {
             return Err(ServiceError::BadRequest(
                 "The reinvested share must be between 0 and 100.".into(),
             ));
+        }
+        if !(0.0..=crate::dividends::MAX_MONTHLY_CONTRIBUTION).contains(&monthly_contribution)
+            || !monthly_contribution.is_finite()
+        {
+            return Err(ServiceError::BadRequest(format!(
+                "The monthly allowance must be between 0 and {}.",
+                crate::dividends::MAX_MONTHLY_CONTRIBUTION
+            )));
         }
         if !(1..=crate::dividends::MAX_TOP_N).contains(&top_n) {
             return Err(ServiceError::BadRequest(format!(
@@ -179,6 +191,7 @@ impl CapitalService {
             reinvest_pct,
             allocation,
             top_n,
+            monthly_contribution,
             reserve_pt_tax,
             start,
         };

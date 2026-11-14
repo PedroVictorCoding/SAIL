@@ -8,10 +8,15 @@
 //! - a reinvestment rule chosen by the owner.
 //!
 //! **Reinvestment.** A share `reinvest_pct` of each net payment buys more units the same
-//! month. Fractional units are allowed (XTB sells fractional shares). Two allocations:
-//! - `Proportional` (the default): spread across all paying holdings in proportion to
-//!   their current share of the projected portfolio value, so the mix stays stable;
-//! - `SameHolding`: each holding's dividends buy more of that holding (a DRIP).
+//! month. Fractional units are allowed (XTB sells fractional shares). The allocation
+//! choices decide where the month's pool goes (see [`Allocation`]).
+//!
+//! **Monthly allowance.** `monthly_contribution` is money added from salary and invested
+//! every month, on top of the dividends, using the same allocation. It is not a dividend:
+//! no withholding or Portuguese tax is taken from it, and it is not limited by
+//! `reinvest_pct`. With `SameHolding`, dividends stay in the holding that paid them while
+//! the allowance is spread across the paying holdings by current value. The allowance is
+//! invested after that month's dividend, so it first earns from the following month.
 //!
 //! The rest of each payment is kept as cash and does not earn anything.
 //!
@@ -64,7 +69,14 @@ pub const MAX_TOP_N: u32 = 10;
 /// Default count for the top-value and top-yield strategies.
 pub const DEFAULT_TOP_N: u32 = 5;
 
-/// Where reinvested dividends go.
+/// Most the owner may add from salary each month, in the account currency.
+pub const MAX_MONTHLY_CONTRIBUTION: f64 = 10_000.0;
+
+fn default_monthly_contribution() -> f64 {
+    0.0
+}
+
+/// Where the month's investable pool goes: reinvested dividends and the salary allowance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Allocation {
@@ -98,6 +110,9 @@ pub struct Settings {
     /// How many holdings top-value or top-yield may select, 1..=[`MAX_TOP_N`].
     #[serde(default = "default_top_n")]
     pub top_n: u32,
+    /// Money added from salary and invested every month, 0..=[`MAX_MONTHLY_CONTRIBUTION`].
+    #[serde(default = "default_monthly_contribution")]
+    pub monthly_contribution: f64,
     /// Set aside Portuguese tax before reinvesting.
     pub reserve_pt_tax: bool,
     /// First month of the projection (the month after the latest data).
@@ -190,14 +205,17 @@ pub struct YearRow {
     pub pt_tax: f64,
     /// Net after withholding and reserve.
     pub net: f64,
-    /// Reinvested.
+    /// Reinvested from dividends.
     pub reinvested: f64,
+    /// Added from salary and invested.
+    pub contributed: f64,
     /// Kept as cash.
     pub cash: f64,
     /// Value of the dividend-paying holdings at year end.
     pub value: f64,
-    /// Net income of the year divided by the original cost of the starting holdings
-    /// (yield on the money the owner put in), when the cost is known.
+    /// Net income of the year divided by the original cost of the starting holdings plus
+    /// every monthly allowance contributed up to the end of the year (yield on the money
+    /// the owner put in), when the cost is known.
     pub yield_on_cost: Option<f64>,
 }
 
@@ -242,7 +260,8 @@ pub struct DividendOutlook {
     pub holdings: Vec<HoldingRow>,
     /// Holdings that pay nothing (accumulating funds) or have no history, by symbol.
     pub non_paying: Vec<String>,
-    /// The same base projection with 0% reinvested, for comparison.
+    /// The same base projection with dividends not reinvested (the salary allowance is
+    /// still invested), for comparison.
     pub without_reinvestment: Projection,
     /// Plain notes on the assumptions and limits.
     pub notes: Vec<String>,

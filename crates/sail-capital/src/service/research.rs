@@ -255,6 +255,7 @@ impl CapitalService {
                 crate::dividends::MAX_YEARS,
                 100.0,
                 crate::dividends::Allocation::Proportional,
+                0.0,
                 false,
             ) {
                 tracing::debug!(error = %err, "Capital warm-up: dividends");

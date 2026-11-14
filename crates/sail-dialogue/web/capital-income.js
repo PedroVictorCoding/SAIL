@@ -6,6 +6,8 @@ const PROJ_YEARS = 30;
 
 let currentProjReinvestPct = 100;
 
+let currentProjMonthlyContribution = 0;
+
 let currentProjAllocation = "proportional";
 
 let currentProjTopN = 5;
@@ -320,6 +322,14 @@ function formatProjMoney(val, currency = "") {
   return curr ? `${formatted} ${curr}` : formatted;
 }
 
+function projCurrency() {
+  return (currentAccount && accountList.find(a => a.account === currentAccount)?.currency) || "€";
+}
+
+function formatProjAllowance(value) {
+  return `${groupDecimal(Number(value).toFixed(0))} ${projCurrency()}`;
+}
+
 function updateProjTopNVisibility() {
   const group = document.getElementById("cpProjTopNGroup");
   if (!group) return;
@@ -339,6 +349,21 @@ function setupDividendProjectionControls() {
         loadDividendProjection(true);
       }, 250);
     });
+  }
+
+  const contribInput = document.getElementById("cpProjContrib");
+  const contribVal = document.getElementById("cpProjContribVal");
+  if (contribInput) {
+    contribInput.addEventListener("input", (e) => {
+      currentProjMonthlyContribution = parseFloat(e.target.value);
+      if (isNaN(currentProjMonthlyContribution)) currentProjMonthlyContribution = 0;
+      if (contribVal) contribVal.textContent = formatProjAllowance(currentProjMonthlyContribution);
+      if (projDebounceTimer) clearTimeout(projDebounceTimer);
+      projDebounceTimer = setTimeout(() => {
+        loadDividendProjection(true);
+      }, 250);
+    });
+    contribVal.textContent = formatProjAllowance(currentProjMonthlyContribution);
   }
 
   const allocBtns = document.querySelectorAll(".cp-proj-alloc-pills .cp-horizon-btn");
@@ -418,7 +443,7 @@ function setupDividendProjectionControls() {
 
 function projectionUrl(allocation) {
   const queryAcc = currentAccount ? `account=${encodeURIComponent(currentAccount)}&` : "";
-  return `/api/capital/dividends/projection?${queryAcc}years=${PROJ_YEARS}&reinvest_pct=${currentProjReinvestPct}&allocation=${allocation}&top_n=${currentProjTopN}&reserve_pt_tax=${currentProjReservePtTax}`;
+  return `/api/capital/dividends/projection?${queryAcc}years=${PROJ_YEARS}&reinvest_pct=${currentProjReinvestPct}&allocation=${allocation}&monthly_contribution=${currentProjMonthlyContribution}&top_n=${currentProjTopN}&reserve_pt_tax=${currentProjReservePtTax}`;
 }
 
 // `compare` also re-runs the side-by-side table (the shared settings changed).
@@ -489,8 +514,11 @@ function renderProjHeadlines(data) {
 
   const totalReinvestedEl = document.getElementById("cpProjTileTotalReinvested");
   if (totalReinvestedEl) {
-    const totalReinvested = baseYears.reduce((sum, y) => sum + (y.reinvested || 0), 0);
-    totalReinvestedEl.textContent = formatProjMoney(totalReinvested);
+    const totalInvested = baseYears.reduce(
+      (sum, y) => sum + (y.reinvested || 0) + (y.contributed || 0),
+      0,
+    );
+    totalReinvestedEl.textContent = formatProjMoney(totalInvested);
   }
 
   const doublingEl = document.getElementById("cpProjTileDoubling");
@@ -647,11 +675,15 @@ function renderProjChart(data) {
   const yEndNet = formatProjMoney(baseYears[N - 1]?.net);
   const withoutEndNet = formatProjMoney(withoutYears[N - 1]?.net);
   const yEndVal = formatProjMoney(baseYears[N - 1]?.value);
+  const allowance = data.settings?.monthly_contribution || 0;
+  const allowanceDesc = allowance > 0
+    ? ` A salary allowance of ${formatProjMoney(allowance)} a month is invested on top of dividends.`
+    : "";
 
   const svg = `
     <svg viewBox="0 0 ${W} ${H}" role="img" aria-labelledby="cpProjSvgTitle cpProjSvgDesc" preserveAspectRatio="xMidYMid meet">
       <title id="cpProjSvgTitle">Projected Dividend Income and Portfolio Value over ${N} Years</title>
-      <desc id="cpProjSvgDesc">Projection from Year 1 net income of ${y1Net} to Year ${N} net income of ${yEndNet} with ${data.settings?.reinvest_pct || currentProjReinvestPct}% reinvestment. Without reinvestment, Year ${N} net income would be ${withoutEndNet}. Paying portfolio value reaches ${yEndVal}.</desc>
+      <desc id="cpProjSvgDesc">Projection from Year 1 net income of ${y1Net} to Year ${N} net income of ${yEndNet} with ${data.settings?.reinvest_pct ?? currentProjReinvestPct}% reinvestment.${allowanceDesc} Without reinvesting dividends, Year ${N} net income would be ${withoutEndNet}. Paying portfolio value reaches ${yEndVal}.</desc>
 
       <!-- Legend -->
       <g class="cp-chart-legend" transform="translate(${ml}, 20)">
@@ -662,11 +694,11 @@ function renderProjChart(data) {
         <text x="155" y="-1" class="cp-proj-legend-text">Low–High Scenarios</text>
 
         <line x1="285" y1="-2" x2="305" y2="-2" stroke="#e17055" stroke-width="2" stroke-dasharray="4 4" />
-        <text x="312" y="-1" class="cp-proj-legend-text">Without Reinvestment</text>
+        <text x="312" y="-1" class="cp-proj-legend-text">Without Reinvesting Dividends</text>
 
-        <line x1="460" y1="-2" x2="480" y2="-2" stroke="#ffd69f" stroke-width="2.5" />
-        <circle cx="470" cy="-2" r="3" fill="#ffd69f" />
-        <text x="488" y="-1" class="cp-proj-legend-text" fill="#ffd69f">Portfolio Value (Right Axis)</text>
+        <line x1="500" y1="-2" x2="520" y2="-2" stroke="#ffd69f" stroke-width="2.5" />
+        <circle cx="510" cy="-2" r="3" fill="#ffd69f" />
+        <text x="528" y="-1" class="cp-proj-legend-text" fill="#ffd69f">Portfolio Value (Right Axis)</text>
       </g>
 
       <!-- Grid lines -->
@@ -701,7 +733,7 @@ function renderProjYearsTable(data) {
   const years = base.years || [];
 
   if (years.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="9" class="cp-empty">No projection rows available.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="cp-empty">No projection rows available.</td></tr>`;
     if (toggleBtn) toggleBtn.hidden = true;
     return;
   }
@@ -729,6 +761,7 @@ function renderProjYearsTable(data) {
         <td class="num">${formatProjMoney(y.pt_tax)}</td>
         <td class="num"><strong>${formatProjMoney(y.net)}</strong></td>
         <td class="num">${formatProjMoney(y.reinvested)}</td>
+        <td class="num">${formatProjMoney(y.contributed)}</td>
         <td class="num">${formatProjMoney(y.cash)}</td>
         <td class="num">${formatProjMoney(y.value)}</td>
         <td class="num">${yieldCostStr}</td>
@@ -799,7 +832,8 @@ function renderProjAssumptions(data) {
     "Exchange rates between instrument trading currencies and account currency are held constant at current spot rates.",
     "Low and High scenarios represent ±1 standard deviation of historical annual payout changes.",
     "Withholding tax reflects observed ledger rates over the past 24 months, else standard country defaults.",
-    "Portuguese tax reserve applies a 28% flat rate offset by foreign tax withholding (simplified foreign tax credit)."
+    "Portuguese tax reserve applies a 28% flat rate offset by foreign tax withholding (simplified foreign tax credit).",
+    "A monthly allowance, when set, is invested each month after that month's dividends and is not taxed as a dividend."
   ];
 
   const notes = (data.notes && data.notes.length > 0) ? data.notes : defaultNotes;
@@ -821,7 +855,7 @@ const ALLOC_INFO = {
   },
   same_holding: {
     label: "Same holding (DRIP)",
-    help: "Each dividend buys more of the holding that paid it, like a broker's DRIP.",
+    help: "Each dividend buys more of the holding that paid it, like a broker's DRIP; the monthly allowance is spread by current value.",
     tradeoff: "Simple; high payers grow their weight over time.",
   },
   top_value: {
