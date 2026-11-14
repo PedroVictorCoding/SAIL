@@ -50,7 +50,9 @@ across machines.
 | Pool, health checks, routing policy, owner operations, `sail-core mesh` CLI | `crates/sail-mind/src/mesh.rs` |
 | Routing and fallback inside Mind | `MindService::infer_with_priority` / `run_remote` in `crates/sail-mind/src/service.rs` |
 | llama-server client reused for workers | `LocalGemmaBackend::remote` in `crates/sail-mind/src/local.rs` |
+| LAN discovery (announce only; never pairs, never carries the secret) | `crates/sail-mesh/src/discovery.rs`, `sail-core mesh discover` |
 | Owner HTTP API `/api/mind/mesh` | `crates/sail-dialogue/src/mesh_http.rs` |
+| Settings → Models "Worker PCs" (status, pair, turn off, forget) | `crates/sail-dialogue/web/mesh.js`, `mesh.css`; `scripts/ui/mesh_browser_test.py` |
 | End-to-end test (real worker over TLS, fake llama-servers) | `crates/sail-mind/tests/mesh_e2e.rs` |
 
 ### Trust and transport
@@ -70,7 +72,12 @@ across machines.
   `POST /tokenize` and `POST /v1/chat/completions` to its configured llama-server, plus
   its own `GET /mesh/v1/hello`. It is not a shell, file or generic proxy. `/props` loses
   the model's directory before it leaves the worker. At most `--max-parallel` generations
-  run at once (more get 503).
+  run at once (more get 503). Only `Content-Type` crosses in either direction (never the
+  host's `Authorization` to llama-server). After 20 failed authentications in 60 s an
+  address is refused for 60 s.
+- `serve` announces `{name, port, certificate fingerprint}` on UDP 7711 every 5 s
+  (`--no-announce` turns it off). `sail-core mesh discover` lists what it hears; pairing
+  still needs the code.
 
 ### Routing policy
 
@@ -92,6 +99,11 @@ across machines.
   file, so CLI changes reach a running SAIL without a restart.
 - Status: `GET /api/mind/status` → `mesh`, `sail-core mind-status`, `sail-core mesh list`.
 
+### Finding and pairing a worker
+
+`sail-core mesh discover` lists workers announcing on the LAN (the host must receive UDP
+7711). Run `sail-mesh-worker pairing-code` on the worker to show its code again.
+
 ### Setting up a Windows worker
 
 1. Install Rust (`rustup`, MSVC toolchain), clone this repository and run
@@ -112,15 +124,16 @@ Linux workers use the same steps with the Linux binaries.
 - [x] Confirm existing source files, interfaces and dependency versions before changing architecture.
 - [x] Pair one trusted worker, route a permitted inference request and fall back locally on disconnect (`mesh_e2e.rs`).
 - [x] Test success, unavailable, wrong secret/certificate, cancellation and fallback rules.
+- [x] Live check with the real binaries on the host (loopback worker in front of the running
+  llama-server): pair, list, test and a forged fingerprint refused (2026-11-14).
 - [ ] Record measured latency against a real worker PC (needs the owner's second machine).
-- [ ] Show worker status and pairing in Settings → Models (round 23 UI slice).
+- [x] Show worker status and pairing in Settings → Models.
 - [x] Focused tests and a reviewable PR without automatic merge.
 
 ## 8. Next steps
-1. LAN discovery (announce only; pairing still needs the code), round 23.
-2. Settings → Models "Worker PCs" UI, round 23.
-3. Measure real offload latency and throughput with the owner's PC; tune `max_parallel`.
-4. Later: route non-inference jobs (embeddings, speech) only with their own contracts; llama.cpp RPC
+1. First Windows build and run on the owner's PC (not verifiable on the host: `ring` needs MSVC tools).
+2. Measure real offload latency and throughput with the owner's PC; tune `max_parallel`.
+3. Later: route non-inference jobs (embeddings, speech) only with their own contracts; llama.cpp RPC
    (one model split across machines) stays out of scope until measured worthwhile.
 
 ## 9. Related references

@@ -290,12 +290,14 @@ sail-mesh-worker init --name desktop
 sail-mesh-worker serve --llama-server <path to llama-server> --model <model.gguf>
 ```
 
-It prints a `sailmesh://…` pairing code (it contains a secret). On the SAIL host:
+It prints a `sailmesh://…` pairing code (it contains a secret). Paste it in Settings →
+Models → Worker PCs, or on the SAIL host:
 
 ```sh
 sail-core mesh pair '<code>'
 sail-core mesh test desktop     # one short answer from the worker
 sail-core mesh list             # health of every paired worker
+sail-core mesh discover         # workers announcing on this network
 ```
 
 Voice always stays on this machine. Background work goes to a free worker first, and if

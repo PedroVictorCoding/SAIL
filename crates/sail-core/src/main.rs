@@ -26,6 +26,11 @@ use sail_ui::UiSubsystem;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Owner commands print plain text; they do not start the runtime or its logging.
+    if std::env::args().nth(1).as_deref() == Some("mesh") {
+        let code = sail_mind::mesh::cli::run(std::env::args().skip(2).collect()).await;
+        std::process::exit(code);
+    }
     logging::init()?;
     // Persistent data lives under one root (`/srv/sail-data` when mounted). Move data left at
     // older defaults before any store opens.
@@ -48,10 +53,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     tracing::debug!(root = %data_root.path.display(), "data migration checked");
 
-    if std::env::args().nth(1).as_deref() == Some("mesh") {
-        let code = sail_mind::mesh::cli::run(std::env::args().skip(2).collect()).await;
-        std::process::exit(code);
-    }
     if std::env::args().nth(1).as_deref() == Some("mind-status") {
         let status = status::read().await?;
         println!("{}", serde_json::to_string_pretty(&status)?);

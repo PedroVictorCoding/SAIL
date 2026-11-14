@@ -669,6 +669,7 @@ sail-core mesh — share inference with paired worker PCs
 
   sail-core mesh pair '<sailmesh://… code>' [--serves NAME[,NAME…]]
   sail-core mesh list
+  sail-core mesh discover [--seconds N]
   sail-core mesh test <name> [--prompt TEXT]
   sail-core mesh enable <name> | disable <name> | remove <name>
 
@@ -776,6 +777,60 @@ A running SAIL picks up changes within 15 seconds.";
                 }
                 Ok(())
             }
+            "discover" => {
+                let seconds: u64 = take(args, "--seconds")?
+                    .map(|s| {
+                        s.parse()
+                            .map_err(|_| format!("--seconds: invalid value {s:?}"))
+                    })
+                    .transpose()?
+                    .unwrap_or(6)
+                    .clamp(1, 60);
+                if !args.is_empty() {
+                    return Err(format!("unexpected argument {:?}\n\n{USAGE}", args[0]));
+                }
+                println!(
+                    "Listening {seconds} s for SAIL Mesh workers on UDP {}…",
+                    sail_mesh::discovery::DISCOVERY_PORT
+                );
+                let found = sail_mesh::discovery::listen(
+                    std::net::SocketAddr::from((
+                        [0, 0, 0, 0],
+                        sail_mesh::discovery::DISCOVERY_PORT,
+                    )),
+                    Duration::from_secs(seconds),
+                )
+                .await
+                .map_err(|e| {
+                    format!(
+                        "cannot listen on UDP {}: {e}",
+                        sail_mesh::discovery::DISCOVERY_PORT
+                    )
+                })?;
+                if found.is_empty() {
+                    println!(
+                        "No workers heard. Is `sail-mesh-worker serve` running on the same network, without --no-announce, and allowed through its firewall?"
+                    );
+                }
+                for d in found {
+                    let paired = registry
+                        .workers
+                        .iter()
+                        .any(|w| w.fingerprint == d.announcement.fingerprint);
+                    println!(
+                        "{:<16} {:<22} {}  {}",
+                        d.announcement.name,
+                        d.address,
+                        &d.announcement.fingerprint[..16],
+                        if paired {
+                            "paired"
+                        } else {
+                            "not paired: run `sail-mesh-worker pairing-code` on it and paste the code here"
+                        }
+                    );
+                }
+                Ok(())
+            }
             "test" => {
                 let prompt = take(args, "--prompt")?.unwrap_or_else(|| {
                     "Reply with one short sentence confirming you are reachable.".into()
@@ -819,11 +874,10 @@ A running SAIL picks up changes within 15 seconds.";
                 );
                 let tokens = response.usage.output_tokens.unwrap_or(0);
                 println!(
-                    "{} output tokens in {:.1} s (first token {} ms, {:.1} tokens/s)",
+                    "{} output tokens in {:.1} s (first token after {} ms, including prompt processing on the worker)",
                     tokens,
                     elapsed.as_secs_f32(),
-                    response.timings.first_token_ms.unwrap_or(0),
-                    tokens as f32 / elapsed.as_secs_f32().max(0.001)
+                    response.timings.first_token_ms.unwrap_or(0)
                 );
                 Ok(())
             }
