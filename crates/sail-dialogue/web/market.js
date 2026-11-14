@@ -27,6 +27,7 @@
 
   let busy = false;
   let refreshing = false;
+  let pollTimer = null;
   let items = [];
   let total = 0;
   let lastStatus = null;
@@ -413,7 +414,7 @@
     setStatus(append ? 'Loading more…' : 'Loading market…');
     try {
       const offset = append ? items.length : 0;
-      const data = await api('/?' + currentQueryParams(offset));
+      const data = await api('?' + currentQueryParams(offset));
       lastStatus = data.status;
       const page = data.page || { total: 0, items: [] };
       total = page.total || 0;
@@ -423,6 +424,11 @@
       setStatus(isFirstRun(lastStatus)
         ? 'The market has not been downloaded yet.'
         : `Showing ${items.length} of ${total} matching item${total === 1 ? '' : 's'}.`);
+      // The server downloads a stale catalog in the background; look again until it is done.
+      clearTimeout(pollTimer);
+      if (lastStatus?.refreshing && !refreshing) {
+        pollTimer = setTimeout(() => { if (shown()) searchMarket(false); }, 1500);
+      }
     } catch (err) {
       setStatus(err.message, true);
     } finally {

@@ -996,26 +996,6 @@ async fn dividend_refresh(
     Ok(no_store(to_json(&result)?))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::ProjectionQuery;
-    use sail_capital::dividends::Allocation;
-
-    #[test]
-    fn projection_query_parses_the_new_allocations_and_top_n() {
-        let query: ProjectionQuery =
-            serde_json::from_value(serde_json::json!({"allocation": "top_value", "top_n": 7}))
-                .unwrap();
-        assert_eq!(query.allocation, Some(Allocation::TopValue));
-        assert_eq!(query.top_n, Some(7));
-
-        let query: ProjectionQuery =
-            serde_json::from_value(serde_json::json!({"allocation": "underweight"})).unwrap();
-        assert_eq!(query.allocation, Some(Allocation::Underweight));
-        assert_eq!(query.top_n, None);
-    }
-}
-
 async fn prediction_status(
     State(s): State<Arc<CapitalState>>,
     h: HeaderMap,
@@ -1045,4 +1025,24 @@ async fn prediction_start(
         Json(job),
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProjectionQuery;
+    use sail_capital::dividends::Allocation;
+
+    #[test]
+    fn projection_query_parses_the_new_allocations_and_top_n() {
+        let query: ProjectionQuery =
+            serde_json::from_value(serde_json::json!({"allocation": "top_value", "top_n": 7}))
+                .unwrap();
+        assert_eq!(query.allocation, Some(Allocation::TopValue));
+        assert_eq!(query.top_n, Some(7));
+
+        let query: ProjectionQuery =
+            serde_json::from_value(serde_json::json!({"allocation": "underweight"})).unwrap();
+        assert_eq!(query.allocation, Some(Allocation::Underweight));
+        assert_eq!(query.top_n, None);
+    }
 }

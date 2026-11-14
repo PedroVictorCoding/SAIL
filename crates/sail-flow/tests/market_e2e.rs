@@ -77,7 +77,6 @@ fn open_market(tmp: &std::path::Path, http: Arc<dyn Http>) -> (Market, hermes::P
 }
 
 #[tokio::test]
-#[ignore = "round 20: needs Kilo's catalog, guard and install slices"]
 async fn browse_stage_install_and_uninstall() {
     let tmp = tempfile::tempdir().unwrap();
     let http = Arc::new(network());
@@ -165,7 +164,6 @@ async fn browse_stage_install_and_uninstall() {
 }
 
 #[tokio::test]
-#[ignore = "round 20: needs Kilo's catalog, guard and install slices"]
 async fn a_failed_refresh_keeps_the_cached_market() {
     let tmp = tempfile::tempdir().unwrap();
     let http = Arc::new(network());
@@ -188,7 +186,6 @@ async fn a_failed_refresh_keeps_the_cached_market() {
 }
 
 #[test]
-#[ignore = "round 20: needs Kilo's guard slice"]
 fn proposed_skills_wait_for_the_owner() {
     let tmp = tempfile::tempdir().unwrap();
     let proposals = Proposals {

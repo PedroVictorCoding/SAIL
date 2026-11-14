@@ -156,7 +156,7 @@
     for (const pr of proposals) {
       const verdict = pr.report?.verdict || 'caution';
       const findings = pr.report?.findings || [];
-      const cardEl = el('article', { class: 'hermes-proposal', 'data-proposal': pr.id, 'aria-label': `Proposed skill ${pr.name}` },
+      const cardEl = el('article', { class: 'hermes-proposal', 'data-proposal': pr.id, 'data-proposal-name': pr.name, 'aria-label': `Proposed skill ${pr.name}` },
         el('header', { class: 'hermes-proposal-head' },
           el('h5', { text: pr.name }),
           el('span', { class: `hermes-pill hermes-pill-${verdict}` }, el('i', { 'aria-hidden': 'true' }), VERDICTS[verdict] || verdict)),

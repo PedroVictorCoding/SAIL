@@ -1335,9 +1335,7 @@ fn clip_text(text: &str, max_chars: usize) -> String {
 }
 
 fn summarize_tool_output(success: bool, output: &Value) -> String {
-    if !success
-        && let Some(err) = output.get("error").and_then(Value::as_str)
-    {
+    if !success && let Some(err) = output.get("error").and_then(Value::as_str) {
         return clip_text(err, 240);
     }
     for key in ["message", "summary", "status", "title", "text"] {
@@ -1954,7 +1952,10 @@ async fn run_turn(
         .arena
         .record_turn_at_epoch(&session, current, &prompt, &reply, learning_epoch);
     // Did the reply use an answer a stronger model gave during this turn? (#450)
-    crate::escalation_outcomes::settle_turn(&tool_correlation(&session, current).to_string(), &reply);
+    crate::escalation_outcomes::settle_turn(
+        &tool_correlation(&session, current).to_string(),
+        &reply,
+    );
     crate::proactive::note_conversation_turn();
     // Extract and add learned knowledge from the conversation turn once if not already in memory.
     state

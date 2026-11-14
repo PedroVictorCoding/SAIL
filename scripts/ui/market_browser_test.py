@@ -43,9 +43,10 @@ with sync_playwright() as p:
 
         open_market(page)
 
-        # Download (first run on the initial width; catalog stays cached for later widths).
-        if idx == 0:
-            expect(page.locator("#marketEmptyFirstRun")).to_be_visible()
+        # The first visit starts the catalog download by itself (contract: GET starts a
+        # background refresh when stale). On the fake network it can finish before the
+        # first-run prompt renders, so use the Download button only if it is still shown.
+        if idx == 0 and page.locator("#marketEmptyFirstRun").is_visible():
             page.locator("#marketDownloadBtn").click()
         expect(page.locator("#marketCatalogLine")).to_contain_text("5 skills", timeout=15000)
         expect(page.locator("#marketCatalogLine")).to_contain_text("2 plugins")
@@ -67,7 +68,7 @@ with sync_playwright() as p:
 
         # Proposals (staged once at demo startup when SAIL_AGENTS_DEMO_PROPOSAL=1).
         if idx == 0:
-            prop = page.locator('[data-proposal="weekly-report"]')
+            prop = page.locator('[data-proposal-name="weekly-report"]')
             expect(prop).to_be_visible()
             expect(prop).to_contain_text("SAIL's reason")
             prop.get_by_role("button", name="Approve").click()
