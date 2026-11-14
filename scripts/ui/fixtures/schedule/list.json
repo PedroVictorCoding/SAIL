@@ -1,0 +1,94 @@
+{
+  "status": {
+    "quiet_now": true,
+    "quiet_until": "2026-11-15T07:00:00Z",
+    "voice_active": false,
+    "timezone": "Europe/Lisbon"
+  },
+  "jobs": [
+    {
+      "id": "11111111111111111111111111111111",
+      "name": "Weekly repo digest",
+      "when_text": "every monday at 9am",
+      "tz": "Europe/Lisbon",
+      "anchor": 1794660000,
+      "action": {
+        "type": "prompt",
+        "text": "Summarise recent commits and open PRs."
+      },
+      "deliver": "web",
+      "state": "proposed",
+      "created_by": "model",
+      "created_at": 1794660000,
+      "last_slot": null,
+      "failure_streak": 0,
+      "reason": "You check repository activity every Monday morning.",
+      "describe": "every Monday at 09:00 (Europe/Lisbon)",
+      "next_run": "2026-11-16T09:00:00Z",
+      "last_run": null
+    },
+    {
+      "id": "22222222222222222222222222222222",
+      "name": "Morning briefing",
+      "when_text": "weekdays at 9am",
+      "tz": "Europe/Lisbon",
+      "anchor": 1794570000,
+      "action": {
+        "type": "prompt",
+        "text": "Summarise my day."
+      },
+      "deliver": "web",
+      "state": "active",
+      "created_by": "owner",
+      "created_at": 1794570000,
+      "last_slot": 1794646800,
+      "failure_streak": 0,
+      "reason": null,
+      "describe": "weekdays at 09:00 (Europe/Lisbon)",
+      "next_run": "2026-11-16T09:00:00Z",
+      "last_run": {
+        "id": "22222222222222222222222222222222:1794646800",
+        "job_id": "22222222222222222222222222222222",
+        "slot": 1794646800,
+        "started_at": 1794646801,
+        "finished_at": 1794646812,
+        "outcome": "ok",
+        "summary": "3 tasks due today.",
+        "delivered_at": null,
+        "catch_up": false
+      }
+    },
+    {
+      "id": "33333333333333333333333333333333",
+      "name": "Nightly check",
+      "when_text": "daily at 23:00",
+      "tz": "Europe/Lisbon",
+      "anchor": 1794400000,
+      "action": {
+        "type": "skill",
+        "name": "arxiv",
+        "input": "cs.AI"
+      },
+      "deliver": "silent",
+      "state": "paused",
+      "created_by": "owner",
+      "created_at": 1794400000,
+      "last_slot": 1794610800,
+      "failure_streak": 3,
+      "reason": null,
+      "describe": "daily at 23:00 (Europe/Lisbon)",
+      "next_run": null,
+      "last_run": {
+        "id": "33333333333333333333333333333333:1794610800",
+        "job_id": "33333333333333333333333333333333",
+        "slot": 1794610800,
+        "started_at": 1794610802,
+        "finished_at": 1794610805,
+        "outcome": "failed",
+        "summary": "Timed out fetching feed.",
+        "delivered_at": null,
+        "catch_up": false
+      }
+    }
+  ]
+}

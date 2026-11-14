@@ -214,9 +214,10 @@ html.sail-backdrop-on .activity-entry { --glow: #ff7a1a; --glow-hot: #ffd45a; }
 html.sail-backdrop-on #flowCard { --glow: #22d84a; --glow-hot: #c8ff6a; }
 html.sail-backdrop-on #hermesCard { --glow: #7a5cff; --glow-hot: #d8c8ff; }
 html.sail-backdrop-on #marketCard { --glow: #1fa5ff; --glow-hot: #a5f3fc; }
+html.sail-backdrop-on #scheduleCard { --glow: #f59e0b; --glow-hot: #fde68a; }
 
 html.sail-backdrop-on :is(.flow-node, .hermes-plugin, .hermes-skill, .hermes-proposal,
-  .market-row, .market-installed-item) {
+  .market-row, .market-installed-item, .schedule-job, .schedule-proposal) {
   --glow-a1: 52%; --glow-a2: 42%; --glow-h1: 75%; --glow-h2: 130%; --glow-y1: 4px; --glow-y2: 12px; --glow-halo: 45%;
   --glow-bg:
     radial-gradient(ellipse 55% var(--glow-h1) at 50% calc(100% + var(--glow-y1)),
@@ -231,16 +232,16 @@ html.sail-backdrop-on :is(.flow-node, .hermes-plugin, .hermes-skill, .hermes-pro
   box-shadow: var(--glow-shadow);
 }
 html.sail-backdrop-on :is(.flow-node, .hermes-plugin, .hermes-skill, .hermes-proposal,
-  .market-row, .market-installed-item):hover {
+  .market-row, .market-installed-item, .schedule-job, .schedule-proposal):hover {
   --glow-a1: 64%; --glow-a2: 52%; --glow-halo: 65%;
 }
 html.sail-backdrop-on :is(.flow-node[aria-pressed="true"], .hermes-skill[aria-expanded="true"],
-  .market-row.is-active) {
+  .market-row.is-active, .schedule-job.is-active) {
   --glow-a1: 72%; --glow-a2: 60%; --glow-halo: 75%;
   border-color: color-mix(in srgb, var(--glow) 55%, transparent);
 }
 html[data-sail-visuals=subtle].sail-backdrop-on :is(.flow-node, .hermes-plugin, .hermes-skill,
-  .hermes-proposal, .market-row, .market-installed-item) {
+  .hermes-proposal, .market-row, .market-installed-item, .schedule-job, .schedule-proposal) {
   --glow-a1: 26%; --glow-a2: 20%; --glow-halo: 28%;
 }
 
@@ -261,6 +262,7 @@ html.sail-backdrop-on .page-section-tab[data-section="workflows"] { --glow: #22d
 html.sail-backdrop-on .page-section-tab[data-section="coding"] { --glow: #ff7a1a; --glow-hot: #ffd45a; }
 html.sail-backdrop-on .page-section-tab[data-section="skills"] { --glow: #7a5cff; --glow-hot: #d8c8ff; }
 html.sail-backdrop-on .page-section-tab[data-section="market"] { --glow: #1fa5ff; --glow-hot: #a5f3fc; }
+html.sail-backdrop-on .page-section-tab[data-section="schedule"] { --glow: #f59e0b; --glow-hot: #fde68a; }
 html.sail-backdrop-on .page-section-tab[aria-selected="true"] {
   --glow-a1: 72%; --glow-a2: 60%; --glow-h1: 75%; --glow-h2: 130%; --glow-y1: 4px; --glow-y2: 12px; --glow-halo: 75%;
   background:
@@ -281,7 +283,7 @@ html[data-sail-visuals=subtle].sail-backdrop-on .page-section-tab[aria-selected=
 
 @media (forced-colors: active) {
   html.sail-backdrop-on :is(.page-section-tab, .flow-node, .hermes-plugin, .hermes-skill,
-    .hermes-proposal, .market-row, .market-installed-item) {
+    .hermes-proposal, .market-row, .market-installed-item, .schedule-job, .schedule-proposal) {
     background: Canvas; border: 1px solid CanvasText; box-shadow: none; backdrop-filter: none;
   }
 }

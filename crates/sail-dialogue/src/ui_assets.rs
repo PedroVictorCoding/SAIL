@@ -108,6 +108,8 @@ assets![
     ("/hermes.css", "web/hermes.css", CSS),
     ("/market.js", "web/market.js", JS),
     ("/market.css", "web/market.css", CSS),
+    ("/schedule.js", "web/schedule.js", JS),
+    ("/schedule.css", "web/schedule.css", CSS),
     ("/toolsmap.css", "web/toolsmap.css", CSS),
     ("/card-modal.js", "web/card-modal.js", JS),
     ("/markdown.js", "web/markdown.js", JS),
