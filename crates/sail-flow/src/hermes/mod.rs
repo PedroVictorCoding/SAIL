@@ -16,6 +16,9 @@
 //!   Dialogue tool `hermes:call`, which Guardian gates with exact owner approval.
 //! * Not supported: gateway platforms, memory and model providers, other provider
 //!   registrars, `ctx.llm`, `ctx.call_mcp` and messaging. Hooks are reported, not run.
+pub mod hooks;
+pub mod pyenv;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

@@ -6,10 +6,11 @@ the Hermes plugin API SAIL supports, performs one operation and prints one JSON 
 on the original stdout. Everything the plugin prints goes to stderr.
 
 Request (stdin, JSON):
-    {"op": "describe" | "call" | "command",
+    {"op": "describe" | "call" | "command" | "hook",
      "plugin_id": str, "plugin_dir": str, "settings": {...},
      "tool": str, "args": {...},          # op == "call"
-     "command": str, "raw_args": str}     # op == "command"
+     "command": str, "raw_args": str,     # op == "command"
+     "payload": {"hook": str, ...}}       # op == "hook"
 
 The sandbox, not this file, is the security boundary.
 """
@@ -88,6 +89,7 @@ class PluginContext:
         self._data_dir = data_dir
         self.tools = {}
         self.hooks = []
+        self._hooks = {}
         self.commands = {}
         self.skills = {}
         self.unsupported = []
@@ -117,7 +119,9 @@ class PluginContext:
         }
 
     def register_hook(self, hook_name, callback, hold_stream=False):
-        self.hooks.append(str(hook_name))
+        name = str(hook_name)
+        self.hooks.append(name)
+        self._hooks.setdefault(name, []).append(callback)
 
     def register_command(self, name, handler, description="", args_hint=""):
         self.commands[str(name).lstrip("/")] = {
@@ -240,6 +244,16 @@ def bounded(text):
     return text, False
 
 
+def bounded_result(value):
+    """Bound one hook result, keeping structured values structured."""
+    if isinstance(value, str):
+        return bounded(value)[0]
+    encoded = json.dumps(value, ensure_ascii=False, default=str)
+    if len(encoded) > MAX_RESULT:
+        return encoded[:MAX_RESULT]
+    return value
+
+
 def main():
     request = json.loads(sys.stdin.read() or "{}")
     plugin_id = request["plugin_id"]
@@ -278,6 +292,21 @@ def main():
             return
         text, truncated = bounded(command["handler"](request.get("raw_args") or ""))
         emit({"ok": True, "result": "" if text is None else text, "truncated": truncated})
+    elif op == "hook":
+        payload = request.get("payload")
+        hook = payload.get("hook") if isinstance(payload, dict) else None
+        callbacks = ctx._hooks.get(hook) if isinstance(hook, str) else None
+        if not callbacks:
+            emit({"ok": False, "error": f"unknown hook {hook}"})
+            return
+        kwargs = {key: value for key, value in payload.items() if key != "hook"}
+        results = []
+        for callback in callbacks:
+            try:
+                results.append(bounded_result(callback(**kwargs)))
+            except Exception as error:  # noqa: BLE001 - one callback must not stop the rest
+                results.append({"error": f"{type(error).__name__}: {error}"})
+        emit({"ok": True, "results": results})
     else:
         emit({"ok": False, "error": f"unknown op {op}"})
 
