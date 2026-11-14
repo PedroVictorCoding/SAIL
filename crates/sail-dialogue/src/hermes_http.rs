@@ -74,6 +74,8 @@ pub fn router_with(
         .route("/plugins", get(plugins))
         .route("/plugins/:id/approve", post(approve))
         .route("/plugins/:id/revoke", post(revoke))
+        .route("/plugins/:id/hooks", post(set_hook))
+        .route("/plugins/:id/environment", post(environment))
         .route("/skills", get(skills))
         .route("/skill", get(skill))
         .route("/proposals", get(proposals_list))
@@ -103,13 +105,113 @@ pub fn router_with(
 
 async fn plugin_json(manager: &Manager, plugin: hermes::Plugin) -> Value {
     let mut out = json!(plugin);
+    let mut registered_hooks = Vec::new();
     if plugin.status == Status::Enabled {
         match manager.describe(&plugin).await {
-            Ok(d) => out["registered"] = json!(d),
+            Ok(d) => {
+                registered_hooks = d.hooks.clone();
+                out["registered"] = json!(d);
+            }
             Err(e) => out["describe_error"] = json!(e),
         }
     }
+    out["hooks"] = json!(manager.hook_views(&plugin, &registered_hooks));
+    out["environment"] = json!(manager.env_view(&plugin));
     out
+}
+
+fn find_plugin(manager: &Manager, id: &str) -> Result<hermes::Plugin, (StatusCode, Json<Value>)> {
+    if !hermes::valid_id(id) {
+        return Err(error(StatusCode::BAD_REQUEST, "invalid plugin id"));
+    }
+    manager
+        .paths
+        .discover()
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("no plugin {id}")))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HookBody {
+    hook: String,
+    enabled: bool,
+}
+
+/// Turn one supported hook on or off for an approved plugin (owner action).
+async fn set_hook(
+    State(s): State<Arc<HttpState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(b): Json<HookBody>,
+) -> Reply {
+    authorize(&s, &h)?;
+    let plugin = find_plugin(s.manager, &id)?;
+    if b.enabled && plugin.status != Status::Enabled {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "approve the plugin before turning on its hooks",
+        ));
+    }
+    let paths = s.manager.paths.clone();
+    let (hook, enabled) = (b.hook.clone(), b.enabled);
+    tokio::task::spawn_blocking(move || paths.set_hook(&id, &hook, enabled))
+        .await
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "hook setting failed"))?
+        .map_err(|e| error(StatusCode::BAD_REQUEST, e))?;
+    tracing::info!(plugin = %plugin.id, hook = %b.hook, enabled = b.enabled, "Hermes hook changed by owner");
+    Ok(Json(plugin_json(s.manager, plugin).await))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvBody {
+    action: String,
+}
+
+/// Build or remove an approved plugin's Python environment (owner action). A build runs
+/// in the background; the plugin list shows `building` until it finishes.
+async fn environment(
+    State(s): State<Arc<HttpState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(b): Json<EnvBody>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    authorize(&s, &h)?;
+    let plugin = find_plugin(s.manager, &id)?;
+    match b.action.as_str() {
+        "build" => {
+            if plugin.status != Status::Enabled {
+                return Err(error(
+                    StatusCode::CONFLICT,
+                    "approve the plugin before building its environment",
+                ));
+            }
+            if !s.manager.begin_build(&plugin.id) {
+                return Err(error(StatusCode::CONFLICT, "a build is already running"));
+            }
+            let manager = s.manager;
+            let building = plugin.clone();
+            tokio::spawn(async move {
+                match manager.build_env(&building).await {
+                    Ok(record) => tracing::info!(plugin = %building.id, packages = record.locked.len(), "Hermes plugin environment built"),
+                    Err(error) => tracing::warn!(plugin = %building.id, %error, "Hermes plugin environment build failed"),
+                }
+            });
+            tracing::info!(plugin = %plugin.id, "Hermes plugin environment build started by owner");
+        }
+        "remove" => {
+            let paths = s.manager.paths.clone();
+            let target = plugin.id.clone();
+            tokio::task::spawn_blocking(move || paths.remove_env(&target))
+                .await
+                .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "remove failed"))?
+                .map_err(|e| error(StatusCode::CONFLICT, e))?;
+        }
+        _ => return Err(error(StatusCode::BAD_REQUEST, "action must be build or remove")),
+    }
+    Ok((StatusCode::ACCEPTED, Json(plugin_json(s.manager, plugin).await)))
 }
 
 async fn plugins(State(s): State<Arc<HttpState>>, h: HeaderMap) -> Reply {

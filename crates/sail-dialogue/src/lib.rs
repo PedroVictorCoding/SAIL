@@ -38,6 +38,8 @@ pub mod prompt;
 pub mod proxy_guard;
 pub mod pulse_http;
 pub mod reader_http;
+pub mod schedule_http;
+pub mod schedule_runner;
 pub mod server;
 mod speech;
 pub mod spotify_http;

@@ -4,6 +4,8 @@
 //!   the owner's Hermes skills and enabled plugins' skills). Read-only text.
 //! * `skill:propose`: stage a new skill the model wrote. It becomes a skill only after the
 //!   owner approves it on the Skills & plugins section; until then nothing reads it.
+//! * `schedule:create`: propose a scheduled job ("every weekday at 9am: …"). It waits on
+//!   the Schedule section until the owner approves it, and a scheduled run can't use it.
 //! * `hermes:tools`: what the owner's enabled Hermes plugins registered.
 //! * `hermes:call`: run one plugin tool or slash command in the plugin sandbox. Guardian
 //!   treats it as a high-risk invocation, so every call needs the owner's approval of the
@@ -15,10 +17,11 @@ use sail_protocol::execution::{ToolDescriptor, ToolEffect};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-pub const TOOL_IDS: [&str; 5] = [
+pub const TOOL_IDS: [&str; 6] = [
     "skill:list",
     "skill:view",
     "skill:propose",
+    "schedule:create",
     "hermes:tools",
     "hermes:call",
 ];
@@ -88,6 +91,47 @@ impl Tool for HermesTool {
                     "instruction": "The skill is staged, not installed. Tell the owner it is waiting for their review in SAIL Agents › Skills & plugins. Do not say it was saved as a skill.",
                 })
             }
+            "schedule:create" => {
+                let service = crate::schedule_runner::global()
+                    .ok_or_else(|| fail("the scheduler is not running"))?;
+                if crate::schedule_runner::in_scheduled_run() {
+                    return Err(fail("a scheduled run can't create scheduled jobs"));
+                }
+                let field = |k: &str| input[k].as_str().unwrap_or_default().to_string();
+                let action = match input["skill"].as_str().filter(|s| !s.is_empty()) {
+                    Some(skill) => sail_flow::schedule::Action::Skill {
+                        name: skill.to_string(),
+                        input: field("task"),
+                    },
+                    None => sail_flow::schedule::Action::Prompt { text: field("task") },
+                };
+                let tz = input["timezone"]
+                    .as_str()
+                    .filter(|t| !t.is_empty())
+                    .map(String::from)
+                    .unwrap_or_else(|| service.status(chrono::Utc::now())["timezone"].as_str().unwrap_or("UTC").to_string());
+                let (name, when, reason) = (field("name"), field("when"), field("reason"));
+                let job = tokio::task::spawn_blocking(move || {
+                    service.create(
+                        &name,
+                        &when,
+                        &tz,
+                        action,
+                        sail_flow::schedule::Deliver::Web,
+                        sail_flow::schedule::Creator::Model,
+                        Some(reason.chars().take(500).collect()),
+                        chrono::Utc::now().timestamp(),
+                    )
+                })
+                .await
+                .map_err(|e| fail(e.to_string()))?
+                .map_err(fail)?;
+                json!({
+                    "proposed": job.name,
+                    "when": job.when_text,
+                    "instruction": "The job is proposed, not scheduled. Tell the owner it is waiting for their approval in SAIL Agents › Schedule. Do not say it is scheduled.",
+                })
+            }
             "hermes:tools" => {
                 let mut tools = Vec::new();
                 let mut problems = Vec::new();
@@ -141,7 +185,7 @@ type Spec = (
 
 pub fn register(registry: &ToolRegistry) -> Result<(), String> {
     let s = |max: u64, description: &str| json!({"type":"string","maxLength":max,"description":description});
-    let tools: [Spec; 5] = [
+    let tools: [Spec; 6] = [
         (
             "skill:list",
             "List the skills SAIL knows (Agent Skills / Hermes SKILL.md instructions for specific tasks), optionally filtered by words. Use before a specialised task to find instructions to follow.",
@@ -168,6 +212,21 @@ pub fn register(registry: &ToolRegistry) -> Result<(), String> {
                 "reason":s(500, "Why this is worth keeping, for the owner"),
             }),
             &["name", "description", "instructions", "reason"],
+            ToolEffect::Mutating,
+            30_000,
+        ),
+        (
+            "schedule:create",
+            "Propose a scheduled job when the owner asks for something to happen later or regularly (\"every weekday at 9am summarise my day\", \"in 30 minutes remind me…\"). The owner approves it on the Schedule section before it ever runs.",
+            json!({
+                "name":s(80, "Short name, e.g. Morning summary"),
+                "when":s(200, "When, in plain words: 'weekdays at 9am', 'every 2 hours', 'in 30m', 'daily at 7am and 6pm', or a 5-field cron"),
+                "task":s(4000, "What SAIL should do at that time, as an instruction"),
+                "skill":s(64, "Optional skill name to follow for the task"),
+                "timezone":s(64, "Optional IANA time zone; defaults to the owner's"),
+                "reason":s(500, "Why, for the owner"),
+            }),
+            &["name", "when", "task", "reason"],
             ToolEffect::Mutating,
             30_000,
         ),
@@ -219,7 +278,13 @@ mod tests {
 
     #[test]
     fn reading_skills_is_free_but_running_plugin_code_needs_the_owner() {
-        for tool in ["skill:list", "skill:view", "skill:propose", "hermes:tools"] {
+        for tool in [
+            "skill:list",
+            "skill:view",
+            "skill:propose",
+            "schedule:create",
+            "hermes:tools",
+        ] {
             assert_eq!(risk(tool), RiskLevel::Low, "{tool}");
         }
         assert_eq!(risk("hermes:call"), RiskLevel::High);
