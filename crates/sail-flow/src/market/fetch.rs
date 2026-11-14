@@ -108,14 +108,28 @@ impl Http for ReqwestHttp {
                     .get("x-ratelimit-remaining")
                     .is_some_and(|v| v == "0"))
         {
-            let reset = response
-                .headers()
-                .get("x-ratelimit-reset")
-                .or_else(|| response.headers().get("retry-after"))
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("later")
-                .to_string();
-            return Err(FetchError::RateLimited(format!("retry after {reset}")));
+            let header = |name: &str| {
+                response
+                    .headers()
+                    .get(name)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.trim().parse::<i64>().ok())
+            };
+            // GitHub sends the reset as a Unix time; others send Retry-After in seconds.
+            let wait = header("x-ratelimit-reset")
+                .map(|at| at - chrono::Utc::now().timestamp())
+                .or_else(|| header("retry-after"));
+            let when = match wait {
+                Some(secs) if secs > 90 => format!("try again in {} minutes", (secs + 59) / 60),
+                Some(_) => "try again in a minute".to_string(),
+                None => "try again later".to_string(),
+            };
+            let hint = if url.starts_with(GITHUB_API) && self.github_token.is_none() {
+                " GitHub allows 60 anonymous requests an hour; SAIL_MARKET_GITHUB_TOKEN raises that."
+            } else {
+                ""
+            };
+            return Err(FetchError::RateLimited(format!("{when}.{hint}")));
         }
         if response.content_length().is_some_and(|n| n > max_bytes) {
             return Err(FetchError::TooLarge(format!(
