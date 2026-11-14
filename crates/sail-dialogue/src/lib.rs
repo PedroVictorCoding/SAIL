@@ -13,6 +13,7 @@ mod curiosity_runner;
 mod escalation_outcomes;
 mod execution;
 pub mod flow_http;
+pub mod hermes_http;
 pub mod hermes_tools;
 pub mod learn_courses_http;
 pub mod learn_factory_http;

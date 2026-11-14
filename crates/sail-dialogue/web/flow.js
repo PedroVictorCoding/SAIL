@@ -353,12 +353,14 @@
       render();
     }
   };
-  window.addEventListener('sail:page',e=>{
-    if(e.detail==='flow')load();
+  // Flow is the Workflows section of SAIL Agents: it is shown when its card is on the page.
+  const shown=()=>!!document.getElementById('subsystemContent')?.contains(card);
+  for(const event of ['sail:page','sail:section'])window.addEventListener(event,()=>{
+    if(shown())load();
   });
   new ResizeObserver(()=>requestAnimationFrame(drawEdges)).observe($('#flowGraph'));
   setInterval(()=>{
-    if(window.sailCurrentPage?.()==='flow'&&!busy&&runs.some(r=>r.state==='running'))load();
+    if(shown()&&!busy&&runs.some(r=>r.state==='running'))load();
   },1500);
-  if(window.sailCurrentPage?.()==='flow')load();
+  if(shown())load();
 })();
