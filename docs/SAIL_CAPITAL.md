@@ -12,7 +12,7 @@ everything else on that ledger:
 - **Portfolio:** positions with trailing stops, CFDs kept apart, allocation, reconciliation
   against XTB's own figures, received shares and splits, and SEC filings for US holdings.
 - **Income:** dividends received with withholding, and a projection of future dividends
-  with reinvestment.
+  with reinvestment and an optional monthly salary allowance.
 - **Outlook:** a blended range per holding from daily prices and models, with replays,
   plus trade signals that publish only after passing a replay with a holdout.
 - **Track record:** one scorecard that says, in the same words for everything, whether
@@ -379,7 +379,18 @@ allocation can be:
 
 The top-value and top-yield counts are 1–10 (`top_n`, default 5); top-yield and
 top-value spread the month's pool by current value among the selected holdings. The
-rest stays as cash. A comparison line shows the same projection without reinvesting.
+rest stays as cash. A comparison line shows the same projection without reinvesting
+dividends.
+
+**Monthly allowance.** `monthly_contribution` adds 0–10,000 of the account currency a
+month from salary and invests it in the paying holdings, using the same allocation. It
+is separate from `reinvest_pct` (the allowance is always invested) and is not a dividend,
+so withholding and the Portuguese reserve do not apply. The allowance is invested after
+that month's dividend, so it first earns from the following month. With `same_holding`,
+dividends stay in the holding that paid them and the allowance is spread across the
+paying holdings by current value, because it has no payer. The comparison without
+reinvestment keeps the allowance, so it isolates the effect of reinvesting dividends.
+Contributions add to the cost basis used by yield on cost.
 
 **Growth.** Past payout growth over up to five complete years, shrunk toward zero by
 `n/(n+3)` and capped at ±15%. A year without payment after a paying year counts as a
@@ -777,7 +788,7 @@ scoreboard.
 | `GET /signals/trade/guards?account=` | Trailing stops and trend for each holding |
 | `GET /signals/trade/health?account=` | Run health, per-instrument price freshness and quality, and research coverage |
 | `GET /universe/watchlist` / `POST /universe/watchlist` | The watchlist, and a change: `{"op": "add", "item": {...}}` or `{"op": "remove", "symbol": "..."}` |
-| `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&top_n=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting, per-holding inputs and notes; allocation is `proportional`, `same_holding`, `top_value`, `equal_weight`, `top_yield` or `underweight` |
+| `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&monthly_contribution=&top_n=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting dividends, per-holding inputs and notes; allocation is `proportional`, `same_holding`, `top_value`, `equal_weight`, `top_yield` or `underweight`; `monthly_contribution` is the 0–10,000 salary allowance invested each month |
 | `POST /dividends/refresh?account=` | Fetches per-share payout histories for the holdings |
 | `GET /outlook/track-record?account=&horizon=` | Coverage, average percentile, skill and direction over monthly replays |
 | `GET /markets?account=` | The market board from stored closes: per holding and watchlist instrument the last close, 1D/1W/1M changes, a 30-session spark and whether it is above its 200-day average; breadth; and today's holdings valued over the last 30 sessions |
@@ -812,6 +823,7 @@ Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capit
 | 17 | — | One page structure, house style, lazy loading, the track record, backend modules |
 | — | #463 | Fast dividend projection and track records, 30-year monthly dividends |
 | — | #464 | Signals tab: the signal board, a wider signal universe, per-stock suggestions |
+| — | — | Monthly salary allowance in the dividend projection |
 | 18 | #465 | The board's forward record, the stock drawer, model signals over the whole universe |
 | — | — | Candidate trade ideas: positive in both periods, half size, their own live record |
 

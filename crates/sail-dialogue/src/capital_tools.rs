@@ -430,9 +430,17 @@ fn dividends(service: &CapitalService, input: &Value) -> Result<Value, String> {
         "same_holding" => Allocation::SameHolding,
         _ => Allocation::Proportional,
     };
+    let monthly_contribution = input["monthly_contribution"].as_f64().unwrap_or(0.0);
     let reserve = input["reserve_pt_tax"].as_bool().unwrap_or(false);
     let outlook = service
-        .dividend_projection(&account, years, reinvest_pct, allocation, reserve)
+        .dividend_projection(
+            &account,
+            years,
+            reinvest_pct,
+            allocation,
+            monthly_contribution,
+            reserve,
+        )
         .map_err(|error| error.to_string())?;
     let mut payload = value(outlook)?;
     if let Some(scenarios) = payload.get_mut("scenarios").and_then(Value::as_array_mut) {
