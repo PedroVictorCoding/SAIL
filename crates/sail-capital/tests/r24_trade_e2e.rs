@@ -56,7 +56,10 @@ fn dividends_enter_the_replayed_r() {
     let inst = payer("A", 2);
     let trades = replay(&inst, Costs::default_for(AssetClass::Stock));
     let with_dividend: Vec<_> = trades.iter().filter(|t| t.dividend_r != 0.0).collect();
-    assert!(!with_dividend.is_empty(), "no trade held through an ex-date");
+    assert!(
+        !with_dividend.is_empty(),
+        "no trade held through an ex-date"
+    );
     for t in &with_dividend {
         match t.side {
             Side::Long => assert!(t.dividend_r > 0.0),
