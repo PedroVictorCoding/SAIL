@@ -458,6 +458,63 @@ busy or unavailable; the last brief stays readable, marked stale when the settin
 since it was written. A brief summarises and applies published research; it does not
 verify the owner's holdings and is not financial advice.
 
+## Maximizing dividend income (round 24)
+
+The projection describes six fixed allocation rules. Round 24 adds what an income
+*maximizer* needs before it can be trusted: clean payout histories, a growth estimate that
+has been checked, a safety grade, a distribution instead of three lines, and a search that
+has to beat the fixed rules on paths it never saw.
+
+**Special dividends** (`dividends::classify`). A payment more than 2.5× the median regular
+payment of the 400 days before it (with at least two of them) is a special, unless a
+payment in the following 400 days is at least 0.6× it (a change to annual payments or a
+rebased payout). Specials are kept in the history, listed on the projection
+(`specials`), and left out of the trailing year, the growth and the schedule.
+
+**Is the growth estimate any good?** (`dividends::calibrate`). Every week the trade run
+backtests the estimator, point in time, on every stored payout history of the trade
+universe (holdings, watchlist and, with `SAIL_TRADE_RESEARCH`, the index members). At
+each year-end from 2010 it estimates growth from the years before and compares with the
+realized 1- and 5-year growth, for shrinkage `n/(n+k)` with `k` in 1, 3, 5 and 10. The
+default `k = 3` is replaced only if another value beats it by more than one standard
+error (widened by √5 for overlapping windows). The backtest also counts cuts (next year
+below 0.9×) per trailing-yield bucket; those rates, blended with an a-priori table worth
+20 years of evidence, are the cut chances of the Monte Carlo. The scorecard's
+**Dividend growth estimate** row earns trust with at least 100 five-year outcomes, a bias
+within 2 points a year and a low–high band holding 55–80% of outcomes. The research list
+holds today's index members, so cuts are understated; the notes say so.
+
+**Safety grade** (`sec::companyfacts`, `dividends::safety`). For US listings, SEC's XBRL
+company facts give free cash flow, earnings and dividends paid per fiscal year (only
+annual 10-K values, point in time by filing date). A, B, C, D and E follow fixed rules on
+free-cash-flow cover, the raise streak and recent cuts; funds and non-US listings are
+Unknown. Facts are fetched with the approved EDGAR User-Agent when the owner refreshes
+payout histories, at most 40 issuers at a time, weekly.
+
+**Income as a distribution** (`dividends::montecarlo`, `POST /dividends/distribution`).
+2,000 seeded paths, month by month, with the projection's rules plus: prices with each
+holding's trend and volatility sharing one market factor (the average pairwise
+correlation), payout growth with the estimate's own spread, cuts at the calibrated
+rates, and FX as a random walk (8% a year) for holdings outside the account currency.
+It reports the 10th, 50th and 90th percentiles of net income and value per year and the
+chance that income reaches a target. The seed is the day, so a reload shows the same
+numbers.
+
+**The maximizer** (`dividends::maximize`, `POST /dividends/maximize`, then poll `GET`).
+It searches fixed weights for where each month's pool goes, over the paying holdings and
+the watchlist names the owner marked as **dividend candidates**
+(`GET/POST /dividends/candidates`). Objectives: the 10th percentile of net income in a
+year (default: the last projected year), the median income with the median value kept at
+least a share of the proportional rule's, or the 10th percentile of the lowest month.
+New money never goes to a name at the largest-position limit, to high-yield names past
+20% together, outside the account currency past 60%, or to a name graded below C
+(Unknown is allowed only for funds). The search (coordinate ascent from three starts, on
+200 paths) is re-scored on 2,000 fresh paths beside the six fixed rules, and it is
+recommended only if it beats the best rule by more than two standard errors (20 batches).
+Otherwise the answer is "keep that rule". Three stress runs show the plan under slower
+growth, no cuts and flat FX. The plan only says where new money goes; it never sells and
+SAIL places no orders.
+
 ## Prices and baseline forecasts
 
 **What it is.** Statistical ranges for each held instrument's price over 5, 20 and 60
@@ -736,6 +793,19 @@ are stored under `research:` keys and fetched in a bounded batch per run. Wikipe
 current members only, so former members are absent and the health panel says how much
 survivorship coverage is missing.
 
+**Round 24 inputs.** Bars carry volume (Yahoo's, zero stored as unknown) and the cash
+dividend going ex that session (from the stored payout history, only when its currency
+matches the prices'). Earnings events carry the report's timing and EPS surprise. Every
+instrument has a listing region, which picks its market reference (SPY for US listings,
+the Euro Stoxx 50 for European ones; indices and commodities use their own series; FX
+has none). Setups trigger on dividend-adjusted prices and fill on raw ones, a long held
+over an ex-date earns the dividend after withholding and a short pays it, every setup is
+also tested only in a calm market trending its way, and two setups trade earnings gaps
+with the surprise and volume breakouts. Cards say how often each target was reached in
+the replay, and a candidate says roughly how many live trades it needs for a verdict.
+Total risk across open and new cards is capped (draft 3%, and 1.5% inside a group of
+cards whose returns correlate above 0.7); the caps are policy limits.
+
 ## The track record
 
 Each evaluation used to speak its own language: CRPS skill and calibration for baselines,
@@ -784,6 +854,7 @@ search and check it.
 | `capital:forecast` | Model price distributions at 5, 20 or 60 sessions |
 | `capital:policy` | Position, cash, volatility, turnover and risk-per-trade limits |
 | `capital:filings` | Recent SEC filings for the holdings and why each matters |
+| `capital:income` | The last income plan, the fixed rules it was scored against, and the growth backtest |
 
 The assistant may suggest ideas freely, including ideas that are not published signals.
 It must say which are verified cards and which are its own view, give the main risk,
@@ -836,6 +907,10 @@ scoreboard.
 | `GET /universe/watchlist` / `POST /universe/watchlist` | The watchlist, and a change: `{"op": "add", "item": {...}}` or `{"op": "remove", "symbol": "..."}` |
 | `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&monthly_contribution=&top_n=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting dividends, per-holding inputs and notes; allocation is `proportional`, `same_holding`, `top_value`, `equal_weight`, `top_yield` or `underweight`; `monthly_contribution` is the 0–10,000 salary allowance invested each month |
 | `POST /dividends/refresh?account=` | Fetches per-share payout histories for the holdings |
+| `POST /dividends/distribution?account=` | Income percentiles per year for the posted controls (round 24) |
+| `GET`/`POST /dividends/maximize?account=` | The latest plan job / starts a plan search (202) |
+| `GET /dividends/calibration` | The latest growth backtest, or `null` |
+| `GET`/`POST /dividends/candidates` | Watchlist stocks and ETFs as dividend candidates / mark one |
 | `GET /dividends/retirement?account=&years=&reinvest_pct=&allocation=&monthly_contribution=&top_n=&reserve_pt_tax=&current_age=&retire_age=&target_monthly=&inflation_pct=&withdrawal_rate_pct=` | The early-retirement plan: required capital, progress, the allowance that reaches the income target, per-scenario funding and notes |
 | `GET /dividends/retirement/research` | The latest researched brief, run status, error and every source attempted |
 | `POST /dividends/retirement/research?…same plan inputs…` | Starts a background research run; 202 with `{"started": bool, "research": {...}}`, or 503 when no local model is attached |
@@ -877,6 +952,7 @@ Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capit
 | — | — | Monthly salary allowance in the dividend projection |
 | 18 | #465 | The board's forward record, the stock drawer, model signals over the whole universe |
 | — | — | Candidate trade ideas: positive in both periods, half size, their own live record |
+| 24 | — | Volume, dividend-aware replays, regime conditioning, event setups, portfolio heat; specials, growth backtest, safety grades, income Monte Carlo and maximizer |
 
 ## Not built yet
 
