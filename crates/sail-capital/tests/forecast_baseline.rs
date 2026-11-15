@@ -17,6 +17,8 @@ fn bar(index: usize, close: f64, high: f64, low: f64) -> Bar {
         high,
         low,
         close,
+        volume: None,
+        dividend: None,
     }
 }
 

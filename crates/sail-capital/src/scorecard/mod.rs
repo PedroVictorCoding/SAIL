@@ -466,6 +466,8 @@ fn setup_name(setup: SetupId) -> &'static str {
         SetupId::BollingerReversion => "Bollinger reversion",
         SetupId::InsideBarBreak => "Inside-bar break",
         SetupId::ThreeDayReversal => "Three-day reversal",
+        SetupId::EarningsGapDrift => "Earnings gap drift",
+        SetupId::VolumeBreakout => "Volume breakout",
     }
 }
 
@@ -477,6 +479,8 @@ fn setup_key(setup: SetupId) -> &'static str {
         SetupId::BollingerReversion => "bollinger_reversion",
         SetupId::InsideBarBreak => "inside_bar_break",
         SetupId::ThreeDayReversal => "three_day_reversal",
+        SetupId::EarningsGapDrift => "earnings_gap_drift",
+        SetupId::VolumeBreakout => "volume_breakout",
     }
 }
 

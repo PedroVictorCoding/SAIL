@@ -107,6 +107,9 @@ pub struct LiveTrade {
     pub exit_session: NaiveDate,
     /// Result in R after costs.
     pub r_multiple: f64,
+    /// Round 24: the condition of the verdict the card was published under.
+    #[serde(default)]
+    pub condition: super::regime::Condition,
 }
 
 /// Step 4: one cell's pooled estimate.
@@ -517,6 +520,7 @@ pub fn judge(
             candidate,
             reason,
             judgement: Some(judgement),
+            condition: super::regime::Condition::None,
         });
     }
     out
@@ -525,7 +529,7 @@ pub fn judge(
 const Z95: f64 = 1.959_964;
 const HOLDOUT_MONTHS: u32 = 24;
 const GROUPS: [&str; 3] = ["fx", "stocks", "indices"];
-const SETUPS_PER_GROUP: usize = 12;
+const SETUPS_PER_GROUP: usize = SetupId::ALL.len() * 2;
 
 fn cells_in_order() -> Vec<(String, SetupId, Side)> {
     let mut cells = Vec::with_capacity(GROUPS.len() * SETUPS_PER_GROUP);

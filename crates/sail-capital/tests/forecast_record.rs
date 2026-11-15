@@ -24,6 +24,8 @@ fn bars(count: usize) -> Vec<Bar> {
                 high: close * 1.01,
                 low: close * 0.99,
                 close,
+                volume: None,
+                dividend: None,
             }
         })
         .collect()

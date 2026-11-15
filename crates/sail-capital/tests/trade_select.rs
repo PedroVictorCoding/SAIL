@@ -50,6 +50,9 @@ fn trade(
         exit_session,
         exit: Exit::Target1,
         r_multiple,
+        dividend_r: 0.0,
+        ex_date_gap: false,
+        regime: None,
     }
 }
 
@@ -245,6 +248,7 @@ fn judge_updates_the_pooled_posterior_with_live_trades() {
         tier: Tier::Proven,
         exit_session,
         r_multiple: 0.0,
+        condition: Default::default(),
     };
     let live_trades = [
         LiveTrade {
@@ -521,7 +525,7 @@ fn random_walks_verify_nothing() {
 #[test]
 fn the_reason_names_the_first_failed_condition() {
     let verdicts = judge(&BTreeMap::new(), &[], date(2026, 1, 1));
-    assert_eq!(verdicts.len(), 36);
+    assert_eq!(verdicts.len(), 3 * SetupId::ALL.len() * 2);
     assert!(
         verdicts
             .iter()

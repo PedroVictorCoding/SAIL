@@ -39,8 +39,10 @@
 //!
 //! **Purity.** No I/O and no clock. Prices are `f64` here (statistics, not ledger money).
 pub mod cache;
+pub mod heat;
 mod indicators;
 pub mod quality;
+pub mod regime;
 pub mod select;
 mod setups;
 mod sim;
@@ -132,6 +134,50 @@ pub struct Bar {
     pub low: f64,
     /// Close.
     pub close: f64,
+    /// Round 24: shares or contracts traded, when the source gives a positive number
+    /// (Yahoo reports 0 for FX and most indices; those are stored as `None`).
+    #[serde(default)]
+    pub volume: Option<f64>,
+    /// Round 24: cash dividend per share going ex on this session, in the bar's currency
+    /// (prices are not dividend-adjusted, so the close drops by about this much).
+    #[serde(default)]
+    pub dividend: Option<f64>,
+}
+
+impl Bar {
+    /// A bar with no volume and no dividend.
+    pub fn ohlc(session: NaiveDate, open: f64, high: f64, low: f64, close: f64) -> Self {
+        Bar {
+            session,
+            open,
+            high,
+            low,
+            close,
+            volume: None,
+            dividend: None,
+        }
+    }
+}
+
+/// Round 24: bars back-adjusted for cash dividends, for indicators and setup triggers.
+///
+/// `factor[i]` is the cumulative product of `(1 − d_j / close_{j−1})` over every ex-date
+/// `j > i`, so `factor` of the last bar is 1 and older bars are scaled down. `bars[i]`'s
+/// open, high, low and close are the raw ones times `factor[i]`; volume and dividend are
+/// copied. To turn an adjusted price distance (an ATR) at `i` into raw units, divide by
+/// `factor[i]`. Fills, stops and targets always use raw prices.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Adjusted {
+    /// Scaled bars, same sessions as the input.
+    pub bars: Vec<Bar>,
+    /// Scale per bar, in `(0, 1]`.
+    pub factor: Vec<f64>,
+}
+
+/// Round 24 (Kilo, A2), *pure*: see [`Adjusted`]. A dividend with no previous close, or
+/// one that is not below the previous close, is ignored (factor unchanged).
+pub fn adjust(bars: &[Bar]) -> Adjusted {
+    indicators::adjust(bars)
 }
 
 /// The fixed setups. Each one fires long, short, or not at all on a session. Indicator
@@ -161,17 +207,28 @@ pub enum SetupId {
     /// Three lower closes in a row with the close above the 200-day average → long.
     /// Three higher closes below the 200 → short. Stop 2·ATR, at most 5 sessions.
     ThreeDayReversal,
+    /// Round 24: on an earnings reaction session (see [`EarningsEvent`]), an open gap of at
+    /// least 1·ATR(14) from the previous close in the direction of the EPS surprise, with
+    /// relative volume ≥ 2 → enter the next open that way. Stocks and ETFs only; no fire
+    /// when the surprise is unknown or zero. Stop 1.5·ATR, at most 20 sessions.
+    EarningsGapDrift,
+    /// Round 24: close above the previous 55-session high with relative volume ≥ 2 → long;
+    /// close below the previous 55-session low with relative volume ≥ 2 → short. Stocks
+    /// and ETFs only (needs volume). Stop 2·ATR, at most 20 sessions.
+    VolumeBreakout,
 }
 
 impl SetupId {
     /// Every setup, in report order.
-    pub const ALL: [SetupId; 6] = [
+    pub const ALL: [SetupId; 8] = [
         SetupId::TrendPullback,
         SetupId::SqueezeBreakout,
         SetupId::Donchian55,
         SetupId::BollingerReversion,
         SetupId::InsideBarBreak,
         SetupId::ThreeDayReversal,
+        SetupId::EarningsGapDrift,
+        SetupId::VolumeBreakout,
     ];
 
     /// Stop distance in ATRs, and the most sessions a trade stays open.
@@ -183,6 +240,8 @@ impl SetupId {
             SetupId::BollingerReversion => (1.5, 5),
             SetupId::InsideBarBreak => (1.0, 5),
             SetupId::ThreeDayReversal => (2.0, 5),
+            SetupId::EarningsGapDrift => (1.5, 20),
+            SetupId::VolumeBreakout => (2.0, 20),
         }
     }
 }
@@ -251,6 +310,63 @@ pub struct Instrument {
     /// one. Empty means always.
     #[serde(default)]
     pub membership: Vec<(NaiveDate, Option<NaiveDate>)>,
+    /// Round 24: listing region, earnings surprises and dividend withholding.
+    #[serde(default)]
+    pub context: InstrumentContext,
+}
+
+/// Round 24: where an instrument is listed, which picks its market reference
+/// ([`regime::reference_for`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Region {
+    /// United States (no XTB suffix or `.US`).
+    Us,
+    /// A European listing (`.DE`, `.NL`, `.FR`, `.ES`, `.IT`, `.PT`, `.UK`, …).
+    Eu,
+    /// Anything else, or not known.
+    #[default]
+    Other,
+}
+
+/// Round 24: one earnings report and its EPS surprise.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EarningsEvent {
+    /// The report date as the source gives it (exchange-local).
+    pub date: NaiveDate,
+    /// Reported after the session's close (`Some(true)`), before its open
+    /// (`Some(false)`), or not known (`None`). With `Some(false)` the reaction session is
+    /// the first session on or after `date`; otherwise the first session after it.
+    pub after_close: Option<bool>,
+    /// `(reported − estimate) / |estimate| × 100`, when both are known.
+    pub surprise_pct: Option<f64>,
+}
+
+impl EarningsEvent {
+    /// Index of the first session whose open already reflects the report, if any.
+    pub fn reaction_index(&self, bars: &[Bar]) -> Option<usize> {
+        let index = match self.after_close {
+            Some(false) => bars.partition_point(|bar| bar.session < self.date),
+            _ => bars.partition_point(|bar| bar.session <= self.date),
+        };
+        (index < bars.len()).then_some(index)
+    }
+}
+
+/// Round 24: per-instrument inputs beyond the bars.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct InstrumentContext {
+    /// Listing region.
+    #[serde(default)]
+    pub region: Region,
+    /// Earnings reports with their surprises, oldest first (Yahoo returns about the last
+    /// four years, so older firings of [`SetupId::EarningsGapDrift`] cannot be replayed).
+    #[serde(default)]
+    pub earnings_events: Vec<EarningsEvent>,
+    /// Withholding applied to dividends credited to a long position, 0..1 (the observed
+    /// or by-country default rate the income view uses; no Portuguese tax).
+    #[serde(default)]
+    pub withholding: f64,
 }
 
 impl Instrument {
@@ -311,8 +427,21 @@ pub struct Trade {
     pub exit_session: NaiveDate,
     /// How it ended.
     pub exit: Exit,
-    /// Result in R, after costs (1R = the risk at entry).
+    /// Result in R, after costs (1R = the risk at entry). Includes `dividend_r`.
     pub r_multiple: f64,
+    /// Round 24: dividends in R while the trade was open, already inside `r_multiple`.
+    /// For each ex-date `j` with `entry_index < j` while units remain open at `j`'s open:
+    /// long `+ remaining · d · (1 − withholding) / risk`, short `− remaining · d / risk`,
+    /// where `remaining` is the open share (1, ⅔ or ⅓) and `risk` is `|entry − stop|`.
+    #[serde(default)]
+    pub dividend_r: f64,
+    /// Round 24: the stop was hit on an ex-date session's open gap.
+    #[serde(default)]
+    pub ex_date_gap: bool,
+    /// Round 24: the market regime on the signal session ([`regime::tag`]); `None` when no
+    /// reference applies or it has too little history.
+    #[serde(default)]
+    pub regime: Option<regime::Regime>,
 }
 
 /// Evidence for one setup and side over a set of trades.
@@ -365,6 +494,10 @@ pub struct Verdict {
     /// before round 19.
     #[serde(default)]
     pub judgement: Option<select::Judgement>,
+    /// Round 24: which trades this verdict judges: every firing, or only those whose
+    /// regime agrees with the side and is calm.
+    #[serde(default)]
+    pub condition: regime::Condition,
 }
 
 /// A published signal, as the owner sees it.
@@ -412,6 +545,100 @@ pub struct SignalCard {
     /// Verified or candidate. Cards stored before candidates existed are verified.
     #[serde(default)]
     pub tier: Tier,
+    /// Round 24: what the replayed trades of this card's cell did ([`expectations`]).
+    #[serde(default)]
+    pub expectations: Option<Expectations>,
+    /// Round 24, candidates only: live trades still needed, at the selection mean and
+    /// standard deviation, for the lower 95% bound to clear 0R ([`sessions_to_verdict`]).
+    /// `None` when the mean is not positive or the card is verified.
+    #[serde(default)]
+    pub sessions_to_verdict: Option<u32>,
+}
+
+/// Round 24: what the replayed trades of one cell did, after costs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Expectations {
+    /// Share that reached target 1 (1R).
+    pub p_t1: f64,
+    /// Share that reached target 2.
+    pub p_t2: f64,
+    /// Share that reached target 3.
+    pub p_t3: f64,
+    /// Share stopped out before target 1.
+    pub p_stop: f64,
+    /// Median sessions from entry to the last exit.
+    pub median_sessions: f64,
+    /// Mean R after costs.
+    pub mean_r: f64,
+    /// 95% interval on the mean R (same widening as [`Evidence::expectancy_ci`]).
+    pub mean_r_ci: (f64, f64),
+    /// Trades counted.
+    pub n: u32,
+}
+
+/// Round 24 (Kilo, A7), *pure*: [`Expectations`] over `trades` (one cell's trades).
+/// `None` for an empty slice. `p_t1 ≥ p_t2 ≥ p_t3`, and `p_t1 + p_stop ≤ 1` (the rest
+/// closed on the time stop before target 1).
+pub fn expectations(trades: &[Trade]) -> Option<Expectations> {
+    stats::expectations(trades)
+}
+
+/// Round 24 (Kilo, A7), *pure*: the smallest `n` with `mean − 1.96·sd/√n > 0`, minus
+/// `already` trades (floored at 0). `None` when `mean ≤ 0`, `sd` is not finite or the
+/// answer exceeds 10,000.
+pub fn sessions_to_verdict(mean: f64, sd: f64, already: u32) -> Option<u32> {
+    stats::sessions_to_verdict(mean, sd, already)
+}
+
+/// Round 24: a setup that fired today and gave no card, with why.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Suppressed {
+    /// XTB symbol.
+    pub symbol: String,
+    /// Setup.
+    pub setup: SetupId,
+    /// Side.
+    pub side: Side,
+    /// Plain reason: the verdict's, the earnings window, or `"portfolio heat: …"`.
+    pub reason: String,
+}
+
+impl<'de> Deserialize<'de> for Suppressed {
+    /// Reads the round 24 object, and the `[symbol, setup, side]` arrays of older runs
+    /// (with an empty reason).
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Object {
+                symbol: String,
+                setup: SetupId,
+                side: Side,
+                #[serde(default)]
+                reason: String,
+            },
+            Tuple(String, SetupId, Side),
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Object {
+                symbol,
+                setup,
+                side,
+                reason,
+            } => Suppressed {
+                symbol,
+                setup,
+                side,
+                reason,
+            },
+            Wire::Tuple(symbol, setup, side) => Suppressed {
+                symbol,
+                setup,
+                side,
+                reason: String::new(),
+            },
+        })
+    }
 }
 
 /// The day's signals and the scoreboard behind them.
@@ -427,14 +654,20 @@ pub struct SignalDay {
     /// without a verified card.
     #[serde(default)]
     pub candidates: Vec<SignalCard>,
-    /// Setups that fired today and give neither a card nor a candidate, as
-    /// `(symbol, setup, side)`.
-    pub suppressed: Vec<(String, SetupId, Side)>,
+    /// Setups that fired today and give neither a card nor a candidate.
+    pub suppressed: Vec<Suppressed>,
     /// Plain notes on the limits: survivorship, daily bars only, costs assumed.
     pub notes: Vec<String>,
     /// Round 19: what the run did. `None` on runs stored before round 19.
     #[serde(default)]
     pub run_stats: Option<RunStats>,
+    /// Round 24: risk across the day's cards and the still-open ones. `None` on older runs.
+    #[serde(default)]
+    pub heat: Option<heat::HeatSummary>,
+    /// Round 24: today's regime per reference key (`"SPY"`, `"^STOXX50E"`, or an index or
+    /// commodity's own key).
+    #[serde(default)]
+    pub regime: std::collections::BTreeMap<String, regime::Regime>,
 }
 
 /// Round 19: counts and timing of one run.
@@ -471,6 +704,15 @@ pub struct RunInputs<'a> {
     pub fx_to_account: &'a dyn Fn(&Instrument) -> Option<f64>,
     /// Short description of a held key, used in `relation`.
     pub held: &'a dyn Fn(&str) -> Option<String>,
+    /// Round 24: reference bars by key ([`regime::US_REFERENCE`],
+    /// [`regime::EU_REFERENCE`]). Missing references leave stocks unconditioned.
+    pub references: &'a HashMap<String, Vec<Bar>>,
+    /// Round 24: published cards still open (not graded), verified and candidate.
+    pub open_cards: &'a [heat::OpenCard],
+    /// Round 24: daily returns for correlation clusters.
+    pub correlations: &'a heat::CorrInputs,
+    /// Round 24: the confirmed (or draft) heat limits.
+    pub heat_limits: heat::HeatLimits,
 }
 
 /// A setup that fired on a checked instrument but could not publish, and why.
@@ -522,8 +764,18 @@ pub struct HoldingGuard {
 
 /// Every firing of `setup` on the instrument's bars: `(session index, side)`, using only
 /// bars up to that index.
+///
+/// Setups that need more than bars ([`SetupId::EarningsGapDrift`]) never fire here; use
+/// [`fire_for`].
 pub fn fire(setup: SetupId, bars: &[Bar]) -> Vec<(usize, Side)> {
     setups::fire(setup, bars)
+}
+
+/// Round 24: every firing of `setup` on `instrument`, using its context where the setup
+/// needs it (earnings events for [`SetupId::EarningsGapDrift`]; stocks and ETFs only for
+/// the two round 24 setups). Uses bars up to each index only.
+pub fn fire_for(setup: SetupId, instrument: &Instrument) -> Vec<(usize, Side)> {
+    setups::fire_for(setup, instrument)
 }
 
 /// Replays every firing of every setup on `instrument` as trades with `costs`. Trades
@@ -601,6 +853,10 @@ pub fn signal_day(
         risk_pct,
         fx_to_account,
         held,
+        references: &HashMap::new(),
+        open_cards: &[],
+        correlations: &heat::CorrInputs::default(),
+        heat_limits: heat::HeatLimits::default(),
     })
 }
 
@@ -636,6 +892,8 @@ pub fn signal_day_with(inputs: &RunInputs) -> SignalDay {
             suppressed: Vec::new(),
             notes,
             run_stats: Some(RunStats::default()),
+            heat: None,
+            regime: Default::default(),
         };
     };
 
@@ -651,15 +909,17 @@ pub fn signal_day_with(inputs: &RunInputs) -> SignalDay {
                 &inline
             }
         };
-        let entry = pooled
+        let mut tagged: Vec<Trade> = trades
+            .iter()
+            .filter(|trade| instrument.member_on(trade.signal_session))
+            .cloned()
+            .collect();
+        regime::tag(&mut tagged, instrument, inputs.references);
+        pooled_count += tagged.len() as u32;
+        pooled
             .entry(group_of(instrument.class).to_string())
-            .or_default();
-        for trade in trades {
-            if instrument.member_on(trade.signal_session) {
-                entry.push(trade.clone());
-                pooled_count += 1;
-            }
-        }
+            .or_default()
+            .extend(tagged);
     }
 
     let scoreboard = select::judge(&pooled, inputs.live, session);
@@ -675,6 +935,7 @@ pub fn signal_day_with(inputs: &RunInputs) -> SignalDay {
             inputs.risk_pct,
             inputs.fx_to_account,
             inputs.held,
+            inputs.references,
         );
         cards.extend(signals.cards);
         candidates.extend(signals.candidates);
@@ -682,7 +943,12 @@ pub fn signal_day_with(inputs: &RunInputs) -> SignalDay {
             signals
                 .suppressed
                 .into_iter()
-                .map(|(setup, side, _)| (instrument.symbol.clone(), setup, side)),
+                .map(|(setup, side, reason)| Suppressed {
+                    symbol: instrument.symbol.clone(),
+                    setup,
+                    side,
+                    reason,
+                }),
         );
     }
 
@@ -696,6 +962,44 @@ pub fn signal_day_with(inputs: &RunInputs) -> SignalDay {
     let mut seen = HashSet::new();
     candidates.retain(|card| !verified.contains(&card.key) && seen.insert(card.key.clone()));
     candidates.truncate(MAX_CANDIDATES_PER_DAY);
+
+    for card in cards.iter_mut().chain(candidates.iter_mut()) {
+        attach_expectations(card, &pooled, inputs.live);
+    }
+    let symbols: HashMap<&str, &str> = universe
+        .iter()
+        .map(|i| (i.key.as_str(), i.symbol.as_str()))
+        .collect();
+    let outcome = heat::cap(
+        cards,
+        candidates,
+        inputs.open_cards,
+        inputs.correlations,
+        inputs.heat_limits,
+    );
+    let cards = outcome.cards;
+    let candidates = outcome.candidates;
+    suppressed.extend(outcome.suppressed.into_iter().map(|(card, reason)| {
+        Suppressed {
+            symbol: symbols
+                .get(card.key.as_str())
+                .map_or_else(|| card.symbol.clone(), |s| (*s).to_string()),
+            setup: card.setup,
+            side: card.side,
+            reason,
+        }
+    }));
+    let regime_today = inputs
+        .references
+        .iter()
+        .filter_map(|(key, bars)| {
+            regime::series(bars)
+                .last()
+                .copied()
+                .flatten()
+                .map(|r| (key.clone(), r))
+        })
+        .collect();
 
     let evidence_only = universe.iter().filter(|i| i.evidence_only).count() as u32;
     SignalDay {
@@ -711,7 +1015,59 @@ pub fn signal_day_with(inputs: &RunInputs) -> SignalDay {
             trades: pooled_count,
             ..RunStats::default()
         }),
+        heat: Some(outcome.summary),
+        regime: regime_today,
     }
+}
+
+/// The card's cell trades: same group, setup and side, admitted by its condition.
+fn cell_trades<'a>(
+    card: &SignalCard,
+    pooled: &'a std::collections::BTreeMap<String, Vec<Trade>>,
+) -> Vec<&'a Trade> {
+    let condition = card.verdict.condition;
+    pooled
+        .get(&card.verdict.group)
+        .map(|trades| {
+            trades
+                .iter()
+                .filter(|t| {
+                    t.setup == card.setup
+                        && t.side == card.side
+                        && condition.admits(t.regime, t.side)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn attach_expectations(
+    card: &mut SignalCard,
+    pooled: &std::collections::BTreeMap<String, Vec<Trade>>,
+    live: &[select::LiveTrade],
+) {
+    let trades: Vec<Trade> = cell_trades(card, pooled).into_iter().cloned().collect();
+    card.expectations = expectations(&trades);
+    if card.tier != Tier::Candidate || trades.len() < 2 {
+        return;
+    }
+    let n = trades.len() as f64;
+    let mean = trades.iter().map(|t| t.r_multiple).sum::<f64>() / n;
+    let variance = trades
+        .iter()
+        .map(|t| (t.r_multiple - mean).powi(2))
+        .sum::<f64>()
+        / (n - 1.0);
+    let already = live
+        .iter()
+        .filter(|l| {
+            l.group == card.verdict.group
+                && l.setup == card.setup
+                && l.side == card.side
+                && l.condition == card.verdict.condition
+        })
+        .count() as u32;
+    card.sessions_to_verdict = sessions_to_verdict(mean, variance.sqrt(), already);
 }
 
 /// One instrument's cards and non-publishing firings against an existing scoreboard.
@@ -731,6 +1087,7 @@ fn instrument_signals(
     risk_pct: f64,
     fx_to_account: &dyn Fn(&Instrument) -> Option<f64>,
     held: &dyn Fn(&str) -> Option<String>,
+    references: &HashMap<String, Vec<Bar>>,
 ) -> InstrumentSignals {
     let Some(index) = instrument.bars.len().checked_sub(1) else {
         return InstrumentSignals {
@@ -756,12 +1113,16 @@ fn instrument_signals(
     }
     let close = instrument.bars[index].close;
     let group = group_of(instrument.class);
+    let today = regime::for_instrument(instrument, references)
+        .get(index)
+        .copied()
+        .flatten();
     for setup in SetupId::ALL {
-        for (fired, side) in fire(setup, &instrument.bars) {
+        for (fired, side) in fire_for(setup, instrument) {
             if fired != index {
                 continue;
             }
-            let Some(verdict) = verdict_for(scoreboard, group, setup, side) else {
+            let Some(verdict) = verdict_for(scoreboard, group, setup, side, today) else {
                 continue;
             };
             let tier = if verdict.publishes {
@@ -772,7 +1133,11 @@ fn instrument_signals(
                 out.suppressed.push((setup, side, verdict.reason.clone()));
                 continue;
             };
-            if let Some(date) = earnings_in_window(instrument, session_date, setup.plan().1) {
+            // The earnings trade is the one setup meant to trade the report.
+            if let Some(date) = (setup != SetupId::EarningsGapDrift)
+                .then(|| earnings_in_window(instrument, session_date, setup.plan().1))
+                .flatten()
+            {
                 out.suppressed.push((
                     setup,
                     side,
@@ -840,6 +1205,8 @@ fn instrument_signals(
                 relation,
                 warnings: Vec::new(),
                 tier,
+                expectations: None,
+                sessions_to_verdict: None,
             };
             match tier {
                 Tier::Proven => out.cards.push(card),
@@ -850,13 +1217,39 @@ fn instrument_signals(
     out
 }
 
-fn verdict_for(scoreboard: &[Verdict], group: &str, setup: SetupId, side: Side) -> Option<Verdict> {
+/// The verdict a firing is judged by. A conditioned verdict applies only when today's
+/// regime admits the side. Among those that apply, a publishing one beats a candidate,
+/// which beats neither; ties go to the higher selection lower bound, then to the
+/// unconditioned verdict. So both variants of a cell never give two cards.
+fn verdict_for(
+    scoreboard: &[Verdict],
+    group: &str,
+    setup: SetupId,
+    side: Side,
+    today: Option<regime::Regime>,
+) -> Option<Verdict> {
+    let rank = |v: &Verdict| (u8::from(v.publishes) * 2 + u8::from(v.candidate)) as i32;
     scoreboard
         .iter()
-        .find(|verdict| {
+        .filter(|verdict| {
             verdict.group == group
                 && verdict.selection.setup == setup
                 && verdict.selection.side == side
+                && verdict.condition.admits(today, side)
+        })
+        .max_by(|a, b| {
+            rank(a)
+                .cmp(&rank(b))
+                .then(
+                    a.selection
+                        .expectancy_ci
+                        .0
+                        .total_cmp(&b.selection.expectancy_ci.0),
+                )
+                .then(
+                    (a.condition == regime::Condition::None)
+                        .cmp(&(b.condition == regime::Condition::None)),
+                )
         })
         .cloned()
 }
@@ -870,6 +1263,7 @@ pub fn check_instrument(
     risk_pct: f64,
     fx_to_account: &dyn Fn(&Instrument) -> Option<f64>,
     held: &dyn Fn(&str) -> Option<String>,
+    references: &HashMap<String, Vec<Bar>>,
 ) -> InstrumentCheck {
     let signals = instrument_signals(
         instrument,
@@ -878,6 +1272,7 @@ pub fn check_instrument(
         risk_pct,
         fx_to_account,
         held,
+        references,
     );
     let mut cards = signals.cards;
     cards.sort_by(|left, right| right.score.total_cmp(&left.score));
@@ -951,4 +1346,11 @@ fn add_weekdays(mut date: NaiveDate, mut count: i64) -> NaiveDate {
         }
     }
     date
+}
+
+/// Round 24 (Kilo, A1), *pure*: today's volume over the median of the previous `period`
+/// sessions' volumes. `None` when `index < period`, any of those volumes (or today's) is
+/// missing, or the median is not positive.
+pub fn relative_volume(bars: &[Bar], index: usize, period: usize) -> Option<f64> {
+    indicators::relative_volume(bars, index, period)
 }

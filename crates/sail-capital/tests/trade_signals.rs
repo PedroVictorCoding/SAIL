@@ -81,9 +81,7 @@ fn candidates_skip_instruments_with_a_verified_card() {
         assert!(
             !day.suppressed
                 .iter()
-                .any(|(s, setup, side)| *s == card.symbol
-                    && *setup == card.setup
-                    && *side == card.side)
+                .any(|s| s.symbol == card.symbol && s.setup == card.setup && s.side == card.side)
         );
     }
 }
@@ -100,7 +98,7 @@ fn a_flat_market_has_no_cards_and_keeps_the_scoreboard() {
     );
     let day = day(&[market]);
     assert!(day.cards.is_empty());
-    assert_eq!(day.scoreboard.len(), 36);
+    assert_eq!(day.scoreboard.len(), 3 * SetupId::ALL.len() * 2);
     assert_eq!(day.suppressed.len(), 0);
     assert!(!day.notes.is_empty());
 }
@@ -150,7 +148,7 @@ fn earnings_inside_the_window_suppress_the_card() {
         day.cards.iter().all(|card| card.key != key),
         "the earnings card was still published"
     );
-    assert!(day.suppressed.iter().any(|(seen, _, _)| seen == &symbol));
+    assert!(day.suppressed.iter().any(|s| s.symbol == symbol));
 }
 
 #[test]
@@ -246,6 +244,7 @@ fn a_check_reproduces_the_daily_card_for_the_same_instrument() {
         0.5,
         &|_| Some(1.0),
         &|_| None,
+        &Default::default(),
     );
     assert_eq!(check.session, instrument.bars.last().unwrap().session);
     assert!(
@@ -286,6 +285,7 @@ fn a_check_explains_a_firing_that_did_not_publish() {
         0.5,
         &|_| Some(1.0),
         &|_| None,
+        &Default::default(),
     );
     assert!(check.cards.is_empty());
     assert!(

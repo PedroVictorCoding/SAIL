@@ -11,7 +11,12 @@
 //!   (`None` when there are fewer bars than that).
 //! - [`prefix_hash`]: lowercase hex SHA-256 over the bars with `session < cut`, each fed
 //!   as `"{session}|{open:016x}|{high:016x}|{low:016x}|{close:016x}\n"` with the `f64`s as
-//!   `to_bits()`. Any change to any earlier bar changes the hash.
+//!   `to_bits()`. Any change to any earlier bar changes the hash. Round 24: a bar with a
+//!   volume or a dividend appends `"|v{bits:016x}"` and/or `"|d{bits:016x}"` before the
+//!   newline, so bars without either hash as before.
+//! - [`instrument_prefix_hash`] (round 24): the prefix hash plus the context the replay
+//!   reads (earnings events before the cut, withholding, region), so a cache also goes
+//!   stale when those change.
 //! - [`costs_tag`]: a stable string of the three `Costs` numbers' `to_bits()`, so a change
 //!   to the assumed costs invalidates the cache.
 //! - [`merge`]: cached trades with `signal_session < cut` followed by the fresh
@@ -37,17 +42,48 @@ pub fn cut_session(bars: &[Bar]) -> Option<NaiveDate> {
 pub fn prefix_hash(bars: &[Bar], cut: NaiveDate) -> String {
     let mut hasher = Sha256::new();
     for bar in bars.iter().take_while(|bar| bar.session < cut) {
-        hasher.update(
-            format!(
-                "{}|{:016x}|{:016x}|{:016x}|{:016x}\n",
-                bar.session,
-                bar.open.to_bits(),
-                bar.high.to_bits(),
-                bar.low.to_bits(),
-                bar.close.to_bits()
-            )
-            .as_bytes(),
+        let mut line = format!(
+            "{}|{:016x}|{:016x}|{:016x}|{:016x}",
+            bar.session,
+            bar.open.to_bits(),
+            bar.high.to_bits(),
+            bar.low.to_bits(),
+            bar.close.to_bits()
         );
+        if let Some(volume) = bar.volume {
+            line.push_str(&format!("|v{:016x}", volume.to_bits()));
+        }
+        if let Some(dividend) = bar.dividend {
+            line.push_str(&format!("|d{:016x}", dividend.to_bits()));
+        }
+        line.push('\n');
+        hasher.update(line.as_bytes());
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Round 24: [`prefix_hash`] of the instrument's bars, extended with the context a replay
+/// reads before `cut`: earnings events dated before it, the withholding and the region.
+pub fn instrument_prefix_hash(instrument: &super::Instrument, cut: NaiveDate) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(prefix_hash(&instrument.bars, cut).as_bytes());
+    let context = &instrument.context;
+    hasher.update(format!(
+        "|w{:016x}|r{:?}",
+        context.withholding.to_bits(),
+        context.region
+    ));
+    for event in context.earnings_events.iter().filter(|e| e.date < cut) {
+        hasher.update(format!(
+            "|e{}:{:?}:{:?}",
+            event.date,
+            event.after_close,
+            event.surprise_pct.map(f64::to_bits)
+        ));
     }
     hasher
         .finalize()
@@ -101,5 +137,7 @@ fn setup_rank(setup: SetupId) -> usize {
         SetupId::BollingerReversion => 3,
         SetupId::InsideBarBreak => 4,
         SetupId::ThreeDayReversal => 5,
+        SetupId::EarningsGapDrift => 6,
+        SetupId::VolumeBreakout => 7,
     }
 }

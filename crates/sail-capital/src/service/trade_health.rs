@@ -112,13 +112,13 @@ impl CapitalService {
                 .iter()
                 .filter_map(|observation| {
                     let ohl = observation.ohl.as_ref()?;
-                    Some(Bar {
-                        session: observation.session,
-                        open: ohl.open.to_f64()?,
-                        high: ohl.high.to_f64()?,
-                        low: ohl.low.to_f64()?,
-                        close: observation.close.to_f64()?,
-                    })
+                    Some(Bar::ohlc(
+                        observation.session,
+                        ohl.open.to_f64()?,
+                        ohl.high.to_f64()?,
+                        ohl.low.to_f64()?,
+                        observation.close.to_f64()?,
+                    ))
                 })
                 .filter(|bar| bar.open > 0.0 && bar.high >= bar.low && bar.close > 0.0)
                 .collect();
@@ -362,6 +362,7 @@ impl CapitalService {
                 earnings: Vec::new(),
                 evidence_only: true,
                 membership: member.membership,
+                context: self.trade_context(&yahoo, Some(&yahoo), member.class, now)?,
             });
         }
         Ok(out)
@@ -417,22 +418,9 @@ impl CapitalService {
         key: &str,
         now: DateTime<Utc>,
     ) -> Result<Option<Vec<Bar>>, ServiceError> {
-        let observations = self.store.prices(key, now)?;
-        let bars: Vec<Bar> = observations
-            .iter()
-            .filter_map(|observation| {
-                let ohl = observation.ohl.as_ref()?;
-                Some(Bar {
-                    session: observation.session,
-                    open: ohl.open.to_f64()?,
-                    high: ohl.high.to_f64()?,
-                    low: ohl.low.to_f64()?,
-                    close: observation.close.to_f64()?,
-                })
-            })
-            .filter(|bar| bar.open > 0.0 && bar.high >= bar.low && bar.close > 0.0)
-            .collect();
-        Ok((bars.len() >= MIN_OHL_BARS).then_some(bars))
+        // Round 24: research names carry volume and, once fetched, dividends.
+        let yahoo = key.strip_prefix("research:");
+        self.trade_bars(key, yahoo, AssetClass::Stock, now, MIN_OHL_BARS)
     }
 }
 

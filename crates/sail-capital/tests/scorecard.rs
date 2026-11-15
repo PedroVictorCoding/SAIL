@@ -100,6 +100,7 @@ fn verdict(
         candidate: false,
         reason: reason.to_string(),
         judgement: None,
+        condition: Default::default(),
     }
 }
 

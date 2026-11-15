@@ -25,6 +25,7 @@ mod research;
 mod scorecard;
 mod today;
 mod trade_cache;
+mod trade_context;
 mod trade_health;
 mod trade_run;
 pub use dividends_run::DividendRefresh;

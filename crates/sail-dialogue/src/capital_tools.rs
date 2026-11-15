@@ -265,9 +265,9 @@ fn signals(service: &CapitalService, input: &Value) -> Result<Value, String> {
             let suppressed: Vec<Value> = day
                 .suppressed
                 .iter()
-                .map(
-                    |(symbol, setup, side)| json!({"symbol": symbol, "setup": setup, "side": side}),
-                )
+                .map(|s| {
+                    json!({"symbol": s.symbol, "setup": s.setup, "side": s.side, "reason": s.reason})
+                })
                 .collect();
             (Some(day.session), cards, candidates, scoreboard, suppressed)
         }

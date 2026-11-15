@@ -136,13 +136,15 @@ impl CapitalStore {
         // One grouped read for the whole series instead of one query per bar. It keeps the
         // latest version and the session's first availability, so a refresh that only
         // repeats stored bars writes nothing.
-        // (bar sha, first availability, whether the stored version has open/high/low).
-        let mut latest: std::collections::BTreeMap<String, (String, String, bool)> =
+        // (bar sha, first availability, whether the stored version has open/high/low,
+        // whether it has a volume).
+        let mut latest: std::collections::BTreeMap<String, (String, String, bool, bool)> =
             Default::default();
         {
             let mut stmt = tx.prepare(
                 "SELECT session, bar_sha256, first_available_at,
-                        json_extract(observation_json, '$.ohl') IS NOT NULL
+                        json_extract(observation_json, '$.ohl') IS NOT NULL,
+                        json_extract(observation_json, '$.volume') IS NOT NULL
                  FROM price_bars
                  WHERE instrument_key = ?1 AND source_id = ?2
                  ORDER BY session, ingested_at, rowid",
@@ -153,11 +155,12 @@ impl CapitalStore {
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
                     r.get::<_, bool>(3)?,
+                    r.get::<_, bool>(4)?,
                 ))
             })?;
             for row in rows {
-                let (session, bar_sha, first_available_at, has_ohl) = row?;
-                latest.insert(session, (bar_sha, first_available_at, has_ohl));
+                let (session, bar_sha, first_available_at, has_ohl, has_volume) = row?;
+                latest.insert(session, (bar_sha, first_available_at, has_ohl, has_volume));
             }
         }
 
@@ -167,14 +170,20 @@ impl CapitalStore {
             let content = encode(&(bar, &series.currency, series.adjustment))?;
             let bar_sha = sha256_hex(content.as_bytes());
             let brings_ohl = bar.open.is_some() && bar.high.is_some() && bar.low.is_some();
+            // Round 24: a zero volume (FX, most indices) means "not reported".
+            let volume = bar.volume.filter(|v| *v > rust_decimal::Decimal::ZERO);
+            let brings_volume = volume.is_some();
             let (first_available_at, is_revision) = match latest.get(&session) {
                 // content hash; a bar that now carries them is stored once as a revision.
-                Some((stored_sha, _, has_ohl))
-                    if stored_sha == &bar_sha && (*has_ohl || !brings_ohl) =>
+                // Round 24: the same for a volume that earlier versions dropped.
+                Some((stored_sha, _, has_ohl, has_volume))
+                    if stored_sha == &bar_sha
+                        && (*has_ohl || !brings_ohl)
+                        && (*has_volume || !brings_volume) =>
                 {
                     continue;
                 }
-                Some((_, first_available_at, _)) => (parse_ts(first_available_at)?, true),
+                Some((_, first_available_at, ..)) => (parse_ts(first_available_at)?, true),
                 None => (now, false),
             };
             let observation = MarketObservation {
@@ -188,6 +197,7 @@ impl CapitalStore {
                     }
                     _ => None,
                 },
+                volume,
                 currency: series.currency.clone(),
                 price_kind: "close".to_string(),
                 adjustment: series.adjustment,
@@ -230,7 +240,12 @@ impl CapitalStore {
             }
             latest.insert(
                 session,
-                (bar_sha, first_available_at.to_rfc3339(), brings_ohl),
+                (
+                    bar_sha,
+                    first_available_at.to_rfc3339(),
+                    brings_ohl,
+                    brings_volume,
+                ),
             );
         }
         tx.commit()?;

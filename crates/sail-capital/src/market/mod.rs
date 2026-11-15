@@ -205,6 +205,13 @@ pub struct MarketObservation {
     /// stored earlier have none). Chart-pattern models need them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ohl: Option<Ohl>,
+    /// Round 24: volume traded in the session, when the source gave a positive number.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "rust_decimal::serde::str_option"
+    )]
+    pub volume: Option<Decimal>,
     /// Trading currency, when known.
     pub currency: Option<Currency>,
     /// Always `"close"` this round.

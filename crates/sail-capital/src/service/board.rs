@@ -249,10 +249,10 @@ impl CapitalService {
                 }
                 day.suppressed
                     .iter()
-                    .find(|(s, ..)| s.eq_ignore_ascii_case(&meta.symbol))
-                    .map(|(_, setup, side)| SetupView {
-                        setup: *setup,
-                        side: *side,
+                    .find(|s| s.symbol.eq_ignore_ascii_case(&meta.symbol))
+                    .map(|s| SetupView {
+                        setup: s.setup,
+                        side: s.side,
                         published: false,
                         candidate: false,
                     })

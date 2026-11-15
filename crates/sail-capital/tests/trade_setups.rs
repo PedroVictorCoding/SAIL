@@ -51,6 +51,8 @@ fn squeeze_bars(breakout: f64) -> Vec<Bar> {
         high: 100.05,
         low: 90.0,
         close: 100.0,
+        volume: None,
+        dividend: None,
     });
     for index in 61..=79 {
         bars.push(bar(index, 100.0, 0.2));
@@ -61,6 +63,8 @@ fn squeeze_bars(breakout: f64) -> Vec<Bar> {
         high: breakout + 0.1,
         low: 99.9,
         close: breakout,
+        volume: None,
+        dividend: None,
     });
     bars
 }

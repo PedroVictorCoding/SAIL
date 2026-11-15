@@ -45,12 +45,16 @@
 //!
 //! **Purity.** No I/O and no clock. Money here is `f64` in the account currency, because
 //! it is a projection and not ledger money.
+pub mod calibrate;
 mod growth;
+pub mod maximize;
+pub mod montecarlo;
 mod project;
 pub mod retirement;
 pub mod retirement_research;
+pub mod safety;
 
-pub use self::growth::growth;
+pub use self::growth::{DEFAULT_SHRINK_K, PaymentKind, classify, growth, growth_with, specials};
 pub use self::project::project;
 
 use chrono::NaiveDate;

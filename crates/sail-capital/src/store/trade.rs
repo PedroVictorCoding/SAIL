@@ -21,6 +21,17 @@ CREATE TABLE IF NOT EXISTS earnings_dates (
     dates_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS earnings_by_symbol ON earnings_dates (yahoo, fetched_at);
+CREATE TABLE IF NOT EXISTS earnings_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    yahoo TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    events_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS earnings_events_by_symbol ON earnings_events (yahoo, id);
+CREATE TRIGGER IF NOT EXISTS earnings_events_no_update BEFORE UPDATE ON earnings_events
+BEGIN SELECT RAISE(ABORT, 'earnings events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS earnings_events_no_delete BEFORE DELETE ON earnings_events
+BEGIN SELECT RAISE(ABORT, 'earnings events are append-only'); END;
 CREATE TABLE IF NOT EXISTS trade_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account TEXT NOT NULL,
@@ -137,6 +148,48 @@ impl CapitalStore {
             params![yahoo, now.to_rfc3339(), encode(&dates)?],
         )?;
         Ok(())
+    }
+
+    /// Round 24: stores an earnings-events snapshot (dates, timing and EPS surprise) for a
+    /// Yahoo symbol. Append-only.
+    pub fn record_earnings_events(
+        &self,
+        yahoo: &str,
+        events: &[crate::trade::EarningsEvent],
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        conn.execute(
+            "INSERT INTO earnings_events (yahoo, fetched_at, events_json) VALUES (?1, ?2, ?3)",
+            params![yahoo, now.to_rfc3339(), encode(&events)?],
+        )?;
+        Ok(())
+    }
+
+    /// Round 24: the newest earnings-events snapshot for `yahoo` stored by `known_by`,
+    /// oldest event first. Empty when none was stored by then.
+    pub fn earnings_events(
+        &self,
+        yahoo: &str,
+        known_by: DateTime<Utc>,
+    ) -> Result<Vec<crate::trade::EarningsEvent>, StoreError> {
+        let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+        let mut stmt = conn.prepare(
+            "SELECT fetched_at, events_json FROM earnings_events WHERE yahoo = ?1
+             ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map(params![yahoo], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (at, json) = row?;
+            if parse_ts(&at)? <= known_by {
+                let mut events: Vec<crate::trade::EarningsEvent> = decode(&json)?;
+                events.sort_by_key(|e| e.date);
+                return Ok(events);
+            }
+        }
+        Ok(Vec::new())
     }
 
     /// The latest earnings snapshot for a Yahoo symbol: when fetched, and the dates.

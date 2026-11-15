@@ -3,7 +3,7 @@
 use chrono::NaiveDate;
 
 use super::indicators::atr;
-use super::setups::fire_from;
+use super::setups::fire_for_from;
 use super::{Bar, Costs, Exit, HoldingGuard, Instrument, SetupId, Side, SignalCard, Trade};
 
 const ENTRY_ZONE_ATR: f64 = 0.25;
@@ -25,7 +25,7 @@ fn replay_since(instrument: &Instrument, costs: Costs, from: Option<NaiveDate>) 
         // would round differently from a shorter start and could flip a firing); only
         // the per-session conditions before `from` are skipped.
         let start = from.map_or(0, |from| bars.partition_point(|bar| bar.session < from));
-        let firings = fire_from(setup, bars, start);
+        let firings = fire_for_from(setup, instrument, start);
         for (index, side) in firings {
             // Only firings from `from` on are simulated; earlier ones come from the cache.
             if from.is_some_and(|from| bars[index].session < from) {
@@ -268,6 +268,9 @@ fn closed(
         exit_session,
         exit,
         r_multiple: gross_r - (costs.round_trip + conversion) * entry / risk - financing,
+        dividend_r: 0.0,
+        ex_date_gap: false,
+        regime: None,
     }
 }
 

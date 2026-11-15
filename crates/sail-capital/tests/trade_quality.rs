@@ -15,6 +15,8 @@ fn bars(closes: &[f64]) -> Vec<Bar> {
             high: close * 1.01,
             low: close * 0.99,
             close: *close,
+            volume: None,
+            dividend: None,
         })
         .collect()
 }

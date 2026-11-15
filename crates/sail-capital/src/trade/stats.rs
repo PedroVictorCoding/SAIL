@@ -171,6 +171,7 @@ pub(super) fn verdict(
         candidate,
         reason,
         judgement: None,
+        condition: super::regime::Condition::None,
     }
 }
 
@@ -234,4 +235,16 @@ fn max_drawdown(values: &[f64]) -> f64 {
         worst = worst.max(peak - cumulative);
     }
     worst
+}
+
+/// Round 24 (Kilo, A7): see [`super::expectations`]. M0 stub.
+pub(super) fn expectations(trades: &[Trade]) -> Option<super::Expectations> {
+    let _ = trades;
+    None
+}
+
+/// Round 24 (Kilo, A7): see [`super::sessions_to_verdict`]. M0 stub.
+pub(super) fn sessions_to_verdict(mean: f64, sd: f64, already: u32) -> Option<u32> {
+    let _ = (mean, sd, already);
+    None
 }

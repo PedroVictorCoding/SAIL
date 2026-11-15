@@ -58,10 +58,27 @@ pub struct RiskLimits {
     /// Signal cards are sized from it.
     #[serde(default = "default_risk_per_trade", with = "rust_decimal::serde::str")]
     pub risk_per_trade_pct: Decimal,
+    /// Round 24: most of the account at risk across open and new signal cards, percent.
+    #[serde(default = "default_max_heat", with = "rust_decimal::serde::str")]
+    pub max_heat_pct: Decimal,
+    /// Round 24: most net risk inside one group of correlated cards, percent.
+    #[serde(
+        default = "default_max_cluster_heat",
+        with = "rust_decimal::serde::str"
+    )]
+    pub max_cluster_heat_pct: Decimal,
 }
 
 fn default_risk_per_trade() -> Decimal {
     Decimal::new(5, 1)
+}
+
+fn default_max_heat() -> Decimal {
+    Decimal::from(3)
+}
+
+fn default_max_cluster_heat() -> Decimal {
+    Decimal::new(15, 1)
 }
 
 impl RiskLimits {
@@ -79,6 +96,26 @@ impl RiskLimits {
             fx_cost_bps: Decimal::from(50),
             risk_aversion: Decimal::from(4),
             risk_per_trade_pct: default_risk_per_trade(),
+            max_heat_pct: default_max_heat(),
+            max_cluster_heat_pct: default_max_cluster_heat(),
+        }
+    }
+
+    /// Round 24: the heat limits for the signal cards, with clusters joined above 0.7
+    /// correlation (fixed a priori).
+    pub fn heat_limits(&self) -> crate::trade::heat::HeatLimits {
+        use rust_decimal::prelude::ToPrimitive;
+        let defaults = crate::trade::heat::HeatLimits::default();
+        crate::trade::heat::HeatLimits {
+            max_total_risk_pct: self
+                .max_heat_pct
+                .to_f64()
+                .unwrap_or(defaults.max_total_risk_pct),
+            max_cluster_risk_pct: self
+                .max_cluster_heat_pct
+                .to_f64()
+                .unwrap_or(defaults.max_cluster_risk_pct),
+            cluster_corr: defaults.cluster_corr,
         }
     }
 
@@ -122,6 +159,16 @@ impl RiskLimits {
         }
         if self.risk_per_trade_pct <= Decimal::ZERO || self.risk_per_trade_pct > Decimal::from(5) {
             return Err("Risk per trade must be above 0% and at most 5%".into());
+        }
+        if self.max_heat_pct < self.risk_per_trade_pct || self.max_heat_pct > Decimal::from(20) {
+            return Err(
+                "Risk across signals must be at least the risk per trade and at most 20%".into(),
+            );
+        }
+        if self.max_cluster_heat_pct < self.risk_per_trade_pct
+            || self.max_cluster_heat_pct > self.max_heat_pct
+        {
+            return Err("Risk in correlated signals must be between the risk per trade and the risk across signals".into());
         }
         Ok(())
     }

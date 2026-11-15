@@ -726,6 +726,7 @@ mod tests {
             session,
             close: Decimal::from_str("100").unwrap(),
             ohl: None,
+            volume: None,
             currency: None,
             price_kind: "close".into(),
             adjustment: Adjustment::Unknown,

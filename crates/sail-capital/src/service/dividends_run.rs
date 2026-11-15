@@ -7,7 +7,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 /// Histories are refetched after this many days.
-const HISTORY_MAX_AGE_DAYS: i64 = 7;
+pub(super) const HISTORY_MAX_AGE_DAYS: i64 = 7;
 
 /// When the trailing year implied by the per-share history differs from what the ledger
 /// actually received by more than this factor (either way), the ledger level is used.
@@ -52,6 +52,18 @@ impl CapitalService {
         if wanted.is_empty() {
             return Ok(DividendRefresh { fetched: 0, failed });
         }
+        let (fetched, more_failed) = self.fetch_dividend_histories(&wanted).await?;
+        failed.extend(more_failed);
+        Ok(DividendRefresh { fetched, failed })
+    }
+
+    /// Runs the dividends helper over `wanted` Yahoo symbols (chunks of 100) and stores
+    /// each history it returns. Returns how many were stored and the symbols that failed.
+    pub(super) async fn fetch_dividend_histories(
+        &self,
+        wanted: &[String],
+    ) -> Result<(u32, Vec<String>), ServiceError> {
+        let mut failed = Vec::new();
         let python = std::env::var("SAIL_YFINANCE_PYTHON")
             .unwrap_or_else(|_| crate::market::yahoo::DEFAULT_PYTHON.to_string());
         let script = std::env::var("SAIL_DIVIDENDS_SCRIPT")
@@ -120,7 +132,7 @@ impl CapitalService {
                 fetched += 1;
             }
         }
-        Ok(DividendRefresh { fetched, failed })
+        Ok((fetched, failed))
     }
 
     /// The dividend projection for the current holdings, with the default top-N count.

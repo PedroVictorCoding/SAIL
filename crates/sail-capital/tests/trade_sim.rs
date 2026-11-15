@@ -12,6 +12,8 @@ fn ohlc(index: usize, open: f64, high: f64, low: f64, close: f64) -> Bar {
         high,
         low,
         close,
+        volume: None,
+        dividend: None,
     }
 }
 

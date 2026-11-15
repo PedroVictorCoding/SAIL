@@ -172,3 +172,19 @@ pub(super) fn previous_extreme(
         slice.iter().map(|bar| bar.low).reduce(f64::min)
     }
 }
+
+/// Round 24 (Kilo, A2): see [`super::Adjusted`]. M0 stub: the bars unchanged, factor 1.
+pub(super) fn adjust(bars: &[Bar]) -> super::Adjusted {
+    super::Adjusted {
+        bars: bars.to_vec(),
+        factor: vec![1.0; bars.len()],
+    }
+}
+
+/// Round 24 (Kilo, A1), *pure*: `volume[index] / median(volume[index − period .. index])`.
+/// `None` when `index < period`, when any of those volumes (or today's) is missing, or
+/// when the median is not positive.
+pub(super) fn relative_volume(bars: &[Bar], index: usize, period: usize) -> Option<f64> {
+    let _ = (bars, index, period);
+    None
+}

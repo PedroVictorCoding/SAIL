@@ -1,7 +1,7 @@
-//! The six fixed daily-bar setups.
+//! The fixed daily-bar setups (six from round 13, two event/volume setups from round 24).
 
 use super::indicators::{bollinger, previous_extreme, rolling_range, rsi, sma};
-use super::{Bar, SetupId, Side};
+use super::{Bar, Instrument, SetupId, Side};
 
 pub(super) fn fire(setup: SetupId, bars: &[Bar]) -> Vec<(usize, Side)> {
     fire_from(setup, bars, 0)
@@ -18,7 +18,25 @@ pub(super) fn fire_from(setup: SetupId, bars: &[Bar], start: usize) -> Vec<(usiz
         SetupId::BollingerReversion => bollinger_reversion(bars, start),
         SetupId::InsideBarBreak => inside_bar_break(bars, start),
         SetupId::ThreeDayReversal => three_day_reversal(bars, start),
+        // Round 24: both need more than bars; see `fire_for_from`.
+        SetupId::EarningsGapDrift | SetupId::VolumeBreakout => Vec::new(),
     }
+}
+
+/// Round 24 (Kilo, A2/A4): [`fire_from`] with the instrument's context. Triggers are to be
+/// computed on [`super::adjust`]ed bars; the two round 24 setups fire only on stocks and
+/// ETFs. M0 stub: raw bars, and the round 24 setups never fire.
+pub(super) fn fire_for_from(
+    setup: SetupId,
+    instrument: &Instrument,
+    start: usize,
+) -> Vec<(usize, Side)> {
+    fire_from(setup, &instrument.bars, start)
+}
+
+/// Round 24: [`fire_for_from`] from the first bar.
+pub(super) fn fire_for(setup: SetupId, instrument: &Instrument) -> Vec<(usize, Side)> {
+    fire_for_from(setup, instrument, 0)
 }
 
 fn trend_pullback(bars: &[Bar], start: usize) -> Vec<(usize, Side)> {
