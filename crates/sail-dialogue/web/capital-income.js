@@ -1037,3 +1037,676 @@ function renderProjMonths(data) {
   }).join("");
   wrap.innerHTML = `<table class="cp-table cp-months-table"><thead>${head}</thead><tbody>${rows}</tbody></table>`;
 }
+
+// --- Round 24: safety chips, specials note, income fan, and Maximize income panel -----
+
+(function initR24Income() {
+  let r24FanSeq = 0;
+  let r24MaxPollTimer = null;
+  let r24Candidates = [];
+  let r24LimitsPrefilled = false;
+
+  function r24Query() {
+    return currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+  }
+
+  function retireAssumptions() {
+    const num = (id, fallback, min, max) => {
+      const el = document.getElementById(id);
+      const v = el ? Number(el.value) : NaN;
+      return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
+    };
+    const currentAge = Math.round(num("cpRetireCurrentAge", 35, 16, 95));
+    const retireAge = Math.round(num("cpRetireRetireAge", 55, 16, 95));
+    const targetMonthly = num("cpRetireTarget", 2500, 1, 100000);
+    const inflation = num("cpRetireInflation", 2.0, 0, 10);
+    const years = Math.max(1, Math.min(PROJ_YEARS, retireAge - currentAge));
+    const nominalMonthly = targetMonthly * Math.pow(1 + inflation / 100, years);
+    return { years, nominalMonthly };
+  }
+
+  function safetyLabel(grade) {
+    const g = String(grade || "unknown").toLowerCase();
+    return g === "unknown" ? "?" : g.toUpperCase();
+  }
+
+  function createSafetyChip(safety, symbol) {
+    const g = String((safety && safety.grade) || "unknown").toLowerCase();
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cp-safety-chip";
+    btn.setAttribute("data-grade", g);
+    btn.textContent = safetyLabel(g);
+    const reasons = Array.isArray(safety && safety.reasons) ? safety.reasons : [];
+    const titleParts = [`Safety ${safetyLabel(g)}`];
+    if (safety && typeof safety.fcf_cover === "number") {
+      titleParts.push(`FCF cover ${safety.fcf_cover.toFixed(1)}×`);
+    }
+    if (safety && typeof safety.streak_years === "number" && safety.streak_years > 0) {
+      titleParts.push(`${safety.streak_years}y streak`);
+    }
+    if (reasons.length > 0) titleParts.push(reasons.join(" "));
+    btn.title = titleParts.join(" · ");
+    btn.setAttribute("aria-label", `${symbol} dividend safety ${safetyLabel(g)}`);
+    return btn;
+  }
+
+  // Enhance holdings table with safety grade chips and expandable reason rows.
+  if (typeof renderProjHoldingsTable === "function") {
+    const origHoldings = renderProjHoldingsTable;
+    renderProjHoldingsTable = function (data) {
+      origHoldings(data);
+      const tbody = document.getElementById("cpProjHoldingsBody");
+      const safetyMap = (data && data.safety && typeof data.safety === "object") ? data.safety : {};
+      const holdings = (data && Array.isArray(data.holdings)) ? data.holdings : [];
+      if (tbody && holdings.length > 0) {
+        const rows = Array.from(tbody.querySelectorAll("tr"));
+        rows.forEach((tr, idx) => {
+          const h = holdings[idx];
+          if (!h) return;
+          const s = safetyMap[h.symbol];
+          if (!s) return;
+          const cell = tr.querySelector("td");
+          if (!cell) return;
+          const chip = createSafetyChip(s, h.symbol);
+          chip.addEventListener("click", () => {
+            const next = tr.nextElementSibling;
+            if (next && next.classList.contains("cp-safety-detail-row")) {
+              next.remove();
+              chip.setAttribute("aria-expanded", "false");
+              return;
+            }
+            const detailTr = document.createElement("tr");
+            detailTr.className = "cp-safety-detail-row";
+            const detailTd = document.createElement("td");
+            detailTd.colSpan = 7;
+            const parts = [];
+            if (typeof s.fcf_cover === "number") parts.push(`FCF cover ${s.fcf_cover.toFixed(2)}×`);
+            if (typeof s.earnings_cover === "number") parts.push(`Earnings cover ${s.earnings_cover.toFixed(2)}×`);
+            if (typeof s.streak_years === "number") parts.push(`Streak ${s.streak_years}y`);
+            const head = document.createElement("div");
+            head.className = "cp-safety-detail-head";
+            head.textContent = `${h.symbol} · Grade ${safetyLabel(s.grade)}${parts.length ? " · " + parts.join(" · ") : ""}`;
+            detailTd.appendChild(head);
+            const reasons = Array.isArray(s.reasons) ? s.reasons : [];
+            if (reasons.length > 0) {
+              const ul = document.createElement("ul");
+              ul.className = "cp-safety-reasons";
+              for (const r of reasons) {
+                const li = document.createElement("li");
+                li.textContent = r;
+                ul.appendChild(li);
+              }
+              detailTd.appendChild(ul);
+            }
+            detailTr.appendChild(detailTd);
+            tr.parentNode.insertBefore(detailTr, tr.nextSibling);
+            chip.setAttribute("aria-expanded", "true");
+          });
+          cell.appendChild(document.createTextNode(" "));
+          cell.appendChild(chip);
+        });
+      }
+
+      // Specials note
+      const nonPayingBox = document.getElementById("cpProjNonPaying");
+      if (nonPayingBox && nonPayingBox.parentNode) {
+        let specialsEl = document.getElementById("cpProjSpecialsNote");
+        if (!specialsEl) {
+          specialsEl = document.createElement("p");
+          specialsEl.id = "cpProjSpecialsNote";
+          specialsEl.className = "cp-note cp-specials-note";
+          nonPayingBox.parentNode.insertBefore(specialsEl, nonPayingBox.nextSibling);
+        }
+        const specials = (data && Array.isArray(data.specials)) ? data.specials : [];
+        if (specials.length > 0) {
+          specialsEl.hidden = false;
+          const items = specials.map((sp) => `${sp.symbol} (${sp.ex_date}: ${Number(sp.per_share || 0).toFixed(2)})`);
+          specialsEl.textContent = `Special dividends excluded from TTM and growth: ${items.join(", ")}.`;
+        } else {
+          specialsEl.hidden = true;
+          specialsEl.textContent = "";
+        }
+      }
+    };
+  }
+
+  // --- Income fan (Monte Carlo) -------------------------------------------------------
+  function ensureFanWrap() {
+    const chartWrap = document.getElementById("cpProjChartWrap");
+    if (!chartWrap || !chartWrap.parentNode) return null;
+    let wrap = document.getElementById("cpIncomeFanWrap");
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = "cpIncomeFanWrap";
+      wrap.className = "cp-income-fan-wrap";
+      chartWrap.parentNode.insertBefore(wrap, chartWrap.nextSibling);
+    }
+    return wrap;
+  }
+
+  function renderIncomeFan(dist) {
+    const wrap = ensureFanWrap();
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "cp-fan-header";
+    const title = document.createElement("h3");
+    title.className = "cp-fan-title";
+    title.textContent = "Monte Carlo income fan (p10 / p50 / p90)";
+    header.appendChild(title);
+
+    if (dist && typeof dist.p_target === "number" && Array.isArray(dist.target)) {
+      const badge = document.createElement("span");
+      badge.className = "cp-fan-target-badge";
+      badge.textContent = `P(income ≥ target at Year ${dist.target[0]}): ${Math.round(dist.p_target * 100)}%`;
+      header.appendChild(badge);
+    }
+    wrap.appendChild(header);
+
+    const years = (dist && Array.isArray(dist.years)) ? dist.years : [];
+    if (years.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "cp-empty";
+      empty.textContent = "No Monte Carlo distribution available.";
+      wrap.appendChild(empty);
+      return;
+    }
+
+    const W = 820;
+    const H = 220;
+    const ml = 68;
+    const mr = 24;
+    const mt = 20;
+    const mb = 30;
+    const pw = W - ml - mr;
+    const ph = H - mt - mb;
+    const yBottom = mt + ph;
+
+    const targetAnnual = (dist.target && typeof dist.target[1] === "number") ? dist.target[1] : null;
+    const maxY = Math.max(
+      1,
+      ...years.map((y) => (y.net && y.net.p90) || 0),
+      targetAnnual || 0,
+    ) * 1.1;
+
+    const xPos = (i) => ml + (years.length === 1 ? pw / 2 : (i / (years.length - 1)) * pw);
+    const yPos = (v) => yBottom - (Math.max(0, v) / maxY) * ph;
+
+    const p90Pts = years.map((y, i) => `${xPos(i).toFixed(1)},${yPos(y.net?.p90 || 0).toFixed(1)}`);
+    const p10Pts = years.map((y, i) => `${xPos(i).toFixed(1)},${yPos(y.net?.p10 || 0).toFixed(1)}`).reverse();
+    const p50Pts = years.map((y, i) => `${xPos(i).toFixed(1)},${yPos(y.net?.p50 || 0).toFixed(1)}`);
+
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("class", "cp-fan-svg");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Monte Carlo p10 to p90 net dividend income fan");
+
+    for (let k = 0; k <= 3; k++) {
+      const frac = k / 3;
+      const yLine = yBottom - frac * ph;
+      const line = document.createElementNS(svgNS, "line");
+      line.setAttribute("x1", String(ml));
+      line.setAttribute("y1", yLine.toFixed(1));
+      line.setAttribute("x2", String(W - mr));
+      line.setAttribute("y2", yLine.toFixed(1));
+      line.setAttribute("stroke", "rgba(255,255,255,0.07)");
+      svg.appendChild(line);
+
+      const lbl = document.createElementNS(svgNS, "text");
+      lbl.setAttribute("x", String(ml - 8));
+      lbl.setAttribute("y", (yLine + 3).toFixed(1));
+      lbl.setAttribute("text-anchor", "end");
+      lbl.setAttribute("class", "cp-proj-axis-label");
+      lbl.textContent = `${groupDecimal(Math.round(frac * maxY))}`;
+      svg.appendChild(lbl);
+    }
+
+    const poly = document.createElementNS(svgNS, "polygon");
+    poly.setAttribute("points", p90Pts.concat(p10Pts).join(" "));
+    poly.setAttribute("fill", "rgba(78, 145, 252, 0.22)");
+    svg.appendChild(poly);
+
+    const med = document.createElementNS(svgNS, "polyline");
+    med.setAttribute("points", p50Pts.join(" "));
+    med.setAttribute("fill", "none");
+    med.setAttribute("stroke", "#7cb7ff");
+    med.setAttribute("stroke-width", "2");
+    svg.appendChild(med);
+
+    if (targetAnnual !== null && targetAnnual > 0) {
+      const ty = yPos(targetAnnual);
+      const tLine = document.createElementNS(svgNS, "line");
+      tLine.setAttribute("x1", String(ml));
+      tLine.setAttribute("y1", ty.toFixed(1));
+      tLine.setAttribute("x2", String(W - mr));
+      tLine.setAttribute("y2", ty.toFixed(1));
+      tLine.setAttribute("stroke", "#ffd69f");
+      tLine.setAttribute("stroke-dasharray", "5 4");
+      tLine.setAttribute("stroke-width", "1.5");
+      svg.appendChild(tLine);
+
+      const tLbl = document.createElementNS(svgNS, "text");
+      tLbl.setAttribute("x", String(W - mr));
+      tLbl.setAttribute("y", (ty - 5).toFixed(1));
+      tLbl.setAttribute("text-anchor", "end");
+      tLbl.setAttribute("class", "cp-fan-target-lbl");
+      tLbl.textContent = `Target: ${groupDecimal(Math.round(targetAnnual))}/yr`;
+      svg.appendChild(tLbl);
+    }
+
+    wrap.appendChild(svg);
+
+    const last = years[years.length - 1];
+    if (last && last.net) {
+      const foot = document.createElement("p");
+      foot.className = "cp-note";
+      foot.textContent = `Year ${last.year}: p10 ${formatProjMoney(last.net.p10)} · p50 ${formatProjMoney(last.net.p50)} · p90 ${formatProjMoney(last.net.p90)} (${dist.paths || 2000} paths).`;
+      wrap.appendChild(foot);
+    }
+  }
+
+  async function loadIncomeFan() {
+    const wrap = ensureFanWrap();
+    if (!wrap) return;
+    const seq = ++r24FanSeq;
+    wrap.innerHTML = `<div class="cp-fan-header"><h3 class="cp-fan-title">Monte Carlo income fan</h3><span class="cp-muted">Simulating…</span></div>`;
+
+    const ret = retireAssumptions();
+    const body = {
+      years: PROJ_YEARS,
+      reinvest_pct: currentProjReinvestPct,
+      allocation: currentProjAllocation,
+      monthly_contribution: currentProjMonthlyContribution,
+      top_n: currentProjTopN,
+      reserve_pt_tax: currentProjReservePtTax,
+      paths: 2000,
+      target: [ret.years, ret.nominalMonthly],
+    };
+
+    try {
+      const dist = await fetchJson(`/api/capital/dividends/distribution${r24Query()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (seq !== r24FanSeq) return;
+      renderIncomeFan(dist);
+    } catch (err) {
+      if (seq !== r24FanSeq) return;
+      wrap.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "cp-empty";
+      p.textContent = `Income distribution unavailable: ${err.message}`;
+      wrap.appendChild(p);
+    }
+  }
+
+  // --- Maximize income panel ----------------------------------------------------------
+  function ensureMaximizePanel() {
+    const projPanel = document.getElementById("cpProjectionPanel");
+    if (!projPanel || !projPanel.parentNode) return null;
+    let panel = document.getElementById("cpMaximizePanel");
+    if (!panel) {
+      panel = document.createElement("section");
+      panel.id = "cpMaximizePanel";
+      panel.className = "cp-panel cp-maximize-panel";
+      panel.setAttribute("aria-labelledby", "cpMaximizeTitle");
+
+      const ret = retireAssumptions();
+      panel.innerHTML = `
+        <div class="cp-panel-header">
+          <h2 id="cpMaximizeTitle">Maximize income</h2>
+          <button type="button" class="cp-button cp-btn-primary" id="cpMaxRunBtn">Run maximizer</button>
+        </div>
+        <div class="cp-max-controls">
+          <label class="cp-max-field">
+            <span>Objective</span>
+            <select id="cpMaxObjective" class="cp-input">
+              <option value="robust_income">Robust income (maximize p10)</option>
+              <option value="income_with_wealth_floor">Income with wealth floor (p50)</option>
+              <option value="smooth_months">Smooth months (lowest month p10)</option>
+            </select>
+          </label>
+          <label class="cp-max-field">
+            <span>Target year</span>
+            <input type="number" id="cpMaxYear" class="cp-input" min="1" max="30" value="${ret.years}">
+          </label>
+          <label class="cp-max-field" id="cpMaxFloorWrap" hidden>
+            <span>Wealth floor (%)</span>
+            <input type="number" id="cpMaxFloorPct" class="cp-input" min="50" max="100" value="90">
+          </label>
+          <label class="cp-max-field">
+            <span>Max position (%)</span>
+            <input type="number" id="cpMaxPosPct" class="cp-input" min="5" max="100" value="25">
+          </label>
+          <label class="cp-max-field">
+            <span>Max high-yield (%)</span>
+            <input type="number" id="cpMaxHyPct" class="cp-input" min="0" max="100" value="20">
+          </label>
+          <label class="cp-max-field">
+            <span>Max foreign (%)</span>
+            <input type="number" id="cpMaxFxPct" class="cp-input" min="0" max="100" value="60">
+          </label>
+          <label class="cp-max-field">
+            <span>Min safety</span>
+            <select id="cpMaxMinSafety" class="cp-input">
+              <option value="a">A</option>
+              <option value="b">B</option>
+              <option value="c" selected>C</option>
+              <option value="d">D</option>
+              <option value="e">E</option>
+            </select>
+          </label>
+          <label class="cp-max-field">
+            <span>Top N</span>
+            <input type="number" id="cpMaxTopN" class="cp-input" min="1" max="30" value="10">
+          </label>
+        </div>
+        <div class="cp-max-candidates" id="cpMaxCandidatesWrap">
+          <h3 class="cp-max-sub">Watchlist dividend candidates</h3>
+          <div id="cpMaxCandidatesList" class="cp-max-cand-list"></div>
+        </div>
+        <div id="cpMaxResult" class="cp-max-result"></div>
+      `;
+      projPanel.parentNode.insertBefore(panel, projPanel.nextSibling);
+
+      const objSelect = document.getElementById("cpMaxObjective");
+      const floorWrap = document.getElementById("cpMaxFloorWrap");
+      if (objSelect && floorWrap) {
+        objSelect.addEventListener("change", () => {
+          floorWrap.hidden = objSelect.value !== "income_with_wealth_floor";
+        });
+      }
+      const runBtn = document.getElementById("cpMaxRunBtn");
+      if (runBtn) {
+        runBtn.addEventListener("click", startMaximizeJob);
+      }
+    }
+    return panel;
+  }
+
+  async function prefillLimits() {
+    if (r24LimitsPrefilled) return;
+    r24LimitsPrefilled = true;
+    try {
+      const limits = await fetchJson(`/api/capital/limits${r24Query()}`);
+      const pos = document.getElementById("cpMaxPosPct");
+      if (pos && limits && typeof limits.max_position_pct === "number") {
+        pos.value = String(limits.max_position_pct);
+      }
+    } catch (_) {}
+  }
+
+  function renderCandidates(list) {
+    const wrap = document.getElementById("cpMaxCandidatesList");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    if (!Array.isArray(list) || list.length === 0) {
+      const p = document.createElement("p");
+      p.className = "cp-muted";
+      p.textContent = "No watchlist dividend candidates available yet.";
+      wrap.appendChild(p);
+      return;
+    }
+
+    for (const c of list) {
+      const row = document.createElement("label");
+      row.className = "cp-max-cand-item";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!c.enabled;
+      cb.addEventListener("change", async () => {
+        cb.disabled = true;
+        try {
+          const updated = await fetchJson(`/api/capital/dividends/candidates${r24Query()}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ symbol: c.symbol, enabled: cb.checked }),
+          });
+          r24Candidates = updated;
+          renderCandidates(updated);
+        } catch (_) {
+          cb.checked = !cb.checked;
+        } finally {
+          cb.disabled = false;
+        }
+      });
+
+      const name = document.createElement("strong");
+      name.textContent = c.symbol;
+      const meta = document.createElement("span");
+      meta.className = "cp-muted";
+      const yld = typeof c.trailing_yield === "number" ? `${(c.trailing_yield * 100).toFixed(1)}% yield` : "—";
+      meta.textContent = `${yld} · ${c.years_of_history || 0}y`;
+
+      row.appendChild(cb);
+      row.appendChild(name);
+      if (c.safety) row.appendChild(createSafetyChip(c.safety, c.symbol));
+      row.appendChild(meta);
+      wrap.appendChild(row);
+    }
+  }
+
+  async function loadCandidates() {
+    ensureMaximizePanel();
+    try {
+      const list = await fetchJson(`/api/capital/dividends/candidates${r24Query()}`);
+      r24Candidates = list;
+      renderCandidates(list);
+    } catch (_) {}
+  }
+
+  function renderMaximizeJob(job) {
+    const out = document.getElementById("cpMaxResult");
+    const runBtn = document.getElementById("cpMaxRunBtn");
+    if (!out) return;
+    out.innerHTML = "";
+
+    const state = (job && job.state) || "idle";
+    if (runBtn) runBtn.disabled = state === "running";
+
+    if (state === "idle") {
+      const p = document.createElement("p");
+      p.className = "cp-empty";
+      p.textContent = "Pick an objective and constraints above, then click Run maximizer to search for a robust allocation.";
+      out.appendChild(p);
+      return;
+    }
+
+    if (state === "running") {
+      const p = document.createElement("p");
+      p.className = "cp-max-running";
+      p.textContent = "Searching allocations across Monte Carlo paths…";
+      out.appendChild(p);
+      return;
+    }
+
+    if (state === "failed") {
+      const p = document.createElement("p");
+      p.className = "cp-word-bad";
+      p.textContent = `Maximizer failed: ${(job && job.error) || "unknown error"}`;
+      out.appendChild(p);
+      return;
+    }
+
+    const plan = job && job.plan;
+    if (!plan) {
+      const p = document.createElement("p");
+      p.className = "cp-empty";
+      p.textContent = "No plan returned.";
+      out.appendChild(p);
+      return;
+    }
+
+    const rec = plan.recommendation || {};
+    const banner = document.createElement("div");
+    banner.className = "cp-max-rec";
+    if (rec.kind === "mode") {
+      const label = (ALLOC_INFO[rec.mode] && ALLOC_INFO[rec.mode].label) || rec.mode || "fixed mode";
+      banner.textContent = `No allocation beats ${label} by more than 2 standard errors. Recommended mode: ${label}.`;
+    } else {
+      banner.textContent = "Recommended: custom maximized allocation.";
+    }
+    out.appendChild(banner);
+
+    const thisMonth = Array.isArray(plan.this_month) ? plan.this_month : [];
+    if (thisMonth.length > 0) {
+      const h4 = document.createElement("h4");
+      h4.textContent = "This month's buy list";
+      out.appendChild(h4);
+      const ul = document.createElement("ul");
+      ul.className = "cp-max-buylist";
+      for (const item of thisMonth) {
+        const li = document.createElement("li");
+        const tag = item.candidate ? " (consider buying)" : "";
+        li.textContent = `${item.symbol}: ${formatProjMoney(item.amount)}${tag}`;
+        ul.appendChild(li);
+      }
+      out.appendChild(ul);
+    }
+
+    const scores = Array.isArray(plan.scores) ? plan.scores : [];
+    if (scores.length > 0) {
+      const table = document.createElement("table");
+      table.className = "cp-table cp-max-scores";
+      const thead = document.createElement("thead");
+      const htr = document.createElement("tr");
+      for (const col of ["Policy", "Objective", "p10", "p50", "Wealth p50"]) {
+        const th = document.createElement("th");
+        th.textContent = col;
+        htr.appendChild(th);
+      }
+      thead.appendChild(htr);
+      table.appendChild(thead);
+
+      const tbody = document.createElement("tbody");
+      for (const s of scores) {
+        const tr = document.createElement("tr");
+        const label = s.policy === "plan" ? "Maximized plan" : ((ALLOC_INFO[s.policy] && ALLOC_INFO[s.policy].label) || s.policy);
+        const cells = [
+          label,
+          s.objective !== null && s.objective !== undefined ? formatProjMoney(s.objective) : "—",
+          formatProjMoney(s.p10),
+          formatProjMoney(s.p50),
+          formatProjMoney(s.value_p50),
+        ];
+        cells.forEach((txt, idx) => {
+          const td = document.createElement("td");
+          if (idx > 0) td.className = "num";
+          td.textContent = txt;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      out.appendChild(table);
+    }
+
+    if (plan.sensitivity && typeof plan.sensitivity === "object") {
+      const sensWrap = document.createElement("div");
+      sensWrap.className = "cp-max-sens";
+      const entries = [
+        ["Low growth", plan.sensitivity.low_growth],
+        ["No cuts", plan.sensitivity.no_cuts],
+        ["FX flat", plan.sensitivity.fx_flat],
+      ];
+      for (const [lbl, v] of entries) {
+        if (typeof v !== "number") continue;
+        const chip = document.createElement("span");
+        chip.className = "cp-max-sens-chip";
+        chip.textContent = `${lbl}: ${formatProjMoney(v)}`;
+        sensWrap.appendChild(chip);
+      }
+      if (sensWrap.childNodes.length > 0) out.appendChild(sensWrap);
+    }
+
+    const notes = Array.isArray(plan.notes) ? plan.notes : [];
+    for (const n of notes) {
+      const p = document.createElement("p");
+      p.className = "cp-note";
+      p.textContent = n;
+      out.appendChild(p);
+    }
+  }
+
+  function clearMaxPoll() {
+    if (r24MaxPollTimer) {
+      clearTimeout(r24MaxPollTimer);
+      r24MaxPollTimer = null;
+    }
+  }
+
+  async function pollMaximizeJob() {
+    clearMaxPoll();
+    ensureMaximizePanel();
+    try {
+      const job = await fetchJson(`/api/capital/dividends/maximize${r24Query()}`);
+      renderMaximizeJob(job);
+      if (job && job.state === "running") {
+        r24MaxPollTimer = setTimeout(pollMaximizeJob, 2000);
+      }
+    } catch (err) {
+      renderMaximizeJob({ state: "failed", error: err.message });
+    }
+  }
+
+  async function startMaximizeJob() {
+    clearMaxPoll();
+    const objKind = document.getElementById("cpMaxObjective")?.value || "robust_income";
+    const year = Math.max(1, Math.min(30, Number(document.getElementById("cpMaxYear")?.value) || 20));
+    const floorPct = Math.max(50, Math.min(100, Number(document.getElementById("cpMaxFloorPct")?.value) || 90));
+    const objective = objKind === "income_with_wealth_floor"
+      ? { kind: "income_with_wealth_floor", year, floor_pct: floorPct }
+      : { kind: objKind, year };
+
+    const body = {
+      years: PROJ_YEARS,
+      reinvest_pct: currentProjReinvestPct,
+      allocation: currentProjAllocation,
+      monthly_contribution: currentProjMonthlyContribution,
+      top_n: currentProjTopN,
+      reserve_pt_tax: currentProjReservePtTax,
+      objective,
+      constraints: {
+        max_position_pct: Number(document.getElementById("cpMaxPosPct")?.value) || 25,
+        max_high_yield_pct: Number(document.getElementById("cpMaxHyPct")?.value) || 20,
+        max_foreign_pct: Number(document.getElementById("cpMaxFxPct")?.value) || 60,
+        min_safety: document.getElementById("cpMaxMinSafety")?.value || "c",
+        top_n: Number(document.getElementById("cpMaxTopN")?.value) || 10,
+      },
+    };
+
+    try {
+      renderMaximizeJob({ state: "running" });
+      const res = await fetchJson(`/api/capital/dividends/maximize${r24Query()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const job = (res && res.job) || res;
+      renderMaximizeJob(job);
+      if (job && job.state === "running") {
+        r24MaxPollTimer = setTimeout(pollMaximizeJob, 2000);
+      }
+    } catch (err) {
+      renderMaximizeJob({ state: "failed", error: err.message });
+    }
+  }
+
+  if (typeof loadDividendProjection === "function") {
+    const origLoadProj = loadDividendProjection;
+    loadDividendProjection = async function () {
+      const result = await origLoadProj.apply(this, arguments);
+      ensureMaximizePanel();
+      prefillLimits();
+      loadIncomeFan();
+      loadCandidates();
+      pollMaximizeJob();
+      return result;
+    };
+  }
+})();

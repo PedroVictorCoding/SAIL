@@ -1,0 +1,32 @@
+{
+  "cik": 999001,
+  "entityName": "Synthetic Cutter Inc",
+  "facts": {
+    "us-gaap": {
+      "PaymentsOfDividends": {
+        "units": {
+          "USD": [
+            {"start": "2023-01-01", "end": "2023-12-31", "val": 100000000, "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2024-02-20"},
+            {"start": "2024-01-01", "end": "2024-12-31", "val": 100000000, "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2025-02-20"}
+          ]
+        }
+      },
+      "NetCashProvidedByUsedInOperatingActivities": {
+        "units": {
+          "USD": [
+            {"start": "2023-01-01", "end": "2023-12-31", "val": 80000000, "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2024-02-20"},
+            {"start": "2024-01-01", "end": "2024-12-31", "val": 85000000, "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2025-02-20"}
+          ]
+        }
+      },
+      "PaymentsToAcquirePropertyPlantAndEquipment": {
+        "units": {
+          "USD": [
+            {"start": "2023-01-01", "end": "2023-12-31", "val": 30000000, "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2024-02-20"},
+            {"start": "2024-01-01", "end": "2024-12-31", "val": 30000000, "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2025-02-20"}
+          ]
+        }
+      }
+    }
+  }
+}

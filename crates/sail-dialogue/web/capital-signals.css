@@ -497,3 +497,115 @@
     border-left: 0;
   }
 }
+
+/* Round 24: trade card expectations, heat bar, and regime chips */
+.cp-trade-context-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 18px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cp-heat-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 200px;
+  flex: 1 1 240px;
+}
+
+.cp-heat-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+
+.cp-heat-label {
+  color: rgba(226, 232, 240, 0.72);
+}
+
+.cp-heat-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.cp-heat-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.cp-heat-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(84, 194, 165, 0.85), rgba(100, 160, 240, 0.9));
+  transition: width 180ms ease;
+}
+
+.cp-heat-fill[data-warn="high"] {
+  background: linear-gradient(90deg, rgba(246, 173, 85, 0.9), rgba(225, 112, 85, 0.95));
+}
+
+.cp-heat-clusters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.cp-heat-cluster-chip {
+  font-size: 0.74rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(226, 232, 240, 0.84);
+}
+
+.cp-regime-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cp-regime-chip {
+  font-size: 0.78rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+  white-space: nowrap;
+}
+
+.cp-regime-chip[data-trend="up"][data-vol="calm"] {
+  border-color: rgba(84, 194, 165, 0.35);
+  background: rgba(84, 194, 165, 0.12);
+  color: #a9f0d8;
+}
+
+.cp-regime-chip[data-trend="down"],
+.cp-regime-chip[data-vol="stressed"] {
+  border-color: rgba(246, 173, 85, 0.35);
+  background: rgba(246, 173, 85, 0.12);
+  color: #ffd69f;
+}
+
+.cp-sig-expect {
+  font-size: 0.84rem;
+  color: #c8dcf8;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-sig-verdict-eta {
+  font-size: 0.82rem;
+  color: rgba(255, 214, 159, 0.92);
+}

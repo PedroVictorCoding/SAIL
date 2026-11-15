@@ -1,0 +1,102 @@
+{
+  "candidates": [
+    {
+      "symbol": "PEP",
+      "yahoo": "PEP",
+      "name": "PepsiCo Inc.",
+      "enabled": true,
+      "ttm_per_share": 5.42,
+      "trailing_yield": 0.032,
+      "years_of_history": 12,
+      "safety": {
+        "grade": "a",
+        "fcf_cover": 1.6,
+        "earnings_cover": 1.9,
+        "streak_years": 12,
+        "reasons": ["Free cash flow covered the dividend 1.6× in fiscal 2025."]
+      }
+    }
+  ],
+  "jobs": {
+    "empty": {
+      "state": "idle",
+      "request": null,
+      "plan": null,
+      "error": null,
+      "started_at": null,
+      "finished_at": null
+    },
+    "running": {
+      "state": "running",
+      "request": null,
+      "plan": null,
+      "error": null,
+      "started_at": "2026-11-15T14:00:00Z",
+      "finished_at": null
+    },
+    "done": {
+      "state": "done",
+      "request": null,
+      "started_at": "2026-11-15T14:00:00Z",
+      "finished_at": "2026-11-15T14:00:18Z",
+      "error": null,
+      "plan": {
+        "objective": {"kind": "robust_income", "year": 20},
+        "constraints": {"max_position_pct": 25, "max_high_yield_pct": 20, "max_foreign_pct": 60, "min_safety": "c", "top_n": 10},
+        "weights": [
+          {"key": "JNJ.US", "symbol": "JNJ", "weight": 0.6, "candidate": false},
+          {"key": "PEP.US", "symbol": "PEP", "weight": 0.4, "candidate": true}
+        ],
+        "this_month": [
+          {"key": "JNJ.US", "symbol": "JNJ", "amount": 360.0, "candidate": false},
+          {"key": "PEP.US", "symbol": "PEP", "amount": 240.0, "candidate": true}
+        ],
+        "scores": [
+          {"policy": "plan", "objective": 9450.0, "p10": 9450.0, "p50": 12900.0, "value_p50": 325000.0},
+          {"policy": "proportional", "objective": 8200.0, "p10": 8200.0, "p50": 11500.0, "value_p50": 310000.0}
+        ],
+        "best_mode": "proportional",
+        "margin": 1250.0,
+        "margin_se": 320.0,
+        "recommendation": {"kind": "plan"},
+        "sensitivity": {"low_growth": 7900.0, "no_cuts": 10100.0, "fx_flat": 9520.0},
+        "excluded": [],
+        "notes": ["Search evaluated 500 paths and re-scored on 2000 fresh paths."],
+        "paths": [500, 2000]
+      }
+    },
+    "no_beat": {
+      "state": "done",
+      "request": null,
+      "started_at": "2026-11-15T14:00:00Z",
+      "finished_at": "2026-11-15T14:00:12Z",
+      "error": null,
+      "plan": {
+        "objective": {"kind": "robust_income", "year": 20},
+        "constraints": {"max_position_pct": 25, "max_high_yield_pct": 20, "max_foreign_pct": 60, "min_safety": "c", "top_n": 10},
+        "weights": [],
+        "this_month": [],
+        "scores": [
+          {"policy": "plan", "objective": 8250.0, "p10": 8250.0, "p50": 11520.0, "value_p50": 311000.0},
+          {"policy": "proportional", "objective": 8200.0, "p10": 8200.0, "p50": 11500.0, "value_p50": 310000.0}
+        ],
+        "best_mode": "proportional",
+        "margin": 50.0,
+        "margin_se": 210.0,
+        "recommendation": {"kind": "mode", "mode": "proportional"},
+        "sensitivity": {"low_growth": null, "no_cuts": null, "fx_flat": null},
+        "excluded": [],
+        "notes": ["No allocation beats Proportional by more than 2 standard errors."],
+        "paths": [500, 2000]
+      }
+    },
+    "failed": {
+      "state": "failed",
+      "request": null,
+      "plan": null,
+      "error": "insufficient dividend history",
+      "started_at": "2026-11-15T14:00:00Z",
+      "finished_at": "2026-11-15T14:00:02Z"
+    }
+  }
+}
