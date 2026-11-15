@@ -30,10 +30,19 @@
 //!
 //! Pure: no I/O, no clock.
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::evidence::SourceError;
+
+/// Minimum days for an annual flow period (`start` to `end`), fixed a priori.
+const MIN_ANNUAL_DAYS: i64 = 350;
+
+/// Maximum days for an annual flow period (`start` to `end`), fixed a priori.
+const MAX_ANNUAL_DAYS: i64 = 380;
 
 /// One fiscal year's facts, in USD. `None` when not filed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -80,11 +89,183 @@ impl CompanyFacts {
     }
 }
 
-/// Antigravity, round 24, *pure*: reads a company-facts body (module doc). M0 stub: an
-/// empty result for any body within the size cap.
+/// A single parsed fact observation before merging into [`FiscalYear`].
+#[derive(Clone, Copy)]
+struct FactValue {
+    filed: NaiveDate,
+    val: f64,
+}
+
+/// Antigravity, round 24, *pure*: reads a company-facts body (module doc).
 pub fn parse(body: &[u8]) -> Result<CompanyFacts, SourceError> {
     if body.len() > crate::evidence::MAX_SEC_RESPONSE_BYTES {
         return Err(SourceError::TooLarge);
     }
-    Ok(CompanyFacts::default())
+    let root: Value = serde_json::from_slice(body)
+        .map_err(|e| SourceError::Malformed(format!("companyfacts is not JSON: {e}")))?;
+    let obj = root
+        .as_object()
+        .ok_or_else(|| SourceError::Malformed("companyfacts root is not an object".to_string()))?;
+    let facts = obj
+        .get("facts")
+        .and_then(Value::as_object)
+        .ok_or_else(|| SourceError::Malformed("companyfacts has no facts object".to_string()))?;
+
+    let cik = obj
+        .get("cik")
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
+        .unwrap_or(0);
+
+    let Some(us_gaap) = facts.get("us-gaap").and_then(Value::as_object) else {
+        return Ok(CompanyFacts {
+            cik,
+            years: Vec::new(),
+        });
+    };
+
+    let dividends_paid = read_concept_chain(
+        us_gaap,
+        &["PaymentsOfDividendsCommonStock", "PaymentsOfDividends"],
+        true,
+    );
+    let operating_cash_flow = read_concept_chain(
+        us_gaap,
+        &["NetCashProvidedByUsedInOperatingActivities"],
+        true,
+    );
+    let capex = read_concept_chain(
+        us_gaap,
+        &["PaymentsToAcquirePropertyPlantAndEquipment"],
+        true,
+    );
+    let net_income = read_concept_chain(us_gaap, &["NetIncomeLoss"], true);
+    let long_term_debt =
+        read_concept_chain(us_gaap, &["LongTermDebt", "LongTermDebtNoncurrent"], false);
+    let cash = read_concept_chain(us_gaap, &["CashAndCashEquivalentsAtCarryingValue"], false);
+
+    let mut by_end: BTreeMap<NaiveDate, FiscalYear> = BTreeMap::new();
+    merge_field(&mut by_end, &dividends_paid, |y, v| {
+        y.dividends_paid = Some(v)
+    });
+    merge_field(&mut by_end, &operating_cash_flow, |y, v| {
+        y.operating_cash_flow = Some(v)
+    });
+    merge_field(&mut by_end, &capex, |y, v| y.capex = Some(v));
+    merge_field(&mut by_end, &net_income, |y, v| y.net_income = Some(v));
+    merge_field(&mut by_end, &long_term_debt, |y, v| {
+        y.long_term_debt = Some(v)
+    });
+    merge_field(&mut by_end, &cash, |y, v| y.cash = Some(v));
+
+    Ok(CompanyFacts {
+        cik,
+        years: by_end.into_values().collect(),
+    })
+}
+
+/// Reads a prioritized list of concepts, keeping the first concept that supplies a value
+/// for each `end` date.
+fn read_concept_chain(
+    us_gaap: &Map<String, Value>,
+    concepts: &[&str],
+    is_flow: bool,
+) -> BTreeMap<NaiveDate, FactValue> {
+    let mut merged: BTreeMap<NaiveDate, FactValue> = BTreeMap::new();
+    for concept in concepts {
+        for (end, obs) in read_concept(us_gaap, concept, is_flow) {
+            merged.entry(end).or_insert(obs);
+        }
+    }
+    merged
+}
+
+/// Reads annual USD observations for one concept; latest `filed` wins per `end` date.
+fn read_concept(
+    us_gaap: &Map<String, Value>,
+    concept: &str,
+    is_flow: bool,
+) -> BTreeMap<NaiveDate, FactValue> {
+    let mut out: BTreeMap<NaiveDate, FactValue> = BTreeMap::new();
+    let Some(items) = us_gaap
+        .get(concept)
+        .and_then(|c| c.get("units"))
+        .and_then(|u| u.get("USD"))
+        .and_then(Value::as_array)
+    else {
+        return out;
+    };
+
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let Some(form) = obj.get("form").and_then(Value::as_str) else {
+            continue;
+        };
+        if form != "10-K" && form != "10-K/A" {
+            continue;
+        }
+        if obj.get("fp").and_then(Value::as_str) != Some("FY") {
+            continue;
+        }
+        let Some(end) = parse_date(obj.get("end")) else {
+            continue;
+        };
+        let Some(filed) = parse_date(obj.get("filed")) else {
+            continue;
+        };
+        if is_flow {
+            let Some(start) = parse_date(obj.get("start")) else {
+                continue;
+            };
+            let days = (end - start).num_days();
+            if !(MIN_ANNUAL_DAYS..=MAX_ANNUAL_DAYS).contains(&days) {
+                continue;
+            }
+        }
+        let Some(val) = obj
+            .get("val")
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite())
+        else {
+            continue;
+        };
+
+        out.entry(end)
+            .and_modify(|existing| {
+                if filed >= existing.filed {
+                    *existing = FactValue { filed, val };
+                }
+            })
+            .or_insert(FactValue { filed, val });
+    }
+    out
+}
+
+fn parse_date(val: Option<&Value>) -> Option<NaiveDate> {
+    val.and_then(Value::as_str)
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+}
+
+fn merge_field<F>(
+    by_end: &mut BTreeMap<NaiveDate, FiscalYear>,
+    values: &BTreeMap<NaiveDate, FactValue>,
+    assign: F,
+) where
+    F: Fn(&mut FiscalYear, f64),
+{
+    for (&end, &obs) in values {
+        let year = by_end.entry(end).or_insert_with(|| FiscalYear {
+            end,
+            filed: obs.filed,
+            ..FiscalYear::default()
+        });
+        if obs.filed > year.filed {
+            year.filed = obs.filed;
+        }
+        assign(year, obs.val);
+    }
 }
