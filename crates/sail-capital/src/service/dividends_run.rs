@@ -35,6 +35,26 @@ impl CapitalService {
         let now = Utc::now();
         let mut failed = Vec::new();
         let mut wanted = Vec::new();
+        let mut symbols: Vec<String> = self
+            .held_instruments(account)?
+            .into_iter()
+            .map(|(_, symbol)| symbol)
+            .collect();
+        // Round 24: dividend candidates need histories (and US company facts) too.
+        let candidates = self.store.dividend_candidates()?;
+        for item in self.watchlist()? {
+            if candidates.contains(&item.symbol.to_ascii_uppercase()) {
+                let fresh = self
+                    .store
+                    .dividend_history(&item.yahoo)?
+                    .is_some_and(|(at, ..)| (now - at).num_days() < HISTORY_MAX_AGE_DAYS);
+                if !fresh {
+                    wanted.push(item.yahoo.clone());
+                }
+                symbols.push(item.symbol);
+            }
+        }
+        self.refresh_company_facts(&symbols).await;
         for (_, symbol) in self.held_instruments(account)? {
             match crate::market::yahoo_symbol(&symbol) {
                 Some(yahoo) => {
@@ -184,6 +204,7 @@ impl CapitalService {
             start,
         };
         let mut outlook = crate::dividends::project(&holdings, &settings, original_cost);
+        outlook.safety = self.holdings_safety(&holdings, now)?;
         notes.append(&mut outlook.notes);
         outlook.notes = notes;
         Ok(outlook)
@@ -229,7 +250,7 @@ impl CapitalService {
     /// [`Self::dividend_inputs`], reused while the ledger, prices, payout histories and the
     /// day are unchanged: the projection's settings don't affect them, so moving a control
     /// only re-runs the simulation.
-    fn cached_dividend_inputs(
+    pub(super) fn cached_dividend_inputs(
         &self,
         account: &AccountId,
         now: DateTime<Utc>,
@@ -458,7 +479,7 @@ fn calibrate(
 /// The annual price trend over up to the last three years of stored closes: the
 /// compound rate, shrunk toward zero by `n/(n+3)` (`n` = years of data) and capped to
 /// −50%..+15%. `None` with less than a year.
-fn price_trend(observations: &[crate::market::MarketObservation]) -> Option<f64> {
+pub(super) fn price_trend(observations: &[crate::market::MarketObservation]) -> Option<f64> {
     let last = observations.last()?;
     let from = last.session - Duration::days(3 * 365);
     let first = observations.iter().find(|o| o.session >= from)?;
@@ -475,7 +496,7 @@ fn price_trend(observations: &[crate::market::MarketObservation]) -> Option<f64>
     Some((raw * years / (years + 3.0)).clamp(-0.5, 0.15))
 }
 
-fn first_of_next_month(day: NaiveDate) -> NaiveDate {
+pub(super) fn first_of_next_month(day: NaiveDate) -> NaiveDate {
     let (y, m) = if day.month() == 12 {
         (day.year() + 1, 1)
     } else {
@@ -485,7 +506,7 @@ fn first_of_next_month(day: NaiveDate) -> NaiveDate {
 }
 
 /// The projection controls shared by the projection and the retirement plan.
-fn check_dividend_controls(
+pub(super) fn check_dividend_controls(
     years: u32,
     reinvest_pct: f64,
     monthly_contribution: f64,

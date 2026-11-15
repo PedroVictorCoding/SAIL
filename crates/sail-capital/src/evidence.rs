@@ -188,6 +188,16 @@ pub trait EdgarApi: Send + Sync {
     async fn ticker_index(&self) -> Result<TickerIndex, SourceError>;
     /// Fetches `https://data.sec.gov/submissions/CIK##########.json` for `cik`.
     async fn issuer_filings(&self, cik: Cik) -> Result<IssuerFilings, SourceError>;
+    /// Round 24: fetches `https://data.sec.gov/api/xbrl/companyfacts/CIK##########.json`
+    /// and reads it with [`crate::sec::companyfacts::parse`]. Fakes that don't serve it
+    /// answer [`SourceError::NotConfigured`].
+    async fn company_facts(
+        &self,
+        cik: Cik,
+    ) -> Result<crate::sec::companyfacts::CompanyFacts, SourceError> {
+        let _ = cik;
+        Err(SourceError::NotConfigured)
+    }
 }
 
 /// A filing as stored: the filing plus SAIL's own observation of it.

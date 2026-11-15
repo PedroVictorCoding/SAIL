@@ -252,6 +252,7 @@ pub fn authorize_voice_operation(tool: &str) -> sail_common::error::Result<&'sta
         "capital:forecast" | "capital_forecast" => Ok("capital:forecast"),
         "capital:policy" | "capital_policy" => Ok("capital:policy"),
         "capital:filings" | "capital_filings" => Ok("capital:filings"),
+        "capital:income" | "capital_income" => Ok("capital:income"),
         _ => Err(sail_common::error::SailError::ToolExecution(format!(
             "Operation {tool} is not authorized"
         ))),

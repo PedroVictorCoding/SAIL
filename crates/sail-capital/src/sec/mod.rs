@@ -567,4 +567,14 @@ impl EdgarApi for EdgarClient {
         let body = self.get(&url).await?;
         parse_submissions(&body, cik)
     }
+
+    async fn company_facts(&self, cik: Cik) -> Result<companyfacts::CompanyFacts, SourceError> {
+        let url = format!(
+            "{}/api/xbrl/companyfacts/CIK{}.json",
+            self.data_base,
+            cik.padded()
+        );
+        let body = self.get(&url).await?;
+        companyfacts::parse(&body)
+    }
 }

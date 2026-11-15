@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 /// Every Capital tool this module answers, checked by the registry tests.
 #[cfg(test)]
-pub const TOOL_IDS: [&str; 14] = [
+pub const TOOL_IDS: [&str; 15] = [
     "capital:overview",
     "capital:today",
     "capital:portfolio",
@@ -28,6 +28,7 @@ pub const TOOL_IDS: [&str; 14] = [
     "capital:forecast",
     "capital:policy",
     "capital:filings",
+    "capital:income",
 ];
 
 /// Runs one tool. Arguments are untrusted input from the model; the service validates
@@ -46,6 +47,7 @@ pub async fn execute(service: &CapitalService, tool: &str, input: &Value) -> Res
         "capital:forecast" => forecast(service, input),
         "capital:policy" => policy(service, input),
         "capital:filings" => filings(service, input),
+        "capital:income" => income_plan(service),
         "capital:search" => search(service, input).await,
         "capital:check" => check(service, input).await,
         other => Err(format!("Unknown Capital tool: {other}")),
@@ -457,6 +459,46 @@ fn dividends(service: &CapitalService, input: &Value) -> Result<Value, String> {
         without.remove("monthly_net");
     }
     Ok(payload)
+}
+
+/// Round 24: the last income-plan job and the dividend growth backtest's headline.
+fn income_plan(service: &CapitalService) -> Result<Value, String> {
+    let job = service.income_plan_job();
+    let calibration = service
+        .dividend_calibration()
+        .map_err(|error| error.to_string())?
+        .map(|(computed_at, report)| {
+            json!({
+                "computed_at": computed_at,
+                "symbols": report.symbols,
+                "adopted_shrink_k": report.adopted_k,
+                "notes": report.notes,
+            })
+        });
+    let plan = job.plan.as_ref().map(|plan| {
+        json!({
+            "objective": plan.objective,
+            "recommendation": plan.recommendation,
+            "this_month": plan.this_month,
+            "weights": plan.weights,
+            "scores": plan.scores,
+            "sensitivity": plan.sensitivity,
+            "excluded_by_safety": plan.excluded,
+            "notes": plan.notes,
+        })
+    });
+    Ok(json!({
+        "state": job.state,
+        "finished_at": job.finished_at,
+        "error": job.error,
+        "plan": plan,
+        "dividend_growth_backtest": calibration,
+        "note": if job.plan.is_none() {
+            "No plan has been run since SAIL started; the owner starts one from Income → Maximize income."
+        } else {
+            "Simulated, not a promise; SAIL never places orders."
+        },
+    }))
 }
 
 fn forecast(service: &CapitalService, input: &Value) -> Result<Value, String> {

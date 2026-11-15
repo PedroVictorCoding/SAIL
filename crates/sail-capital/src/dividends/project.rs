@@ -155,7 +155,23 @@ pub fn project(
 
     let notes = notes(holdings, &growths, settings);
 
+    let specials = holdings
+        .iter()
+        .flat_map(|holding| {
+            super::specials(&holding.history, settings.start)
+                .into_iter()
+                .map(|payment| super::SpecialPayment {
+                    key: holding.key.clone(),
+                    symbol: holding.symbol.clone(),
+                    ex_date: payment.ex_date,
+                    per_share: payment.per_share,
+                })
+        })
+        .collect();
+
     DividendOutlook {
+        specials,
+        safety: Default::default(),
         settings: settings.clone(),
         scenarios: vec![low, base, high],
         holdings: holding_rows,

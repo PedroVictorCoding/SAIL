@@ -18,6 +18,7 @@ mod board_record;
 mod dividends_run;
 use grants::grant_record;
 mod grants;
+mod income_plan;
 mod markets;
 mod outlook;
 mod prices;
@@ -30,6 +31,7 @@ mod trade_health;
 mod trade_run;
 pub use dividends_run::DividendRefresh;
 pub use grants::{GrantCostInput, GrantInput};
+pub use income_plan::{IncomeJob, IncomeJobState, IncomeRequest};
 pub use outlook::{ModelRun, ModelStatus, ModelsStatus, OutlookModelStatus, OutlookView};
 pub use prices::{ForecastsView, MAX_PRICES_REPLY, PriceImport, PriceStatus};
 pub use research::{FilingsView, MatchView, SecStatus};
@@ -109,6 +111,8 @@ pub struct CapitalService {
     board_cache: std::sync::Mutex<Option<(String, crate::board::SignalBoard)>>,
     /// The board's graded record, cached until the reads or prices change.
     board_record_cache: std::sync::Mutex<Option<(String, crate::board_record::BoardRecord)>>,
+    /// Round 24: the latest income-plan job.
+    income_job: std::sync::Arc<std::sync::Mutex<income_plan::IncomeJob>>,
 }
 
 /// The daemon's Capital service, set once when Dialogue mounts the owner API.
@@ -228,6 +232,7 @@ impl CapitalService {
             signals_cache: std::sync::Mutex::new(None),
             board_cache: std::sync::Mutex::new(None),
             board_record_cache: std::sync::Mutex::new(None),
+            income_job: Default::default(),
         })
     }
 

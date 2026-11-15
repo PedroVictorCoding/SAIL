@@ -271,6 +271,25 @@ pub struct DividendOutlook {
     pub without_reinvestment: Projection,
     /// Plain notes on the assumptions and limits.
     pub notes: Vec<String>,
+    /// Round 24: special payments left out of the trailing year and the growth.
+    #[serde(default)]
+    pub specials: Vec<SpecialPayment>,
+    /// Round 24: dividend safety per holding symbol (filled by the service).
+    #[serde(default)]
+    pub safety: std::collections::BTreeMap<String, safety::Safety>,
+}
+
+/// Round 24: one special payment, by holding.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpecialPayment {
+    /// Ledger key.
+    pub key: String,
+    /// Symbol.
+    pub symbol: String,
+    /// Ex-date.
+    pub ex_date: NaiveDate,
+    /// Amount per share, in the trading currency.
+    pub per_share: f64,
 }
 
 /// Withholding by the listing's country when nothing is observed, from the XTB suffix:

@@ -913,6 +913,30 @@ impl CapitalService {
         // do. Replays come from the cache where the past is unchanged.
         universe.extend(self.research_universe(now)?);
         universe.retain(|instrument| crate::trade::quality::usable(&instrument.bars));
+        // Round 24: research names' payout histories (a bounded batch per run, for the
+        // next run's replays and the dividend calibration), then the weekly calibration.
+        let research_yahoo: Vec<String> = universe
+            .iter()
+            .filter(|i| i.evidence_only && matches!(i.class, AssetClass::Stock | AssetClass::Etf))
+            .map(|i| i.symbol.clone())
+            .collect();
+        self.refresh_trade_dividends(&research_yahoo).await;
+        let watch_yahoo: std::collections::BTreeMap<String, String> = watch
+            .iter()
+            .map(|w| (watch_key(&w.symbol), w.yahoo.clone()))
+            .collect();
+        let yahoo_of = |instrument: &Instrument| -> Option<String> {
+            if instrument.evidence_only {
+                Some(instrument.symbol.clone())
+            } else if let Some(yahoo) = watch_yahoo.get(&instrument.key) {
+                Some(yahoo.clone())
+            } else {
+                crate::market::yahoo_symbol(&instrument.symbol)
+            }
+        };
+        if let Err(error) = self.refresh_dividend_calibration(&universe, &yahoo_of, now) {
+            tracing::warn!("dividend calibration not refreshed: {error}");
+        }
         let cached = self.cached_replays(&universe)?;
         let live = self.live_trades(account)?;
         let references = self.trade_references(&watch, now)?;

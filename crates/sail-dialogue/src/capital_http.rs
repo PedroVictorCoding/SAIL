@@ -92,6 +92,16 @@ pub fn router_with_research(
             get(retirement_research_status).post(retirement_research_start),
         )
         .route("/dividends/refresh", post(dividend_refresh))
+        .route("/dividends/distribution", post(dividend_distribution))
+        .route(
+            "/dividends/maximize",
+            get(dividend_maximize_status).post(dividend_maximize_start),
+        )
+        .route("/dividends/calibration", get(dividend_calibration))
+        .route(
+            "/dividends/candidates",
+            get(dividend_candidates).post(set_dividend_candidate),
+        )
         .route("/outlook/track-record", get(track_record))
         .route("/scorecard", get(scorecard))
         .route("/markets", get(markets))
@@ -1109,6 +1119,120 @@ fn research_unavailable() -> Failure {
         StatusCode::SERVICE_UNAVAILABLE,
         Json(json!({"error": "Research needs the local SAIL model in this process."})),
     )
+}
+
+fn read_body<T: serde::de::DeserializeOwned>(body: &Bytes, what: &str) -> Result<T, Failure> {
+    serde_json::from_slice(body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("The {what} couldn't be read: {e}")})),
+        )
+    })
+}
+
+/// Round 24: the income distribution for the posted projection controls.
+async fn dividend_distribution(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let request: sail_capital::service::IncomeRequest = read_body(&body, "request")?;
+    let distribution = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.income_distribution(&account, &request)
+    })
+    .await?;
+    Ok(no_store(to_json(&distribution)?))
+}
+
+/// Round 24: starts the income-plan search; 202 with the job.
+async fn dividend_maximize_start(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let request: sail_capital::service::IncomeRequest = read_body(&body, "request")?;
+    let service = s.service.clone();
+    let started = tokio::task::spawn_blocking(move || {
+        let account = service.resolve_account(q.account.as_deref())?;
+        service.start_income_plan(&account, request)
+    })
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "The Capital request failed."})),
+        )
+    })?
+    .map_err(failure)?;
+    let job = s.service.income_plan_job();
+    let body = json!({ "started": started, "job": job });
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(body),
+    )
+        .into_response())
+}
+
+/// Round 24: the latest income-plan job.
+async fn dividend_maximize_status(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    Ok(no_store(to_json(&s.service.income_plan_job())?))
+}
+
+/// Round 24: the latest dividend growth calibration, or `null`.
+async fn dividend_calibration(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let stored = blocking(&s, |svc| svc.dividend_calibration()).await?;
+    let body = match stored {
+        Some((computed_at, report)) => json!({"computed_at": computed_at, "report": report}),
+        None => Value::Null,
+    };
+    Ok(no_store(to_json(&body)?))
+}
+
+/// Round 24: the watchlist's stocks and ETFs as dividend candidates.
+async fn dividend_candidates(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let list = blocking(&s, |svc| svc.dividend_candidates()).await?;
+    Ok(no_store(to_json(&list)?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateChange {
+    symbol: String,
+    enabled: bool,
+}
+
+/// Round 24: marks or unmarks a dividend candidate; answers with the list.
+async fn set_dividend_candidate(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let change: CandidateChange = read_body(&body, "change")?;
+    let list = blocking(&s, move |svc| {
+        svc.set_dividend_candidate(&change.symbol, change.enabled)?;
+        svc.dividend_candidates()
+    })
+    .await?;
+    Ok(no_store(to_json(&list)?))
 }
 
 async fn dividend_refresh(

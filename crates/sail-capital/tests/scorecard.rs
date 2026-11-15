@@ -127,6 +127,7 @@ fn summarize_all<'a>(
             outlook,
             setups,
             live,
+            dividend_calibration: None,
         },
         now(),
     )
