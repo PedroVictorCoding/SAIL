@@ -805,6 +805,11 @@ with the surprise and volume breakouts. Cards say how often each target was reac
 the replay, and a candidate says roughly how many live trades it needs for a verdict.
 Total risk across open and new cards is capped (draft 3%, and 1.5% inside a group of
 cards whose returns correlate above 0.7); the caps are policy limits.
+The false discovery control now runs once over 96 cells (3 groups × 8 setups × 2 sides ×
+2 market conditions), so a setup needs stronger evidence than before to publish. On a
+synthetic set of twelve 8%-yield stocks, counting dividends changed the exit of 0.6% of
+replayed trades and moved the R of 9.6% by more than 0.05R; on ordinary yields the
+effect is smaller.
 
 ## The track record
 

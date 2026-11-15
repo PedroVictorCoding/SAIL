@@ -566,7 +566,8 @@ pub struct Expectations {
     pub p_t3: f64,
     /// Share stopped out before target 1.
     pub p_stop: f64,
-    /// Median sessions from entry to the last exit.
+    /// Median calendar days from entry to the last exit (the field name is kept for the
+    /// wire shape; it matches `Evidence::mean_sessions`, also calendar days).
     pub median_sessions: f64,
     /// Mean R after costs.
     pub mean_r: f64,

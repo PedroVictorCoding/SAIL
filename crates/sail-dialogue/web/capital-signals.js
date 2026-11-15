@@ -910,7 +910,7 @@ registerTab("signals", {
       ? ` [${fmtR(exp.mean_r_ci[0])}, ${fmtR(exp.mean_r_ci[1])}]`
       : "";
     const med = typeof exp.median_sessions === "number" ? Math.round(exp.median_sessions) : "—";
-    return `Reached 1R ${fmtPct(exp.p_t1)} · 2R ${fmtPct(exp.p_t2)} · 3R ${fmtPct(exp.p_t3)} · stop ${fmtPct(exp.p_stop)} · median ${med} sessions · ${fmtR(exp.mean_r)}${ci}`;
+    return `Reached 1R ${fmtPct(exp.p_t1)} · 2R ${fmtPct(exp.p_t2)} · 3R ${fmtPct(exp.p_t3)} · stop ${fmtPct(exp.p_stop)} · median ${med} days · ${fmtR(exp.mean_r)}${ci}`;
   }
 
   if (typeof renderSignalCardMarkup === "function") {
