@@ -13,13 +13,15 @@
 //! - the signal session's close-to-open gap, in ATRs.
 //!
 //! **Model.** Logistic regression in pure Rust (no new dependencies): standardized
-//! features, L2 penalty, fitted by Newton or gradient steps to convergence. It is
+//! features, L2 penalty, fitted by 100 batch-gradient steps (fixed a priori). It is
 //! scored with the same purged walk-forward folds as the setups (no fold trains on a
 //! trade whose holding window overlaps the test fold).
 //!
 //! **Weight.** The model earns weight only when its out-of-sample Brier score beats
-//! the base rate's (predicting the training hit rate for everyone) by more than two
-//! standard errors of the paired difference. Otherwise [`MetaReport::model`] is
+//! the base rate's by more than two standard errors of the paired difference **and**
+//! by at least 0.01. The base rate is each trade's own setup and side hit rate in
+//! training, not one rate for everyone: a model that only re-learns "this setup hits
+//! more often" has not beaten the scoreboard. Otherwise [`MetaReport::model`] is
 //! `None` and every card is left exactly as it was.
 //!
 //! **What it may change.** Only the order of cards inside a tier and a size factor in
@@ -474,7 +476,8 @@ fn fit_rows<'a>(rows: impl Iterator<Item = (&'a [f64], bool)>) -> Option<MetaMod
     let labels: Vec<f64> = rows.iter().map(|(_, hit)| f64::from(*hit)).collect();
     let mut coefficients = vec![0.0; width];
     let mut intercept = 0.0;
-    // Fixed a priori: 500 batch-gradient steps, learning rate 0.1, L2 0.01.
+    // Fixed a priori: 100 batch-gradient steps (to keep a 550-name run under a minute),
+    // learning rate 0.1, L2 0.01.
     for _ in 0..100 {
         let mut gradient = vec![0.0; width];
         let mut bias_gradient = 0.0;
