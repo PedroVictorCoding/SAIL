@@ -1,0 +1,31 @@
+{
+  "days": 90,
+  "payments": [
+    {
+      "key": "XMPL.US",
+      "symbol": "XMPL.US",
+      "ex_date": "2026-11-09",
+      "pay_date": "2026-11-23",
+      "pay_date_estimated": false,
+      "per_share": 0.25,
+      "units": 100.0,
+      "gross": 22.5,
+      "net": 19.125,
+      "confidence": "high",
+      "basis": "Quarterly; last paid 0.25 on 2026-08-10."
+    },
+    {
+      "key": "STALE.US",
+      "symbol": "STALE.US",
+      "ex_date": "2026-12-01",
+      "pay_date": "2026-12-22",
+      "pay_date_estimated": true,
+      "per_share": 0.40,
+      "units": 50.0,
+      "gross": 18.0,
+      "net": 15.3,
+      "confidence": "low",
+      "basis": "Quarterly; last paid 0.40 on 2025-05-10."
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "graded": [],
+  "pending": 3,
+  "bias": null,
+  "mean_abs_error": null,
+  "scenario_coverage": null,
+  "band_coverage": null,
+  "notes": ["Snapshots are graded 12 months after they are taken."]
+}

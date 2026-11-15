@@ -56,10 +56,12 @@ function sigbPct(fraction, digits = 1) {
 }
 
 function sigbHorizonWord(sessions) {
+  if (sessions <= 7) return "1 week";
   return sessions >= 60 ? "3 months" : "1 month";
 }
 
 function sigbHorizonShort(sessions) {
+  if (sessions <= 7) return "1W";
   return sessions >= 60 ? "3M" : "1M";
 }
 
@@ -1051,6 +1053,127 @@ registerTab("signals", {
       const result = await origLoadTradeSignals.apply(this, arguments);
       renderTradeHeatAndRegime(typeof latestTradeSignals !== "undefined" ? latestTradeSignals : null);
       return result;
+    };
+  }
+})();
+
+// --- Round 25: insider-cluster chips on cards and per-stock rows --------------------
+
+(function initR25InsiderChips() {
+  let insiderMap = new Map();
+
+  function normalizeSym(sym) {
+    return String(sym || "").trim().toUpperCase();
+  }
+
+  function matchInsider(sym) {
+    const upper = normalizeSym(sym);
+    if (!upper) return null;
+    if (insiderMap.has(upper)) return insiderMap.get(upper);
+    const base = upper.split(".")[0];
+    return insiderMap.get(base) || null;
+  }
+
+  function buildInsiderChip(buyers) {
+    const chip = document.createElement("span");
+    chip.className = "cp-insider-chip";
+    chip.textContent = `Insider cluster · ${buyers} buyers`;
+    chip.title = `${buyers} distinct officers/directors bought in the last 10 sessions`;
+    return chip;
+  }
+
+  let insiderInFlight = null;
+
+  async function refreshInsiderClusters() {
+    if (insiderInFlight) return insiderInFlight;
+    insiderInFlight = (async () => {
+      try {
+        const q = typeof sigbQuery === "function" ? sigbQuery() : "";
+        const list = await fetchJson(`/api/capital/signals/insider${q}`);
+        const next = new Map();
+        if (Array.isArray(list)) {
+          for (const item of list) {
+            if (!item || !item.symbol) continue;
+            const buyers = Number(item.buyers);
+            if (!Number.isFinite(buyers) || buyers <= 0) continue;
+            const upper = normalizeSym(item.symbol);
+            next.set(upper, buyers);
+            next.set(upper.split(".")[0], buyers);
+          }
+        }
+        insiderMap = next;
+      } catch (_) {
+        insiderMap = new Map();
+      } finally {
+        insiderInFlight = null;
+      }
+      decorateBoardRows();
+      decorateTradeCards();
+    })();
+    return insiderInFlight;
+  }
+
+  function decorateBoardRows() {
+    const tbody = document.getElementById("cpSigbBody");
+    if (!tbody) return;
+    tbody.querySelectorAll(".cp-sigb-row").forEach((tr) => {
+      const symCell = tr.querySelector(".cp-sigb-sym");
+      if (!symCell) return;
+      symCell.querySelectorAll(".cp-insider-chip").forEach((el) => el.remove());
+      const buyers = matchInsider(tr.dataset.symbol);
+      if (buyers) {
+        symCell.appendChild(document.createTextNode(" "));
+        symCell.appendChild(buildInsiderChip(buyers));
+      }
+    });
+  }
+
+  function decorateTradeCards() {
+    ["cpSignalsCardsGrid", "cpSignalsCandidatesGrid"].forEach((id) => {
+      const grid = document.getElementById(id);
+      if (!grid) return;
+      grid.querySelectorAll(".cp-sig").forEach((li) => {
+        const titleEl = li.querySelector(".cp-sig-title");
+        if (!titleEl) return;
+        titleEl.querySelectorAll(".cp-insider-chip").forEach((el) => el.remove());
+        const firstText = (titleEl.childNodes[0] && titleEl.childNodes[0].textContent) || "";
+        const sym = firstText.trim().split(/\s+/)[0];
+        const buyers = matchInsider(sym);
+        if (buyers) {
+          titleEl.appendChild(document.createTextNode(" "));
+          titleEl.appendChild(buildInsiderChip(buyers));
+        }
+      });
+    });
+  }
+
+  if (typeof renderSigbTable === "function") {
+    const origRenderSigbTable = renderSigbTable;
+    renderSigbTable = function () {
+      const res = origRenderSigbTable.apply(this, arguments);
+      decorateBoardRows();
+      if (insiderMap.size === 0) refreshInsiderClusters();
+      return res;
+    };
+  }
+
+  if (typeof loadSignalBoard === "function") {
+    const origLoadSignalBoard = loadSignalBoard;
+    loadSignalBoard = async function () {
+      const [res] = await Promise.all([
+        origLoadSignalBoard.apply(this, arguments),
+        refreshInsiderClusters(),
+      ]);
+      return res;
+    };
+  }
+
+  if (typeof loadTradeSignals === "function") {
+    const origLoadTradeSignals = loadTradeSignals;
+    loadTradeSignals = async function () {
+      const res = await origLoadTradeSignals.apply(this, arguments);
+      await refreshInsiderClusters();
+      return res;
     };
   }
 })();

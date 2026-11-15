@@ -26,11 +26,12 @@
 //! **Purity.** No I/O and no clock.
 
 use chrono::{DateTime, NaiveDate, Utc};
+use roxmltree::{Document, Node};
 use serde::{Deserialize, Serialize};
 
-use crate::evidence::{Cik, Filing, SourceError};
+use crate::evidence::{Cik, Filing, MAX_SEC_RESPONSE_BYTES, MAX_SEC_TEXT_CHARS, SourceError};
 
-/// Most transactions read from one filing.
+/// Most transactions read from one filing (fixed a priori).
 pub const MAX_TRANSACTIONS: usize = 200;
 
 /// Who reported, and their role at the issuer.
@@ -97,11 +98,61 @@ pub struct Form4 {
     pub amendment: bool,
 }
 
-/// Parses a Form 4 XML `body` for `filing`. M0 stub: always
-/// [`SourceError::NotConfigured`].
+/// Parses a Form 4 XML `body` for `filing`.
 pub fn parse(body: &[u8], filing: &Filing) -> Result<Form4, SourceError> {
-    let _ = (body, filing);
-    Err(SourceError::NotConfigured)
+    if body.len() > MAX_SEC_RESPONSE_BYTES {
+        return Err(SourceError::TooLarge);
+    }
+    let text = std::str::from_utf8(body)
+        .map_err(|e| SourceError::Malformed(format!("form4 is not utf-8: {e}")))?;
+    let doc = Document::parse(text)
+        .map_err(|e| SourceError::Malformed(format!("form4 is not valid XML: {e}")))?;
+    let root = doc.root_element();
+    if root.tag_name().name() != "ownershipDocument" {
+        return Err(SourceError::Malformed(
+            "form4 root is not ownershipDocument".to_string(),
+        ));
+    }
+
+    let issuer = child_named(root, "issuer")
+        .ok_or_else(|| SourceError::Malformed("form4 is missing issuer".to_string()))?;
+    let issuer_cik_str = child_text(issuer, "issuerCik")
+        .ok_or_else(|| SourceError::Malformed("form4 is missing issuerCik".to_string()))?;
+    let issuer_cik_num: u64 = issuer_cik_str
+        .parse()
+        .map_err(|_| SourceError::Malformed("form4 issuerCik is not numeric".to_string()))?;
+    let issuer_ticker = child_text(issuer, "issuerTradingSymbol").map(cap_text);
+
+    let owners = root
+        .children()
+        .filter(|n| n.is_element() && n.tag_name().name() == "reportingOwner")
+        .filter_map(parse_owner)
+        .collect();
+
+    let mut transactions = Vec::new();
+    if let Some(table) = child_named(root, "nonDerivativeTable") {
+        for tx_node in table
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "nonDerivativeTransaction")
+        {
+            if transactions.len() >= MAX_TRANSACTIONS {
+                break;
+            }
+            if let Some(tx) = parse_transaction(tx_node) {
+                transactions.push(tx);
+            }
+        }
+    }
+
+    Ok(Form4 {
+        accession: filing.accession.clone(),
+        issuer_cik: Cik(issuer_cik_num),
+        issuer_ticker,
+        published_at: filing.published_at,
+        owners,
+        transactions,
+        amendment: filing.form.trim().eq_ignore_ascii_case("4/A"),
+    })
 }
 
 /// The raw XML document name from a submissions `primaryDocument`: SEC lists the
@@ -112,6 +163,97 @@ pub fn raw_document(primary_document: &str) -> &str {
         Some((dir, rest)) if dir.starts_with("xsl") => rest,
         _ => primary_document,
     }
+}
+
+fn parse_owner(node: Node<'_, '_>) -> Option<ReportingOwner> {
+    let id = child_named(node, "reportingOwnerId")?;
+    let cik = child_text(id, "rptOwnerCik")
+        .map(cap_text)
+        .unwrap_or_default();
+    let name = child_text(id, "rptOwnerName")
+        .map(cap_text)
+        .unwrap_or_default();
+    if cik.is_empty() && name.is_empty() {
+        return None;
+    }
+    let rel = child_named(node, "reportingOwnerRelationship");
+    let is_director = rel
+        .and_then(|r| child_text(r, "isDirector"))
+        .is_some_and(is_xml_true);
+    let is_officer = rel
+        .and_then(|r| child_text(r, "isOfficer"))
+        .is_some_and(is_xml_true);
+    let is_ten_pct_owner = rel
+        .and_then(|r| child_text(r, "isTenPercentOwner"))
+        .is_some_and(is_xml_true);
+    let officer_title = rel
+        .and_then(|r| child_text(r, "officerTitle"))
+        .map(cap_text);
+
+    Some(ReportingOwner {
+        cik,
+        name,
+        is_director,
+        is_officer,
+        is_ten_pct_owner,
+        officer_title,
+    })
+}
+
+fn parse_transaction(node: Node<'_, '_>) -> Option<InsiderTransaction> {
+    let date_str = child_named(node, "transactionDate").and_then(|d| child_text(d, "value"))?;
+    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+
+    let coding = child_named(node, "transactionCoding")?;
+    let code = child_text(coding, "transactionCode")?.to_ascii_uppercase();
+
+    let amounts = child_named(node, "transactionAmounts")?;
+    let shares_str =
+        child_named(amounts, "transactionShares").and_then(|s| child_text(s, "value"))?;
+    let shares: f64 = shares_str.parse().ok()?;
+    if !shares.is_finite() || shares < 0.0 {
+        return None;
+    }
+
+    let price = child_named(amounts, "transactionPricePerShare")
+        .and_then(|p| child_text(p, "value"))
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|p| p.is_finite() && *p >= 0.0);
+
+    let ad_str = child_named(amounts, "transactionAcquiredDisposedCode")
+        .and_then(|a| child_text(a, "value"))?;
+    let acquired = match ad_str.to_ascii_uppercase().as_str() {
+        "A" => true,
+        "D" => false,
+        _ => return None,
+    };
+
+    Some(InsiderTransaction {
+        date,
+        code,
+        shares,
+        price,
+        acquired,
+    })
+}
+
+fn child_named<'a>(node: Node<'a, 'a>, name: &str) -> Option<Node<'a, 'a>> {
+    node.children()
+        .find(|c| c.is_element() && c.tag_name().name() == name)
+}
+
+fn child_text<'a>(node: Node<'a, 'a>, name: &str) -> Option<&'a str> {
+    let child = child_named(node, name)?;
+    let text = child.text()?.trim();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn is_xml_true(s: &str) -> bool {
+    s == "1" || s.eq_ignore_ascii_case("true")
+}
+
+fn cap_text(s: &str) -> String {
+    s.chars().take(MAX_SEC_TEXT_CHARS).collect()
 }
 
 #[cfg(test)]
