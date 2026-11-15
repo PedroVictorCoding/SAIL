@@ -1,0 +1,83 @@
+{
+  "settings": {
+    "years": 30,
+    "reinvest_pct": 100.0,
+    "allocation": "proportional",
+    "top_n": 5,
+    "monthly_contribution": 300.0,
+    "reserve_pt_tax": false,
+    "start": "2026-12-01"
+  },
+  "scenarios": [
+    {
+      "scenario": "low",
+      "years": [
+        {"year": 1, "gross": 4000, "withheld": 600, "pt_tax": 0, "net": 3400, "reinvested": 3400, "contributed": 3600, "cash": 0, "value": 95000, "yield_on_cost": 0.036},
+        {"year": 30, "gross": 12000, "withheld": 1800, "pt_tax": 0, "net": 10200, "reinvested": 10200, "contributed": 3600, "cash": 0, "value": 310000, "yield_on_cost": 0.09}
+      ],
+      "monthly_net": [283, 283, 283, 283, 283, 283, 283, 283, 283, 283, 283, 283],
+      "doubling_year": 14
+    },
+    {
+      "scenario": "base",
+      "years": [
+        {"year": 1, "gross": 4500, "withheld": 675, "pt_tax": 0, "net": 3825, "reinvested": 3825, "contributed": 3600, "cash": 0, "value": 105000, "yield_on_cost": 0.038},
+        {"year": 30, "gross": 18000, "withheld": 2700, "pt_tax": 0, "net": 15300, "reinvested": 15300, "contributed": 3600, "cash": 0, "value": 450000, "yield_on_cost": 0.14}
+      ],
+      "monthly_net": [318, 318, 318, 318, 318, 318, 318, 318, 318, 318, 318, 318],
+      "doubling_year": 11
+    },
+    {
+      "scenario": "high",
+      "years": [
+        {"year": 1, "gross": 5000, "withheld": 750, "pt_tax": 0, "net": 4250, "reinvested": 4250, "contributed": 3600, "cash": 0, "value": 115000, "yield_on_cost": 0.04},
+        {"year": 30, "gross": 24000, "withheld": 3600, "pt_tax": 0, "net": 20400, "reinvested": 20400, "contributed": 3600, "cash": 0, "value": 600000, "yield_on_cost": 0.19}
+      ],
+      "monthly_net": [354, 354, 354, 354, 354, 354, 354, 354, 354, 354, 354, 354],
+      "doubling_year": 9
+    }
+  ],
+  "holdings": [
+    {
+      "symbol": "JNJ",
+      "growth": {"g": 0.052, "raw": 0.058, "annual": [[2020, 4.0], [2025, 5.2]], "ttm_per_share": 5.20},
+      "withholding": [0.15, "observed"],
+      "first_year_net": 2200.0,
+      "last_year_net": 9500.0,
+      "end_units": 120.5
+    },
+    {
+      "symbol": "VWRL",
+      "growth": {"g": 0.03, "raw": 0.035, "annual": [[2022, 2.0], [2025, 2.2]], "ttm_per_share": 2.20},
+      "withholding": [0.0, "default"],
+      "first_year_net": 1625.0,
+      "last_year_net": 5800.0,
+      "end_units": 240.0
+    }
+  ],
+  "non_paying": [],
+  "specials": [
+    {"key": "JNJ.US", "symbol": "JNJ", "ex_date": "2025-05-12", "per_share": 2.50}
+  ],
+  "safety": {
+    "JNJ": {
+      "grade": "a",
+      "fcf_cover": 1.85,
+      "earnings_cover": 2.1,
+      "streak_years": 15,
+      "reasons": [
+        "Free cash flow covered the dividend 1.9× in fiscal 2025.",
+        "Raised or held the dividend for 15 years in a row."
+      ]
+    },
+    "VWRL": {
+      "grade": "unknown",
+      "fcf_cover": null,
+      "earnings_cover": null,
+      "streak_years": 4,
+      "reasons": ["No annual cash-flow filings were found."]
+    }
+  },
+  "without_reinvestment": {"scenario": "base", "years": [], "monthly_net": [], "doubling_year": null},
+  "notes": ["Fixture projection."]
+}
