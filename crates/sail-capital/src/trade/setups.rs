@@ -1,6 +1,7 @@
 //! The fixed daily-bar setups (six from round 13, two event/volume setups from round 24).
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 
 use super::indicators::{
     adjust, atr, bollinger, previous_extreme, relative_volume, rolling_range, rsi, sma,
@@ -212,7 +213,17 @@ fn earnings_gap_drift(instrument: &Instrument, start: usize) -> Vec<(usize, Side
         if index == 0 || index < start {
             continue;
         }
-        events.entry(index).or_insert(event.surprise_pct);
+        match events.entry(index) {
+            Entry::Vacant(vacant) => {
+                vacant.insert(event.surprise_pct);
+            }
+            Entry::Occupied(mut occupied) => {
+                // K0: two reports on one reaction session; a known surprise wins.
+                if occupied.get().is_none() && event.surprise_pct.is_some() {
+                    occupied.insert(event.surprise_pct);
+                }
+            }
+        }
     }
     let mut firings = Vec::new();
     for (index, surprise) in events {

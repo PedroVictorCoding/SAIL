@@ -24,7 +24,7 @@
 //!
 //! **Purity.** No I/O and no clock.
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Months, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 /// One holding's expectation in a snapshot.
@@ -143,17 +143,101 @@ pub fn snapshot(
     }
 }
 
-/// Grades every snapshot whose 12 months ended by `today`. M0 stub: everything
-/// pending.
+/// Grades every snapshot whose 12 months ended by `today`. Pure.
 pub fn grade(
     snapshots: &[IncomeSnapshot],
     receipts: &[Receipt],
     today: NaiveDate,
 ) -> RecordSummary {
-    let _ = (receipts, today);
-    RecordSummary {
-        pending: snapshots.len() as u32,
-        notes: vec!["The projection record is not graded yet.".into()],
-        ..RecordSummary::default()
+    let mut graded = Vec::new();
+    let mut pending = 0u32;
+    for snap in snapshots {
+        let end = snap
+            .month
+            .checked_add_months(Months::new(12))
+            .unwrap_or(NaiveDate::MAX);
+        if today < end {
+            pending += 1;
+            continue;
+        }
+        let mut holdings = Vec::with_capacity(snap.holdings.len());
+        let mut received_total = 0.0;
+        for holding in &snap.holdings {
+            let received: f64 = receipts
+                .iter()
+                .filter(|receipt| {
+                    receipt.key == holding.key
+                        && receipt.paid >= snap.month
+                        && receipt.paid < end
+                        && receipt.units_then.is_finite()
+                        && receipt.units_then > 0.0
+                        && holding.units.is_finite()
+                        && receipt.net.is_finite()
+                })
+                .map(|receipt| receipt.net * holding.units / receipt.units_then)
+                .sum();
+            received_total += received;
+            holdings.push((
+                holding.symbol.clone(),
+                holding.projected_net,
+                received,
+                ratio(received, holding.projected_net),
+            ));
+        }
+        graded.push(GradedSnapshot {
+            month: snap.month,
+            projected: snap.base,
+            received: received_total,
+            error: ratio(received_total, snap.base),
+            in_scenarios: received_total >= snap.low && received_total <= snap.high,
+            in_band: match (snap.p10, snap.p90) {
+                (Some(low), Some(high)) => Some(received_total >= low && received_total <= high),
+                _ => None,
+            },
+            holdings,
+        });
     }
+    graded.sort_by_key(|row| row.month);
+    let errors: Vec<f64> = graded.iter().filter_map(|row| row.error).collect();
+    let bias = mean(&errors);
+    let mean_abs_error = (!errors.is_empty())
+        .then(|| errors.iter().map(|e| e.abs()).sum::<f64>() / errors.len() as f64);
+    let scenario_coverage = (!graded.is_empty())
+        .then(|| graded.iter().filter(|row| row.in_scenarios).count() as f64 / graded.len() as f64);
+    let bands: Vec<bool> = graded.iter().filter_map(|row| row.in_band).collect();
+    let band_coverage = (!bands.is_empty())
+        .then(|| bands.iter().filter(|inside| **inside).count() as f64 / bands.len() as f64);
+    let mut notes = Vec::new();
+    if pending > 0 {
+        notes.push(format!(
+            "{pending} snapshot(s) are still inside their 12 months."
+        ));
+    }
+    if graded.is_empty() {
+        notes.push("No snapshots have a full 12 months to grade yet.".into());
+    } else {
+        notes.push(format!(
+            "{} graded snapshot(s); unit-adjusted receipts are compared with the base projection.",
+            graded.len()
+        ));
+    }
+    RecordSummary {
+        graded,
+        pending,
+        bias,
+        mean_abs_error,
+        scenario_coverage,
+        band_coverage,
+        notes,
+    }
+}
+
+/// `(received − projected) / projected` when the projection is positive and finite.
+fn ratio(received: f64, projected: f64) -> Option<f64> {
+    (projected.is_finite() && projected > 0.0 && received.is_finite())
+        .then(|| (received - projected) / projected)
+}
+
+fn mean(values: &[f64]) -> Option<f64> {
+    (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
 }

@@ -415,11 +415,43 @@ pub const MIN_DIVIDEND_OUTCOMES: u32 = 100;
 /// it has at least [`MIN_DIVIDEND_OUTCOMES`] five-year outcomes, its bias is within two
 /// percentage points a year, and its low–high band holds 55–80% of outcomes (one σ either
 /// side would hold about 68%).
-/// Round 25 (Kilo): the projection record's row, per [`crate::dividends::record`]'s
-/// thresholds. M0 stub: no row until something is graded.
+/// Round 25 (Kilo): the projection record's row. Earned with at least twelve graded
+/// snapshots, a bias within ten percentage points and a p10–p90 band that held 65–95% of
+/// them (one σ either side of a normal would hold about 68%); NotYet below twelve.
 fn dividend_record_row(summary: &crate::dividends::record::RecordSummary) -> Option<ScoreRow> {
-    let _ = summary;
-    None
+    let graded = u32::try_from(summary.graded.len()).unwrap_or(u32::MAX);
+    if graded == 0 {
+        return None;
+    }
+    let bias = summary.bias.unwrap_or(0.0);
+    let band = summary.band_coverage;
+    let standing = if graded >= 12
+        && summary.bias.is_some_and(|value| value.abs() <= 0.10)
+        && band.is_some_and(|value| (0.65..=0.95).contains(&value))
+    {
+        Standing::Earned
+    } else if graded < 12 {
+        Standing::NotYet
+    } else {
+        Standing::Failed
+    };
+    let headline = match standing {
+        Standing::NotYet => format!("Needs 12 graded months; has {graded}."),
+        _ => format!(
+            "Bias {:+.1}% over {graded} graded months; the p10–p90 band held {}% of them.",
+            bias * 100.0,
+            whole(band.unwrap_or(0.0) * 100.0)
+        ),
+    };
+    Some(ScoreRow {
+        key: "income:dividend_record".to_string(),
+        family: Family::Income,
+        name: "Dividend projection record".to_string(),
+        horizon_sessions: None,
+        standing,
+        headline,
+        evidence: graded,
+    })
 }
 
 fn dividend_growth_row(report: &crate::dividends::calibrate::CalibrationReport) -> ScoreRow {

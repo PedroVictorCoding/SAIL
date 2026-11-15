@@ -45,8 +45,9 @@ pub const SHORT_HORIZON: u32 = 5;
 /// Fewest instruments for a cross-section. Below it, nothing is scored or combined.
 pub const MIN_CROSS_SECTION: usize = 5;
 
-/// Horizons, in sessions, that signals are scored and combined at.
-pub const SIGNAL_HORIZONS: [u32; 2] = [20, 60];
+/// Horizons, in sessions, that signals are scored and combined at. The five-session
+/// horizon is where short-term reversal and event effects live (round 25, A5).
+pub const SIGNAL_HORIZONS: [u32; 3] = [5, 20, 60];
 
 /// Default fewest cross-sections before an IC is judged (about half a year of weekly
 /// dates).
@@ -261,20 +262,17 @@ pub struct SignalInputs<'a> {
 }
 
 /// Round 25 (A5): [`evaluate_and_combine`] with an evidence-only research universe.
-/// M0 stub: scores everything together, then drops evidence-only keys from `latest`;
-/// Kilo replaces it with membership-aware cross-sections.
+/// Evidence-only keys join a cross-section on a date only when `member_on` says they
+/// were index members then; they count in every IC but never get a [`CombinedScore`].
 pub fn evaluate_with(inputs: &SignalInputs<'_>) -> SignalReport {
-    let mut report =
-        evaluate_and_combine(inputs.series, inputs.external, inputs.sigma, inputs.config);
-    report
-        .latest
-        .retain(|score| !inputs.evidence_only.contains(&score.instrument_key));
-    report.evidence_instruments = inputs
-        .series
-        .iter()
-        .filter(|s| inputs.evidence_only.contains(s.instrument_key))
-        .count() as u32;
-    report
+    evaluate_internal(
+        inputs.series,
+        inputs.evidence_only,
+        inputs.member_on,
+        inputs.external,
+        inputs.sigma,
+        inputs.config,
+    )
 }
 
 /// Scores every price signal (plus any `external` scores) walk-forward over `series`,
@@ -285,6 +283,26 @@ pub fn evaluate_with(inputs: &SignalInputs<'_>) -> SignalReport {
 /// and horizon at the latest date (from `forecast::forecast` with `EwmaVolatility`).
 pub fn evaluate_and_combine(
     series: &[CloseSeries<'_>],
+    external: &[ExternalScores],
+    sigma: &dyn Fn(&str, u32) -> Option<f64>,
+    config: &SignalEvalConfig,
+) -> SignalReport {
+    evaluate_internal(
+        series,
+        &BTreeSet::new(),
+        &|_, _| true,
+        external,
+        sigma,
+        config,
+    )
+}
+
+/// The one evaluation body. `evidence_only` keys are excluded from each cross-section on
+/// dates where `member_on` is false, and from `latest`.
+fn evaluate_internal(
+    series: &[CloseSeries<'_>],
+    evidence_only: &BTreeSet<String>,
+    member_on: &dyn Fn(&str, NaiveDate) -> bool,
     external: &[ExternalScores],
     sigma: &dyn Fn(&str, u32) -> Option<f64>,
     config: &SignalEvalConfig,
@@ -300,7 +318,14 @@ pub fn evaluate_and_combine(
 
     let external_by_signal = group_externals(external);
     let signals = collect_signals(&external_by_signal);
-    let cross_sections = build_cross_sections(&instruments, &signals, &external_by_signal, config);
+    let cross_sections = build_cross_sections(
+        &instruments,
+        &signals,
+        &external_by_signal,
+        config,
+        evidence_only,
+        member_on,
+    );
     let available: Vec<bool> = (0..signals.len())
         .map(|signal| {
             cross_sections
@@ -417,7 +442,7 @@ pub fn evaluate_and_combine(
         horizon_weights.push((horizon, weights));
     }
 
-    let latest = latest_scores(
+    let mut latest = latest_scores(
         &instruments,
         &signals,
         &external_by_signal,
@@ -425,8 +450,11 @@ pub fn evaluate_and_combine(
         &combined_ic,
         sigma,
     );
+    if !evidence_only.is_empty() {
+        latest.retain(|score| !evidence_only.contains(&score.instrument_key));
+    }
 
-    let notes = report_notes(
+    let mut notes = report_notes(
         &signals,
         &skill,
         config,
@@ -435,6 +463,12 @@ pub fn evaluate_and_combine(
         cross_sections.len(),
         latest.is_empty(),
     );
+    if !evidence_only.is_empty() {
+        notes.push(format!(
+            "The cross-sections include {} evidence-only research names; their combined scores are not published.",
+            evidence_only.len()
+        ));
+    }
 
     SignalReport {
         config: config.clone(),
@@ -442,7 +476,10 @@ pub fn evaluate_and_combine(
         combined_ic,
         latest,
         notes,
-        evidence_instruments: 0,
+        evidence_instruments: series
+            .iter()
+            .filter(|item| evidence_only.contains(item.instrument_key))
+            .count() as u32,
     }
 }
 
@@ -619,6 +656,8 @@ fn build_cross_sections(
     signals: &[SignalId],
     external: &ExternalScoresBySignal,
     config: &SignalEvalConfig,
+    evidence_only: &BTreeSet<String>,
+    member_on: &dyn Fn(&str, NaiveDate) -> bool,
 ) -> Vec<CrossSection> {
     let mut dates: BTreeSet<NaiveDate> = BTreeSet::new();
     for instrument in instruments {
@@ -640,6 +679,9 @@ fn build_cross_sections(
             let external_rows = external.get(signal);
             let mut raw: Vec<(usize, f64, usize)> = Vec::new();
             for (instrument_index, instrument) in instruments.iter().enumerate() {
+                if evidence_only.contains(&instrument.key) && !member_on(&instrument.key, date) {
+                    continue;
+                }
                 let Some(index) = instrument.index_on_or_before(date) else {
                     continue;
                 };
