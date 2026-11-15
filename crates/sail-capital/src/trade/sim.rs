@@ -2,7 +2,7 @@
 
 use chrono::NaiveDate;
 
-use super::indicators::atr;
+use super::indicators::{adjust, atr};
 use super::setups::fire_for_from;
 use super::{Bar, Costs, Exit, HoldingGuard, Instrument, SetupId, Side, SignalCard, Trade};
 
@@ -18,7 +18,10 @@ pub(super) fn replay_from(instrument: &Instrument, costs: Costs, from: NaiveDate
 
 fn replay_since(instrument: &Instrument, costs: Costs, from: Option<NaiveDate>) -> Vec<Trade> {
     let bars = &instrument.bars;
-    let atr = atr(bars, 14);
+    // Triggers and the ATR see dividend-adjusted bars; fills and stops stay raw. The ATR
+    // is converted back to raw units at each firing (`Adjusted` documents the factor).
+    let adjusted = adjust(bars);
+    let adjusted_atr = atr(&adjusted.bars, 14);
     let mut trades = Vec::new();
     for setup in SetupId::ALL {
         // Indicators always see every bar (the running sums in `sma` and `bollinger`
@@ -37,9 +40,14 @@ fn replay_since(instrument: &Instrument, costs: Costs, from: Option<NaiveDate>) 
             let Some(next) = bars.get(entry_index) else {
                 continue;
             };
-            let Some(atr) = atr[index] else {
+            let Some(value) = adjusted_atr[index] else {
                 continue;
             };
+            let factor = adjusted.factor[index];
+            if !(factor.is_finite() && factor > 0.0) {
+                continue;
+            }
+            let atr = value / factor;
             if !(atr.is_finite() && atr > 0.0) {
                 continue;
             }
@@ -84,6 +92,8 @@ fn replay_since(instrument: &Instrument, costs: Costs, from: Option<NaiveDate>) 
                 costs,
                 instrument.needs_cfd(side),
                 instrument.foreign_currency,
+                instrument.context.withholding,
+                true,
             ) else {
                 continue;
             };
@@ -108,6 +118,8 @@ pub(super) fn simulate(
     costs: Costs,
     needs_cfd: bool,
     foreign: bool,
+    withholding: f64,
+    pay_dividends: bool,
 ) -> Option<Trade> {
     if max_sessions == 0 || entry_index >= bars.len() {
         return None;
@@ -126,10 +138,32 @@ pub(super) fn simulate(
     let mut remaining = 1.0;
     let mut gross_r = 0.0;
     let mut targets_hit = 0usize;
+    let mut dividend_r = 0.0;
+    let mut ex_date_gap = false;
+    let withholding = withholding.clamp(0.0, 1.0);
 
     for (index, bar) in bars.iter().enumerate().skip(entry_index) {
         let bar = *bar;
+        // Units still open at the ex-date's open earn the cash dividend (long, net of
+        // withholding) or pay it (short CFD). Entering on the ex-date itself does not.
+        if pay_dividends
+            && index > entry_index
+            && let Some(dividend) = bar.dividend
+            && dividend.is_finite()
+            && dividend > 0.0
+        {
+            let credit = match side {
+                Side::Long => dividend * (1.0 - withholding),
+                Side::Short => -dividend,
+            };
+            dividend_r += remaining * credit / risk;
+        }
         if let Some(fill) = stop_fill(bar, side, stop) {
+            let gapped = match side {
+                Side::Long => bar.open <= stop,
+                Side::Short => bar.open >= stop,
+            };
+            ex_date_gap = gapped && bar.dividend.is_some_and(|dividend| dividend > 0.0);
             gross_r += remaining * direction * (fill - entry) / risk;
             let exit = match targets_hit {
                 0 => Exit::Stop,
@@ -152,6 +186,8 @@ pub(super) fn simulate(
                 needs_cfd,
                 foreign,
                 risk,
+                dividend_r,
+                ex_date_gap,
             ));
         }
 
@@ -188,6 +224,8 @@ pub(super) fn simulate(
                 needs_cfd,
                 foreign,
                 risk,
+                dividend_r,
+                ex_date_gap,
             ));
         }
 
@@ -213,6 +251,8 @@ pub(super) fn simulate(
                 needs_cfd,
                 foreign,
                 risk,
+                dividend_r,
+                ex_date_gap,
             ));
         }
     }
@@ -245,6 +285,8 @@ fn closed(
     needs_cfd: bool,
     foreign: bool,
     risk: f64,
+    dividend_r: f64,
+    ex_date_gap: bool,
 ) -> Trade {
     let conversion = if foreign && !needs_cfd {
         costs.fx_conversion
@@ -267,9 +309,11 @@ fn closed(
         stop,
         exit_session,
         exit,
-        r_multiple: gross_r - (costs.round_trip + conversion) * entry / risk - financing,
-        dividend_r: 0.0,
-        ex_date_gap: false,
+        r_multiple: gross_r + dividend_r
+            - (costs.round_trip + conversion) * entry / risk
+            - financing,
+        dividend_r,
+        ex_date_gap,
         regime: None,
     }
 }
@@ -294,6 +338,8 @@ pub(super) fn grade(card: &SignalCard, bars_after: &[Bar], costs: Costs) -> Opti
         costs,
         card.needs_cfd,
         !card.needs_cfd,
+        0.0,
+        false,
     )
 }
 

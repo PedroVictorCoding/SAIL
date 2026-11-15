@@ -119,25 +119,142 @@ pub fn reference_for(instrument: &Instrument) -> Reference {
     }
 }
 
-/// Kilo, round 24, *pure*: the regime at each of `bars`' sessions (module doc). M0 stub:
-/// all `None`.
+/// Trend window: the close against its 200-session simple average.
+const TREND_WINDOW: usize = 200;
+/// Realized-volatility window (daily log returns).
+const VOL_WINDOW: usize = 20;
+/// History of volatility values the percentile is taken over (this session included).
+const VOL_HISTORY: usize = 252;
+/// The volatility percentile that splits calm from stressed.
+const STRESSED_PERCENTILE: f64 = 0.8;
+/// Reference sessions older than this leave the instrument's regime unknown.
+const MAX_STALE_DAYS: i64 = 5;
+
+/// Kilo, round 24, *pure*: the regime at each of `bars`' sessions (module doc). The
+/// realized volatility is the population standard deviation of the last 20 daily log
+/// returns; its cut is the nearest-rank 80th percentile of the last 252 values, both
+/// fixed a priori. A window with a missing return or non-positive price gives `None`.
 pub fn series(bars: &[Bar]) -> Vec<Option<Regime>> {
-    vec![None; bars.len()]
+    let length = bars.len();
+    let mut out = vec![None; length];
+    if length < VOL_WINDOW + VOL_HISTORY {
+        return out;
+    }
+    let mut returns: Vec<Option<f64>> = vec![None; length];
+    for index in 1..length {
+        let previous = bars[index - 1].close;
+        let close = bars[index].close;
+        if previous.is_finite() && close.is_finite() && previous > 0.0 && close > 0.0 {
+            returns[index] = Some((close / previous).ln());
+        }
+    }
+    let mut volatility: Vec<Option<f64>> = vec![None; length];
+    for index in VOL_WINDOW..length {
+        let Some(values): Option<Vec<f64>> = returns[index + 1 - VOL_WINDOW..=index]
+            .iter()
+            .copied()
+            .collect()
+        else {
+            continue;
+        };
+        let mean = values.iter().sum::<f64>() / VOL_WINDOW as f64;
+        let variance = values
+            .iter()
+            .map(|value| (value - mean).powi(2))
+            .sum::<f64>()
+            / VOL_WINDOW as f64;
+        if variance.is_finite() {
+            volatility[index] = Some(variance.sqrt());
+        }
+    }
+    for index in 0..length {
+        if index + 1 < VOL_WINDOW + VOL_HISTORY {
+            continue;
+        }
+        let Some(now) = volatility[index] else {
+            continue;
+        };
+        let start = index + 1 - TREND_WINDOW;
+        let average =
+            bars[start..=index].iter().map(|bar| bar.close).sum::<f64>() / TREND_WINDOW as f64;
+        if !average.is_finite() {
+            continue;
+        }
+        let trend = if bars[index].close > average {
+            Trend::Up
+        } else {
+            Trend::Down
+        };
+        let from = index + 1 - VOL_HISTORY;
+        let Some(mut history): Option<Vec<f64>> =
+            volatility[from..=index].iter().copied().collect()
+        else {
+            continue;
+        };
+        history.sort_by(f64::total_cmp);
+        let rank = ((STRESSED_PERCENTILE * history.len() as f64).ceil() as usize)
+            .saturating_sub(1)
+            .min(history.len() - 1);
+        let vol = if now > history[rank] {
+            Vol::Stressed
+        } else {
+            Vol::Calm
+        };
+        out[index] = Some(Regime { trend, vol });
+    }
+    out
 }
 
 /// Kilo, round 24, *pure*: the regime at each of the instrument's sessions, aligned with
 /// `instrument.bars`, from its [`reference_for`] (`references` holds the keyed series).
-/// M0 stub: all `None`.
+/// A reference session is used only if it is at most [`MAX_STALE_DAYS`] calendar days
+/// before the instrument's session.
 pub fn for_instrument(
     instrument: &Instrument,
     references: &HashMap<String, Vec<Bar>>,
 ) -> Vec<Option<Regime>> {
-    let _ = references;
-    vec![None; instrument.bars.len()]
+    let length = instrument.bars.len();
+    match reference_for(instrument) {
+        Reference::Own => series(&instrument.bars),
+        Reference::Unconditioned => vec![None; length],
+        Reference::Key(key) => {
+            let Some(reference) = references.get(key) else {
+                return vec![None; length];
+            };
+            let regimes = series(reference);
+            let mut out = vec![None; length];
+            let mut next = 0usize;
+            for (index, bar) in instrument.bars.iter().enumerate() {
+                while next < reference.len() && reference[next].session <= bar.session {
+                    next += 1;
+                }
+                if next == 0 {
+                    continue;
+                }
+                let at = next - 1;
+                let Some(regime) = regimes[at] else {
+                    continue;
+                };
+                if (bar.session - reference[at].session).num_days() <= MAX_STALE_DAYS {
+                    out[index] = Some(regime);
+                }
+            }
+            out
+        }
+    }
 }
 
 /// Kilo, round 24, *pure*: sets each trade's `regime` to the instrument's regime on its
-/// `signal_session` ([`for_instrument`]). M0 stub: leaves them `None`.
+/// `signal_session` ([`for_instrument`]). A trade whose session is not one of the
+/// instrument's bars keeps `None`.
 pub fn tag(trades: &mut [Trade], instrument: &Instrument, references: &HashMap<String, Vec<Bar>>) {
-    let _ = (trades, instrument, references);
+    let regimes = for_instrument(instrument, references);
+    for trade in trades {
+        let index = instrument
+            .bars
+            .partition_point(|bar| bar.session < trade.signal_session);
+        if index < regimes.len() && instrument.bars[index].session == trade.signal_session {
+            trade.regime = regimes[index];
+        }
+    }
 }
