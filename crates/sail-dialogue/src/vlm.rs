@@ -2109,7 +2109,8 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        assert_eq!(tools.len(), 53);
+        // 54 since round 24 added `capital:income`.
+        assert_eq!(tools.len(), 54);
 
         let names: Vec<_> = tools
             .iter()
@@ -2133,6 +2134,7 @@ mod schema_selection_tests {
         assert!(names.contains(&"studio_audio_analyze"));
         assert!(names.contains(&"forge_enqueue"));
         assert!(names.contains(&"forge_status"));
+        assert!(names.contains(&"capital_income"));
         assert!(names.contains(&"forge_list"));
         assert!(names.contains(&"forge_cancel"));
         assert!(names.contains(&"forge_clear"));

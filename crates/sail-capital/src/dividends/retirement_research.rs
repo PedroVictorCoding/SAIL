@@ -119,6 +119,8 @@ may explain what they imply.\n\
 - Be concrete and conservative. Say when a strategy would not fit these numbers. No hype, \
 no certainty about future returns, no product promotion.\n\
 - This is planning information, not regulated financial advice.\n\
+- Keep it short: every string under 35 words, at most 3 actions and 3 tradeoffs per \
+strategy, so the whole answer fits.\n\
 - Reply with JSON only, no markdown fences, using exactly these keys: headline (string, one \
 line), summary (string, 2-3 sentences), strategies (array of at most {MAX_STRATEGIES} \
 objects with name, why, actions (array of strings), tradeoffs (array of strings), citations \
@@ -238,19 +240,121 @@ one concrete check the owner can run in SAIL.",
     out
 }
 
-/// A validated draft and whether it came back as structured JSON.
+/// What the page shows when the model's answer was JSON that could not be read at all:
+/// never the raw JSON itself.
+pub const UNREADABLE_ANSWER: &str = "The local model's answer was cut off before it could be \
+read. Press \"Research a retirement strategy\" to run it again.";
+
+/// A validated draft and whether it came back as structured JSON. An answer cut off
+/// mid-JSON keeps its complete parts ([`parse_structured`] repairs it). An answer that is
+/// JSON but unreadable becomes [`UNREADABLE_ANSWER`]; plain prose is kept as the summary.
 pub fn draft_from_response(raw: &str, source_count: usize) -> (Draft, bool) {
     match parse_structured(raw, source_count) {
         Some(draft) => (draft, true),
-        None => (
-            Draft {
-                headline: "Research note".into(),
-                summary: truncate(raw.trim(), 4_000),
-                ..Draft::default()
-            },
-            false,
-        ),
+        None => {
+            let trimmed = raw.trim();
+            let summary = if looks_like_json(trimmed) {
+                UNREADABLE_ANSWER.to_string()
+            } else {
+                truncate(trimmed, 4_000)
+            };
+            (
+                Draft {
+                    headline: "Research note".into(),
+                    summary,
+                    ..Draft::default()
+                },
+                false,
+            )
+        }
     }
+}
+
+/// Whether the model's answer was cut off: its JSON does not parse as it is, but does
+/// once the unfinished tail is dropped and the brackets are closed.
+pub fn was_cut_off(raw: &str) -> bool {
+    let Some(start) = raw.find('{') else {
+        return false;
+    };
+    let strict =
+        json_object(raw).is_some_and(|json| serde_json::from_str::<RawDraft>(json).is_ok());
+    !strict && repaired_draft(&raw[start..]).is_some()
+}
+
+/// Text that starts like the JSON answer (an object, possibly fenced).
+fn looks_like_json(text: &str) -> bool {
+    let body = text
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_start();
+    body.starts_with('{') || body.contains("\"headline\"")
+}
+
+/// The brief as plain sentences for text to speech: headline, summary, each strategy
+/// with its reason and actions, then next steps and risks. Source markers like `[S2]`
+/// are dropped, since they mean nothing when heard.
+pub fn speakable(draft: &Draft) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut push = |text: &str| {
+        let clean = strip_source_markers(text);
+        let clean = clean.trim();
+        if !clean.is_empty() {
+            let ends = clean.ends_with(['.', '!', '?']);
+            parts.push(if ends {
+                clean.to_string()
+            } else {
+                format!("{clean}.")
+            });
+        }
+    };
+    push(&draft.headline);
+    push(&draft.summary);
+    for (index, strategy) in draft.strategies.iter().enumerate() {
+        push(&format!("Strategy {}: {}", index + 1, strategy.name));
+        push(&strategy.why);
+        for action in &strategy.actions {
+            push(action);
+        }
+    }
+    if !draft.next_steps.is_empty() {
+        push("Next steps");
+        for step in &draft.next_steps {
+            push(step);
+        }
+    }
+    if !draft.risks.is_empty() {
+        push("Risks");
+        for risk in &draft.risks {
+            push(risk);
+        }
+    }
+    parts.join(" ")
+}
+
+/// Drops `[S1]`, `[S2, S3]` and similar source markers.
+fn strip_source_markers(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find("[S") {
+        let (before, after) = rest.split_at(open);
+        match after.find(']') {
+            Some(close)
+                if after[1..close]
+                    .chars()
+                    .all(|c| c == 'S' || c == ',' || c == ' ' || c.is_ascii_digit()) =>
+            {
+                out.push_str(before.trim_end());
+                rest = &after[close + 1..];
+            }
+            _ => {
+                out.push_str(before);
+                out.push('[');
+                rest = &after[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[derive(Deserialize, Default)]
@@ -286,8 +390,11 @@ struct RawStrategy {
 /// Parse the model's JSON (tolerating code fences and prose around it). `None` when no
 /// usable object is found.
 pub fn parse_structured(raw: &str, source_count: usize) -> Option<Draft> {
-    let json = json_object(raw)?;
-    let parsed: RawDraft = serde_json::from_str(json).ok()?;
+    let strict = json_object(raw).and_then(|json| serde_json::from_str::<RawDraft>(json).ok());
+    let parsed = match strict {
+        Some(parsed) => parsed,
+        None => repaired_draft(&raw[raw.find('{')?..])?,
+    };
     let headline = one_line(&parsed.headline, 160);
     let summary = truncate(parsed.summary.trim(), 1_500);
     if headline.is_empty() && summary.is_empty() {
@@ -339,6 +446,55 @@ fn json_object(raw: &str) -> Option<&str> {
     let start = raw.find('{')?;
     let end = raw.rfind('}')?;
     (end > start).then(|| &raw[start..=end])
+}
+
+/// Reads an answer cut off mid-JSON: tries every point where a value had just closed,
+/// latest first, drops the unfinished tail after it and closes the open brackets. The
+/// first prefix that parses wins, so only complete strings, strategies and lists are
+/// kept.
+fn repaired_draft(text: &str) -> Option<RawDraft> {
+    // (byte index just after a closing bracket or string, the brackets open there)
+    let mut cuts: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut stack: Vec<u8> = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, byte) in text.bytes().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+                cuts.push((index + 1, stack.clone()));
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' | b'[' => stack.push(byte),
+            b'}' | b']' => {
+                stack.pop();
+                cuts.push((index + 1, stack.clone()));
+                if stack.is_empty() {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    // Bound the work on a long answer: the last 400 cut points are plenty.
+    let skip = cuts.len().saturating_sub(400);
+    for (end, open) in cuts.into_iter().skip(skip).rev() {
+        let mut candidate = text[..end].trim_end().trim_end_matches(',').to_string();
+        for bracket in open.iter().rev() {
+            candidate.push(if *bracket == b'{' { '}' } else { ']' });
+        }
+        if let Ok(parsed) = serde_json::from_str::<RawDraft>(&candidate) {
+            return Some(parsed);
+        }
+    }
+    None
 }
 
 /// First line only, collapsed, at most `max` characters.
@@ -508,6 +664,63 @@ mod tests {
         assert_eq!(draft.strategies[0].actions, vec!["Add 200 a month"]);
         assert_eq!(draft.risks.len(), 1);
         assert_eq!(draft.assumptions, vec!["2% inflation"]);
+    }
+
+    #[test]
+    fn an_answer_cut_off_mid_json_keeps_its_complete_parts() {
+        let full = r#"{"headline": "Close the gap", "summary": "You need more savings.",
+            "strategies": [
+              {"name": "Raise the allowance", "why": "It is the biggest lever [S3].",
+               "actions": ["Add 200 a month"], "tradeoffs": ["Less to spend"], "citations": [3]},
+              {"name": "Reinvest", "why": "Compounding", "actions": ["Turn on DRIP"],
+               "tradeoffs": [], "citations": [4]},
+              {"name": "Optimize Tax Efficiency", "why": "Holding international ETFs (XMPL.DE"#;
+        assert!(parse_structured(full, 4).is_some());
+        assert!(was_cut_off(full));
+        let (draft, structured) = draft_from_response(full, 4);
+        assert!(structured);
+        assert_eq!(draft.headline, "Close the gap");
+        // The unfinished third strategy is dropped; the two complete ones stay.
+        assert_eq!(draft.strategies.len(), 2);
+        assert_eq!(draft.strategies[1].name, "Reinvest");
+        assert!(!was_cut_off(r#"{"headline": "a", "summary": "b"}"#));
+        assert!(!was_cut_off("plain prose"));
+    }
+
+    #[test]
+    fn unreadable_json_is_never_shown_raw() {
+        let (draft, structured) = draft_from_response(r#"{"headline": "#, 2);
+        assert!(!structured);
+        assert_eq!(draft.summary, UNREADABLE_ANSWER);
+        let (fenced, _) = draft_from_response("```json\n{\"oops\"", 2);
+        assert_eq!(fenced.summary, UNREADABLE_ANSWER);
+    }
+
+    #[test]
+    fn the_spoken_brief_is_plain_sentences_without_source_markers() {
+        let draft = Draft {
+            headline: "Close the gap".into(),
+            summary: "You need more savings [S1].".into(),
+            strategies: vec![Strategy {
+                name: "Raise the allowance".into(),
+                why: "It is the biggest lever [S2, S3]".into(),
+                actions: vec!["Add 200 a month".into()],
+                tradeoffs: vec!["Less to spend".into()],
+                citations: vec![2, 3],
+            }],
+            risks: vec!["Returns may be lower".into()],
+            next_steps: vec!["Check the plan in a year".into()],
+            assumptions: Vec::new(),
+        };
+        let spoken = speakable(&draft);
+        assert_eq!(
+            spoken,
+            "Close the gap. You need more savings. Strategy 1: Raise the allowance. It is the \
+             biggest lever. Add 200 a month. Next steps. Check the plan in a year. Risks. \
+             Returns may be lower."
+        );
+        assert!(!spoken.contains('{') && !spoken.contains("[S"));
+        assert_eq!(strip_source_markers("keep [this] text"), "keep [this] text");
     }
 
     #[test]

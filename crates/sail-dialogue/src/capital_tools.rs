@@ -493,6 +493,9 @@ fn income_plan(service: &CapitalService) -> Result<Value, String> {
         "error": job.error,
         "plan": plan,
         "dividend_growth_backtest": calibration,
+        "retirement_research": crate::capital_retirement::brief_for_voice(
+            &sail_capital::service::default_dir()
+        ),
         "note": if job.plan.is_none() {
             "No plan has been run since SAIL started; the owner starts one from Income → Maximize income."
         } else {
