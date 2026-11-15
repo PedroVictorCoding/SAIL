@@ -65,7 +65,8 @@ pub struct IncomeRequest {
     /// Paths for a distribution (default 2,000).
     #[serde(default)]
     pub paths: Option<u32>,
-    /// For a distribution: `(year, monthly net target in today's money)`.
+    /// For a distribution: `(year, monthly net target)`, in the projection's nominal money
+    /// (not inflated; the caller inflates a target given in today's money).
     #[serde(default)]
     pub target: Option<(u32, f64)>,
     /// For a plan: what to maximize (default robust income at the last year).
