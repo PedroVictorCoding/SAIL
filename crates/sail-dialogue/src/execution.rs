@@ -393,7 +393,7 @@ impl Tool for Canvas {
 #[cfg(test)]
 pub(crate) const OWNER_GATED_TOOLS: [&str; 1] = ["escalate:reasoning"];
 
-pub(crate) const MODEL_TOOL_ORDER: [&str; 48] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 49] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -431,6 +431,7 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 48] = [
     "capital:forecast",
     "capital:policy",
     "capital:filings",
+    "capital:income",
     "forge:enqueue",
     "forge:status",
     "forge:list",
@@ -859,7 +860,7 @@ pub fn registry() -> Arc<ToolRegistry> {
             "Optional account id or name; defaults to the primary account",
         )
     };
-    let capital_tools: [KernelTool; 14] = [
+    let capital_tools: [KernelTool; 15] = [
         (
             "capital:overview",
             "Start here for questions about the owner's investments, portfolio, stocks, ETFs, funds, trades, signals, market positions, dividends, risk, or what to buy or sell. Returns account value, cash, largest positions, today's stance and top suggestions, the latest verified signals and candidate ideas, watchlist size and risk per trade. Read-only.",
@@ -978,6 +979,14 @@ pub fn registry() -> Arc<ToolRegistry> {
             "capital:policy",
             "The saved risk policy: position size, cash band, volatility and turnover limits, trading costs and risk per trade. Use before suggesting position sizes or checking whether an idea fits the owner's rules. Read-only.",
             json!({"account": capital_account()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "capital:income",
+            "The latest dividend income plan and what backs it: whether a search found a monthly allocation that beats the fixed choices (and the buys it suggests this month, never orders), the plan and the six fixed choices scored on simulated paths (10th-percentile and median income, median value), sensitivity to slower growth, no cuts and flat FX, names left out for dividend safety, and how well the dividend growth estimate held up in its backtest. Use for 'how do I maximize dividend income?', 'where should my monthly money go?', 'is my dividend income safe?'. Read-only: it reports the last plan the owner ran.",
+            json!({}),
             &[],
             ToolEffect::ReadOnly,
             2,

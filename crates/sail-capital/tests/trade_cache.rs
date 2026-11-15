@@ -36,6 +36,9 @@ fn trade(session: NaiveDate) -> Trade {
         exit_session: session,
         exit: Exit::Target1,
         r_multiple: 0.0,
+        dividend_r: 0.0,
+        ex_date_gap: false,
+        regime: None,
     }
 }
 

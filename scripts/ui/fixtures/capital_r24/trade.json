@@ -1,0 +1,81 @@
+{
+  "run_at": "2026-11-15T12:00:00Z",
+  "next_run_at": "2026-11-16T12:00:00Z",
+  "notes": [],
+  "running": false,
+  "last_error": null,
+  "day": {
+    "session": "2026-11-14",
+    "regime": {
+      "SPY": {"trend": "up", "vol": "calm"},
+      "^STOXX50E": {"trend": "down", "vol": "stressed"}
+    },
+    "heat": {
+      "total_risk_pct": 1.75,
+      "limit_pct": 3.0,
+      "cluster_limit_pct": 1.5,
+      "clusters": [
+        {"keys": ["AAPL", "MSFT"], "risk_pct": 1.0},
+        {"keys": ["NVDA"], "risk_pct": 0.75}
+      ]
+    },
+    "cards": [
+      {
+        "id": "card-aapl-1",
+        "symbol": "AAPL",
+        "setup": "volume_breakout",
+        "side": "long",
+        "tier": "verified",
+        "entry_zone": [224.0, 226.5],
+        "stop": 218.0,
+        "targets": [232.5, 240.0, 247.5],
+        "size": 12,
+        "risk_pct": 0.5,
+        "verdict": {"pooled_lower_r": 0.18, "n": 42},
+        "expectations": {
+          "p_t1": 0.54,
+          "p_t2": 0.31,
+          "p_t3": 0.17,
+          "p_stop": 0.41,
+          "median_sessions": 6,
+          "mean_r": 0.18,
+          "mean_r_ci": [-0.02, 0.38],
+          "n": 42
+        },
+        "sessions_to_verdict": null,
+        "warnings": []
+      }
+    ],
+    "candidates": [
+      {
+        "id": "cand-msft-1",
+        "symbol": "MSFT",
+        "setup": "earnings_gap_drift",
+        "side": "long",
+        "tier": "candidate",
+        "entry_zone": [415.0, 419.0],
+        "stop": 405.0,
+        "targets": [429.0, 441.0, 453.0],
+        "size": 5,
+        "risk_pct": 0.25,
+        "verdict": {"pooled_lower_r": -0.04, "n": 18},
+        "expectations": {
+          "p_t1": 0.50,
+          "p_t2": 0.28,
+          "p_t3": 0.14,
+          "p_stop": 0.44,
+          "median_sessions": 8,
+          "mean_r": 0.11,
+          "mean_r_ci": [-0.08, 0.30],
+          "n": 18
+        },
+        "sessions_to_verdict": 14,
+        "warnings": []
+      }
+    ],
+    "suppressed": [
+      {"symbol": "NVDA", "setup": "volume_breakout", "side": "long", "reason": "portfolio heat: cluster limit 1.5%"}
+    ],
+    "scoreboard": []
+  }
+}

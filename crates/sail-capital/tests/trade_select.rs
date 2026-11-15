@@ -50,6 +50,9 @@ fn trade(
         exit_session,
         exit: Exit::Target1,
         r_multiple,
+        dividend_r: 0.0,
+        ex_date_gap: false,
+        regime: None,
     }
 }
 
@@ -245,6 +248,7 @@ fn judge_updates_the_pooled_posterior_with_live_trades() {
         tier: Tier::Proven,
         exit_session,
         r_multiple: 0.0,
+        condition: Default::default(),
     };
     let live_trades = [
         LiveTrade {
@@ -280,6 +284,7 @@ fn judge_updates_the_pooled_posterior_with_live_trades() {
 }
 
 fn fit_trades(count: usize, exit: NaiveDate) -> Vec<Trade> {
+    // A strong synthetic edge: eight +2R and two 0R trades clear the 96-cell FDR bar.
     (0..count)
         .map(|index| {
             let signal = exit - Days::new(2);
@@ -288,7 +293,7 @@ fn fit_trades(count: usize, exit: NaiveDate) -> Vec<Trade> {
                 Side::Long,
                 signal + Days::new(index as u64),
                 exit + Days::new(index as u64),
-                if index % 2 == 0 { 2.0 } else { 0.0 },
+                if index + 2 < count { 2.0 } else { 0.0 },
             )
         })
         .collect()
@@ -368,7 +373,7 @@ fn walk_forward_purges_a_trade_that_spans_the_fold_start() {
                 Side::Long,
                 date(2021, 6, 1) + Days::new(index as u64),
                 date(2021, 12, 1) + Days::new(index as u64),
-                if index % 2 == 0 { 5.0 } else { 0.0 },
+                if index < 8 { 5.0 } else { 0.0 },
             )
         })
         .collect();
@@ -391,7 +396,7 @@ fn walk_forward_embargoes_trades_just_before_the_fold() {
                 Side::Long,
                 date(2021, 12, 1) + Days::new(index as u64),
                 date(2021, 12, 25) + Days::new(index as u64),
-                if index % 2 == 0 { 5.0 } else { 0.0 },
+                if index < 8 { 5.0 } else { 0.0 },
             )
         })
         .collect();
@@ -408,7 +413,7 @@ fn walk_forward_embargoes_trades_just_before_the_fold() {
                 Side::Long,
                 date(2021, 11, 1) + Days::new(index as u64),
                 date(2021, 12, 10) + Days::new(index as u64),
-                if index % 2 == 0 { 5.0 } else { 0.0 },
+                if index < 8 { 5.0 } else { 0.0 },
             )
         })
         .collect();
@@ -521,7 +526,10 @@ fn random_walks_verify_nothing() {
 #[test]
 fn the_reason_names_the_first_failed_condition() {
     let verdicts = judge(&BTreeMap::new(), &[], date(2026, 1, 1));
-    assert_eq!(verdicts.len(), 36);
+    assert_eq!(
+        verdicts.len(),
+        3 * sail_capital::trade::regime::Condition::ALL.len() * SetupId::ALL.len() * 2
+    );
     assert!(
         verdicts
             .iter()
@@ -583,4 +591,160 @@ fn p_value_is_one_for_degenerate_evidence() {
     assert_eq!(p_value(&evidence(1, 10.0, 0.1)), 1.0);
     assert_eq!(p_value(&evidence(10, 10.0, 0.0)), 1.0);
     assert_eq!(p_value(&evidence(10, 10.0, f64::NAN)), 1.0);
+}
+
+use sail_capital::trade::regime::{Condition, Regime, Trend, Vol};
+
+fn regime(trend: Trend, vol: Vol) -> Option<Regime> {
+    Some(Regime { trend, vol })
+}
+
+fn verdict_under(
+    verdicts: &[sail_capital::trade::Verdict],
+    setup: SetupId,
+    side: Side,
+    condition: Condition,
+) -> &sail_capital::trade::Verdict {
+    verdicts
+        .iter()
+        .find(|verdict| {
+            verdict.group == "stocks"
+                && verdict.selection.setup == setup
+                && verdict.selection.side == side
+                && verdict.condition == condition
+        })
+        .expect("a conditioned verdict")
+}
+
+#[test]
+fn the_fdr_family_covers_every_condition() {
+    assert_eq!(
+        sail_capital::trade::select::FDR_FAMILY,
+        3 * Condition::ALL.len() * SetupId::ALL.len() * 2
+    );
+    assert_eq!(sail_capital::trade::select::FDR_FAMILY, 96);
+    let verdicts = judge(&BTreeMap::new(), &[], date(2026, 1, 1));
+    assert_eq!(verdicts.len(), 96);
+    let conditioned = verdicts
+        .iter()
+        .filter(|verdict| verdict.condition == Condition::AgreesCalm)
+        .count();
+    assert_eq!(conditioned, 3 * SetupId::ALL.len() * 2);
+}
+
+#[test]
+fn the_agrees_calm_cell_uses_only_admitted_trades() {
+    let mut trades = Vec::new();
+    for index in 0..40 {
+        let session = date(2020, 1, 1) + Days::new(index as u64);
+        let mut long = trade(
+            SetupId::ThreeDayReversal,
+            Side::Long,
+            session,
+            session,
+            if index % 2 == 0 { 1.0 } else { -0.5 },
+        );
+        long.regime = if index % 2 == 0 {
+            regime(Trend::Up, Vol::Calm)
+        } else {
+            regime(Trend::Up, Vol::Stressed)
+        };
+        trades.push(long);
+        let mut short = trade(
+            SetupId::ThreeDayReversal,
+            Side::Short,
+            session,
+            session,
+            if index % 2 == 0 { 1.0 } else { -0.5 },
+        );
+        short.regime = if index % 2 == 0 {
+            regime(Trend::Down, Vol::Calm)
+        } else {
+            regime(Trend::Up, Vol::Calm)
+        };
+        trades.push(short);
+    }
+    let verdicts = judge(&group_trades("stocks", trades), &[], date(2026, 1, 1));
+    let none = verdict_under(
+        &verdicts,
+        SetupId::ThreeDayReversal,
+        Side::Long,
+        Condition::None,
+    );
+    let calm = verdict_under(
+        &verdicts,
+        SetupId::ThreeDayReversal,
+        Side::Long,
+        Condition::AgreesCalm,
+    );
+    assert_eq!(none.selection.trades, 40);
+    assert_eq!(calm.selection.trades, 20);
+    assert!((calm.selection.expectancy_r - 1.0).abs() < 1e-12);
+
+    let short_calm = verdict_under(
+        &verdicts,
+        SetupId::ThreeDayReversal,
+        Side::Short,
+        Condition::AgreesCalm,
+    );
+    assert_eq!(short_calm.selection.trades, 20);
+}
+
+#[test]
+fn live_trades_update_only_their_own_condition() {
+    let trades = alternating(
+        SetupId::ThreeDayReversal,
+        Side::Long,
+        40,
+        1.0,
+        date(2020, 1, 1),
+    );
+    let live = [
+        LiveTrade {
+            group: "stocks".into(),
+            setup: SetupId::ThreeDayReversal,
+            side: Side::Long,
+            tier: Tier::Proven,
+            exit_session: date(2025, 6, 1),
+            r_multiple: 1.0,
+            condition: Condition::None,
+        },
+        LiveTrade {
+            group: "stocks".into(),
+            setup: SetupId::ThreeDayReversal,
+            side: Side::Long,
+            tier: Tier::Candidate,
+            exit_session: date(2025, 6, 2),
+            r_multiple: -1.0,
+            condition: Condition::AgreesCalm,
+        },
+    ];
+    let verdicts = judge(&group_trades("stocks", trades), &live, date(2026, 1, 1));
+    let none = verdict_under(
+        &verdicts,
+        SetupId::ThreeDayReversal,
+        Side::Long,
+        Condition::None,
+    );
+    let calm = verdict_under(
+        &verdicts,
+        SetupId::ThreeDayReversal,
+        Side::Long,
+        Condition::AgreesCalm,
+    );
+    assert_eq!(none.judgement.as_ref().expect("a judgement").live.trades, 1);
+    assert_eq!(calm.judgement.as_ref().expect("a judgement").live.trades, 1);
+    assert!((none.judgement.as_ref().expect("a judgement").live.mean_r - 1.0).abs() < 1e-12);
+    assert!((calm.judgement.as_ref().expect("a judgement").live.mean_r + 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn walk_forward_is_deterministic() {
+    let as_of = date(2026, 1, 1);
+    let trades = fit_trades(12, date(2021, 3, 1));
+    let by_group = group_trades("fx", trades);
+    assert_eq!(
+        walk_forward(&by_group, as_of),
+        walk_forward(&by_group, as_of)
+    );
 }

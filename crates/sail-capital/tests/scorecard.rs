@@ -100,6 +100,7 @@ fn verdict(
         candidate: false,
         reason: reason.to_string(),
         judgement: None,
+        condition: Default::default(),
     }
 }
 
@@ -126,6 +127,7 @@ fn summarize_all<'a>(
             outlook,
             setups,
             live,
+            dividend_calibration: None,
         },
         now(),
     )

@@ -23,6 +23,7 @@ mod dividends;
 mod evidence;
 mod forecast_records;
 mod grants;
+mod income;
 mod outlook;
 mod prices;
 mod replays;
@@ -200,6 +201,7 @@ impl CapitalStore {
         conn.execute_batch(board::SCHEMA)?;
         conn.execute_batch(replays::SCHEMA)?;
         conn.execute_batch(research::SCHEMA)?;
+        conn.execute_batch(income::SCHEMA)?;
         conn.execute_batch(forecast_records::SCHEMA)?;
         prices::init_price_schema(&conn)?;
         Ok(Self {
@@ -726,6 +728,7 @@ mod tests {
             session,
             close: Decimal::from_str("100").unwrap(),
             ohl: None,
+            volume: None,
             currency: None,
             price_kind: "close".into(),
             adjustment: Adjustment::Unknown,

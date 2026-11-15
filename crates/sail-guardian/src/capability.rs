@@ -133,6 +133,7 @@ impl Capability {
                         || tool == "capital:forecast"
                         || tool == "capital:policy"
                         || tool == "capital:filings"
+                        || tool == "capital:income"
                         || tool == "studio:audio_analyze"
                         || tool == "skill:list"
                         || tool == "skill:view"

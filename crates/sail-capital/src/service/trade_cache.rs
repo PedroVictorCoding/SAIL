@@ -2,7 +2,7 @@
 use super::{CapitalService, ServiceError};
 use crate::contracts::AccountId;
 use crate::store::ReplayCache;
-use crate::trade::cache::{costs_tag, cut_session, merge, prefix_hash};
+use crate::trade::cache::{costs_tag, cut_session, instrument_prefix_hash, merge};
 use crate::trade::select::LiveTrade;
 use crate::trade::{Costs, Instrument, REPLAY_SAFE_SESSIONS, Trade, replay, replay_from};
 use chrono::Utc;
@@ -25,7 +25,7 @@ impl CapitalService {
     /// - per instrument, read [`crate::store::ReplayCache`] for its key and
     ///   [`crate::trade::cache::costs_tag`] of `Costs::default_for(class)`;
     /// - a hit needs the stored `cut` to be a session in the current bars at least
-    ///   `REPLAY_SAFE_SESSIONS` before the last bar, and `prefix_hash(bars, cut)` to
+    ///   `REPLAY_SAFE_SESSIONS` before the last bar, and `instrument_prefix_hash(instrument, cut)` to
     ///   match; then `merge(cached, replay_from(i, costs, cut), cut)`; else a full
     ///   `replay` (a miss);
     /// - replays run in parallel with `std::thread::scope` over
@@ -118,7 +118,7 @@ impl CapitalService {
                     key: instrument.key.clone(),
                     costs_tag: costs_tag(Costs::default_for(instrument.class)),
                     cut,
-                    prefix_hash: prefix_hash(&instrument.bars, cut),
+                    prefix_hash: instrument_prefix_hash(instrument, cut),
                     trades: cached,
                 });
             }
@@ -151,6 +151,7 @@ impl CapitalService {
                 tier: graded.card.tier,
                 exit_session: trade.exit_session,
                 r_multiple: trade.r_multiple,
+                condition: graded.card.verdict.condition,
             });
         }
         Ok(out)
@@ -167,7 +168,7 @@ fn replay_instrument(instrument: &Instrument, cached: Option<ReplayCache>) -> (V
             .position(|bar| bar.session == cached.cut)
         && let Some(last) = instrument.bars.len().checked_sub(1)
         && last.saturating_sub(position) >= REPLAY_SAFE_SESSIONS
-        && prefix_hash(&instrument.bars, cached.cut) == cached.prefix_hash
+        && instrument_prefix_hash(instrument, cached.cut) == cached.prefix_hash
     {
         let fresh = replay_from(instrument, costs, cached.cut);
         return (merge(cached.trades, fresh, cached.cut), true);

@@ -659,6 +659,7 @@ fn bar_input_hash_does_not_include_the_sqlite_row_id() {
         session,
         close: Decimal::new(10_000, 2),
         ohl: None,
+        volume: None,
         currency: Some(Currency::parse("USD").unwrap()),
         price_kind: "close".into(),
         adjustment: Adjustment::SplitAdjusted,

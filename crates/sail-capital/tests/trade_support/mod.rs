@@ -20,6 +20,8 @@ pub fn bar(index: usize, close: f64, half_range: f64) -> Bar {
         high: close + half_range,
         low: close - half_range,
         close,
+        volume: None,
+        dividend: None,
     }
 }
 
@@ -43,6 +45,8 @@ pub fn bars_with_prior_open(closes: &[f64], half_range: f64) -> Vec<Bar> {
             high: open.max(close) + half_range,
             low: open.min(close) - half_range,
             close,
+            volume: None,
+            dividend: None,
         });
     }
     bars
@@ -64,6 +68,7 @@ pub fn instrument(
         earnings: Vec::new(),
         evidence_only: false,
         membership: Vec::new(),
+        context: Default::default(),
     }
 }
 
@@ -164,6 +169,7 @@ pub fn dummy_verdict(setup: SetupId, side: Side) -> Verdict {
         candidate: false,
         reason: String::new(),
         judgement: None,
+        condition: Default::default(),
     }
 }
 
@@ -196,5 +202,7 @@ pub fn card(
         relation: None,
         warnings: Vec::new(),
         tier: Default::default(),
+        expectations: None,
+        sessions_to_verdict: None,
     }
 }

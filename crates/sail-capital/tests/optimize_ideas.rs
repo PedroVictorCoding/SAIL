@@ -35,6 +35,8 @@ fn permissive_limits() -> RiskLimits {
         fx_cost_bps: decimal(0.0),
         risk_aversion: decimal(4.0),
         risk_per_trade_pct: decimal(0.5),
+        max_heat_pct: Decimal::from(3),
+        max_cluster_heat_pct: Decimal::new(15, 1),
     }
 }
 

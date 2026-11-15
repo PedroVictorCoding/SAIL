@@ -313,6 +313,11 @@ impl CapitalService {
                     high: bar.high?.to_f64()?,
                     low: bar.low?.to_f64()?,
                     close: bar.close.to_f64()?,
+                    volume: bar
+                        .volume
+                        .and_then(|v| v.to_f64())
+                        .filter(|v| v.is_finite() && *v > 0.0),
+                    dividend: None,
                 })
             })
             .filter(|bar| bar.open > 0.0 && bar.high >= bar.low && bar.close > 0.0)
@@ -380,7 +385,9 @@ impl CapitalService {
             earnings,
             evidence_only: false,
             membership: Vec::new(),
+            context: self.trade_context(symbol, Some(yahoo), class, now)?,
         };
+        let references = self.trade_references(&watch, now)?;
         let fx = |instrument: &Instrument| -> Option<f64> {
             if instrument.key != checked_key {
                 return None;
@@ -406,6 +413,7 @@ impl CapitalService {
             risk_pct,
             &fx,
             &held_fn,
+            &references,
         );
 
         let group = crate::trade::group_of(class);
@@ -540,22 +548,8 @@ impl CapitalService {
         key: &str,
         known_by: DateTime<Utc>,
     ) -> Result<Option<Vec<Bar>>, ServiceError> {
-        let observations = self.store.prices(key, known_by)?;
-        let bars: Vec<Bar> = observations
-            .iter()
-            .filter_map(|o| {
-                let ohl = o.ohl.as_ref()?;
-                Some(Bar {
-                    session: o.session,
-                    open: ohl.open.to_f64()?,
-                    high: ohl.high.to_f64()?,
-                    low: ohl.low.to_f64()?,
-                    close: o.close.to_f64()?,
-                })
-            })
-            .filter(|b| b.open > 0.0 && b.high >= b.low && b.close > 0.0)
-            .collect();
-        Ok((bars.len() >= MIN_OHL_BARS).then_some(bars))
+        // Round 24: with volume; no dividends (grading and FX closes use raw prices).
+        self.trade_bars(key, None, AssetClass::Fx, known_by, MIN_OHL_BARS)
     }
 
     fn earnings_for(&self, yahoo: Option<&str>) -> Result<Vec<NaiveDate>, ServiceError> {
@@ -576,15 +570,18 @@ impl CapitalService {
         let mut out = Vec::new();
         for position in &projection.positions {
             let key = position.instrument.key();
-            let Some(bars) = self.bars_for(&key, now)? else {
-                continue;
-            };
             let class = match position.instrument.kind {
                 InstrumentKind::Etf => AssetClass::Etf,
                 _ => AssetClass::Stock,
             };
-            let currency = self.instrument_currency(&key, now)?;
             let yahoo = crate::market::yahoo_symbol(&position.instrument.symbol);
+            let Some(bars) = self.trade_bars(&key, yahoo.as_deref(), class, now, MIN_OHL_BARS)?
+            else {
+                continue;
+            };
+            let currency = self.instrument_currency(&key, now)?;
+            let context =
+                self.trade_context(&position.instrument.symbol, yahoo.as_deref(), class, now)?;
             out.push(Instrument {
                 key,
                 symbol: position.instrument.symbol.clone(),
@@ -605,6 +602,7 @@ impl CapitalService {
                 },
                 evidence_only: false,
                 membership: Vec::new(),
+                context,
             });
         }
         Ok(out)
@@ -731,10 +729,15 @@ impl CapitalService {
                 tracing::warn!("earnings helper did not finish");
                 continue;
             };
+            /// Round 24: `[date, after_close, surprise_pct]`.
+            type EventRow = (NaiveDate, Option<bool>, Option<f64>);
             #[derive(Deserialize)]
             struct Out {
                 #[serde(default)]
                 dates: std::collections::BTreeMap<String, Vec<NaiveDate>>,
+                /// Round 24: earnings events per symbol.
+                #[serde(default)]
+                events: std::collections::BTreeMap<String, Vec<EventRow>>,
             }
             let Ok(out) = serde_json::from_slice::<Out>(&output.stdout) else {
                 tracing::warn!("earnings helper output unreadable");
@@ -742,6 +745,20 @@ impl CapitalService {
             };
             for (symbol, dates) in out.dates {
                 self.store.record_earnings(&symbol, &dates, Utc::now())?;
+            }
+            for (symbol, rows) in out.events {
+                let events: Vec<crate::trade::EarningsEvent> = rows
+                    .into_iter()
+                    .map(
+                        |(date, after_close, surprise_pct)| crate::trade::EarningsEvent {
+                            date,
+                            after_close,
+                            surprise_pct: surprise_pct.filter(|v| v.is_finite()),
+                        },
+                    )
+                    .collect();
+                self.store
+                    .record_earnings_events(&symbol, &events, Utc::now())?;
             }
         }
         Ok(())
@@ -802,6 +819,18 @@ impl CapitalService {
         stock_yahoo.sort();
         stock_yahoo.dedup();
         self.refresh_earnings(&stock_yahoo).await?;
+        // Round 24: dividends for the replays of stocks and ETFs (shorts pay them, longs
+        // receive them, and indicators read dividend-adjusted prices).
+        let mut paying_yahoo = stock_yahoo.clone();
+        paying_yahoo.extend(
+            watch
+                .iter()
+                .filter(|w| w.class == AssetClass::Etf)
+                .map(|w| w.yahoo.clone()),
+        );
+        paying_yahoo.sort();
+        paying_yahoo.dedup();
+        self.refresh_trade_dividends(&paying_yahoo).await;
         self.refresh_research(Utc::now()).await;
 
         let now = Utc::now();
@@ -817,7 +846,9 @@ impl CapitalService {
                 continue;
             }
             let key = watch_key(&item.symbol);
-            let Some(bars) = self.bars_for(&key, now)? else {
+            let Some(bars) =
+                self.trade_bars(&key, Some(&item.yahoo), item.class, now, MIN_OHL_BARS)?
+            else {
                 continue;
             };
             if item.class == AssetClass::Fx
@@ -839,6 +870,7 @@ impl CapitalService {
                 },
                 evidence_only: false,
                 membership: Vec::new(),
+                context: self.trade_context(&item.symbol, Some(&item.yahoo), item.class, now)?,
             });
         }
         for instrument in &universe {
@@ -881,8 +913,36 @@ impl CapitalService {
         // do. Replays come from the cache where the past is unchanged.
         universe.extend(self.research_universe(now)?);
         universe.retain(|instrument| crate::trade::quality::usable(&instrument.bars));
+        // Round 24: research names' payout histories (a bounded batch per run, for the
+        // next run's replays and the dividend calibration), then the weekly calibration.
+        let research_yahoo: Vec<String> = universe
+            .iter()
+            .filter(|i| i.evidence_only && matches!(i.class, AssetClass::Stock | AssetClass::Etf))
+            .map(|i| i.symbol.clone())
+            .collect();
+        self.refresh_trade_dividends(&research_yahoo).await;
+        let watch_yahoo: std::collections::BTreeMap<String, String> = watch
+            .iter()
+            .map(|w| (watch_key(&w.symbol), w.yahoo.clone()))
+            .collect();
+        let yahoo_of = |instrument: &Instrument| -> Option<String> {
+            if instrument.evidence_only {
+                Some(instrument.symbol.clone())
+            } else if let Some(yahoo) = watch_yahoo.get(&instrument.key) {
+                Some(yahoo.clone())
+            } else {
+                crate::market::yahoo_symbol(&instrument.symbol)
+            }
+        };
+        if let Err(error) = self.refresh_dividend_calibration(&universe, &yahoo_of, now) {
+            tracing::warn!("dividend calibration not refreshed: {error}");
+        }
         let cached = self.cached_replays(&universe)?;
         let live = self.live_trades(account)?;
+        let references = self.trade_references(&watch, now)?;
+        let open_cards = self.open_trade_cards(account)?;
+        let correlations = super::trade_context::correlation_inputs(&universe);
+        let heat_limits = self.policy(account)?.current.limits.heat_limits();
         let mut day = crate::trade::signal_day_with(&crate::trade::RunInputs {
             universe: &universe,
             replays: &cached.replays,
@@ -891,6 +951,10 @@ impl CapitalService {
             risk_pct,
             fx_to_account: &fx,
             held: &held_fn,
+            references: &references,
+            open_cards: &open_cards,
+            correlations: &correlations,
+            heat_limits,
         });
         if let Some(stats) = day.run_stats.as_mut() {
             stats.replay_cache_hits = cached.hits;

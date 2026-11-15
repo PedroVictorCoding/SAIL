@@ -889,3 +889,168 @@ registerTab("signals", {
   },
   load: loadSignalBoard,
 });
+
+// --- Round 24: card expectations, portfolio heat bar, regime chips --------------------
+
+(function initR24TradeSignals() {
+  function fmtPct(v) {
+    if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+    return `${Math.round(v * 100)}%`;
+  }
+
+  function fmtR(v) {
+    if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+    const sign = v > 0.005 ? "+" : v < -0.005 ? "−" : "";
+    return `${sign}${Math.abs(v).toFixed(2)}R`;
+  }
+
+  function formatExpectationsLine(exp) {
+    if (!exp || typeof exp !== "object") return "";
+    const ci = Array.isArray(exp.mean_r_ci) && exp.mean_r_ci.length === 2
+      ? ` [${fmtR(exp.mean_r_ci[0])}, ${fmtR(exp.mean_r_ci[1])}]`
+      : "";
+    const med = typeof exp.median_sessions === "number" ? Math.round(exp.median_sessions) : "—";
+    return `Reached 1R ${fmtPct(exp.p_t1)} · 2R ${fmtPct(exp.p_t2)} · 3R ${fmtPct(exp.p_t3)} · stop ${fmtPct(exp.p_stop)} · median ${med} days · ${fmtR(exp.mean_r)}${ci}`;
+  }
+
+  if (typeof renderSignalCardMarkup === "function") {
+    const origRenderCard = renderSignalCardMarkup;
+    renderSignalCardMarkup = function (c, idPrefix = "") {
+      let html = origRenderCard(c, idPrefix);
+      if (!c || typeof html !== "string") return html;
+
+      const extraLines = [];
+      const expText = formatExpectationsLine(c.expectations);
+      if (expText) {
+        extraLines.push(
+          `<p class="cp-sig-line cp-sig-expect"><span class="cp-sug-label">Expect</span> ${escapeHtml(expText)}</p>`,
+        );
+      }
+      if (c.tier === "candidate" && typeof c.sessions_to_verdict === "number" && Number.isFinite(c.sessions_to_verdict)) {
+        extraLines.push(
+          `<p class="cp-sig-line cp-sig-verdict-eta">≈ ${Math.round(c.sessions_to_verdict)} trades to a verdict</p>`,
+        );
+      }
+      if (extraLines.length > 0) {
+        const marker = '<div class="cp-sig-body">';
+        const idx = html.indexOf(marker);
+        if (idx !== -1) {
+          const insertAt = idx + marker.length;
+          html = html.slice(0, insertAt) + extraLines.join("") + html.slice(insertAt);
+        }
+      }
+      return html;
+    };
+  }
+
+  function ensureContextBar() {
+    const cardsGrid = document.getElementById("cpSignalsCardsGrid");
+    if (!cardsGrid) return null;
+    let bar = document.getElementById("cpTradeContextBar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "cpTradeContextBar";
+      bar.className = "cp-trade-context-bar";
+      bar.hidden = true;
+      const emptyWrap = document.getElementById("cpSignalsEmpty");
+      const anchor = emptyWrap && emptyWrap.parentNode === cardsGrid.parentNode ? emptyWrap : cardsGrid;
+      cardsGrid.parentNode.insertBefore(bar, anchor);
+    }
+    return bar;
+  }
+
+  function renderTradeHeatAndRegime(day) {
+    const bar = ensureContextBar();
+    if (!bar) return;
+    bar.innerHTML = "";
+
+    const heat = day && day.heat && typeof day.heat === "object" ? day.heat : null;
+    const regime = day && day.regime && typeof day.regime === "object" ? day.regime : null;
+    const regimeEntries = regime ? Object.entries(regime) : [];
+
+    if (!heat && regimeEntries.length === 0) {
+      bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+
+    if (heat) {
+      const heatWrap = document.createElement("div");
+      heatWrap.className = "cp-heat-wrap";
+
+      const used = Number(heat.total_risk_pct) || 0;
+      const limit = Number(heat.limit_pct) || 3;
+      const ratio = limit > 0 ? Math.min(1, Math.max(0, used / limit)) : 0;
+
+      const labelRow = document.createElement("div");
+      labelRow.className = "cp-heat-header";
+      const label = document.createElement("span");
+      label.className = "cp-heat-label";
+      label.textContent = "Portfolio heat";
+      const val = document.createElement("span");
+      val.className = "cp-heat-val";
+      val.textContent = `${used.toFixed(2)}% / ${limit.toFixed(1)}%`;
+      labelRow.appendChild(label);
+      labelRow.appendChild(val);
+      heatWrap.appendChild(labelRow);
+
+      const track = document.createElement("div");
+      track.className = "cp-heat-track";
+      track.setAttribute("role", "progressbar");
+      track.setAttribute("aria-valuenow", used.toFixed(2));
+      track.setAttribute("aria-valuemin", "0");
+      track.setAttribute("aria-valuemax", limit.toFixed(1));
+      const fill = document.createElement("div");
+      fill.className = "cp-heat-fill";
+      if (ratio >= 0.85) fill.setAttribute("data-warn", "high");
+      fill.style.width = `${(ratio * 100).toFixed(1)}%`;
+      track.appendChild(fill);
+      heatWrap.appendChild(track);
+
+      const clusters = Array.isArray(heat.clusters) ? heat.clusters : [];
+      if (clusters.length > 0) {
+        const clusterRow = document.createElement("div");
+        clusterRow.className = "cp-heat-clusters";
+        for (const cl of clusters) {
+          const chip = document.createElement("span");
+          chip.className = "cp-heat-cluster-chip";
+          const keys = Array.isArray(cl.keys) ? cl.keys.join(" · ") : "Cluster";
+          const cRisk = typeof cl.risk_pct === "number" ? `${cl.risk_pct.toFixed(2)}%` : "—";
+          chip.textContent = `${keys}: ${cRisk}`;
+          clusterRow.appendChild(chip);
+        }
+        heatWrap.appendChild(clusterRow);
+      }
+
+      bar.appendChild(heatWrap);
+    }
+
+    if (regimeEntries.length > 0) {
+      const regWrap = document.createElement("div");
+      regWrap.className = "cp-regime-chips";
+      for (const [group, reg] of regimeEntries) {
+        if (!reg || typeof reg !== "object") continue;
+        const chip = document.createElement("span");
+        chip.className = "cp-regime-chip";
+        const trend = reg.trend === "down" ? "down" : "up";
+        const vol = reg.vol === "stressed" ? "stressed" : "calm";
+        chip.setAttribute("data-trend", trend);
+        chip.setAttribute("data-vol", vol);
+        const trendWord = trend === "up" ? "Uptrend" : "Downtrend";
+        const volWord = vol === "calm" ? "Calm" : "Stressed";
+        chip.textContent = `${group}: ${trendWord} · ${volWord}`;
+        regWrap.appendChild(chip);
+      }
+      bar.appendChild(regWrap);
+    }
+  }
+
+  if (typeof loadTradeSignals === "function") {
+    const origLoadTradeSignals = loadTradeSignals;
+    loadTradeSignals = async function () {
+      const result = await origLoadTradeSignals.apply(this, arguments);
+      renderTradeHeatAndRegime(typeof latestTradeSignals !== "undefined" ? latestTradeSignals : null);
+      return result;
+    };
+  }
+})();

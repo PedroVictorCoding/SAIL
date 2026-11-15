@@ -10,6 +10,8 @@
 //!   sec.gov index page says "Accepted 2026-11-05 21:54:06" (Eastern, UTC-5).
 //! - [`ACCEPT_ENCODING`] is `identity`: the workspace builds `reqwest` without its gzip
 //!   feature, so asking for a compressed body would leave it undecoded.
+pub mod companyfacts;
+
 use crate::evidence::*;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use chrono_tz::America::New_York;
@@ -564,5 +566,15 @@ impl EdgarApi for EdgarClient {
         let url = format!("{}/submissions/CIK{}.json", self.data_base, cik.padded());
         let body = self.get(&url).await?;
         parse_submissions(&body, cik)
+    }
+
+    async fn company_facts(&self, cik: Cik) -> Result<companyfacts::CompanyFacts, SourceError> {
+        let url = format!(
+            "{}/api/xbrl/companyfacts/CIK{}.json",
+            self.data_base,
+            cik.padded()
+        );
+        let body = self.get(&url).await?;
+        companyfacts::parse(&body)
     }
 }

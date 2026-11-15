@@ -379,3 +379,176 @@
     padding: 14px 16px 6px;
   }
 }
+
+/* Round 24: safety grade chips, specials note, income fan, and Maximize income panel */
+.cp-safety-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.cp-safety-chip[data-grade="a"] {
+  background: rgba(84, 194, 165, 0.18);
+  border-color: rgba(84, 194, 165, 0.45);
+  color: #9bf0d4;
+}
+
+.cp-safety-chip[data-grade="b"] {
+  background: rgba(100, 160, 240, 0.18);
+  border-color: rgba(100, 160, 240, 0.45);
+  color: #b8d8ff;
+}
+
+.cp-safety-chip[data-grade="c"] {
+  background: rgba(255, 214, 159, 0.16);
+  border-color: rgba(255, 214, 159, 0.4);
+  color: #ffd69f;
+}
+
+.cp-safety-chip[data-grade="d"],
+.cp-safety-chip[data-grade="e"] {
+  background: rgba(225, 112, 85, 0.2);
+  border-color: rgba(225, 112, 85, 0.5);
+  color: #ffb8a8;
+}
+
+.cp-safety-detail-row td {
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px 12px;
+  font-size: 0.82rem;
+}
+
+.cp-safety-detail-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.cp-safety-reasons {
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(226, 232, 240, 0.82);
+}
+
+.cp-income-fan-wrap {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cp-fan-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cp-fan-title {
+  margin: 0;
+  font-size: 0.94rem;
+}
+
+.cp-fan-target-badge {
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 214, 159, 0.14);
+  border: 1px solid rgba(255, 214, 159, 0.35);
+  color: #ffd69f;
+}
+
+.cp-fan-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.cp-fan-target-lbl {
+  font-size: 11px;
+  fill: #ffd69f;
+}
+
+.cp-maximize-panel {
+  margin-top: 18px;
+}
+
+.cp-max-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 12px;
+  margin-bottom: 14px;
+}
+
+.cp-max-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: rgba(226, 232, 240, 0.78);
+}
+
+.cp-max-sub {
+  margin: 0 0 8px;
+  font-size: 0.88rem;
+}
+
+.cp-max-cand-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.cp-max-cand-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.cp-max-rec {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(84, 194, 165, 0.12);
+  border: 1px solid rgba(84, 194, 165, 0.32);
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+
+.cp-max-buylist {
+  margin: 6px 0 12px;
+  padding-left: 18px;
+}
+
+.cp-max-sens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.cp-max-sens-chip {
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}

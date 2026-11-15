@@ -172,3 +172,80 @@ pub(super) fn previous_extreme(
         slice.iter().map(|bar| bar.low).reduce(f64::min)
     }
 }
+
+/// Round 24 (Kilo, A2): see [`super::Adjusted`]. `factor[i]` is the cumulative product of
+/// `(1 − d_j / close_{j−1})` over ex-dates `j > i`, so it is 1 at the last bar and older
+/// bars are scaled down. A dividend with no usable previous close, or one that is not
+/// strictly below it, is ignored (its factor stays 1).
+pub(super) fn adjust(bars: &[Bar]) -> super::Adjusted {
+    let mut factor = vec![1.0; bars.len()];
+    let mut cumulative = 1.0;
+    for index in (0..bars.len()).rev() {
+        factor[index] = cumulative;
+        if index == 0 {
+            continue;
+        }
+        let Some(dividend) = bars[index].dividend else {
+            continue;
+        };
+        let previous = bars[index - 1].close;
+        if dividend.is_finite()
+            && dividend > 0.0
+            && previous.is_finite()
+            && previous > 0.0
+            && dividend < previous
+        {
+            cumulative *= 1.0 - dividend / previous;
+        }
+    }
+    let adjusted = bars
+        .iter()
+        .zip(&factor)
+        .map(|(bar, factor)| Bar {
+            session: bar.session,
+            open: bar.open * factor,
+            high: bar.high * factor,
+            low: bar.low * factor,
+            close: bar.close * factor,
+            volume: bar.volume,
+            dividend: bar.dividend,
+        })
+        .collect();
+    super::Adjusted {
+        bars: adjusted,
+        factor,
+    }
+}
+
+/// Round 24 (Kilo, A1), *pure*: `volume[index] / median(volume[index − period .. index])`.
+/// `None` when `index < period`, when any of those volumes (or today's) is missing, or
+/// when the median is not positive. The median of an even window averages its two middle
+/// values.
+pub(super) fn relative_volume(bars: &[Bar], index: usize, period: usize) -> Option<f64> {
+    if period == 0 || index < period || index >= bars.len() {
+        return None;
+    }
+    let today = bars[index].volume?;
+    if !(today.is_finite() && today >= 0.0) {
+        return None;
+    }
+    let mut window = Vec::with_capacity(period);
+    for bar in &bars[index - period..index] {
+        let volume = bar.volume?;
+        if !(volume.is_finite() && volume >= 0.0) {
+            return None;
+        }
+        window.push(volume);
+    }
+    window.sort_by(f64::total_cmp);
+    let median = if period % 2 == 1 {
+        window[period / 2]
+    } else {
+        (window[period / 2 - 1] + window[period / 2]) / 2.0
+    };
+    if median > 0.0 && median.is_finite() {
+        Some(today / median)
+    } else {
+        None
+    }
+}

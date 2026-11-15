@@ -21,6 +21,9 @@ fn trade(exit_session: NaiveDate, r_multiple: f64, exit: Exit) -> Trade {
         exit_session,
         exit,
         r_multiple,
+        dividend_r: 0.0,
+        ex_date_gap: false,
+        regime: None,
     }
 }
 

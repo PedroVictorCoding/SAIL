@@ -84,6 +84,8 @@ pub enum Family {
     Setup,
     /// Published cards graded live (round 13).
     Live,
+    /// The dividend growth estimate, backtested on payout histories (round 24).
+    Income,
 }
 
 /// Whether a row has earned trust.
@@ -143,6 +145,8 @@ pub struct ScorecardInputs<'a> {
     pub setups: &'a [Verdict],
     /// Totals of the live record, when any card was ever published.
     pub live: Option<&'a RecordTotals>,
+    /// Round 24: the latest dividend growth calibration.
+    pub dividend_calibration: Option<&'a crate::dividends::calibrate::CalibrationReport>,
 }
 
 /// Builds the track record. See the module doc.
@@ -161,6 +165,9 @@ pub fn summarize(inputs: &ScorecardInputs<'_>, as_of: DateTime<Utc>) -> Scorecar
     rows.extend(inputs.setups.iter().map(setup_row));
     if let Some(totals) = inputs.live {
         rows.push(live_row(totals));
+    }
+    if let Some(report) = inputs.dividend_calibration {
+        rows.push(dividend_growth_row(report));
     }
 
     rows.sort_by(|a, b| {
@@ -394,6 +401,51 @@ fn live_row(totals: &RecordTotals) -> ScoreRow {
     }
 }
 
+/// Five-year outcomes needed before the dividend growth estimate is judged.
+pub const MIN_DIVIDEND_OUTCOMES: u32 = 100;
+
+/// Round 24: the dividend growth estimate in use (the adopted shrinkage) earns trust when
+/// it has at least [`MIN_DIVIDEND_OUTCOMES`] five-year outcomes, its bias is within two
+/// percentage points a year, and its low–high band holds 55–80% of outcomes (one σ either
+/// side would hold about 68%).
+fn dividend_growth_row(report: &crate::dividends::calibrate::CalibrationReport) -> ScoreRow {
+    let row = report
+        .shrink
+        .iter()
+        .find(|r| r.k == report.adopted_k)
+        .or_else(|| report.shrink.first());
+    let (n, bias, coverage, mae) = row.map_or((0, 0.0, 0.0, 0.0), |r| {
+        (r.n_5y, r.bias_5y, r.band_coverage_5y, r.mae_5y)
+    });
+    let standing = if n < MIN_DIVIDEND_OUTCOMES {
+        Standing::NotYet
+    } else if bias.abs() <= 0.02 && (0.55..=0.80).contains(&coverage) {
+        Standing::Earned
+    } else {
+        Standing::Failed
+    };
+    let headline = match standing {
+        Standing::NotYet => {
+            format!("Needs {MIN_DIVIDEND_OUTCOMES} five-year payout outcomes; has {n}.")
+        }
+        _ => format!(
+            "Off by {:.1} points a year on average (bias {:+.1}); the low–high band held {}% of outcomes.",
+            mae * 100.0,
+            bias * 100.0,
+            whole(coverage * 100.0)
+        ),
+    };
+    ScoreRow {
+        key: "dividend_growth_estimator".to_string(),
+        family: Family::Income,
+        name: "Dividend growth estimate".to_string(),
+        horizon_sessions: None,
+        standing,
+        headline,
+        evidence: n,
+    }
+}
+
 /// A percentage rounded to a whole number.
 fn whole(value: f64) -> i64 {
     (value).round() as i64
@@ -466,6 +518,8 @@ fn setup_name(setup: SetupId) -> &'static str {
         SetupId::BollingerReversion => "Bollinger reversion",
         SetupId::InsideBarBreak => "Inside-bar break",
         SetupId::ThreeDayReversal => "Three-day reversal",
+        SetupId::EarningsGapDrift => "Earnings gap drift",
+        SetupId::VolumeBreakout => "Volume breakout",
     }
 }
 
@@ -477,6 +531,8 @@ fn setup_key(setup: SetupId) -> &'static str {
         SetupId::BollingerReversion => "bollinger_reversion",
         SetupId::InsideBarBreak => "inside_bar_break",
         SetupId::ThreeDayReversal => "three_day_reversal",
+        SetupId::EarningsGapDrift => "earnings_gap_drift",
+        SetupId::VolumeBreakout => "volume_breakout",
     }
 }
 
