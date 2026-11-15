@@ -411,7 +411,7 @@ function setupDividendProjectionControls() {
     refreshBtn.addEventListener("click", async () => {
       refreshBtn.disabled = true;
       const origText = refreshBtn.textContent;
-      refreshBtn.textContent = "Refreshing payouts...";
+      refreshBtn.textContent = "Updating dividend history…";
       try {
         const query = currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
         const res = await fetchJson(`/api/capital/dividends/refresh${query}`, { method: "POST" });
@@ -860,32 +860,32 @@ registerTab("income", {
 
 const ALLOC_INFO = {
   proportional: {
-    label: "Proportional",
+    label: "Proportional to value",
     help: "Spreads each dividend across your paying holdings by their current value, so your mix stays as it is.",
     tradeoff: "Keeps your current mix. The default.",
   },
   same_holding: {
-    label: "Same holding (DRIP)",
+    label: "Back into the payer (DRIP)",
     help: "Each dividend buys more of the holding that paid it, like a broker's DRIP; the monthly allowance is spread by current value.",
     tradeoff: "Simple; high payers grow their weight over time.",
   },
   top_value: {
-    label: "Top value",
+    label: "Largest holdings",
     help: "Everything goes into your largest holdings by value.",
     tradeoff: "Concentrates further in what is already biggest.",
   },
   equal_weight: {
-    label: "Equal weight",
+    label: "Toward equal sizes",
     help: "Spreads dividends so paying holdings drift toward equal sizes.",
     tradeoff: "Diversifies; small holdings grow fastest.",
   },
   top_yield: {
-    label: "Top yield",
+    label: "Highest yields",
     help: "Everything goes into your highest-yielding holdings.",
     tradeoff: "Most income on paper, but very high yields are the most likely to be cut.",
   },
   underweight: {
-    label: "Underweight",
+    label: "Smallest positions first",
     help: "Tops up the paying holdings that are smallest relative to an equal split.",
     tradeoff: "Rebalances without selling anything.",
   },
@@ -1076,7 +1076,7 @@ function renderProjMonths(data) {
     btn.type = "button";
     btn.className = "cp-safety-chip";
     btn.setAttribute("data-grade", g);
-    btn.textContent = safetyLabel(g);
+    btn.textContent = `Safety ${safetyLabel(g)}`;
     const reasons = Array.isArray(safety && safety.reasons) ? safety.reasons : [];
     const titleParts = [`Safety ${safetyLabel(g)}`];
     if (safety && typeof safety.fcf_cover === "number") {
@@ -1087,7 +1087,7 @@ function renderProjMonths(data) {
     }
     if (reasons.length > 0) titleParts.push(reasons.join(" "));
     btn.title = titleParts.join(" · ");
-    btn.setAttribute("aria-label", `${symbol} dividend safety ${safetyLabel(g)}`);
+    btn.setAttribute("aria-label", `${symbol} dividend safety ${safetyLabel(g)}: show the reasons`);
     return btn;
   }
 
@@ -1346,6 +1346,13 @@ function renderProjMonths(data) {
   }
 
   // --- Maximize income panel ----------------------------------------------------------
+  // Round 25: one run compares all three goals on the same simulated futures.
+  const MAX_GOALS = [
+    { kind: "robust_income", label: "Most income in a bad year" },
+    { kind: "income_with_wealth_floor", label: "Most typical income, keeping wealth" },
+    { kind: "smooth_months", label: "Steadiest monthly income" },
+  ];
+
   function ensureMaximizePanel() {
     const projPanel = document.getElementById("cpProjectionPanel");
     if (!projPanel || !projPanel.parentNode) return null;
@@ -1360,67 +1367,53 @@ function renderProjMonths(data) {
       panel.innerHTML = `
         <div class="cp-panel-header">
           <h2 id="cpMaximizeTitle">Maximize income</h2>
-          <button type="button" class="cp-button cp-btn-primary" id="cpMaxRunBtn">Run maximizer</button>
+          <button type="button" class="cp-button cp-btn-primary" id="cpMaxRunBtn" title="Search the best way to invest your dividends and allowance for each of the three goals, then compare them">Compare all three goals</button>
         </div>
+        <p class="cp-muted cp-max-intro">One run searches the best allocation for each goal on the same simulated futures: the most income in a bad year, the most typical income without giving up wealth, and the steadiest months. It then compares each with the six fixed rules.</p>
         <div class="cp-max-controls">
           <label class="cp-max-field">
-            <span>Objective</span>
-            <select id="cpMaxObjective" class="cp-input">
-              <option value="robust_income">Robust income (maximize p10)</option>
-              <option value="income_with_wealth_floor">Income with wealth floor (p50)</option>
-              <option value="smooth_months">Smooth months (lowest month p10)</option>
-            </select>
-          </label>
-          <label class="cp-max-field">
-            <span>Target year</span>
+            <span>Year to maximize (from now)</span>
             <input type="number" id="cpMaxYear" class="cp-input" min="1" max="30" value="${ret.years}">
           </label>
-          <label class="cp-max-field" id="cpMaxFloorWrap" hidden>
-            <span>Wealth floor (%)</span>
+          <label class="cp-max-field">
+            <span>Keep at least this much wealth (% of the proportional rule)</span>
             <input type="number" id="cpMaxFloorPct" class="cp-input" min="50" max="100" value="90">
           </label>
           <label class="cp-max-field">
-            <span>Max position (%)</span>
+            <span>Largest single holding (% of portfolio)</span>
             <input type="number" id="cpMaxPosPct" class="cp-input" min="5" max="100" value="25">
           </label>
           <label class="cp-max-field">
-            <span>Max high-yield (%)</span>
+            <span>High-yield names, over 12% (max % of portfolio)</span>
             <input type="number" id="cpMaxHyPct" class="cp-input" min="0" max="100" value="20">
           </label>
           <label class="cp-max-field">
-            <span>Max foreign (%)</span>
+            <span>Outside your account currency (max %)</span>
             <input type="number" id="cpMaxFxPct" class="cp-input" min="0" max="100" value="60">
           </label>
           <label class="cp-max-field">
-            <span>Min safety</span>
+            <span>Lowest dividend safety allowed</span>
             <select id="cpMaxMinSafety" class="cp-input">
-              <option value="a">A</option>
-              <option value="b">B</option>
-              <option value="c" selected>C</option>
-              <option value="d">D</option>
-              <option value="e">E</option>
+              <option value="a">A: safest only</option>
+              <option value="b">B or better</option>
+              <option value="c" selected>C or better</option>
+              <option value="d">D or better</option>
+              <option value="e">E: any graded payer</option>
             </select>
           </label>
           <label class="cp-max-field">
-            <span>Top N</span>
+            <span>Most holdings to buy</span>
             <input type="number" id="cpMaxTopN" class="cp-input" min="1" max="30" value="10">
           </label>
         </div>
         <div class="cp-max-candidates" id="cpMaxCandidatesWrap">
-          <h3 class="cp-max-sub">Watchlist dividend candidates</h3>
+          <h3 class="cp-max-sub">Watchlist names the plan may buy</h3>
           <div id="cpMaxCandidatesList" class="cp-max-cand-list"></div>
         </div>
-        <div id="cpMaxResult" class="cp-max-result"></div>
+        <div id="cpMaxResult" class="cp-max-result" aria-live="polite"></div>
       `;
       projPanel.parentNode.insertBefore(panel, projPanel.nextSibling);
 
-      const objSelect = document.getElementById("cpMaxObjective");
-      const floorWrap = document.getElementById("cpMaxFloorWrap");
-      if (objSelect && floorWrap) {
-        objSelect.addEventListener("change", () => {
-          floorWrap.hidden = objSelect.value !== "income_with_wealth_floor";
-        });
-      }
       const runBtn = document.getElementById("cpMaxRunBtn");
       if (runBtn) {
         runBtn.addEventListener("click", startMaximizeJob);
@@ -1448,7 +1441,7 @@ function renderProjMonths(data) {
     if (!Array.isArray(list) || list.length === 0) {
       const p = document.createElement("p");
       p.className = "cp-muted";
-      p.textContent = "No watchlist dividend candidates available yet.";
+      p.textContent = "No watchlist dividend payers to choose from yet. Add stocks or ETFs to the watchlist.";
       wrap.appendChild(p);
       return;
     }
@@ -1459,6 +1452,8 @@ function renderProjMonths(data) {
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.checked = !!c.enabled;
+      cb.setAttribute("aria-label", `Let the plan buy ${c.symbol}`);
+      row.title = `Tick to let the maximizer buy ${c.symbol}`;
       cb.addEventListener("change", async () => {
         cb.disabled = true;
         try {
@@ -1500,119 +1495,195 @@ function renderProjMonths(data) {
     } catch (_) {}
   }
 
-  function renderMaximizeJob(job) {
-    const out = document.getElementById("cpMaxResult");
-    const runBtn = document.getElementById("cpMaxRunBtn");
-    if (!out) return;
-    out.innerHTML = "";
+  function jobPlans(job) {
+    if (job && Array.isArray(job.plans) && job.plans.length > 0) return job.plans;
+    return job && job.plan ? [job.plan] : [];
+  }
 
-    const state = (job && job.state) || "idle";
-    if (runBtn) runBtn.disabled = state === "running";
+  function goalLabel(plan) {
+    if (plan && plan.objective_label) return plan.objective_label;
+    const kind = plan && plan.objective && plan.objective.kind;
+    const goal = MAX_GOALS.find((g) => g.kind === kind);
+    return goal ? goal.label : kind || "Goal";
+  }
 
-    if (state === "idle") {
-      const p = document.createElement("p");
-      p.className = "cp-empty";
-      p.textContent = "Pick an objective and constraints above, then click Run maximizer to search for a robust allocation.";
-      out.appendChild(p);
-      return;
+  function policyLabel(policy) {
+    if (policy === "plan") return "Maximized plan";
+    return (ALLOC_INFO[policy] && ALLOC_INFO[policy].label) || policy || "fixed rule";
+  }
+
+  // The row of the policy the plan recommends: the plan itself, or the best fixed rule.
+  function recommendedScore(plan) {
+    const scores = Array.isArray(plan.scores) ? plan.scores : [];
+    const rec = plan.recommendation || {};
+    const policy = rec.kind === "mode" ? rec.mode : "plan";
+    return { policy, score: scores.find((s) => s.policy === policy) || null };
+  }
+
+  function moneyOrDash(v) {
+    return typeof v === "number" && Number.isFinite(v) ? formatProjMoney(v) : "—";
+  }
+
+  function cell(tr, text, numeric) {
+    const td = document.createElement("td");
+    if (numeric) td.className = "num";
+    td.textContent = text;
+    tr.appendChild(td);
+  }
+
+  function renderComparison(out, plans, total) {
+    const year = plans[0] && plans[0].objective && plans[0].objective.year;
+    const h3 = document.createElement("h3");
+    h3.className = "cp-max-sub";
+    h3.textContent = year
+      ? `How each goal maximizes income in year ${year}`
+      : "How each goal maximizes income";
+    out.appendChild(h3);
+
+    const scroll = document.createElement("div");
+    scroll.className = "cp-max-table-scroll";
+    const table = document.createElement("table");
+    table.className = "cp-table cp-max-compare";
+    const thead = document.createElement("thead");
+    const htr = document.createElement("tr");
+    for (const col of [
+      "Goal",
+      "Best choice",
+      "Bad-year income (p10, a year)",
+      "Typical income (p50, a year)",
+      "Typical portfolio value",
+      "Gain over the best fixed rule",
+    ]) {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = col;
+      htr.appendChild(th);
     }
+    thead.appendChild(htr);
+    table.appendChild(thead);
 
-    if (state === "running") {
-      const p = document.createElement("p");
-      p.className = "cp-max-running";
-      p.textContent = "Searching allocations across Monte Carlo paths…";
-      out.appendChild(p);
-      return;
+    const tbody = document.createElement("tbody");
+    for (let i = 0; i < Math.max(total, plans.length); i++) {
+      const plan = plans[i];
+      const tr = document.createElement("tr");
+      if (!plan) {
+        cell(tr, (MAX_GOALS[i] && MAX_GOALS[i].label) || "Goal", false);
+        cell(tr, "Searching…", false);
+        for (let k = 0; k < 4; k++) cell(tr, "—", true);
+        tbody.appendChild(tr);
+        continue;
+      }
+      const { policy, score } = recommendedScore(plan);
+      cell(tr, goalLabel(plan), false);
+      cell(tr, policyLabel(policy), false);
+      cell(tr, moneyOrDash(score && score.p10), true);
+      cell(tr, moneyOrDash(score && score.p50), true);
+      cell(tr, moneyOrDash(score && score.value_p50), true);
+      const proven = policy === "plan" && typeof plan.margin === "number";
+      cell(
+        tr,
+        proven
+          ? `+${formatProjMoney(plan.margin)} (± ${moneyOrDash(plan.margin_se)})`
+          : "Not proven",
+        true,
+      );
+      tbody.appendChild(tr);
     }
+    table.appendChild(tbody);
+    scroll.appendChild(table);
+    out.appendChild(scroll);
 
-    if (state === "failed") {
-      const p = document.createElement("p");
-      p.className = "cp-word-bad";
-      p.textContent = `Maximizer failed: ${(job && job.error) || "unknown error"}`;
-      out.appendChild(p);
-      return;
+    const legend = document.createElement("ul");
+    legend.className = "cp-max-goal-legend";
+    for (const plan of plans) {
+      if (!plan.objective_explainer) continue;
+      const li = document.createElement("li");
+      const strong = document.createElement("strong");
+      strong.textContent = `${goalLabel(plan)}: `;
+      li.appendChild(strong);
+      li.appendChild(document.createTextNode(plan.objective_explainer));
+      legend.appendChild(li);
     }
+    if (legend.childNodes.length > 0) out.appendChild(legend);
+    const gainNote = document.createElement("p");
+    gainNote.className = "cp-note";
+    gainNote.textContent =
+      "Gain is the goal's value for the plan minus the best fixed rule, with its standard error. A plan is recommended only when it wins by more than two standard errors; otherwise the best fixed rule is.";
+    out.appendChild(gainNote);
+  }
 
-    const plan = job && job.plan;
-    if (!plan) {
-      const p = document.createElement("p");
-      p.className = "cp-empty";
-      p.textContent = "No plan returned.";
-      out.appendChild(p);
-      return;
-    }
-
+  function renderPlanDetail(plan, container) {
     const rec = plan.recommendation || {};
     const banner = document.createElement("div");
     banner.className = "cp-max-rec";
     if (rec.kind === "mode") {
-      const label = (ALLOC_INFO[rec.mode] && ALLOC_INFO[rec.mode].label) || rec.mode || "fixed mode";
-      banner.textContent = `No allocation beats ${label} by more than 2 standard errors. Recommended mode: ${label}.`;
+      const label = policyLabel(rec.mode);
+      banner.textContent = `No allocation beats ${label} by more than 2 standard errors. Recommended rule: ${label}.`;
     } else {
-      banner.textContent = "Recommended: custom maximized allocation.";
+      banner.textContent = "Recommended: the maximized allocation below.";
     }
-    out.appendChild(banner);
+    container.appendChild(banner);
 
     const thisMonth = Array.isArray(plan.this_month) ? plan.this_month : [];
     if (thisMonth.length > 0) {
       const h4 = document.createElement("h4");
       h4.textContent = "This month's buy list";
-      out.appendChild(h4);
+      container.appendChild(h4);
       const ul = document.createElement("ul");
       ul.className = "cp-max-buylist";
       for (const item of thisMonth) {
         const li = document.createElement("li");
-        const tag = item.candidate ? " (consider buying)" : "";
+        const tag = item.candidate ? " (new name: consider buying)" : "";
         li.textContent = `${item.symbol}: ${formatProjMoney(item.amount)}${tag}`;
         ul.appendChild(li);
       }
-      out.appendChild(ul);
+      container.appendChild(ul);
     }
 
     const scores = Array.isArray(plan.scores) ? plan.scores : [];
     if (scores.length > 0) {
+      const scroll = document.createElement("div");
+      scroll.className = "cp-max-table-scroll";
       const table = document.createElement("table");
       table.className = "cp-table cp-max-scores";
       const thead = document.createElement("thead");
       const htr = document.createElement("tr");
-      for (const col of ["Policy", "Objective", "p10", "p50", "Wealth p50"]) {
+      for (const col of [
+        "Rule",
+        "Goal value",
+        "Bad-year income (p10)",
+        "Typical income (p50)",
+        "Typical portfolio value",
+      ]) {
         const th = document.createElement("th");
+        th.scope = "col";
         th.textContent = col;
         htr.appendChild(th);
       }
       thead.appendChild(htr);
       table.appendChild(thead);
-
       const tbody = document.createElement("tbody");
       for (const s of scores) {
         const tr = document.createElement("tr");
-        const label = s.policy === "plan" ? "Maximized plan" : ((ALLOC_INFO[s.policy] && ALLOC_INFO[s.policy].label) || s.policy);
-        const cells = [
-          label,
-          s.objective !== null && s.objective !== undefined ? formatProjMoney(s.objective) : "—",
-          formatProjMoney(s.p10),
-          formatProjMoney(s.p50),
-          formatProjMoney(s.value_p50),
-        ];
-        cells.forEach((txt, idx) => {
-          const td = document.createElement("td");
-          if (idx > 0) td.className = "num";
-          td.textContent = txt;
-          tr.appendChild(td);
-        });
+        cell(tr, policyLabel(s.policy), false);
+        cell(tr, moneyOrDash(s.objective), true);
+        cell(tr, moneyOrDash(s.p10), true);
+        cell(tr, moneyOrDash(s.p50), true);
+        cell(tr, moneyOrDash(s.value_p50), true);
         tbody.appendChild(tr);
       }
       table.appendChild(tbody);
-      out.appendChild(table);
+      scroll.appendChild(table);
+      container.appendChild(scroll);
     }
 
     if (plan.sensitivity && typeof plan.sensitivity === "object") {
       const sensWrap = document.createElement("div");
       sensWrap.className = "cp-max-sens";
       const entries = [
-        ["Low growth", plan.sensitivity.low_growth],
-        ["No cuts", plan.sensitivity.no_cuts],
-        ["FX flat", plan.sensitivity.fx_flat],
+        ["If dividends grow slower", plan.sensitivity.low_growth],
+        ["If no dividend is cut", plan.sensitivity.no_cuts],
+        ["If exchange rates stay flat", plan.sensitivity.fx_flat],
       ];
       for (const [lbl, v] of entries) {
         if (typeof v !== "number") continue;
@@ -1621,7 +1692,7 @@ function renderProjMonths(data) {
         chip.textContent = `${lbl}: ${formatProjMoney(v)}`;
         sensWrap.appendChild(chip);
       }
-      if (sensWrap.childNodes.length > 0) out.appendChild(sensWrap);
+      if (sensWrap.childNodes.length > 0) container.appendChild(sensWrap);
     }
 
     const notes = Array.isArray(plan.notes) ? plan.notes : [];
@@ -1629,8 +1700,80 @@ function renderProjMonths(data) {
       const p = document.createElement("p");
       p.className = "cp-note";
       p.textContent = n;
-      out.appendChild(p);
+      container.appendChild(p);
     }
+  }
+
+  function renderMaximizeJob(job) {
+    const out = document.getElementById("cpMaxResult");
+    const runBtn = document.getElementById("cpMaxRunBtn");
+    if (!out) return;
+    out.innerHTML = "";
+
+    const state = (job && job.state) || "idle";
+    const plans = jobPlans(job);
+    const total = Math.max((job && job.objectives_total) || 0, plans.length);
+    if (runBtn) {
+      runBtn.disabled = state === "running";
+      runBtn.textContent = state === "running"
+        ? `Searching… ${plans.length} of ${total || MAX_GOALS.length} goals done`
+        : plans.length > 0 ? "Run all three goals again" : "Compare all three goals";
+    }
+
+    if (state === "idle") {
+      const p = document.createElement("p");
+      p.className = "cp-empty";
+      p.textContent = "Set the limits above, then press Compare all three goals to search the best allocation for each goal.";
+      out.appendChild(p);
+      return;
+    }
+
+    if (state === "running") {
+      const p = document.createElement("p");
+      p.className = "cp-max-running";
+      p.textContent = `Searching allocations across simulated futures… ${plans.length} of ${total || MAX_GOALS.length} goals done.`;
+      out.appendChild(p);
+      if (plans.length > 0) renderComparison(out, plans, total);
+      return;
+    }
+
+    if (state === "failed") {
+      const p = document.createElement("p");
+      p.className = "cp-word-bad";
+      p.textContent = `Maximizer failed: ${(job && job.error) || "unknown error"}`;
+      out.appendChild(p);
+      if (plans.length > 0) renderComparison(out, plans, plans.length);
+      return;
+    }
+
+    if (plans.length === 0) {
+      const p = document.createElement("p");
+      p.className = "cp-empty";
+      p.textContent = "No plan returned.";
+      out.appendChild(p);
+      return;
+    }
+
+    renderComparison(out, plans, total);
+    plans.forEach((plan, i) => {
+      const details = document.createElement("details");
+      details.className = "cp-max-goal";
+      if (i === 0) details.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = `${goalLabel(plan)}: details and buy list`;
+      details.appendChild(summary);
+      const body = document.createElement("div");
+      body.className = "cp-max-goal-body";
+      if (plan.objective_explainer) {
+        const p = document.createElement("p");
+        p.className = "cp-muted";
+        p.textContent = plan.objective_explainer;
+        body.appendChild(p);
+      }
+      renderPlanDetail(plan, body);
+      details.appendChild(body);
+      out.appendChild(details);
+    });
   }
 
   function clearMaxPoll() {
@@ -1656,13 +1799,10 @@ function renderProjMonths(data) {
 
   async function startMaximizeJob() {
     clearMaxPoll();
-    const objKind = document.getElementById("cpMaxObjective")?.value || "robust_income";
     const year = Math.max(1, Math.min(30, Number(document.getElementById("cpMaxYear")?.value) || 20));
     const floorPct = Math.max(50, Math.min(100, Number(document.getElementById("cpMaxFloorPct")?.value) || 90));
-    const objective = objKind === "income_with_wealth_floor"
-      ? { kind: "income_with_wealth_floor", year, floor_pct: floorPct }
-      : { kind: objKind, year };
 
+    // No `objective`: the server runs all three goals at `objective_year`.
     const body = {
       years: PROJ_YEARS,
       reinvest_pct: currentProjReinvestPct,
@@ -1670,7 +1810,8 @@ function renderProjMonths(data) {
       monthly_contribution: currentProjMonthlyContribution,
       top_n: currentProjTopN,
       reserve_pt_tax: currentProjReservePtTax,
-      objective,
+      objective_year: year,
+      floor_pct: floorPct,
       constraints: {
         max_position_pct: Number(document.getElementById("cpMaxPosPct")?.value) || 25,
         max_high_yield_pct: Number(document.getElementById("cpMaxHyPct")?.value) || 20,
@@ -1681,7 +1822,7 @@ function renderProjMonths(data) {
     };
 
     try {
-      renderMaximizeJob({ state: "running" });
+      renderMaximizeJob({ state: "running", objectives_total: MAX_GOALS.length });
       const res = await fetchJson(`/api/capital/dividends/maximize${r24Query()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

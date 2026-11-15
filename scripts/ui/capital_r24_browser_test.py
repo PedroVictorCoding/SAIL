@@ -24,6 +24,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+SCREENSHOTS = Path("/tmp/sail-capital-r24-qa")
+
+
 def load_fixture(name):
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
@@ -93,6 +96,7 @@ def run_case(browser, port, width, max_state, trade_fx, proj_fx, dist_fx, max_fx
             return fulfill_json(route, candidates)
         if path == "/api/capital/dividends/maximize":
             if req.method == "POST":
+                posted.append(json.loads(req.post_data or "{}"))
                 return fulfill_json(route, {"started": True, "job": current_job}, status=202)
             return fulfill_json(route, current_job)
         if path == "/api/capital/limits":
@@ -107,6 +111,7 @@ def run_case(browser, port, width, max_state, trade_fx, proj_fx, dist_fx, max_fx
             return fulfill_json(route, {})
         route.continue_()
 
+    posted = []
     page.route("**/api/**", handle_api)
     page.goto(f"http://127.0.0.1:{port}/capital.html", wait_until="networkidle")
 
@@ -129,10 +134,24 @@ def run_case(browser, port, width, max_state, trade_fx, proj_fx, dist_fx, max_fx
     expect(page.locator("#cpProjSpecialsNote")).to_contain_text("JNJ")
 
     if max_state == "empty":
-        expect(page.locator("#cpMaxResult")).to_contain_text("Run maximizer")
+        expect(page.locator("#cpMaxResult")).to_contain_text("Compare all three goals")
+        expect(page.locator("#cpMaxRunBtn")).to_have_text("Compare all three goals")
+        if width == 1440:
+            page.click("#cpMaxRunBtn")
+            expect(page.locator("#cpMaxRunBtn")).to_be_enabled()
+            assert posted, "the run button posts a request"
+            assert "objective" not in posted[-1], posted[-1]
+            assert posted[-1]["objective_year"] >= 1 and posted[-1]["floor_pct"] == 90, posted[-1]
     elif max_state == "running":
         expect(page.locator("#cpMaxResult")).to_contain_text("Searching allocations")
+        expect(page.locator("#cpMaxResult")).to_contain_text("1 of 3 goals done")
+        expect(page.locator("#cpMaxRunBtn")).to_be_disabled()
     elif max_state == "done":
+        expect(page.locator("#cpMaxResult")).to_contain_text("How each goal maximizes income in year 20")
+        for goal in ("Most income in a bad year", "Most typical income, keeping wealth", "Steadiest monthly income"):
+            expect(page.locator("#cpMaxResult .cp-max-compare")).to_contain_text(goal)
+        expect(page.locator("#cpMaxResult .cp-max-compare")).to_contain_text("Not proven")
+        expect(page.locator("#cpMaxResult .cp-max-goal")).to_have_count(3)
         expect(page.locator("#cpMaxResult")).to_contain_text("This month's buy list")
         expect(page.locator("#cpMaxResult")).to_contain_text("PEP")
         expect(page.locator("#cpMaxResult")).to_contain_text("consider buying")
@@ -150,6 +169,9 @@ def run_case(browser, port, width, max_state, trade_fx, proj_fx, dist_fx, max_fx
     assert not overflow, f"Horizontal overflow on income ({max_state}) at {width}px"
     assert not page_errors, f"Page errors at {width}px ({max_state}): {page_errors}"
     assert not console_errors, f"Console errors at {width}px ({max_state}): {console_errors}"
+    if max_state in ("running", "done"):
+        SCREENSHOTS.mkdir(parents=True, exist_ok=True)
+        page.locator("#cpMaximizePanel").screenshot(path=str(SCREENSHOTS / f"maximize-{max_state}-{width}.png"))
     context.close()
 
 

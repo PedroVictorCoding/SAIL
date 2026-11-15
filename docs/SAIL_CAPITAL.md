@@ -515,6 +515,17 @@ Otherwise the answer is "keep that rule". Three stress runs show the plan under 
 growth, no cuts and flat FX. The plan only says where new money goes; it never sells and
 SAIL places no orders.
 
+**All three goals at once (round 25).** By default one run searches every goal in turn
+on the same simulated futures (same seeds): *most income in a bad year* (10th percentile),
+*most typical income, keeping wealth* (median, with the median value at least 90% of the
+proportional rule's unless the owner sets another floor) and *steadiest monthly income*
+(10th percentile of the weakest month). The job lists each plan as it finishes
+(`plans`, `objectives_total`), each with a plain label and a sentence on what it
+maximizes. The Income tab compares them in one table: the recommended choice per goal,
+its bad-year and typical income, the typical portfolio value, and the gain over the best
+fixed rule (or "Not proven"). A request that names one `objective` still runs only that
+one.
+
 ## Prices and baseline forecasts
 
 **What it is.** Statistical ranges for each held instrument's price over 5, 20 and 60
