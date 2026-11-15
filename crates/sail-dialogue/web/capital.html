@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/capital-today.css">
 <link rel="stylesheet" href="/capital-portfolio.css">
 <link rel="stylesheet" href="/capital-income.css">
+<link rel="stylesheet" href="/capital-retirement.css">
 <link rel="stylesheet" href="/capital-outlook.css">
 <link rel="stylesheet" href="/capital-prediction.css">
 <link rel="stylesheet" href="/capital-record.css">
@@ -459,6 +460,109 @@
           <ul class="cp-proj-notes-list" id="cpProjNotesList">
           </ul>
         </div>
+      </details>
+    </section>
+
+    <section class="cp-panel cp-retirement-panel" id="cpRetirementPanel" aria-labelledby="cpRetirementTitle">
+      <header class="cp-panel-head">
+        <div class="cp-title-group">
+          <h2 id="cpRetirementTitle">Early retirement</h2>
+          <span class="cp-sub-notice">What this projection means for stopping work. Estimates from past payouts, not advice.</span>
+        </div>
+        <div class="cp-panel-actions">
+          <button type="button" class="cp-button cp-btn-sm" id="cpRetireResearchBtn">Research a strategy</button>
+        </div>
+      </header>
+
+      <div class="cp-retire-controls">
+        <div class="cp-control-group">
+          <label for="cpRetireCurrentAge" class="cp-control-label">Age today</label>
+          <input type="number" class="cp-input cp-retire-number" id="cpRetireCurrentAge" min="16" max="95" step="1" value="35" inputmode="numeric">
+        </div>
+        <div class="cp-control-group">
+          <label for="cpRetireRetireAge" class="cp-control-label">Retire at</label>
+          <input type="number" class="cp-input cp-retire-number" id="cpRetireRetireAge" min="16" max="95" step="1" value="55" inputmode="numeric">
+        </div>
+        <div class="cp-control-group">
+          <label for="cpRetireTarget" class="cp-control-label">Target, net a month</label>
+          <input type="number" class="cp-input cp-retire-number" id="cpRetireTarget" min="1" max="100000" step="50" value="2500" inputmode="decimal">
+        </div>
+        <div class="cp-control-group">
+          <label for="cpRetireInflation" class="cp-control-label">Inflation, % a year</label>
+          <input type="number" class="cp-input cp-retire-number" id="cpRetireInflation" min="0" max="10" step="0.5" value="2" inputmode="decimal">
+        </div>
+        <div class="cp-control-group">
+          <label for="cpRetireWithdrawal" class="cp-control-label">Withdrawal rate, %</label>
+          <input type="number" class="cp-input cp-retire-number" id="cpRetireWithdrawal" min="1" max="10" step="0.5" value="4" inputmode="decimal">
+        </div>
+      </div>
+      <p class="cp-muted cp-retire-help">
+        The target is in today's money and grows with inflation. The income test asks whether projected net dividends cover it; the capital test divides it by the withdrawal rate.
+        Both use the reinvestment, allocation, allowance and tax settings above.
+      </p>
+
+      <div id="cpRetireStatus" class="cp-empty" hidden role="status" aria-live="polite"></div>
+
+      <div class="cp-retire-tiles">
+        <div class="cp-retire-tile">
+          <span class="cp-retire-tile-label">Retirement year</span>
+          <span class="cp-retire-tile-val" id="cpRetireTileYear">—</span>
+          <span class="cp-retire-tile-sub" id="cpRetireTileYearSub">in your projection</span>
+        </div>
+        <div class="cp-retire-tile">
+          <span class="cp-retire-tile-label">Income today / target</span>
+          <span class="cp-retire-tile-val" id="cpRetireTileProgress">—</span>
+          <span class="cp-retire-tile-sub" id="cpRetireTileProgressSub">trailing dividends</span>
+        </div>
+        <div class="cp-retire-tile">
+          <span class="cp-retire-tile-label">Income at retirement</span>
+          <span class="cp-retire-tile-val" id="cpRetireTileIncome">—</span>
+          <span class="cp-retire-tile-sub">base scenario, today's money</span>
+        </div>
+        <div class="cp-retire-tile">
+          <span class="cp-retire-tile-label">Capital target</span>
+          <span class="cp-retire-tile-val" id="cpRetireTileCapital">—</span>
+          <span class="cp-retire-tile-sub" id="cpRetireTileCapitalSub">at your withdrawal rate</span>
+        </div>
+        <div class="cp-retire-tile">
+          <span class="cp-retire-tile-label">Allowance to get there</span>
+          <span class="cp-retire-tile-val" id="cpRetireTileContribution">—</span>
+          <span class="cp-retire-tile-sub" id="cpRetireTileContributionSub">base scenario</span>
+        </div>
+      </div>
+
+      <p class="cp-retire-caption">The same plan in the projection's low, base and high scenarios.</p>
+      <div class="cp-table-wrap">
+        <table class="cp-table cp-retire-table">
+          <thead>
+            <tr>
+              <th scope="col">Scenario</th>
+              <th scope="col" class="num">Income then, today's money</th>
+              <th scope="col" class="num">Portfolio then</th>
+              <th scope="col">Income covers target</th>
+              <th scope="col">Capital covers target</th>
+            </tr>
+          </thead>
+          <tbody id="cpRetireScenarioBody">
+            <tr><td colspan="5" class="cp-empty">Loading plan…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="cp-retire-research">
+        <div class="cp-retire-research-head">
+          <h3 class="cp-proj-subtitle">Researched strategy</h3>
+          <span class="cp-retire-pill" id="cpRetireResearchState">Not run yet</span>
+        </div>
+        <p class="cp-muted" id="cpRetireResearchIntro">
+          Fetches a vetted set of public pages on withdrawal rates, dividend investing and Portuguese tax, asks the local SAIL model for a strategy that fits these numbers, and keeps only citations that point at the fetched pages. Nothing is sent to a cloud model.
+        </p>
+        <div id="cpRetireResearchBody" class="cp-retire-research-body" aria-live="polite"></div>
+      </div>
+
+      <details class="cp-more" id="cpRetireNotesDetails">
+        <summary>Show method and limits</summary>
+        <ul class="cp-proj-notes-list" id="cpRetireNotes"></ul>
       </details>
     </section>
 
@@ -1187,6 +1291,7 @@
 <script src="/capital-today.js" defer></script>
 <script src="/capital-portfolio.js" defer></script>
 <script src="/capital-income.js" defer></script>
+<script src="/capital-retirement.js" defer></script>
 <script src="/capital-outlook.js" defer></script>
 <script src="/capital-prediction.js" defer></script>
 <script src="/capital-record.js" defer></script>

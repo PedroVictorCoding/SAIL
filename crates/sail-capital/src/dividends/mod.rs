@@ -47,6 +47,8 @@
 //! it is a projection and not ledger money.
 mod growth;
 mod project;
+pub mod retirement;
+pub mod retirement_research;
 
 pub use self::growth::growth;
 pub use self::project::project;

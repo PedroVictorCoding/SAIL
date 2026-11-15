@@ -35,7 +35,7 @@ still resolve.
 |---|---|---|
 | Dashboard | How is it doing, and what needs me? | Account value with the holdings line, figures, market breadth, holding price cards, index tiles, what needs you, calendar, market overview |
 | Portfolio | What do I own, and is the ledger right? | Positions with trailing stops, CFDs, allocation, reconciliation, received shares, SEC filings |
-| Income | What does it pay? | Dividend projection, dividends received, income summary |
+| Income | What does it pay, and when can I stop? | Dividend projection, early-retirement plan and researched strategy, dividends received, income summary |
 | Signals | What do the signals say about each stock? | The signal board: every holding and watchlist stock or ETF with its read, the four price signals as percentiles, the 1- and 3-month outlook, any trade setup, and a CSV download |
 | Outlook | What could happen to a holding? | Holding outlook (fan and replay), trade signals, one-off asset check |
 | Track record | Has anything earned trust? | The scorecard, then the evidence: setups, live record, baselines, signal skill |
@@ -44,7 +44,8 @@ still resolve.
 **Files.** `web/capital.html` holds one region per tab. `capital-core.js` has the
 shared state, owner-token fetch, formatting, tabs and boot. Each tab has its own
 `capital-<tab>.js` and `capital-<tab>.css`, and `capital.css` holds the shared base.
-The scripts are classic `defer` scripts that share globals. Each tab registers
+`capital-retirement.js`/`.css` sit beside them and load with the Income tab. The scripts
+are classic `defer` scripts that share globals. Each tab registers
 `registerTab(id, { setup, load })`. The header (portfolio and Today's tiles) loads at
 start, and a tab loads its own data the first time it opens and again on Refresh.
 
@@ -411,6 +412,51 @@ minus what was withheld, floored at zero (simplified).
 came from, using the units held on the payment date. A history is scaled only when the
 receipts consistently differ by more than 1.6× (for example a fund quoted in its base
 currency), and a note says so.
+
+## Early retirement and the researched strategy
+
+**Income → Early retirement** turns the projection into a plan for stopping work early.
+It is deterministic: the same inputs always give the same answer.
+
+**Inputs.** Age today, the age income should cover spending, a monthly net target in
+today's money, inflation and a withdrawal rate. The target grows with the inflation rate
+to the retirement year. Both tests use the projection's current reinvestment, allocation,
+allowance and Portuguese-tax settings.
+
+**Two tests per scenario.**
+- **Income:** projected net dividends in the retirement year cover the inflated target.
+  The capital stays invested.
+- **Capital:** the paying portfolio is worth at least the target divided by the
+  withdrawal rate. This is the sell-down route; sequence risk is not simulated.
+
+For each of the low, base and high scenarios the plan reports income and portfolio value
+in the retirement year, the first age at which income stays above the target through that
+year, and whether each test passes. It also reports progress today (trailing-twelve-month
+net income ÷ the annual target) and the smallest monthly allowance that makes the base
+scenario's income cover the target by the retirement age (`required_monthly_contribution`,
+bisected through the same simulation, rounded up to 10, or absent above the 10,000 cap).
+Notes state the method and the limits: scenarios are not probabilities, a dividend cut or
+a flat market moves the date, and this is not regulated advice.
+
+**The researched brief.** "Research a strategy" starts a background run:
+1. it fetches eight vetted public pages (Wikipedia on safe withdrawal rates, the Trinity
+   study, FIRE and dividend investing, Early Retirement Now, the Portuguese IRS Code
+   article on dividend tax and the European Commission on double taxation) from those
+   domains only, over https, with a 20-second timeout, a 2 MB cap, no redirects and a
+   private-address check on the resolved host;
+2. it sends the plan, the projection's trajectory and the readable text of up to eight
+   fetched pages to SAIL's local model (Mind), which must answer JSON;
+3. it validates the answer before storing it: only citations to the supplied numbered
+   sources survive, unknown fields are ignored, every list is capped, and a non-JSON answer
+   is shown as prose with no checked citations;
+4. it stores the brief under `retirement-research.json` in the Capital data directory and
+   returns it, together with every source attempted and whether it was fetched.
+
+The model never sees a broker credential, and only the listed public pages are requested.
+A run may fail if the host is offline, a page refuses the request or the local model is
+busy or unavailable; the last brief stays readable, marked stale when the settings changed
+since it was written. A brief summarises and applies published research; it does not
+verify the owner's holdings and is not financial advice.
 
 ## Prices and baseline forecasts
 
@@ -790,6 +836,9 @@ scoreboard.
 | `GET /universe/watchlist` / `POST /universe/watchlist` | The watchlist, and a change: `{"op": "add", "item": {...}}` or `{"op": "remove", "symbol": "..."}` |
 | `GET /dividends/projection?account=&years=&reinvest_pct=&allocation=&monthly_contribution=&top_n=&reserve_pt_tax=` | Low, base and high projections, the same without reinvesting dividends, per-holding inputs and notes; allocation is `proportional`, `same_holding`, `top_value`, `equal_weight`, `top_yield` or `underweight`; `monthly_contribution` is the 0–10,000 salary allowance invested each month |
 | `POST /dividends/refresh?account=` | Fetches per-share payout histories for the holdings |
+| `GET /dividends/retirement?account=&years=&reinvest_pct=&allocation=&monthly_contribution=&top_n=&reserve_pt_tax=&current_age=&retire_age=&target_monthly=&inflation_pct=&withdrawal_rate_pct=` | The early-retirement plan: required capital, progress, the allowance that reaches the income target, per-scenario funding and notes |
+| `GET /dividends/retirement/research` | The latest researched brief, run status, error and every source attempted |
+| `POST /dividends/retirement/research?…same plan inputs…` | Starts a background research run; 202 with `{"started": bool, "research": {...}}`, or 503 when no local model is attached |
 | `GET /outlook/track-record?account=&horizon=` | Coverage, average percentile, skill and direction over monthly replays |
 | `GET /markets?account=` | The market board from stored closes: per holding and watchlist instrument the last close, 1D/1W/1M changes, a 30-session spark and whether it is above its 200-day average; breadth; and today's holdings valued over the last 30 sessions |
 | `GET /scorecard?account=` | The track record: one row per baseline, signal, outlook horizon, setup and the live record, each Earned / Not yet / Failed with a headline, plus a summary sentence |
@@ -806,7 +855,9 @@ All amounts are decimal strings. Errors are `{"error": "..."}`, with these statu
 Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capital/`:
 - `capital.sqlite3`, the ledger;
 - `reports/<sha256>.<ext>`, the original uploads, kept as evidence and readable only by
-  the owner.
+  the owner;
+- `retirement-research.json`, the latest researched brief and the sources it fetched
+  (owner-only permissions on Unix).
 
 ## History
 

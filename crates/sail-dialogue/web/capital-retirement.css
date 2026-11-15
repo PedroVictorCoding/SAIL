@@ -1,0 +1,326 @@
+/* SAIL Capital — early retirement plan and researched brief.
+   Reuses the Income panel's controls and tokens; one calm illuminated research surface,
+   no extra animation, readable in forced colours. */
+
+.cp-retirement-panel {
+  margin-top: 18px;
+}
+
+.cp-retire-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 22px;
+  align-items: flex-end;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--sail-glass-border);
+  background: var(--sail-surface);
+}
+
+.cp-retire-controls .cp-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 132px;
+}
+
+.cp-retire-number {
+  width: 132px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-retire-help {
+  margin: 0;
+  padding: 10px 20px 0;
+  max-width: 92ch;
+}
+
+.cp-retire-tiles {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 20px 14px;
+}
+
+.cp-retire-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-control);
+  background: linear-gradient(160deg, rgb(73 111 157 / 0.08), transparent 60%),
+    var(--sail-surface);
+}
+
+.cp-retire-tile-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sail-text-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cp-retire-tile-val {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--sail-text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.cp-retire-tile-sub {
+  font-size: 11px;
+  color: var(--sail-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.cp-retire-caption {
+  margin: 0 20px 6px;
+  color: var(--sail-text-muted);
+  font-size: 12px;
+}
+
+.cp-retire-verdict {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--sail-glass-border);
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cp-retire-yes {
+  border-color: rgb(92 205 164 / 0.45);
+  background: rgb(92 205 164 / 0.09);
+  color: #7fd6a4;
+}
+
+.cp-retire-no {
+  color: var(--sail-text-muted);
+}
+
+.cp-retire-research {
+  margin: 16px 20px 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--sail-glass-border);
+  border-radius: var(--sail-radius-card);
+  background: linear-gradient(158deg, rgb(73 111 157 / 0.12), transparent 58%),
+    var(--sail-surface);
+}
+
+.cp-retire-research-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cp-retire-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 1px solid var(--sail-glass-border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--sail-text-muted);
+  white-space: nowrap;
+}
+
+.cp-retire-pill-small {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
+.cp-retire-pill-warn {
+  border-color: rgb(243 176 90 / 0.5);
+  color: #f3b05a;
+}
+
+.cp-retire-research-body {
+  margin-top: 10px;
+}
+
+.cp-retire-headline {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--sail-text);
+}
+
+.cp-retire-brief h4,
+.cp-retire-research-block h4 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sail-text);
+}
+
+.cp-retire-brief ul,
+.cp-retire-notes {
+  margin: 4px 0 0 18px;
+  padding: 0;
+  color: var(--sail-text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.cp-retire-brief li {
+  margin: 3px 0;
+}
+
+.cp-retire-strategy {
+  margin: 10px 0;
+  padding: 10px 14px;
+  border-left: 2px solid var(--sail-focus-ring);
+  background: rgb(0 0 0 / 0.14);
+  border-radius: 0 var(--sail-radius-control) var(--sail-radius-control) 0;
+}
+
+.cp-retire-strategy h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.cp-retire-strategy p {
+  margin: 4px 0;
+  color: var(--sail-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cp-retire-strategy-label {
+  margin-top: 8px !important;
+  font-size: 11px !important;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sail-text-subtle) !important;
+}
+
+.cp-retire-strategy ul {
+  margin: 2px 0 4px 18px;
+  color: var(--sail-text-muted);
+  font-size: 13px;
+}
+
+.cp-retire-strategy-cites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cp-retire-cite {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--sail-glass-border);
+  border-radius: 8px;
+  color: var(--sail-focus-ring);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.cp-retire-cite:focus-visible {
+  outline: 2px solid var(--sail-focus-ring);
+  outline-offset: 2px;
+}
+
+.cp-retire-sources li {
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+
+.cp-retire-sources a {
+  color: var(--sail-text);
+}
+
+.cp-retire-meta {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--sail-text-subtle);
+}
+
+.cp-retire-notes {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.cp-retire-running,
+.cp-retire-stale {
+  padding: 8px 12px;
+  border-left: 2px solid var(--sail-focus-ring);
+  background: rgb(73 111 157 / 0.12);
+  color: var(--sail-text-muted);
+  font-size: 13px;
+}
+
+.cp-retire-failed {
+  padding: 8px 12px;
+  border-left: 2px solid #ed7275;
+  background: rgb(237 114 117 / 0.08);
+  color: var(--sail-text);
+  font-size: 13px;
+}
+
+.cp-retire-stale {
+  border-left-color: #f3b05a;
+}
+
+@media (max-width: 1100px) {
+  .cp-retire-tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .cp-retire-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cp-retire-controls {
+    gap: 12px 16px;
+  }
+
+  .cp-retire-controls .cp-control-group {
+    flex: 1 1 132px;
+  }
+
+  .cp-retire-number {
+    width: 100%;
+  }
+
+  .cp-retire-research {
+    margin: 14px 12px 16px;
+    padding: 14px;
+  }
+}
+
+@media (max-width: 520px) {
+  .cp-retire-tiles {
+    grid-template-columns: 1fr;
+    margin: 14px 12px;
+  }
+
+  .cp-retire-controls {
+    padding: 12px;
+  }
+
+  .cp-retire-help {
+    padding: 8px 12px 0;
+  }
+}
+
+@media (forced-colors: active) {
+  .cp-retire-tile,
+  .cp-retire-research,
+  .cp-retire-strategy,
+  .cp-retire-pill,
+  .cp-retire-verdict,
+  .cp-retire-cite {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    forced-color-adjust: none;
+  }
+}
