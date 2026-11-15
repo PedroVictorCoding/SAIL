@@ -8,7 +8,8 @@
 //! every step uses only trades with `exit_session <= as_of` (and, inside the walk-forward,
 //! only trades that exited before the fold start minus [`EMBARGO_DAYS`]).
 //!
-//! # Steps, per group, for each of the 12 setup and side cells
+//! # Steps, per group, for each of the 16 setup and side cells under each of the two
+//! [`Condition`]s (the unconditioned cell and the `AgreesCalm` one)
 //! 1. **Evidence:** [`super::evidence`] over the cell's trades with
 //!    `exit_session <= as_of`. This is `Verdict::selection`. `Verdict::holdout` stays the
 //!    evidence over the last 24 months (exits in `(as_of − 24 months, as_of]`), for display
@@ -17,12 +18,13 @@
 //!    with the autocorrelation-inflated standard error that `Evidence::expectancy_ci`
 //!    already uses: `se = (ci.1 − ci.0) / (2 · 1.959964)`, `z = mean / se`,
 //!    `p = 1 − Φ(z)`. Fewer than 2 trades, or `se` not finite or ≤ 0: `p = 1`.
-//! 3. **False discovery rate:** [`benjamini_hochberg`] over **all 36** p-values at once
-//!    (3 groups × 6 setups × 2 sides) at `q = ` [`FDR_Q`]. Step-up: sort ascending,
+//! 3. **False discovery rate:** [`benjamini_hochberg`] over **all 96** p-values at once
+//!    (3 groups × 2 conditions × 8 setups × 2 sides, [`FDR_FAMILY`]) at `q = ` [`FDR_Q`].
+//!    Step-up: sort ascending,
 //!    find the largest `k` with `p_(k) <= k / m · q`, reject `p_(1) … p_(k)`. Ties keep
 //!    input order; NaN p-values never reject. `m` is the number of p-values passed.
-//! 4. **Partial pooling:** [`pool`] over the group's 12 cells (normal–normal empirical
-//!    Bayes, DerSimonian–Laird):
+//! 4. **Partial pooling:** [`pool`] over the group's 16 cells under the same condition
+//!    (normal–normal empirical Bayes, DerSimonian–Laird):
 //!    - per cell `y_i = expectancy_r`, `v_i = se_i²`; cells with fewer than
 //!      [`MIN_POOL_TRADES`] trades or a non-finite/zero `v_i` don't inform the prior and
 //!      get `Pooled::default()` with `shrinkage = 1` and `posterior_mean = prior_mean`;
@@ -33,8 +35,8 @@
 //!    - `B_i = v_i / (v_i + τ²)` (1 when `τ² = 0`), `posterior_mean = B·prior + (1−B)·y`,
 //!      `posterior_sd = sqrt((1 − B) · v_i)` (when `B = 1`, use `sqrt(v_i·τ²/(v_i+τ²))`
 //!      which is 0 for `τ² = 0`; then the cell is exactly the prior mean).
-//! 5. **Live update:** the cell's live closed cards ([`LiveTrade`], either tier, exit ≤
-//!    `as_of`) update the pooled posterior as further normal observations with the
+//! 5. **Live update:** the cell's live closed cards ([`LiveTrade`], either tier, same
+//!    condition, exit ≤ `as_of`) update the pooled posterior as further normal observations with the
 //!    cell's backtest per-trade variance `s² = v_i · n_i` (n_i = selection trades):
 //!    `precision = 1/posterior_sd² + n_live/s²`,
 //!    `mean = (posterior_mean/posterior_sd² + Σr_live/s²) / precision`. If
@@ -65,8 +67,8 @@
 //! - `Verdict::judgement` is always `Some` from [`judge`].
 //!
 //! # Output
-//! [`judge`] returns 36 verdicts in the order `["fx", "stocks", "indices"]` ×
-//! [`super::SetupId::ALL`] × `[Long, Short]`, the order the scoreboard has today.
+//! [`judge`] returns 96 verdicts in the order `["fx", "stocks", "indices"]` ×
+//! [`Condition::ALL`] × [`super::SetupId::ALL`] × `[Long, Short]`.
 //! It is deterministic (same inputs, same output, bit for bit) and pure: no I/O, no
 //! clock, no randomness.
 
@@ -75,9 +77,10 @@ use std::collections::BTreeMap;
 use chrono::{Days, Months, NaiveDate};
 use serde::{Deserialize, Serialize};
 
+use super::regime::Condition;
 use super::{Evidence, SetupId, Side, Tier, Trade, Verdict};
 
-/// False discovery rate across the 36 cells.
+/// False discovery rate across the [`FDR_FAMILY`] cells.
 pub const FDR_Q: f64 = 0.10;
 /// Fewest trades for a cell to inform the pooled prior.
 pub const MIN_POOL_TRADES: u32 = 10;
@@ -303,13 +306,14 @@ pub fn pool(cells: &[Evidence]) -> Vec<Pooled> {
     out
 }
 
-/// Step 6 for every cell of every group, keyed by `(group, setup, side)`. Kilo, round 19.
-pub fn walk_forward(
+/// Step 6 for every cell of every group and condition, keyed by
+/// `(group, setup, side, condition)`. Kilo, round 19; conditions, round 24.
+fn walk_forward_cells(
     trades_by_group: &BTreeMap<String, Vec<Trade>>,
     as_of: NaiveDate,
-) -> BTreeMap<(String, SetupId, Side), WalkForward> {
+) -> BTreeMap<CellKey, WalkForward> {
     let cells = cells_in_order();
-    let mut folds: BTreeMap<(String, SetupId, Side), Vec<Fold>> = cells
+    let mut folds: BTreeMap<CellKey, Vec<Fold>> = cells
         .iter()
         .map(|key| (key.clone(), Vec::with_capacity(WF_FOLDS as usize)))
         .collect();
@@ -336,16 +340,20 @@ pub fn walk_forward(
         let fit_evidence: Vec<Evidence> = cells
             .iter()
             .enumerate()
-            .map(|(index, (_, setup, side))| {
-                super::stats::evidence(*setup, *side, &fit_groups[group_index(index)])
+            .map(|(index, (_, setup, side, condition))| {
+                cell_evidence(&fit_groups[group_index(index)], *setup, *side, *condition)
             })
             .collect();
         let p_values: Vec<f64> = fit_evidence.iter().map(p_value).collect();
         let rejected = benjamini_hochberg(&p_values, FDR_Q);
-        let pooled: Vec<Vec<Pooled>> = (0..GROUPS.len())
+        let pooled: Vec<Vec<Vec<Pooled>>> = (0..GROUPS.len())
             .map(|group| {
-                let from = group * SETUPS_PER_GROUP;
-                pool(&fit_evidence[from..from + SETUPS_PER_GROUP])
+                (0..Condition::ALL.len())
+                    .map(|condition| {
+                        let from = pool_start(group, condition);
+                        pool(&fit_evidence[from..from + SETUPS_PER_GROUP])
+                    })
+                    .collect()
             })
             .collect();
         let selected: Vec<bool> = cells
@@ -353,12 +361,14 @@ pub fn walk_forward(
             .enumerate()
             .map(|(index, _)| {
                 let group = group_index(index);
-                let estimate = &pooled[group][index - group * SETUPS_PER_GROUP];
+                let condition = condition_index(index);
+                let cell = index - pool_start(group, condition);
+                let estimate = &pooled[group][condition][cell];
                 rejected[index] && estimate.posterior_mean - Z95 * estimate.posterior_sd > 0.0
             })
             .collect();
 
-        for (index, (group, setup, side)) in cells.iter().enumerate() {
+        for (index, (group, setup, side, condition)) in cells.iter().enumerate() {
             let cell_trades: Vec<&Trade> = trades_by_group
                 .get(group)
                 .map(Vec::as_slice)
@@ -367,6 +377,7 @@ pub fn walk_forward(
                 .filter(|trade| {
                     trade.setup == *setup
                         && trade.side == *side
+                        && condition.admits(trade.regime, trade.side)
                         && trade.signal_session >= start
                         && trade.signal_session < end
                         && trade.exit_session <= as_of
@@ -374,7 +385,7 @@ pub fn walk_forward(
                 .collect();
             let count = cell_trades.len() as u32;
             let mean_r = mean_of(cell_trades.iter().map(|trade| trade.r_multiple));
-            if let Some(fold) = folds.get_mut(&(group.clone(), *setup, *side)) {
+            if let Some(fold) = folds.get_mut(&(group.clone(), *setup, *side, *condition)) {
                 fold.push(Fold {
                     start,
                     end,
@@ -391,12 +402,12 @@ pub fn walk_forward(
     }
 
     let mut out = BTreeMap::new();
-    for (index, (group, setup, side)) in cells.into_iter().enumerate() {
+    for (index, (group, setup, side, condition)) in cells.into_iter().enumerate() {
         let oos = &selected_trades[index];
         let all = &all_trades[index];
         let walk_forward = WalkForward {
             folds: folds
-                .remove(&(group.clone(), setup, side))
+                .remove(&(group.clone(), setup, side, condition))
                 .unwrap_or_default(),
             oos_trades: oos.len() as u32,
             oos_mean_r: mean_of(oos.iter().map(|trade| trade.r_multiple)),
@@ -404,13 +415,36 @@ pub fn walk_forward(
             all_trades: all.len() as u32,
             all_mean_r: mean_of(all.iter().map(|trade| trade.r_multiple)),
         };
-        out.insert((group, setup, side), walk_forward);
+        out.insert((group, setup, side, condition), walk_forward);
     }
     out
 }
 
-/// Steps 1–6 and the verdicts, in scoreboard order. Kilo, round 19: until then this keeps
-/// the round 13 rule so the build and the page work.
+/// Step 6 for the unconditioned cells, keyed by `(group, setup, side)`. The condition
+/// variants are only used inside [`judge`].
+pub fn walk_forward(
+    trades_by_group: &BTreeMap<String, Vec<Trade>>,
+    as_of: NaiveDate,
+) -> BTreeMap<(String, SetupId, Side), WalkForward> {
+    walk_forward_cells(trades_by_group, as_of)
+        .into_iter()
+        .filter_map(|((group, setup, side, condition), walk)| {
+            (condition == Condition::None).then_some(((group, setup, side), walk))
+        })
+        .collect()
+}
+
+/// The cell's evidence over the trades the condition admits.
+fn cell_evidence(trades: &[Trade], setup: SetupId, side: Side, condition: Condition) -> Evidence {
+    let admitted: Vec<Trade> = trades
+        .iter()
+        .filter(|trade| condition.admits(trade.regime, trade.side))
+        .cloned()
+        .collect();
+    super::stats::evidence(setup, side, &admitted)
+}
+
+/// Steps 1–6 and the verdicts, in scoreboard order, for both conditions.
 pub fn judge(
     trades_by_group: &BTreeMap<String, Vec<Trade>>,
     live: &[LiveTrade],
@@ -436,42 +470,54 @@ pub fn judge(
     let selection: Vec<Evidence> = cells
         .iter()
         .enumerate()
-        .map(|(index, (_, setup, side))| {
-            super::stats::evidence(*setup, *side, &selection_groups[group_index(index)])
+        .map(|(index, (_, setup, side, condition))| {
+            cell_evidence(
+                &selection_groups[group_index(index)],
+                *setup,
+                *side,
+                *condition,
+            )
         })
         .collect();
     let holdout: Vec<Evidence> = cells
         .iter()
         .enumerate()
-        .map(|(index, (_, setup, side))| {
+        .map(|(index, (_, setup, side, condition))| {
             let trades: Vec<Trade> = selection_groups[group_index(index)]
                 .iter()
                 .filter(|trade| trade.exit_session > cutoff)
                 .cloned()
                 .collect();
-            super::stats::evidence(*setup, *side, &trades)
+            cell_evidence(&trades, *setup, *side, *condition)
         })
         .collect();
     let p_values: Vec<f64> = selection.iter().map(p_value).collect();
     let fdr = benjamini_hochberg(&p_values, FDR_Q);
-    let pooled: Vec<Vec<Pooled>> = (0..GROUPS.len())
+    let pooled: Vec<Vec<Vec<Pooled>>> = (0..GROUPS.len())
         .map(|group| {
-            let from = group * SETUPS_PER_GROUP;
-            pool(&selection[from..from + SETUPS_PER_GROUP])
+            (0..Condition::ALL.len())
+                .map(|condition| {
+                    let from = pool_start(group, condition);
+                    pool(&selection[from..from + SETUPS_PER_GROUP])
+                })
+                .collect()
         })
         .collect();
-    let walk = walk_forward(trades_by_group, as_of);
+    let walk = walk_forward_cells(trades_by_group, as_of);
 
     let mut out = Vec::with_capacity(cells.len());
-    for (index, (group, setup, side)) in cells.into_iter().enumerate() {
+    for (index, (group, setup, side, condition)) in cells.into_iter().enumerate() {
         let group_at = group_index(index);
-        let estimate = &pooled[group_at][index - group_at * SETUPS_PER_GROUP];
+        let condition_at = condition_index(index);
+        let cell_at = index - pool_start(group_at, condition_at);
+        let estimate = &pooled[group_at][condition_at][cell_at];
         let cell_live: Vec<&LiveTrade> = live
             .iter()
             .filter(|card| {
                 card.group == group
                     && card.setup == setup
                     && card.side == side
+                    && card.condition == condition
                     && card.exit_session <= as_of
             })
             .collect();
@@ -483,7 +529,7 @@ pub fn judge(
             live_update(estimate, &selection[index], &cell_live, &live_evidence);
         let posterior_lower = posterior_mean - Z95 * posterior_sd;
         let walk_forward = walk
-            .get(&(group.clone(), setup, side))
+            .get(&(group.clone(), setup, side, condition))
             .cloned()
             .unwrap_or_default();
         let publishes = fdr[index]
@@ -520,7 +566,7 @@ pub fn judge(
             candidate,
             reason,
             judgement: Some(judgement),
-            condition: super::regime::Condition::None,
+            condition,
         });
     }
     out
@@ -530,13 +576,22 @@ const Z95: f64 = 1.959_964;
 const HOLDOUT_MONTHS: u32 = 24;
 const GROUPS: [&str; 3] = ["fx", "stocks", "indices"];
 const SETUPS_PER_GROUP: usize = SetupId::ALL.len() * 2;
+const CELLS_PER_GROUP: usize = SETUPS_PER_GROUP * Condition::ALL.len();
 
-fn cells_in_order() -> Vec<(String, SetupId, Side)> {
-    let mut cells = Vec::with_capacity(GROUPS.len() * SETUPS_PER_GROUP);
+/// Cells in the false-discovery family: every setup and side, in every group, under both
+/// conditions. The scoreboard prints this through the verdict count.
+pub const FDR_FAMILY: usize = GROUPS.len() * CELLS_PER_GROUP;
+
+type CellKey = (String, SetupId, Side, Condition);
+
+fn cells_in_order() -> Vec<CellKey> {
+    let mut cells = Vec::with_capacity(FDR_FAMILY);
     for group in GROUPS {
-        for setup in SetupId::ALL {
-            for side in [Side::Long, Side::Short] {
-                cells.push((group.to_string(), setup, side));
+        for condition in Condition::ALL {
+            for setup in SetupId::ALL {
+                for side in [Side::Long, Side::Short] {
+                    cells.push((group.to_string(), setup, side, condition));
+                }
             }
         }
     }
@@ -544,7 +599,15 @@ fn cells_in_order() -> Vec<(String, SetupId, Side)> {
 }
 
 fn group_index(cell: usize) -> usize {
-    cell / SETUPS_PER_GROUP
+    cell / CELLS_PER_GROUP
+}
+
+fn condition_index(cell: usize) -> usize {
+    (cell % CELLS_PER_GROUP) / SETUPS_PER_GROUP
+}
+
+fn pool_start(group: usize, condition: usize) -> usize {
+    group * CELLS_PER_GROUP + condition * SETUPS_PER_GROUP
 }
 
 fn fold_bounds(as_of: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {

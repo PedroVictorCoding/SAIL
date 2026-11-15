@@ -2,7 +2,10 @@
 
 mod trade_support;
 
-use sail_capital::trade::{AssetClass, Bar, Costs, Exit, SetupId, Side, grade, replay, verdict};
+use sail_capital::trade::{
+    AssetClass, Bar, Costs, Exit, SetupId, Side, Trade, expectations, grade, replay,
+    sessions_to_verdict, verdict,
+};
 use trade_support::{bars_with_prior_open, card, date_at, instrument, planted_closes, zero_costs};
 
 fn ohlc(index: usize, open: f64, high: f64, low: f64, close: f64) -> Bar {
@@ -324,4 +327,143 @@ fn appending_future_bars_changes_no_earlier_trade_or_verdict() {
         as_of,
     );
     assert_eq!(earlier_verdict, later_verdict);
+}
+
+#[test]
+fn a_future_dividend_changes_no_trade_that_closed_before_it() {
+    let closes = planted_closes(2000, 23);
+    let bars = bars_with_prior_open(&closes, 0.5);
+    let costs = Costs::default_for(AssetClass::Stock);
+    let base = instrument("test", "TST", AssetClass::Stock, false, bars.clone());
+    let baseline = replay(&base, costs);
+    let at = 1900;
+    let mut with_dividend = bars;
+    with_dividend[at].dividend = Some(with_dividend[at].close * 0.02);
+    let changed = replay(
+        &instrument("test", "TST", AssetClass::Stock, false, with_dividend),
+        costs,
+    );
+    let cutoff = base.bars[at].session;
+    let mut before: Vec<_> = baseline
+        .into_iter()
+        .filter(|trade| trade.exit_session < cutoff)
+        .collect();
+    let mut after: Vec<_> = changed
+        .into_iter()
+        .filter(|trade| trade.exit_session < cutoff)
+        .collect();
+    let order = |trade: &sail_capital::trade::Trade| {
+        (
+            trade.signal_session,
+            trade.entry_session,
+            trade.setup,
+            trade.side,
+        )
+    };
+    before.sort_by_key(order);
+    after.sort_by_key(order);
+    // The back-adjustment scales every bar before the ex-date by the same factor, so the
+    // same trades, exits and prices come out; only floating-point rounding can differ.
+    assert_eq!(before.len(), after.len());
+    for (before, after) in before.iter().zip(&after) {
+        assert_eq!(
+            (
+                before.setup,
+                before.side,
+                before.signal_session,
+                before.entry_session,
+                before.exit_session,
+                before.exit
+            ),
+            (
+                after.setup,
+                after.side,
+                after.signal_session,
+                after.entry_session,
+                after.exit_session,
+                after.exit
+            )
+        );
+        assert!((before.entry - after.entry).abs() < 1e-9);
+        assert!((before.stop - after.stop).abs() < 1e-9);
+        assert!(
+            (before.r_multiple - after.r_multiple).abs() < 1e-9,
+            "{} vs {}",
+            before.r_multiple,
+            after.r_multiple
+        );
+    }
+}
+
+#[test]
+fn grading_does_not_pay_dividends_by_design() {
+    let bars = vec![
+        ohlc(0, 100.0, 100.5, 99.5, 100.0),
+        ohlc(1, 100.0, 100.5, 99.5, 100.0),
+        ohlc(2, 100.0, 100.5, 99.5, 100.0),
+    ];
+    let mut with_dividend = bars.clone();
+    with_dividend[1].dividend = Some(5.0);
+    let card = long_card(95.0, [200.0, 210.0, 220.0], 3, false);
+    let plain = grade(&card, &bars, zero_costs()).expect("a trade");
+    let altered = grade(&card, &with_dividend, zero_costs()).expect("a trade");
+    assert_eq!(plain, altered);
+    assert_eq!(plain.dividend_r, 0.0);
+    assert!(!plain.ex_date_gap);
+}
+
+fn closed_trade(exit: Exit, r_multiple: f64) -> Trade {
+    Trade {
+        key: "test".into(),
+        setup: SetupId::ThreeDayReversal,
+        side: Side::Long,
+        signal_session: date_at(0),
+        entry_session: date_at(1),
+        entry: 100.0,
+        stop: 95.0,
+        exit_session: date_at(6),
+        exit,
+        r_multiple,
+        dividend_r: 0.0,
+        ex_date_gap: false,
+        regime: None,
+    }
+}
+
+#[test]
+fn expectations_reports_the_exit_shares() {
+    let trades = vec![
+        closed_trade(Exit::Target3, 2.0),
+        closed_trade(Exit::Target2, 1.0),
+        closed_trade(Exit::Target1, 0.5),
+        closed_trade(Exit::Stop, -1.0),
+        closed_trade(Exit::Time, -0.2),
+    ];
+    let summary = expectations(&trades).expect("expectations");
+    assert!((summary.p_t3 - 0.2).abs() < 1e-12);
+    assert!((summary.p_t2 - 0.4).abs() < 1e-12);
+    assert!((summary.p_t1 - 0.6).abs() < 1e-12);
+    assert!((summary.p_stop - 0.2).abs() < 1e-12);
+    assert!(summary.p_t1 + summary.p_stop <= 1.0);
+    assert_eq!(summary.n, 5);
+    assert_eq!(summary.median_sessions, 5.0);
+    assert!(summary.p_t1 >= summary.p_t2);
+    assert!(summary.p_t2 >= summary.p_t3);
+    assert_eq!(expectations(&trades), Some(summary));
+    assert_eq!(expectations(&[]), None);
+}
+
+#[test]
+fn sessions_to_verdict_solves_the_lower_bound() {
+    // 0.2 - 1.96 * 1.0 / sqrt(n) > 0 first holds at n = 97.
+    assert_eq!(sessions_to_verdict(0.2, 1.0, 10), Some(87));
+    assert_eq!(sessions_to_verdict(0.2, 1.0, 200), Some(0));
+    assert_eq!(sessions_to_verdict(0.2, 0.0, 0), Some(1));
+    assert_eq!(sessions_to_verdict(0.0, 1.0, 0), None);
+    assert_eq!(sessions_to_verdict(0.2, f64::NAN, 0), None);
+    assert_eq!(sessions_to_verdict(0.0001, 1.0, 0), None);
+    assert_eq!(
+        sessions_to_verdict(0.2, 1.0, 10),
+        sessions_to_verdict(0.2, 1.0, 10)
+    );
 }

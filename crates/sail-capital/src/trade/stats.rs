@@ -237,14 +237,63 @@ fn max_drawdown(values: &[f64]) -> f64 {
     worst
 }
 
-/// Round 24 (Kilo, A7): see [`super::expectations`]. M0 stub.
+/// Round 24 (Kilo, A7): see [`super::expectations`]. Trades are ordered as
+/// [`evidence`] orders them, so the interval matches the one the card's verdict shows.
 pub(super) fn expectations(trades: &[Trade]) -> Option<super::Expectations> {
-    let _ = trades;
-    None
+    if trades.is_empty() {
+        return None;
+    }
+    let mut values: Vec<&Trade> = trades.iter().collect();
+    values.sort_by_key(|trade| (trade.exit_session, trade.signal_session));
+    let count = values.len();
+    let share = |predicate: &dyn Fn(&Trade) -> bool| {
+        values.iter().filter(|trade| predicate(trade)).count() as f64 / count as f64
+    };
+    let p_t3 = share(&|trade| trade.exit == Exit::Target3);
+    let p_t2 = share(&|trade| matches!(trade.exit, Exit::Target2 | Exit::Target3));
+    let p_t1 = share(&|trade| matches!(trade.exit, Exit::Target1 | Exit::Target2 | Exit::Target3));
+    let p_stop = share(&|trade| trade.exit == Exit::Stop);
+    let mut sessions: Vec<f64> = values
+        .iter()
+        .map(|trade| (trade.exit_session - trade.entry_session).num_days().max(0) as f64)
+        .collect();
+    sessions.sort_by(f64::total_cmp);
+    let median_sessions = if count % 2 == 1 {
+        sessions[count / 2]
+    } else {
+        (sessions[count / 2 - 1] + sessions[count / 2]) / 2.0
+    };
+    let returns: Vec<f64> = values.iter().map(|trade| trade.r_multiple).collect();
+    let mean_r = mean(&returns);
+    let standard_error = sample_std(&returns) / (count as f64).sqrt()
+        * (1.0 + 2.0 * autocorrelation(&returns)).sqrt();
+    Some(super::Expectations {
+        p_t1,
+        p_t2,
+        p_t3,
+        p_stop,
+        median_sessions,
+        mean_r,
+        mean_r_ci: (mean_r - Z * standard_error, mean_r + Z * standard_error),
+        n: count as u32,
+    })
 }
 
-/// Round 24 (Kilo, A7): see [`super::sessions_to_verdict`]. M0 stub.
+/// Round 24 (Kilo, A7): see [`super::sessions_to_verdict`]. The bound is the one the
+/// verdict uses (`mean − 1.96 · sd / √n > 0`), with no autocorrelation widening because
+/// the caller passes the selection standard deviation.
 pub(super) fn sessions_to_verdict(mean: f64, sd: f64, already: u32) -> Option<u32> {
-    let _ = (mean, sd, already);
-    None
+    if !mean.is_finite() || mean <= 0.0 || !sd.is_finite() {
+        return None;
+    }
+    let ratio = Z * sd / mean;
+    if ratio.is_nan() {
+        return None;
+    }
+    let required = ratio.max(0.0).powi(2).floor() + 1.0;
+    if !required.is_finite() || required > 10_000.0 {
+        return None;
+    }
+    let required = required as u32;
+    Some(required.saturating_sub(already))
 }

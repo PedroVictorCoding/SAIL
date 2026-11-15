@@ -98,7 +98,10 @@ fn a_flat_market_has_no_cards_and_keeps_the_scoreboard() {
     );
     let day = day(&[market]);
     assert!(day.cards.is_empty());
-    assert_eq!(day.scoreboard.len(), 3 * SetupId::ALL.len() * 2);
+    assert_eq!(
+        day.scoreboard.len(),
+        3 * sail_capital::trade::regime::Condition::ALL.len() * SetupId::ALL.len() * 2
+    );
     assert_eq!(day.suppressed.len(), 0);
     assert!(!day.notes.is_empty());
 }
