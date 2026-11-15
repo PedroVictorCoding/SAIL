@@ -1851,3 +1851,329 @@ function renderProjMonths(data) {
     };
   }
 })();
+
+// --- Round 25: upcoming-payments calendar and projection track record -----------------
+
+(function initR25Income() {
+  let calendarSeq = 0;
+  let recordSeq = 0;
+
+  function queryString() {
+    return currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+  }
+
+  function fmtPct(v) {
+    if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+    return `${(v * 100).toFixed(1)}%`;
+  }
+
+  function fmtSignedPct(v) {
+    if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+    const pct = v * 100;
+    const sign = pct > 0.05 ? "+" : pct < -0.05 ? "−" : "";
+    return `${sign}${Math.abs(pct).toFixed(1)}%`;
+  }
+
+  function ensureCalendarWrap() {
+    const projPanel = document.getElementById("cpProjectionPanel");
+    if (!projPanel) return null;
+    let wrap = document.getElementById("cpUpcomingCalendarWrap");
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = "cpUpcomingCalendarWrap";
+      wrap.className = "cp-upcoming-wrap";
+      const fanWrap = document.getElementById("cpIncomeFanWrap");
+      const chartWrap = document.getElementById("cpProjChartWrap");
+      if (fanWrap && fanWrap.parentNode === projPanel) {
+        projPanel.insertBefore(wrap, fanWrap);
+      } else if (chartWrap && chartWrap.parentNode === projPanel) {
+        projPanel.insertBefore(wrap, chartWrap.nextSibling);
+      } else {
+        projPanel.appendChild(wrap);
+      }
+    }
+    return wrap;
+  }
+
+  function renderUpcomingCalendar(data) {
+    const wrap = ensureCalendarWrap();
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "cp-upcoming-header";
+    const title = document.createElement("h3");
+    title.className = "cp-upcoming-title";
+    const days = (data && Number(data.days)) || 90;
+    title.textContent = `Upcoming dividends (next ${days} days)`;
+    header.appendChild(title);
+    wrap.appendChild(header);
+
+    const payments = (data && Array.isArray(data.payments)) ? data.payments : [];
+    if (payments.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "cp-empty";
+      empty.textContent = `No regular dividend payments expected in the next ${days} days.`;
+      wrap.appendChild(empty);
+      return;
+    }
+
+    const totalNet = payments.reduce((sum, p) => sum + (Number(p.net) || 0), 0);
+    const totalBadge = document.createElement("span");
+    totalBadge.className = "cp-upcoming-total";
+    totalBadge.textContent = `Expected net: ${formatProjMoney(totalNet)}`;
+    header.appendChild(totalBadge);
+
+    const tableWrap = document.createElement("div");
+    tableWrap.className = "cp-table-scroll";
+    const table = document.createElement("table");
+    table.className = "cp-table cp-upcoming-table";
+
+    const thead = document.createElement("thead");
+    const htr = document.createElement("tr");
+    for (const col of ["Pay date", "Ex-date", "Symbol", "Per share", "Net", "Confidence", "Basis"]) {
+      const th = document.createElement("th");
+      if (col === "Per share" || col === "Net") th.className = "num";
+      th.textContent = col;
+      htr.appendChild(th);
+    }
+    thead.appendChild(htr);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const p of payments) {
+      const tr = document.createElement("tr");
+
+      const payTd = document.createElement("td");
+      payTd.className = "cp-nowrap";
+      payTd.textContent = String(p.pay_date || "—");
+      if (p.pay_date_estimated) {
+        const est = document.createElement("span");
+        est.className = "cp-upcoming-est";
+        est.textContent = "est.";
+        payTd.appendChild(document.createTextNode(" "));
+        payTd.appendChild(est);
+      }
+      tr.appendChild(payTd);
+
+      const exTd = document.createElement("td");
+      exTd.className = "cp-nowrap";
+      exTd.textContent = String(p.ex_date || "—");
+      tr.appendChild(exTd);
+
+      const symTd = document.createElement("td");
+      const symStrong = document.createElement("strong");
+      symStrong.textContent = String(p.symbol || "—");
+      symTd.appendChild(symStrong);
+      tr.appendChild(symTd);
+
+      const psTd = document.createElement("td");
+      psTd.className = "num";
+      psTd.textContent = typeof p.per_share === "number" ? p.per_share.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : "—";
+      tr.appendChild(psTd);
+
+      const netTd = document.createElement("td");
+      netTd.className = "num";
+      const netStrong = document.createElement("strong");
+      netStrong.textContent = formatProjMoney(p.net);
+      netTd.appendChild(netStrong);
+      tr.appendChild(netTd);
+
+      const confTd = document.createElement("td");
+      const confChip = document.createElement("span");
+      const conf = String(p.confidence || "low").toLowerCase();
+      confChip.className = "cp-conf-chip";
+      confChip.setAttribute("data-confidence", conf);
+      confChip.textContent = conf;
+      confTd.appendChild(confChip);
+      tr.appendChild(confTd);
+
+      const basisTd = document.createElement("td");
+      basisTd.className = "cp-muted";
+      basisTd.textContent = String(p.basis || "");
+      tr.appendChild(basisTd);
+
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    tableWrap.appendChild(table);
+    wrap.appendChild(tableWrap);
+  }
+
+  async function loadUpcomingCalendar() {
+    const wrap = ensureCalendarWrap();
+    if (!wrap) return;
+    const seq = ++calendarSeq;
+    try {
+      const q = queryString();
+      const sep = q ? "&" : "?";
+      const data = await fetchJson(`/api/capital/dividends/calendar${q}${sep}days=90`);
+      if (seq !== calendarSeq) return;
+      renderUpcomingCalendar(data);
+    } catch (err) {
+      if (seq !== calendarSeq) return;
+      wrap.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "cp-empty";
+      p.textContent = `Upcoming dividend calendar unavailable: ${err.message}`;
+      wrap.appendChild(p);
+    }
+  }
+
+  // --- B8 UI: How the projection has done --------------------------------------------
+  function ensureRecordPanel() {
+    const maxPanel = document.getElementById("cpMaximizePanel");
+    const projPanel = document.getElementById("cpProjectionPanel");
+    const anchor = maxPanel || projPanel;
+    if (!anchor || !anchor.parentNode) return null;
+    let panel = document.getElementById("cpProjectionRecordPanel");
+    if (!panel) {
+      panel = document.createElement("section");
+      panel.id = "cpProjectionRecordPanel";
+      panel.className = "cp-panel cp-proj-record-panel";
+      panel.setAttribute("aria-labelledby", "cpProjRecordTitle");
+      anchor.parentNode.insertBefore(panel, anchor.nextSibling);
+    }
+    return panel;
+  }
+
+  function renderProjectionRecord(rec) {
+    const panel = ensureRecordPanel();
+    if (!panel) return;
+    panel.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "cp-panel-header";
+    const title = document.createElement("h2");
+    title.id = "cpProjRecordTitle";
+    title.textContent = "How the projection has done";
+    header.appendChild(title);
+    panel.appendChild(header);
+
+    const graded = (rec && Array.isArray(rec.graded)) ? rec.graded : [];
+    const pending = (rec && typeof rec.pending === "number") ? rec.pending : 0;
+
+    if (graded.length === 0) {
+      const p = document.createElement("p");
+      p.className = "cp-empty";
+      p.textContent = pending > 0
+        ? `${pending} monthly snapshot${pending === 1 ? "" : "s"} waiting 12 months for grading.`
+        : "No projection snapshots recorded yet.";
+      panel.appendChild(p);
+    } else {
+      const stats = document.createElement("div");
+      stats.className = "cp-proj-record-stats";
+      const items = [
+        ["Graded snapshots", String(graded.length)],
+        ["Pending", String(pending)],
+        ["Bias", fmtSignedPct(rec.bias)],
+        ["Mean abs. error", fmtPct(rec.mean_abs_error)],
+        ["In scenarios", fmtPct(rec.scenario_coverage)],
+        ["In p10–p90 band", fmtPct(rec.band_coverage)],
+      ];
+      for (const [label, value] of items) {
+        const card = document.createElement("div");
+        card.className = "cp-proj-record-stat";
+        const l = document.createElement("span");
+        l.className = "cp-proj-record-stat-lbl";
+        l.textContent = label;
+        const v = document.createElement("strong");
+        v.className = "cp-proj-record-stat-val";
+        v.textContent = value;
+        card.appendChild(l);
+        card.appendChild(v);
+        stats.appendChild(card);
+      }
+      panel.appendChild(stats);
+
+      const tableWrap = document.createElement("div");
+      tableWrap.className = "cp-table-scroll";
+      const table = document.createElement("table");
+      table.className = "cp-table cp-proj-record-table";
+      const thead = document.createElement("thead");
+      const htr = document.createElement("tr");
+      for (const col of ["Month", "Projected", "Received", "Error", "Scenarios", "Band"]) {
+        const th = document.createElement("th");
+        if (col === "Projected" || col === "Received" || col === "Error") th.className = "num";
+        th.textContent = col;
+        htr.appendChild(th);
+      }
+      thead.appendChild(htr);
+      table.appendChild(thead);
+
+      const tbody = document.createElement("tbody");
+      for (const g of graded) {
+        const tr = document.createElement("tr");
+
+        const mTd = document.createElement("td");
+        mTd.className = "cp-nowrap";
+        mTd.textContent = String(g.month || "—");
+        tr.appendChild(mTd);
+
+        const pTd = document.createElement("td");
+        pTd.className = "num";
+        pTd.textContent = formatProjMoney(g.projected);
+        tr.appendChild(pTd);
+
+        const rTd = document.createElement("td");
+        rTd.className = "num";
+        rTd.textContent = formatProjMoney(g.received);
+        tr.appendChild(rTd);
+
+        const eTd = document.createElement("td");
+        eTd.className = "num";
+        eTd.textContent = fmtSignedPct(g.error);
+        tr.appendChild(eTd);
+
+        const sTd = document.createElement("td");
+        sTd.textContent = g.in_scenarios ? "Yes" : "No";
+        tr.appendChild(sTd);
+
+        const bTd = document.createElement("td");
+        bTd.textContent = g.in_band ? "Yes" : "No";
+        tr.appendChild(bTd);
+
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      tableWrap.appendChild(table);
+      panel.appendChild(tableWrap);
+    }
+
+    const notes = (rec && Array.isArray(rec.notes)) ? rec.notes : [];
+    for (const n of notes) {
+      const p = document.createElement("p");
+      p.className = "cp-note";
+      p.textContent = n;
+      panel.appendChild(p);
+    }
+  }
+
+  async function loadProjectionRecord() {
+    const panel = ensureRecordPanel();
+    if (!panel) return;
+    const seq = ++recordSeq;
+    try {
+      const rec = await fetchJson(`/api/capital/dividends/record${queryString()}`);
+      if (seq !== recordSeq) return;
+      renderProjectionRecord(rec);
+    } catch (err) {
+      if (seq !== recordSeq) return;
+      panel.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "cp-empty";
+      p.textContent = `Projection record unavailable: ${err.message}`;
+      panel.appendChild(p);
+    }
+  }
+
+  if (typeof loadDividendProjection === "function") {
+    const origLoadProj = loadDividendProjection;
+    loadDividendProjection = async function () {
+      const res = await origLoadProj.apply(this, arguments);
+      loadUpcomingCalendar();
+      loadProjectionRecord();
+      return res;
+    };
+  }
+})();
