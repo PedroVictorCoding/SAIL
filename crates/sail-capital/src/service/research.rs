@@ -20,6 +20,9 @@ pub struct SecStatus {
     pub new_evidence: u32,
     /// When the ticker map in use was fetched.
     pub map_fetched_at: Option<DateTime<Utc>>,
+    /// Round 25: Form 4s stored in the last refresh.
+    #[serde(default)]
+    pub form4_stored: u32,
 }
 
 /// One owned position and how it links to SEC.
@@ -123,7 +126,11 @@ impl CapitalService {
             return self.finish(status, now);
         }
         match self.refresh_inner(account, now, &mut status).await {
-            Ok(()) => {}
+            // Round 25: Form 4s only after a clean refresh, so a refusal stops everything.
+            Ok(()) => match self.refresh_insider_filings().await {
+                Ok(stored) => status.form4_stored = stored,
+                Err(message) => status.last_error = Some(message),
+            },
             Err(message) => status.last_error = Some(message),
         }
         self.finish(status, now)
@@ -243,6 +250,9 @@ impl CapitalService {
             let account = summary.account;
             if let Err(err) = self.scorecard(&account) {
                 tracing::debug!(error = %err, "Capital warm-up: track record");
+            }
+            if let Err(err) = self.record_income_snapshot_if_due(&account, chrono::Utc::now()) {
+                tracing::debug!(error = %err, "Capital warm-up: income snapshot");
             }
             if let Err(err) = self.signal_board(&account) {
                 tracing::debug!(error = %err, "Capital warm-up: signal board");

@@ -210,7 +210,11 @@ fn regular(history: &[Payment]) -> Vec<Payment> {
 
 impl CapitalService {
     /// The SEC issuer for a US-listed symbol, from the stored ticker map.
-    fn cik_for(&self, symbol: &str, now: DateTime<Utc>) -> Result<Option<Cik>, ServiceError> {
+    pub(super) fn cik_for(
+        &self,
+        symbol: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Cik>, ServiceError> {
         if super::trade_context::region_of(symbol) != Region::Us {
             return Ok(None);
         }

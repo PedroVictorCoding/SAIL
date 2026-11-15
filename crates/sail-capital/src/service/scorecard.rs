@@ -54,6 +54,7 @@ impl CapitalService {
             .any(|c| c.card.tier == crate::trade::Tier::Proven)
             .then_some(&record.totals);
         let calibration = self.store.dividend_calibration()?.map(|(_, r)| r);
+        let dividend_record = self.dividend_record(account).ok();
         let inputs = crate::scorecard::ScorecardInputs {
             forecasts: &forecasts,
             signals: &signals,
@@ -61,6 +62,7 @@ impl CapitalService {
             setups: &setups,
             live,
             dividend_calibration: calibration.as_ref(),
+            dividend_record: dividend_record.as_ref(),
         };
         Ok(crate::scorecard::summarize(&inputs, Utc::now()))
     }

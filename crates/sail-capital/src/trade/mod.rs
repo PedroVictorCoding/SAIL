@@ -41,6 +41,7 @@
 pub mod cache;
 pub mod heat;
 mod indicators;
+pub mod meta;
 pub mod quality;
 pub mod regime;
 pub mod select;
@@ -553,6 +554,10 @@ pub struct SignalCard {
     /// `None` when the mean is not positive or the card is verified.
     #[serde(default)]
     pub sessions_to_verdict: Option<u32>,
+    /// Round 25: the meta-labeling model's view ([`meta::apply`]). `None` when no model
+    /// beat the base rate.
+    #[serde(default)]
+    pub meta: Option<meta::MetaScore>,
 }
 
 /// Round 24: what the replayed trades of one cell did, after costs.
@@ -669,6 +674,9 @@ pub struct SignalDay {
     /// commodity's own key).
     #[serde(default)]
     pub regime: std::collections::BTreeMap<String, regime::Regime>,
+    /// Round 25: the meta-labeling result. `None` on older runs.
+    #[serde(default)]
+    pub meta: Option<meta::MetaReport>,
 }
 
 /// Round 19: counts and timing of one run.
@@ -895,6 +903,7 @@ pub fn signal_day_with(inputs: &RunInputs) -> SignalDay {
             run_stats: Some(RunStats::default()),
             heat: None,
             regime: Default::default(),
+            meta: None,
         };
     };
 
@@ -967,6 +976,8 @@ pub fn signal_day_with(inputs: &RunInputs) -> SignalDay {
     for card in cards.iter_mut().chain(candidates.iter_mut()) {
         attach_expectations(card, &pooled, inputs.live);
     }
+    let meta_report = meta::fit(universe, &pooled);
+    meta::apply(&meta_report, universe, &mut cards, &mut candidates);
     let symbols: HashMap<&str, &str> = universe
         .iter()
         .map(|i| (i.key.as_str(), i.symbol.as_str()))
@@ -1018,6 +1029,7 @@ pub fn signal_day_with(inputs: &RunInputs) -> SignalDay {
         }),
         heat: Some(outcome.summary),
         regime: regime_today,
+        meta: Some(meta_report),
     }
 }
 
@@ -1208,6 +1220,7 @@ fn instrument_signals(
                 tier,
                 expectations: None,
                 sessions_to_verdict: None,
+                meta: None,
             };
             match tier {
                 Tier::Proven => out.cards.push(card),

@@ -82,7 +82,8 @@ impl CapitalService {
             .signal_value_coverage()?
             .iter()
             .map(|c| u64::from(c.values))
-            .sum();
+            .sum::<u64>()
+            + u64::from(self.store.form4_counts()?.0);
         let version = format!(
             "{}|{}|{}|{}",
             account.as_str(),
@@ -132,7 +133,14 @@ impl CapitalService {
             ewma_sigma(s, horizon)
         };
         let held_keys: Vec<&str> = held.iter().map(|(k, _)| k.as_str()).collect();
-        let (external, model_manifests) = self.external_scores_as_of(&held_keys, decision)?;
+        let (mut external, model_manifests) = self.external_scores_as_of(&held_keys, decision)?;
+        // Round 25: insider buying from stored Form 4s.
+        let issuers = self.insider_issuers(account, decision)?;
+        if let Some(insider) =
+            self.insider_scores_as_of(&issuers, &super::insider::sessions_of(&data), decision)?
+        {
+            external.push(insider);
+        }
         let report = crate::signals::evaluate_and_combine(
             &series,
             &external,

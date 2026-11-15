@@ -98,6 +98,9 @@ pub fn router_with_research(
             get(dividend_maximize_status).post(dividend_maximize_start),
         )
         .route("/dividends/calibration", get(dividend_calibration))
+        .route("/dividends/record", get(dividend_record))
+        .route("/dividends/calendar", get(dividend_calendar))
+        .route("/signals/insider", get(insider_clusters))
         .route(
             "/dividends/candidates",
             get(dividend_candidates).post(set_dividend_candidate),
@@ -1200,6 +1203,67 @@ async fn dividend_calibration(
         None => Value::Null,
     };
     Ok(no_store(to_json(&body)?))
+}
+
+/// Round 25: the dividend projection's record, graded against the ledger.
+async fn dividend_record(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let summary = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.dividend_record(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&summary)?))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct CalendarQuery {
+    account: Option<String>,
+    days: Option<u32>,
+}
+
+/// Round 25: dividends expected in the next `days` days (default 90).
+async fn dividend_calendar(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<CalendarQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let days = q
+        .days
+        .unwrap_or(sail_capital::dividends::calendar::DEFAULT_DAYS);
+    let payments = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.dividend_calendar(&account, days)
+    })
+    .await?;
+    Ok(no_store(to_json(
+        &json!({ "days": days, "payments": payments }),
+    )?))
+}
+
+/// Round 25: today's insider-buying clusters, as `[{symbol, buyers}]`.
+async fn insider_clusters(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let clusters = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.insider_clusters(&account)
+    })
+    .await?;
+    let rows: Vec<Value> = clusters
+        .into_iter()
+        .map(|(symbol, buyers)| json!({ "symbol": symbol, "buyers": buyers }))
+        .collect();
+    Ok(no_store(to_json(&rows)?))
 }
 
 /// Round 24: the watchlist's stocks and ETFs as dividend candidates.

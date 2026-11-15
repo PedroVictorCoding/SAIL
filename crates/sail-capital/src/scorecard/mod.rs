@@ -147,6 +147,8 @@ pub struct ScorecardInputs<'a> {
     pub live: Option<&'a RecordTotals>,
     /// Round 24: the latest dividend growth calibration.
     pub dividend_calibration: Option<&'a crate::dividends::calibrate::CalibrationReport>,
+    /// Round 25: the dividend projection's own record ([`crate::dividends::record`]).
+    pub dividend_record: Option<&'a crate::dividends::record::RecordSummary>,
 }
 
 /// Builds the track record. See the module doc.
@@ -168,6 +170,11 @@ pub fn summarize(inputs: &ScorecardInputs<'_>, as_of: DateTime<Utc>) -> Scorecar
     }
     if let Some(report) = inputs.dividend_calibration {
         rows.push(dividend_growth_row(report));
+    }
+    if let Some(summary) = inputs.dividend_record
+        && let Some(row) = dividend_record_row(summary)
+    {
+        rows.push(row);
     }
 
     rows.sort_by(|a, b| {
@@ -408,6 +415,13 @@ pub const MIN_DIVIDEND_OUTCOMES: u32 = 100;
 /// it has at least [`MIN_DIVIDEND_OUTCOMES`] five-year outcomes, its bias is within two
 /// percentage points a year, and its low–high band holds 55–80% of outcomes (one σ either
 /// side would hold about 68%).
+/// Round 25 (Kilo): the projection record's row, per [`crate::dividends::record`]'s
+/// thresholds. M0 stub: no row until something is graded.
+fn dividend_record_row(summary: &crate::dividends::record::RecordSummary) -> Option<ScoreRow> {
+    let _ = summary;
+    None
+}
+
 fn dividend_growth_row(report: &crate::dividends::calibrate::CalibrationReport) -> ScoreRow {
     let row = report
         .shrink

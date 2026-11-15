@@ -35,7 +35,12 @@ use chrono::NaiveDate;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
+pub mod insider;
 mod matrix;
+
+/// Round 25 (A5): the short horizon, in sessions, Kilo adds to [`SIGNAL_HORIZONS`] so
+/// the weekly-trade use of signals is scored at its own horizon.
+pub const SHORT_HORIZON: u32 = 5;
 
 /// Fewest instruments for a cross-section. Below it, nothing is scored or combined.
 pub const MIN_CROSS_SECTION: usize = 5;
@@ -230,6 +235,46 @@ pub struct SignalReport {
     /// Plain-language notes: what passed, what didn't, and the limits (overlap,
     /// survivorship, a small universe, no costs).
     pub notes: Vec<String>,
+    /// Round 25: instruments that entered the evaluation as evidence only (research
+    /// universe), never scored in `latest`.
+    #[serde(default)]
+    pub evidence_instruments: u32,
+}
+
+/// Round 25 (A5): everything one evaluation needs. The research universe joins as
+/// evidence: its instruments count in each cross-section on dates they were index
+/// members (`member_on`) and in the IC, but never get a [`CombinedScore`].
+pub struct SignalInputs<'a> {
+    /// Every series: the owner's universe and the research universe.
+    pub series: &'a [CloseSeries<'a>],
+    /// Model and producer scores (e.g. [`insider::cluster_scores`]).
+    pub external: &'a [ExternalScores],
+    /// `σ_j(h)` per instrument key and horizon at the latest date.
+    pub sigma: &'a dyn Fn(&str, u32) -> Option<f64>,
+    /// Settings.
+    pub config: &'a SignalEvalConfig,
+    /// Keys of the evidence-only instruments.
+    pub evidence_only: &'a BTreeSet<String>,
+    /// Whether an evidence-only key was an index member on a date (survivorship: the
+    /// research universe is today's members only, so earlier dates are filtered).
+    pub member_on: &'a dyn Fn(&str, NaiveDate) -> bool,
+}
+
+/// Round 25 (A5): [`evaluate_and_combine`] with an evidence-only research universe.
+/// M0 stub: scores everything together, then drops evidence-only keys from `latest`;
+/// Kilo replaces it with membership-aware cross-sections.
+pub fn evaluate_with(inputs: &SignalInputs<'_>) -> SignalReport {
+    let mut report =
+        evaluate_and_combine(inputs.series, inputs.external, inputs.sigma, inputs.config);
+    report
+        .latest
+        .retain(|score| !inputs.evidence_only.contains(&score.instrument_key));
+    report.evidence_instruments = inputs
+        .series
+        .iter()
+        .filter(|s| inputs.evidence_only.contains(s.instrument_key))
+        .count() as u32;
+    report
 }
 
 /// Scores every price signal (plus any `external` scores) walk-forward over `series`,
@@ -397,6 +442,7 @@ pub fn evaluate_and_combine(
         combined_ic,
         latest,
         notes,
+        evidence_instruments: 0,
     }
 }
 
