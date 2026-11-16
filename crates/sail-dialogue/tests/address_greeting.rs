@@ -441,3 +441,65 @@ fn does_not_repeat_a_held_item_as_an_event() {
     assert_eq!(greeting.spoken, "Welcome back. QUIZ 3.");
     assert_eq!(greeting.item_ids, vec!["a2".to_owned()]);
 }
+
+#[test]
+fn homophone_sale_matches_the_host_measurement_rows() {
+    // Heard text from the 2026-11-16 host STT measurement; expected result after R14.
+    let rows: &[(&str, Option<&str>)] = &[
+        (
+            "Hey sale, turn the music down.",
+            Some("turn the music down."),
+        ),
+        (
+            "Sale, what's next on my calendar today?",
+            Some("what's next on my calendar today?"),
+        ),
+        (
+            "Okay, Sale. Remind me to call Mum at 6.",
+            Some("Remind me to call Mum at 6."),
+        ),
+        ("Sale, read me the news.", Some("read me the news.")),
+        ("Sail what time is it?", Some("what time is it?")),
+        ("You", None),
+        ("Alessio Querrosao.", None),
+        ("The sale ends on Friday, so let's go.", None),
+        ("We should sail this weekend, …", None),
+    ];
+    for (heard, expected) in rows {
+        assert_eq!(rest(heard).as_deref(), *expected, "heard: {heard:?}");
+    }
+}
+
+#[test]
+fn bare_sale_needs_a_sentence_break_after_it() {
+    assert_eq!(rest("Sale.").as_deref(), Some(""));
+    assert_eq!(rest("Sale!").as_deref(), Some(""));
+    assert_eq!(rest("Sale?").as_deref(), Some(""));
+    assert_eq!(rest("Sale").as_deref(), Some(""));
+    assert_eq!(
+        rest("Sale, read me the news").as_deref(),
+        Some("read me the news")
+    );
+
+    // A space or another punctuation mark is not a sentence break.
+    assert_eq!(rest("Sale ends Friday"), None);
+    assert_eq!(rest("Sale; read me the news"), None);
+    assert_eq!(rest("Sale) read me the news"), None);
+    assert_eq!(rest("The sale ends on Friday"), None);
+
+    // R6 placement still applies to the homophone.
+    assert_eq!(
+        rest("um, sale, what's next").as_deref(),
+        Some("what's next")
+    );
+    assert_eq!(rest("so sale what's next"), None);
+
+    // Multi-word twins keep the existing placement rule (no break needed).
+    assert_eq!(rest("Hey sale ends Friday").as_deref(), Some("ends Friday"));
+    assert_eq!(rest("hi sale, read this").as_deref(), Some("read this"));
+    assert_eq!(rest("ok sale now").as_deref(), Some("now"));
+    assert_eq!(rest("okay, sale, read this").as_deref(), Some("read this"));
+
+    // The original name is unchanged.
+    assert_eq!(rest("Sail ends Friday").as_deref(), Some("ends Friday"));
+}
