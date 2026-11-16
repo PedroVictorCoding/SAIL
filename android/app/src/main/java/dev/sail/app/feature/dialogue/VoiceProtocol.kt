@@ -1,5 +1,6 @@
 package dev.sail.app.feature.dialogue
 
+import dev.sail.app.feature.dock.GreetingItem
 import dev.sail.app.feature.dock.PresenceState
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -52,7 +53,7 @@ sealed interface VoiceEvent {
     ) : VoiceEvent
     data class PresenceGreeting(
         val spoken: String,
-        val itemIds: List<String>,
+        val items: List<GreetingItem>,
         val awayForSecs: Long,
     ) : VoiceEvent
     data class PresenceStateEvent(val state: PresenceState) : VoiceEvent
@@ -126,9 +127,14 @@ object VoiceProtocol {
     private fun presenceGreeting(m: JsonObject): VoiceEvent {
         val spoken = m.str("spoken") ?: return VoiceEvent.Ignored
         val awaySecs = (m["away_for_secs"] as? JsonPrimitive)?.longOrNull ?: 0L
+        val items = (m["items"] as? JsonArray)?.mapNotNull { el ->
+            val obj = el as? JsonObject ?: return@mapNotNull null
+            val title = obj.str("title")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            GreetingItem(id = obj.str("id").orEmpty(), title = title)
+        } ?: emptyList()
         return VoiceEvent.PresenceGreeting(
             spoken = spoken,
-            itemIds = m.strList("item_ids"),
+            items = items,
             awayForSecs = awaySecs,
         )
     }

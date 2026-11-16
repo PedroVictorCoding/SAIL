@@ -94,9 +94,14 @@ data class DockAnnouncement(
     val reasons: List<String>,
 )
 
+data class GreetingItem(
+    val id: String,
+    val title: String,
+)
+
 data class DockGreeting(
     val spoken: String,
-    val itemIds: List<String>,
+    val items: List<GreetingItem>,
     val awayForSecs: Long,
 )
 

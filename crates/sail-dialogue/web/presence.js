@@ -311,9 +311,10 @@
     }
     document.addEventListener('visibilitychange', () => {
       sendHeartbeat();
-      if (document.visibilityState === 'hidden' && handsFreeEnabled) {
+      if (handsFreeEnabled) {
+        const active = document.visibilityState !== 'hidden';
         for (const cb of handsFreeListeners) {
-          try { cb(false); } catch (_) {}
+          try { cb(active); } catch (_) {}
         }
       }
     });

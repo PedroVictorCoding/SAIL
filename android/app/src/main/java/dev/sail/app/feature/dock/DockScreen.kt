@@ -417,6 +417,24 @@ private fun DockContextColumn(
                             Text("Dismiss")
                         }
                     }
+                    if (greeting.items.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            greeting.items.forEach { item ->
+                                Text(
+                                    text = item.title,
+                                    color = SailColors.TextMuted,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(SailColors.SurfaceRaised)
+                                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

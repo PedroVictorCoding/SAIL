@@ -63,11 +63,11 @@ class DockViewModel(
 
     fun onForegroundStart(hasMicPermission: Boolean) {
         val deviceId = heartbeats.deviceId(SurfaceKind.DOCK)
-        heartbeats.setSurface(SurfaceKind.DOCK, voiceReady = true)
+        heartbeats.setSurface(SurfaceKind.DOCK, voiceReady = false)
         session.setSurfaceHello(deviceId, "dock", handsFree = mutableState.value.listening)
         session.open()
         if (hasMicPermission && mutableState.value.listening) {
-            val started = mic.start()
+            val started = startCaptureOnce(isRunning = { mic.isRunning }, startCapture = { mic.start() })
             mutableState.update {
                 it.copy(
                     listening = started,
@@ -97,7 +97,7 @@ class DockViewModel(
             mutableState.update { it.copy(error = "Microphone permission is required to listen.") }
             return
         }
-        val started = mic.start()
+        val started = startCaptureOnce(isRunning = { mic.isRunning }, startCapture = { mic.start() })
         val deviceId = heartbeats.deviceId(SurfaceKind.DOCK)
         session.setSurfaceHello(deviceId, "dock", handsFree = started)
         mutableState.update {
@@ -177,6 +177,10 @@ class DockViewModel(
     }
 
     companion object {
+        /** Idempotent guard so granting permission + ON_START never starts two mic captures. */
+        fun startCaptureOnce(isRunning: () -> Boolean, startCapture: () -> Boolean): Boolean =
+            if (isRunning()) true else startCapture()
+
         /** Pure state reducer for Dock events so JVM tests can verify state transitions directly. */
         fun reduce(cur: DockUiState, event: VoiceEvent): DockUiState = when (event) {
             is VoiceEvent.Announce -> {
@@ -194,7 +198,7 @@ class DockViewModel(
                 cur.copy(announcements = next, orbState = if (event.speak) "speaking" else cur.orbState)
             }
             is VoiceEvent.PresenceGreeting -> cur.copy(
-                greeting = DockGreeting(event.spoken, event.itemIds, event.awayForSecs),
+                greeting = DockGreeting(event.spoken, event.items, event.awayForSecs),
                 orbState = "speaking",
             )
             is VoiceEvent.PresenceStateEvent -> cur.copy(place = event.state.place)

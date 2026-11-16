@@ -178,14 +178,12 @@
     row.append(dismissBtn);
     box.append(row);
 
-    const ids = Array.isArray(msg.item_ids) ? msg.item_ids : [];
-    if (ids.length > 0) {
+    const greetingItems = Array.isArray(msg.items) ? msg.items : [];
+    const titled = greetingItems.filter((it) => it && typeof it.title === 'string' && it.title.trim().length > 0);
+    if (titled.length > 0) {
       const chips = el('div', 'presence-greeting-chips');
-      for (const id of ids) {
-        const match = items.find((it) => it.item_id === id);
-        const label = match?.title || String(id);
-        const chip = el('span', 'presence-greeting-chip', label);
-        chips.append(chip);
+      for (const it of titled) {
+        chips.append(el('span', 'presence-greeting-chip', it.title));
       }
       box.append(chips);
     }
