@@ -8,12 +8,20 @@ use chrono::{DateTime, Duration, Utc};
 
 /// Wake names, fixed a priori (the owner may extend them in settings later; not this
 /// round). Matched as whole words and only within the first three words of a transcript.
+///
+/// The `"sale"` homophone and its multi-word twins were added from the 2026-11-16 host
+/// measurement: Whisper transcribed "sail" as "sale" in 4 of 5 clear English requests.
 pub const WAKE_NAMES: &[&str] = &[
     "sail",
+    "sale",
     "hey sail",
+    "hey sale",
     "hi sail",
+    "hi sale",
     "ok sail",
+    "ok sale",
     "okay sail",
+    "okay sale",
     "olá sail",
     "ola sail",
     "ó sail",
@@ -76,11 +84,14 @@ fn words(text: &str) -> Vec<Word<'_>> {
 /// Check whether `transcript` addresses SAIL.
 ///
 /// The transcript is lowercased for matching and split on non-alphanumeric characters.
-/// Multi-word names ("hey sail") may start within the first three words and match whole
-/// words only. The bare name matches whole words only as the first word, or at words 2–3
-/// when every preceding word is a [`FILLERS`] word: "we should sail this weekend" is
-/// overheard speech, not a command. `rest` comes from the original transcript, so its case
-/// is preserved. Input over [`MAX_TRANSCRIPT_CHARS`] is rejected without scanning.
+/// Multi-word names ("hey sail", "hey sale") may start within the first three words and
+/// match whole words only. The bare name matches whole words only as the first word, or at
+/// words 2–3 when every preceding word is a [`FILLERS`] word: "we should sail this weekend"
+/// is overheard speech, not a command. A bare `"sale"` additionally needs a sentence break
+/// right after it (`,` `.` `!` `?` or end of transcript): "Sale, read me the news" is a
+/// command, "Sale ends Friday" and "The sale ends on Friday" are not. `rest` comes from the
+/// original transcript, so its case is preserved. Input over [`MAX_TRANSCRIPT_CHARS`] is
+/// rejected without scanning.
 pub fn addressed(transcript: &str) -> Addressed {
     if transcript.chars().count() > MAX_TRANSCRIPT_CHARS {
         return Addressed::No;
@@ -111,7 +122,17 @@ pub fn addressed(transcript: &str) -> Addressed {
             {
                 continue;
             }
-            let rest = transcript[words[last - 1].end..].trim_start_matches(|c: char| {
+            let after = words[last - 1].end;
+            if name.len() == 1
+                && name[0] == "sale"
+                && !matches!(
+                    transcript[after..].chars().next(),
+                    None | Some(',' | '.' | '!' | '?')
+                )
+            {
+                continue;
+            }
+            let rest = transcript[after..].trim_start_matches(|c: char| {
                 c.is_whitespace() || matches!(c, ',' | '.' | '!' | '?' | ':' | '-')
             });
             return Addressed::Yes {
