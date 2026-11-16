@@ -1,3 +1,4 @@
+pub mod address;
 pub mod approval_http;
 pub mod briefing;
 pub mod briefing_http;
@@ -16,6 +17,7 @@ mod execution;
 pub mod flow_http;
 pub mod gateway_http;
 pub mod gateway_service;
+pub mod greeting;
 pub mod hermes_http;
 pub mod hermes_tools;
 mod html_text;

@@ -11,6 +11,7 @@
 //! `docs/SAIL_PULSE.md`).
 
 pub mod attention;
+pub mod presence;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
