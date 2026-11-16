@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::calendar::ExchangeCalendar;
+use chrono::NaiveDate;
 
 /// `GET /policy`: the policy in force and every stored version.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,6 +16,13 @@ pub struct PolicyView {
 /// Horizon, in sessions, that ideas are formed at: about a quarter, so trading costs
 /// weigh less against the expected gain.
 pub const IDEA_HORIZON: u32 = 60;
+
+/// Round 25 A5: one research name and when it was an index member.
+struct ResearchSignal {
+    key: String,
+    symbol: String,
+    membership: Vec<(NaiveDate, Option<NaiveDate>)>,
+}
 
 /// XTB suffixes whose listings trade outside the euro.
 const NON_EURO_SUFFIXES: [&str; 7] = ["US", "UK", "CH", "DK", "SE", "NO", "PL"];
@@ -75,14 +83,20 @@ impl CapitalService {
     ) -> Result<crate::signals::SignalReport, ServiceError> {
         let decision = DecisionTime::now();
         let held = self.universe_pairs_as_of(account, decision)?;
-        let mut held_keys: Vec<&str> = held.iter().map(|(key, _)| key.as_str()).collect();
+        let research = self.research_signals_as_of(decision, VintagePolicy::ObservedOnly)?;
+        let mut held_keys: Vec<&str> = held
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .chain(research.iter().map(|row| row.key.as_str()))
+            .collect();
         held_keys.sort_unstable();
         let model_version: u64 = self
             .store
             .signal_value_coverage()?
             .iter()
             .map(|c| u64::from(c.values))
-            .sum();
+            .sum::<u64>()
+            + u64::from(self.store.form4_counts()?.0);
         let version = format!(
             "{}|{}|{}|{}",
             account.as_str(),
@@ -105,6 +119,38 @@ impl CapitalService {
         Ok(report)
     }
 
+    /// Round 25 A5: research names that may join the signal cross-sections as evidence
+    /// only, with the membership intervals that decide whether they counted on a date.
+    fn research_signals_as_of(
+        &self,
+        decision: DecisionTime,
+        policy: VintagePolicy,
+    ) -> Result<Vec<ResearchSignal>, ServiceError> {
+        let Some(indexes) = super::trade_health::research_indexes() else {
+            return Ok(Vec::new());
+        };
+        let mut members: std::collections::BTreeMap<String, crate::universe::ResearchMember> =
+            std::collections::BTreeMap::new();
+        for index in indexes {
+            if let Some(((_, stored), _)) = self
+                .store
+                .research_members_as_of(&index, decision, policy)?
+            {
+                for member in stored {
+                    members.insert(member.yahoo.clone(), member);
+                }
+            }
+        }
+        Ok(members
+            .into_values()
+            .map(|member| ResearchSignal {
+                key: super::trade_health::research_key(&member.yahoo),
+                symbol: member.yahoo,
+                membership: member.membership,
+            })
+            .collect())
+    }
+
     /// Point-in-time signal evaluation at `decision`, returning the report and its
     /// deterministic [`crate::replay::ReplayManifest`]. Never calls `Utc::now()`.
     pub fn signals_as_of(
@@ -116,6 +162,15 @@ impl CapitalService {
         let (universe, mut membership) = self.signal_universe_as_of(account, decision)?;
         let mut held: Vec<(String, String)> =
             universe.into_iter().map(|m| (m.key, m.symbol)).collect();
+        // Round 25 A5: the research universe joins the cross-sections as evidence only.
+        let research = self.research_signals_as_of(decision, policy)?;
+        let evidence_only: std::collections::BTreeSet<String> =
+            research.iter().map(|row| row.key.clone()).collect();
+        held.extend(
+            research
+                .iter()
+                .map(|row| (row.key.clone(), row.symbol.clone())),
+        );
         held.sort();
         let (data, bar_manifests) = self.closes_for_as_of(&held, decision, policy)?;
         let series: Vec<crate::forecast::CloseSeries<'_>> = data
@@ -132,13 +187,38 @@ impl CapitalService {
             ewma_sigma(s, horizon)
         };
         let held_keys: Vec<&str> = held.iter().map(|(k, _)| k.as_str()).collect();
-        let (external, model_manifests) = self.external_scores_as_of(&held_keys, decision)?;
-        let report = crate::signals::evaluate_and_combine(
-            &series,
-            &external,
-            &sigma,
-            &crate::signals::SignalEvalConfig::default(),
-        );
+        let (mut external, model_manifests) = self.external_scores_as_of(&held_keys, decision)?;
+        // Round 25: insider buying from stored Form 4s.
+        let issuers = self.insider_issuers(account, decision)?;
+        if let Some(insider) =
+            self.insider_scores_as_of(&issuers, &super::insider::sessions_of(&data), decision)?
+        {
+            external.push(insider);
+        }
+        let research_membership: std::collections::BTreeMap<
+            String,
+            Vec<(NaiveDate, Option<NaiveDate>)>,
+        > = research
+            .iter()
+            .map(|row| (row.key.clone(), row.membership.clone()))
+            .collect();
+        let member_on = |key: &str, date: NaiveDate| {
+            research_membership.get(key).is_none_or(|intervals| {
+                intervals.is_empty()
+                    || intervals
+                        .iter()
+                        .any(|(from, to)| *from <= date && to.is_none_or(|end| date < end))
+            })
+        };
+        let config = crate::signals::SignalEvalConfig::default();
+        let report = crate::signals::evaluate_with(&crate::signals::SignalInputs {
+            series: &series,
+            external: &external,
+            sigma: &sigma,
+            config: &config,
+            evidence_only: &evidence_only,
+            member_on: &member_on,
+        });
         let mut manifest = crate::replay::ReplayManifest::new(
             decision,
             crate::calendar::WeekdayCalendar.id(),

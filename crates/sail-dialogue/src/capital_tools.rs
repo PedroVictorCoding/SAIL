@@ -475,9 +475,11 @@ fn income_plan(service: &CapitalService) -> Result<Value, String> {
                 "notes": report.notes,
             })
         });
-    let plan = job.plan.as_ref().map(|plan| {
+    let summarize = |plan: &sail_capital::dividends::maximize::IncomePlan| {
         json!({
             "objective": plan.objective,
+            "objective_label": plan.objective_label,
+            "what_it_maximizes": plan.objective_explainer,
             "recommendation": plan.recommendation,
             "this_month": plan.this_month,
             "weights": plan.weights,
@@ -486,12 +488,20 @@ fn income_plan(service: &CapitalService) -> Result<Value, String> {
             "excluded_by_safety": plan.excluded,
             "notes": plan.notes,
         })
-    });
+    };
+    // Round 25: one entry per objective the job ran (all three by default).
+    let plans: Vec<Value> = if job.plans.is_empty() {
+        job.plan.iter().map(summarize).collect()
+    } else {
+        job.plans.iter().map(summarize).collect()
+    };
     Ok(json!({
         "state": job.state,
         "finished_at": job.finished_at,
         "error": job.error,
-        "plan": plan,
+        "objectives_done": plans.len(),
+        "objectives_total": job.objectives_total,
+        "plans": plans,
         "dividend_growth_backtest": calibration,
         "retirement_research": crate::capital_retirement::brief_for_voice(
             &sail_capital::service::default_dir()

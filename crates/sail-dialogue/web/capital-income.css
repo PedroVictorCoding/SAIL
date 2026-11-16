@@ -552,3 +552,159 @@
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
+
+/* Round 25: all three goals compared */
+.cp-max-intro {
+  margin: 0 0 12px;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.cp-max-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-bottom: 10px;
+}
+
+.cp-max-compare th,
+.cp-max-scores th {
+  white-space: normal;
+  font-size: 0.78rem;
+}
+
+.cp-max-compare td:first-child {
+  font-weight: 600;
+}
+
+.cp-max-goal-legend {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.cp-max-goal {
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.cp-max-goal > summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.cp-max-goal-body {
+  padding: 0 12px 12px;
+}
+
+.cp-safety-chip {
+  white-space: nowrap;
+}
+
+/* Round 25: upcoming-payments calendar and projection track record */
+.cp-upcoming-wrap {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cp-upcoming-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.cp-upcoming-title {
+  margin: 0;
+  font-size: 0.94rem;
+}
+
+.cp-upcoming-total {
+  font-size: 0.82rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(84, 194, 165, 0.14);
+  border: 1px solid rgba(84, 194, 165, 0.35);
+  color: #a4f3d9;
+}
+
+.cp-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.cp-upcoming-est {
+  font-size: 0.7rem;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(226, 232, 240, 0.78);
+}
+
+.cp-conf-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  text-transform: capitalize;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.cp-conf-chip[data-confidence="high"] {
+  background: rgba(84, 194, 165, 0.16);
+  border-color: rgba(84, 194, 165, 0.4);
+  color: #a4f3d9;
+}
+
+.cp-conf-chip[data-confidence="medium"] {
+  background: rgba(100, 160, 240, 0.16);
+  border-color: rgba(100, 160, 240, 0.4);
+  color: #b8d8ff;
+}
+
+.cp-conf-chip[data-confidence="low"] {
+  background: rgba(246, 173, 85, 0.16);
+  border-color: rgba(246, 173, 85, 0.4);
+  color: #ffd69f;
+}
+
+.cp-proj-record-panel {
+  margin-top: 18px;
+}
+
+.cp-proj-record-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.cp-proj-record-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cp-proj-record-stat-lbl {
+  font-size: 0.76rem;
+  color: rgba(226, 232, 240, 0.72);
+}
+
+.cp-proj-record-stat-val {
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}

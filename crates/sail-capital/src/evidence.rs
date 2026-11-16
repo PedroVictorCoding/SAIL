@@ -198,6 +198,14 @@ pub trait EdgarApi: Send + Sync {
         let _ = cik;
         Err(SourceError::NotConfigured)
     }
+    /// Round 25: fetches the raw XML of a Form 4 (`4` or `4/A`) `filing` from
+    /// `https://www.sec.gov/Archives/edgar/data/{cik}/{accession without dashes}/{raw
+    /// document}` and reads it with [`crate::sec::form4::parse`]. Fakes that don't serve
+    /// it answer [`SourceError::NotConfigured`].
+    async fn form4(&self, filing: &Filing) -> Result<crate::sec::form4::Form4, SourceError> {
+        let _ = filing;
+        Err(SourceError::NotConfigured)
+    }
 }
 
 /// A filing as stored: the filing plus SAIL's own observation of it.

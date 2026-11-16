@@ -128,6 +128,7 @@ fn summarize_all<'a>(
             setups,
             live,
             dividend_calibration: None,
+            dividend_record: None,
         },
         now(),
     )

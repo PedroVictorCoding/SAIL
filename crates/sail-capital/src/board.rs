@@ -649,6 +649,7 @@ mod tests {
             combined_ic: vec![(20, 0.0), (60, 0.0)],
             latest: Vec::new(),
             notes: Vec::new(),
+            evidence_instruments: 0,
         }
     }
 

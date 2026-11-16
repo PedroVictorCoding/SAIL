@@ -87,7 +87,53 @@ pub enum Objective {
     },
 }
 
+/// The wealth floor the "all objectives" run uses: the plan's median portfolio value
+/// must stay at least 90% of the proportional mode's (fixed a priori: income may cost
+/// at most a tenth of the wealth the default rule keeps).
+pub const DEFAULT_FLOOR_PCT: f64 = 90.0;
+
 impl Objective {
+    /// Round 25: the three objectives, in the order the "all objectives" run scores
+    /// them, for `year` (the wealth floor at [`DEFAULT_FLOOR_PCT`] unless given).
+    pub fn all(year: u32, floor_pct: Option<f64>) -> [Objective; 3] {
+        [
+            Objective::RobustIncome { year },
+            Objective::IncomeWithWealthFloor {
+                year,
+                floor_pct: floor_pct.unwrap_or(DEFAULT_FLOOR_PCT),
+            },
+            Objective::SmoothMonths { year },
+        ]
+    }
+
+    /// A short name for the owner.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Objective::RobustIncome { .. } => "Most income in a bad year",
+            Objective::IncomeWithWealthFloor { .. } => "Most typical income, keeping wealth",
+            Objective::SmoothMonths { .. } => "Steadiest monthly income",
+        }
+    }
+
+    /// One plain sentence on what it maximizes.
+    pub fn explainer(&self) -> String {
+        match *self {
+            Objective::RobustIncome { year } => format!(
+                "Maximizes the net income you'd still get in year {year} if things go badly \
+                 (the 10th percentile across simulated futures)."
+            ),
+            Objective::IncomeWithWealthFloor { year, floor_pct } => format!(
+                "Maximizes the typical (median) net income in year {year}, as long as the \
+                 typical portfolio value stays at least {floor_pct:.0}% of what the \
+                 proportional rule would leave."
+            ),
+            Objective::SmoothMonths { year } => format!(
+                "Maximizes the weakest month's net income in year {year} in a bad case (the \
+                 10th percentile), so income arrives evenly through the year."
+            ),
+        }
+    }
+
     /// The projection year it scores.
     pub fn year(&self) -> u32 {
         match *self {
@@ -240,6 +286,12 @@ pub struct IncomePlan {
     pub notes: Vec<String>,
     /// Paths used to search and to score.
     pub paths: (u32, u32),
+    /// Round 25: [`Objective::label`].
+    #[serde(default)]
+    pub objective_label: String,
+    /// Round 25: [`Objective::explainer`].
+    #[serde(default)]
+    pub objective_explainer: String,
 }
 
 /// The objective over a subset of paths. `floor` is the proportional mode's median value
@@ -703,5 +755,7 @@ pub fn solve(
         excluded,
         notes,
         paths: (search.paths, score_mc.paths),
+        objective_label: objective.label().to_string(),
+        objective_explainer: objective.explainer(),
     }
 }

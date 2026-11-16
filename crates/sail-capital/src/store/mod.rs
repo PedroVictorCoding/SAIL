@@ -19,11 +19,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 mod board;
+mod dividend_record;
 mod dividends;
 mod evidence;
 mod forecast_records;
 mod grants;
 mod income;
+mod insider;
 mod outlook;
 mod prices;
 mod replays;
@@ -202,6 +204,8 @@ impl CapitalStore {
         conn.execute_batch(replays::SCHEMA)?;
         conn.execute_batch(research::SCHEMA)?;
         conn.execute_batch(income::SCHEMA)?;
+        conn.execute_batch(insider::SCHEMA)?;
+        conn.execute_batch(dividend_record::SCHEMA)?;
         conn.execute_batch(forecast_records::SCHEMA)?;
         prices::init_price_schema(&conn)?;
         Ok(Self {

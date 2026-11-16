@@ -69,9 +69,17 @@ pub struct IncomeRequest {
     /// (not inflated; the caller inflates a target given in today's money).
     #[serde(default)]
     pub target: Option<(u32, f64)>,
-    /// For a plan: what to maximize (default robust income at the last year).
+    /// For a plan: one objective to maximize. Round 25: when absent, the job runs all
+    /// three ([`Objective::all`]) at `objective_year` and compares them.
     #[serde(default)]
     pub objective: Option<Objective>,
+    /// Round 25: the year the "all objectives" run scores (default `years`).
+    #[serde(default)]
+    pub objective_year: Option<u32>,
+    /// Round 25: the wealth floor for the "all objectives" run, percent (default
+    /// [`crate::dividends::maximize::DEFAULT_FLOOR_PCT`]).
+    #[serde(default)]
+    pub floor_pct: Option<f64>,
     /// For a plan: limits (default from the confirmed policy).
     #[serde(default)]
     pub constraints: Option<Constraints>,
@@ -107,8 +115,15 @@ pub struct IncomeJob {
     pub state: IncomeJobState,
     /// The request it ran with.
     pub request: Option<IncomeRequest>,
-    /// The plan, when done.
+    /// The first objective's plan, when done (kept for older readers).
     pub plan: Option<IncomePlan>,
+    /// Round 25: one plan per objective run, in [`Objective::all`]'s order, filled as
+    /// each finishes.
+    #[serde(default)]
+    pub plans: Vec<IncomePlan>,
+    /// Round 25: objectives this job runs.
+    #[serde(default)]
+    pub objectives_total: u32,
     /// Why it failed.
     pub error: Option<String>,
     /// When it started.
@@ -210,7 +225,11 @@ fn regular(history: &[Payment]) -> Vec<Payment> {
 
 impl CapitalService {
     /// The SEC issuer for a US-listed symbol, from the stored ticker map.
-    fn cik_for(&self, symbol: &str, now: DateTime<Utc>) -> Result<Option<Cik>, ServiceError> {
+    pub(super) fn cik_for(
+        &self,
+        symbol: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Cik>, ServiceError> {
         if super::trade_context::region_of(symbol) != Region::Us {
             return Ok(None);
         }
@@ -552,18 +571,30 @@ impl CapitalService {
         account: &AccountId,
         request: IncomeRequest,
     ) -> Result<bool, ServiceError> {
-        let objective = request.objective.unwrap_or(Objective::RobustIncome {
-            year: request.years,
-        });
+        let objectives: Vec<Objective> = match request.objective {
+            Some(objective) => vec![objective],
+            None => {
+                let year = request.objective_year.unwrap_or(request.years);
+                if !(1..=crate::dividends::MAX_YEARS).contains(&year) {
+                    return Err(ServiceError::BadRequest(format!(
+                        "The objective year must be between 1 and {}.",
+                        crate::dividends::MAX_YEARS
+                    )));
+                }
+                Objective::all(year, request.floor_pct).to_vec()
+            }
+        };
         let constraints = request
             .constraints
             .unwrap_or_else(|| self.default_constraints(account, request.top_n));
-        if let Objective::IncomeWithWealthFloor { floor_pct, .. } = objective
-            && !(0.0..=100.0).contains(&floor_pct)
-        {
-            return Err(ServiceError::BadRequest(
-                "The wealth floor must be between 0 and 100%.".into(),
-            ));
+        for objective in &objectives {
+            if let Objective::IncomeWithWealthFloor { floor_pct, .. } = *objective
+                && !(0.0..=100.0).contains(&floor_pct)
+            {
+                return Err(ServiceError::BadRequest(
+                    "The wealth floor must be between 0 and 100%.".into(),
+                ));
+            }
         }
         let rules = self.rules_for(&request, Limits::default())?;
         let now = Utc::now();
@@ -580,6 +611,8 @@ impl CapitalService {
                 state: IncomeJobState::Running,
                 request: Some(request.clone()),
                 plan: None,
+                plans: Vec::new(),
+                objectives_total: objectives.len() as u32,
                 error: None,
                 started_at: Some(now),
                 finished_at: None,
@@ -588,34 +621,48 @@ impl CapitalService {
         let job = self.income_job.clone();
         let seed = day_seed(now.date_naive());
         tokio::task::spawn_blocking(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::dividends::maximize::solve(
-                    &inputs,
-                    &rules,
-                    objective,
-                    constraints,
-                    McSettings {
-                        paths: SEARCH_PATHS,
-                        seed,
-                    },
-                    McSettings {
-                        paths: SCORE_PATHS,
-                        seed: seed ^ 0x5EED_5C0E,
-                    },
-                )
-            }));
-            if let Ok(mut job) = job.lock() {
-                job.finished_at = Some(Utc::now());
+            // Same seeds for every objective: they are compared on the same futures.
+            for objective in objectives {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::dividends::maximize::solve(
+                        &inputs,
+                        &rules,
+                        objective,
+                        constraints,
+                        McSettings {
+                            paths: SEARCH_PATHS,
+                            seed,
+                        },
+                        McSettings {
+                            paths: SCORE_PATHS,
+                            seed: seed ^ 0x5EED_5C0E,
+                        },
+                    )
+                }));
+                let Ok(mut job) = job.lock() else {
+                    return;
+                };
                 match result {
                     Ok(plan) => {
-                        job.state = IncomeJobState::Done;
-                        job.plan = Some(plan);
+                        if job.plan.is_none() {
+                            job.plan = Some(plan.clone());
+                        }
+                        job.plans.push(plan);
                     }
                     Err(_) => {
                         job.state = IncomeJobState::Failed;
-                        job.error = Some("The plan search stopped unexpectedly.".into());
+                        job.error = Some(format!(
+                            "The search for \"{}\" stopped unexpectedly.",
+                            objective.label()
+                        ));
+                        job.finished_at = Some(Utc::now());
+                        return;
                     }
                 }
+            }
+            if let Ok(mut job) = job.lock() {
+                job.state = IncomeJobState::Done;
+                job.finished_at = Some(Utc::now());
             }
         });
         Ok(true)

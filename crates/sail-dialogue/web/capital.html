@@ -296,7 +296,7 @@
           <span class="cp-sub-notice">The next 30 years, from each holding's payout history. Scenarios, not promises: dividends can be cut.</span>
         </div>
         <div class="cp-panel-actions">
-          <button type="button" class="cp-button cp-btn-sm" id="cpProjRefreshBtn">Refresh payout history</button>
+          <button type="button" class="cp-button cp-btn-sm" id="cpProjRefreshBtn" title="Fetch each holding's dividend history again from Yahoo">Update dividend history</button>
         </div>
       </header>
 
@@ -314,20 +314,20 @@
         </div>
 
         <div class="cp-control-group">
-          <span class="cp-control-label" id="cpProjAllocLabel">Allocation</span>
+          <span class="cp-control-label" id="cpProjAllocLabel">Where reinvested money goes</span>
           <div class="cp-horizon-pills cp-proj-alloc-pills" role="radiogroup" aria-labelledby="cpProjAllocLabel">
-            <button type="button" class="cp-horizon-btn cp-active" data-allocation="proportional" aria-checked="true">Proportional</button>
-            <button type="button" class="cp-horizon-btn" data-allocation="same_holding" aria-checked="false">Same holding</button>
-            <button type="button" class="cp-horizon-btn" data-allocation="top_value" aria-checked="false">Top value</button>
-            <button type="button" class="cp-horizon-btn" data-allocation="equal_weight" aria-checked="false">Equal weight</button>
-            <button type="button" class="cp-horizon-btn" data-allocation="top_yield" aria-checked="false">Top yield</button>
-            <button type="button" class="cp-horizon-btn" data-allocation="underweight" aria-checked="false">Underweight</button>
+            <button type="button" class="cp-horizon-btn cp-active" data-allocation="proportional" aria-checked="true" title="Spread across holdings by current value">Proportional to value</button>
+            <button type="button" class="cp-horizon-btn" data-allocation="same_holding" aria-checked="false" title="Each dividend buys more of the holding that paid it">Back into the payer (DRIP)</button>
+            <button type="button" class="cp-horizon-btn" data-allocation="top_value" aria-checked="false" title="Everything into your largest holdings">Largest holdings</button>
+            <button type="button" class="cp-horizon-btn" data-allocation="equal_weight" aria-checked="false" title="Drift holdings toward equal sizes">Toward equal sizes</button>
+            <button type="button" class="cp-horizon-btn" data-allocation="top_yield" aria-checked="false" title="Everything into your highest-yielding holdings">Highest yields</button>
+            <button type="button" class="cp-horizon-btn" data-allocation="underweight" aria-checked="false" title="Top up the holdings furthest below an equal split">Smallest positions first</button>
           </div>
           <p class="cp-muted cp-proj-help" id="cpProjAllocHelp"></p>
         </div>
 
         <div class="cp-control-group" id="cpProjTopNGroup" hidden>
-          <label for="cpProjTopN" class="cp-control-label">Top holdings: <strong id="cpProjTopNVal">5</strong></label>
+          <label for="cpProjTopN" class="cp-control-label">How many holdings receive money: <strong id="cpProjTopNVal">5</strong></label>
           <input type="range" class="cp-range" id="cpProjTopN" min="1" max="10" value="5" step="1" aria-label="Number of holdings for top-value or top-yield reinvestment">
         </div>
 
@@ -470,7 +470,7 @@
           <span class="cp-sub-notice">What this projection means for stopping work. Estimates from past payouts, not advice.</span>
         </div>
         <div class="cp-panel-actions">
-          <button type="button" class="cp-button cp-btn-sm" id="cpRetireResearchBtn">Research a strategy</button>
+          <button type="button" class="cp-button cp-btn-sm" id="cpRetireResearchBtn" title="Ask SAIL Mind to research an early-retirement strategy for these numbers">Research a retirement strategy</button>
         </div>
       </header>
 

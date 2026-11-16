@@ -19,6 +19,8 @@ mod dividends_run;
 use grants::grant_record;
 mod grants;
 mod income_plan;
+mod income_record;
+mod insider;
 mod markets;
 mod outlook;
 mod prices;

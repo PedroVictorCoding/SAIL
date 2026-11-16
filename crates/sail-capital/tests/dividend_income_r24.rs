@@ -468,3 +468,53 @@ fn the_wealth_floor_rejects_plans_that_give_up_too_much_value() {
         assert!(plan_score.value_p50 >= proportional.value_p50 * 0.97);
     }
 }
+
+#[test]
+fn every_objective_is_run_and_says_what_it_maximizes() {
+    let goals = Objective::all(12, None);
+    assert!(matches!(goals[0], Objective::RobustIncome { year: 12 }));
+    assert!(matches!(
+        goals[1],
+        Objective::IncomeWithWealthFloor { year: 12, floor_pct } if floor_pct == sail_capital::dividends::maximize::DEFAULT_FLOOR_PCT
+    ));
+    assert!(matches!(goals[2], Objective::SmoothMonths { year: 12 }));
+    let labels: Vec<&str> = goals.iter().map(Objective::label).collect();
+    assert_eq!(labels.len(), 3);
+    assert!(labels.iter().all(|l| !l.is_empty()));
+    assert_ne!(labels[0], labels[1]);
+    assert_ne!(labels[1], labels[2]);
+    assert!(goals[1].explainer().contains("90%"));
+    assert!(
+        Objective::all(12, Some(75.0))[1]
+            .explainer()
+            .contains("75%")
+    );
+
+    let inputs = inputs(vec![holding("A", 100.0, 50.0, 0.03, 0.06)]);
+    for goal in goals {
+        let plan = solve(
+            &inputs,
+            &rules(12, 200.0),
+            goal,
+            Constraints::default(),
+            search(),
+            score(),
+        );
+        assert_eq!(plan.objective_label, goal.label());
+        assert!(plan.objective_explainer.contains("year 12"));
+    }
+}
+
+#[test]
+fn a_plan_request_without_an_objective_names_its_year_and_floor() {
+    let request: sail_capital::service::IncomeRequest = serde_json::from_value(serde_json::json!({
+        "years": 20,
+        "reinvest_pct": 100.0,
+        "objective_year": 15,
+        "floor_pct": 80.0
+    }))
+    .unwrap();
+    assert!(request.objective.is_none());
+    assert_eq!(request.objective_year, Some(15));
+    assert_eq!(request.floor_pct, Some(80.0));
+}

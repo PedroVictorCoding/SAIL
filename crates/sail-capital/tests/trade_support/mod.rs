@@ -204,5 +204,6 @@ pub fn card(
         tier: Default::default(),
         expectations: None,
         sessions_to_verdict: None,
+        meta: None,
     }
 }

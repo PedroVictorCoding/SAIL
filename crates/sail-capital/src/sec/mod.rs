@@ -11,6 +11,7 @@
 //! - [`ACCEPT_ENCODING`] is `identity`: the workspace builds `reqwest` without its gzip
 //!   feature, so asking for a compressed body would leave it undecoded.
 pub mod companyfacts;
+pub mod form4;
 
 use crate::evidence::*;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
@@ -576,5 +577,34 @@ impl EdgarApi for EdgarClient {
         );
         let body = self.get(&url).await?;
         companyfacts::parse(&body)
+    }
+
+    async fn form4(&self, filing: &Filing) -> Result<form4::Form4, SourceError> {
+        if !matches!(filing.form.as_str(), "4" | "4/A") {
+            return Err(SourceError::Malformed(format!(
+                "not a Form 4: {}",
+                filing.form
+            )));
+        }
+        let Some(document) = filing.primary_document.as_deref() else {
+            return Err(SourceError::Malformed("Form 4 without a document".into()));
+        };
+        let document = form4::raw_document(document);
+        let safe = |s: &str| {
+            !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                && !s.contains("..")
+        };
+        let accession: String = filing.accession.chars().filter(|c| *c != '-').collect();
+        if !safe(document) || !accession.chars().all(|c| c.is_ascii_digit()) {
+            return Err(SourceError::Malformed("unsafe Form 4 path".into()));
+        }
+        let url = format!(
+            "{}/Archives/edgar/data/{}/{accession}/{document}",
+            self.www_base, filing.cik.0
+        );
+        let body = self.get(&url).await?;
+        form4::parse(&body, filing)
     }
 }

@@ -609,3 +609,19 @@
   font-size: 0.82rem;
   color: rgba(255, 214, 159, 0.92);
 }
+
+/* Round 25: insider-cluster chip */
+.cp-insider-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: rgba(84, 194, 165, 0.16);
+  border: 1px solid rgba(84, 194, 165, 0.42);
+  color: #a4f3d9;
+  vertical-align: middle;
+  white-space: nowrap;
+}

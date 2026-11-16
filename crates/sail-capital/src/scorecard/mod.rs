@@ -147,6 +147,8 @@ pub struct ScorecardInputs<'a> {
     pub live: Option<&'a RecordTotals>,
     /// Round 24: the latest dividend growth calibration.
     pub dividend_calibration: Option<&'a crate::dividends::calibrate::CalibrationReport>,
+    /// Round 25: the dividend projection's own record ([`crate::dividends::record`]).
+    pub dividend_record: Option<&'a crate::dividends::record::RecordSummary>,
 }
 
 /// Builds the track record. See the module doc.
@@ -168,6 +170,11 @@ pub fn summarize(inputs: &ScorecardInputs<'_>, as_of: DateTime<Utc>) -> Scorecar
     }
     if let Some(report) = inputs.dividend_calibration {
         rows.push(dividend_growth_row(report));
+    }
+    if let Some(summary) = inputs.dividend_record
+        && let Some(row) = dividend_record_row(summary)
+    {
+        rows.push(row);
     }
 
     rows.sort_by(|a, b| {
@@ -408,6 +415,45 @@ pub const MIN_DIVIDEND_OUTCOMES: u32 = 100;
 /// it has at least [`MIN_DIVIDEND_OUTCOMES`] five-year outcomes, its bias is within two
 /// percentage points a year, and its low–high band holds 55–80% of outcomes (one σ either
 /// side would hold about 68%).
+/// Round 25 (Kilo): the projection record's row. Earned with at least twelve graded
+/// snapshots, a bias within ten percentage points and a p10–p90 band that held 65–95% of
+/// them (one σ either side of a normal would hold about 68%); NotYet below twelve.
+fn dividend_record_row(summary: &crate::dividends::record::RecordSummary) -> Option<ScoreRow> {
+    let graded = u32::try_from(summary.graded.len()).unwrap_or(u32::MAX);
+    if graded == 0 {
+        return None;
+    }
+    let bias = summary.bias.unwrap_or(0.0);
+    let band = summary.band_coverage;
+    let standing = if graded >= 12
+        && summary.bias.is_some_and(|value| value.abs() <= 0.10)
+        && band.is_some_and(|value| (0.65..=0.95).contains(&value))
+    {
+        Standing::Earned
+    } else if graded < 12 {
+        Standing::NotYet
+    } else {
+        Standing::Failed
+    };
+    let headline = match standing {
+        Standing::NotYet => format!("Needs 12 graded months; has {graded}."),
+        _ => format!(
+            "Bias {:+.1}% over {graded} graded months; the p10–p90 band held {}% of them.",
+            bias * 100.0,
+            whole(band.unwrap_or(0.0) * 100.0)
+        ),
+    };
+    Some(ScoreRow {
+        key: "income:dividend_record".to_string(),
+        family: Family::Income,
+        name: "Dividend projection record".to_string(),
+        horizon_sessions: None,
+        standing,
+        headline,
+        evidence: graded,
+    })
+}
+
 fn dividend_growth_row(report: &crate::dividends::calibrate::CalibrationReport) -> ScoreRow {
     let row = report
         .shrink

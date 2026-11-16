@@ -1,0 +1,29 @@
+{
+  "session": "2026-11-14",
+  "held": 1,
+  "watched": 0,
+  "passed": [],
+  "evidence_instruments": 500,
+  "outlook_record": [
+    {"horizon_sessions": 5, "replays": 120, "direction_hit_rate": 0.56, "inside_90": 0.89},
+    {"horizon_sessions": 60, "replays": 120, "direction_hit_rate": 0.58, "inside_90": 0.91}
+  ],
+  "rows": [
+    {
+      "symbol": "XMPL.US",
+      "name": "Example Steady Payer Inc.",
+      "class": "stock",
+      "held": true,
+      "close": 42.5,
+      "change_1m": 0.045,
+      "read": {"lean": "favoured", "proven": false, "for_count": 2, "against_count": 0},
+      "readings": [],
+      "outlook": [
+        {"horizon_sessions": 5, "median": 0.012, "low": -0.03, "high": 0.05, "p_up": 0.62},
+        {"horizon_sessions": 60, "median": 0.048, "low": -0.08, "high": 0.16, "p_up": 0.66}
+      ],
+      "setup": null
+    }
+  ],
+  "notes": []
+}

@@ -167,3 +167,21 @@ fn appending_future_bars_changes_no_earlier_event_firing() {
     let after = fire_for(SetupId::EarningsGapDrift, &longer);
     assert_eq!(before, after);
 }
+
+#[test]
+fn two_events_on_one_reaction_session_prefer_the_known_surprise() {
+    let mut unknown = positive_event(80);
+    unknown.surprise_pct = None;
+    let instrument = with_events(gap_bars(80, 5_000.0), vec![unknown, positive_event(80)]);
+    assert_eq!(
+        fire_for(SetupId::EarningsGapDrift, &instrument),
+        vec![(80, Side::Long)]
+    );
+    let mut unknown = positive_event(80);
+    unknown.surprise_pct = None;
+    let instrument = with_events(gap_bars(80, 5_000.0), vec![positive_event(80), unknown]);
+    assert_eq!(
+        fire_for(SetupId::EarningsGapDrift, &instrument),
+        vec![(80, Side::Long)]
+    );
+}

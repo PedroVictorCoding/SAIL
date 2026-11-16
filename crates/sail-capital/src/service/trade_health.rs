@@ -427,11 +427,11 @@ impl CapitalService {
 const RESEARCH_MAX_AGE_DAYS: i64 = 7;
 const RESEARCH_MAX_FETCHES: usize = crate::market::MAX_INSTRUMENTS_PER_REFRESH;
 
-fn research_key(yahoo: &str) -> String {
+pub(super) fn research_key(yahoo: &str) -> String {
     format!("research:{}", yahoo.to_ascii_uppercase())
 }
 
-fn research_indexes() -> Option<Vec<String>> {
+pub(super) fn research_indexes() -> Option<Vec<String>> {
     let raw = std::env::var("SAIL_TRADE_RESEARCH").ok()?;
     let indexes: Vec<String> = raw
         .split(',')
