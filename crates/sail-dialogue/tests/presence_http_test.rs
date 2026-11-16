@@ -160,6 +160,8 @@ async fn settings_round_trip_echoes_clamped_values() {
 
     let mut body = defaults.clone();
     body["max_spoken_per_hour"] = json!(99);
+    body["away_after_secs"] = json!(0);
+    body["greet_after_away_secs"] = json!(1);
     body["telegram_when_away"] = json!(true);
     body["speak_on"] = json!(["phone"]);
     let saved: Value = client
@@ -173,6 +175,8 @@ async fn settings_round_trip_echoes_clamped_values() {
         .await
         .unwrap();
     assert_eq!(saved["max_spoken_per_hour"], 6);
+    assert_eq!(saved["away_after_secs"], 60);
+    assert_eq!(saved["greet_after_away_secs"], 300);
     assert_eq!(saved["telegram_when_away"], true);
     assert_eq!(saved["speak_on"], json!(["phone"]));
 

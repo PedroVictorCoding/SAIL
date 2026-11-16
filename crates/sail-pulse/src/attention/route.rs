@@ -4,6 +4,7 @@
 //! [`score::assess`](super::score::assess) owns that decision, and routing never raises a
 //! delivery. It is pure: no clock, randomness, I/O or global state.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{AttentionItem, Delivery, score};
@@ -25,6 +26,8 @@ pub enum Route {
 /// Inputs routing needs that are not the item or the presence estimate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RouteContext {
+    /// The routing clock; held or snoozed items may be routed long after ingest.
+    pub now: DateTime<Utc>,
     pub quiet_hours: bool,
     pub spoken_last_hour: u32,
     pub telegram_paired: bool,
@@ -37,17 +40,15 @@ pub const TELEGRAM_MIN_URGENCY: f32 = 0.8;
 ///
 /// First match wins:
 /// 1. anything Pulse did not assess as `Interrupt` is held for the next greeting;
-/// 2. quiet hours / `Asleep` never speak: Telegram if away and allowed, else show on the
-///    active device, else hold;
+/// 2. quiet hours / `Asleep` never speak: Telegram if away or asleep and the owner
+///    allowed it, else show on the active device, else hold;
 /// 3. the active device can speak, speech is enabled and the hourly cap is not spent;
 /// 4. otherwise show on the active device;
 /// 5. when away, Telegram if the owner allowed it, a bot is paired and the item (or its
 ///    deadline) is at least [`TELEGRAM_MIN_URGENCY`];
 /// 6. otherwise hold.
 ///
-/// The deadline pressure used by rule 5 is evaluated against `item.created_at`, the
-/// assessment clock: [`RouteContext`] carries no `now`, and `assess` already used that
-/// instant when it decided the delivery. This keeps routing deterministic.
+/// The deadline pressure used by rule 5 is evaluated against [`RouteContext::now`].
 pub fn route(
     item: &AttentionItem,
     presence: &PresenceState,
@@ -61,7 +62,10 @@ pub fn route(
     let active = active_surface(presence);
 
     if matches!(presence.place, Place::Asleep) || ctx.quiet_hours {
-        if presence.place == Place::Away && settings.telegram_when_away && ctx.telegram_paired {
+        if matches!(presence.place, Place::Away | Place::Asleep)
+            && settings.telegram_when_away
+            && ctx.telegram_paired
+        {
             return Route::Telegram;
         }
         return match active {
@@ -88,10 +92,10 @@ pub fn route(
         };
     }
 
-    let reach = item.signal.urgency.max(score::deadline_pressure(
-        item.signal.deadline,
-        item.created_at,
-    ));
+    let reach = item
+        .signal
+        .urgency
+        .max(score::deadline_pressure(item.signal.deadline, ctx.now));
     if presence.place == Place::Away
         && settings.telegram_when_away
         && ctx.telegram_paired

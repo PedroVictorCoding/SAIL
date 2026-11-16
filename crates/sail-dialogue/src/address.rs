@@ -28,6 +28,12 @@ pub const FOLLOW_UP_SECS: i64 = 8;
 /// rejected rather than scanned (fixed a priori to bound work on hostile input).
 pub const MAX_TRANSCRIPT_CHARS: usize = 2_000;
 
+/// Words that may precede a bare "SAIL" without turning it into a normal sentence word.
+/// Fixed a priori from the owner's rule for overheard speech.
+pub const FILLERS: &[&str] = &[
+    "um", "uh", "uhm", "erm", "er", "ah", "eh", "oh", "so", "well", "então", "olha",
+];
+
 /// Result of checking one transcript.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Addressed {
@@ -70,10 +76,11 @@ fn words(text: &str) -> Vec<Word<'_>> {
 /// Check whether `transcript` addresses SAIL.
 ///
 /// The transcript is lowercased for matching and split on non-alphanumeric characters.
-/// The wake name must start within the first three words and match whole words only; a
-/// longer name ("hey sail") is preferred over its tail. `rest` comes from the original
-/// transcript, so its case is preserved. Input over [`MAX_TRANSCRIPT_CHARS`] is rejected
-/// without scanning.
+/// Multi-word names ("hey sail") may start within the first three words and match whole
+/// words only. The bare name matches whole words only as the first word, or at words 2–3
+/// when every preceding word is a [`FILLERS`] word: "we should sail this weekend" is
+/// overheard speech, not a command. `rest` comes from the original transcript, so its case
+/// is preserved. Input over [`MAX_TRANSCRIPT_CHARS`] is rejected without scanning.
 pub fn addressed(transcript: &str) -> Addressed {
     if transcript.chars().count() > MAX_TRANSCRIPT_CHARS {
         return Addressed::No;
@@ -94,6 +101,14 @@ pub fn addressed(transcript: &str) -> Addressed {
                 continue;
             };
             if last > lowered.len() || lowered[start..last] != name[..] {
+                continue;
+            }
+            if name.len() == 1
+                && start > 0
+                && !lowered[..start]
+                    .iter()
+                    .all(|word| FILLERS.contains(&word.as_str()))
+            {
                 continue;
             }
             let rest = transcript[words[last - 1].end..].trim_start_matches(|c: char| {

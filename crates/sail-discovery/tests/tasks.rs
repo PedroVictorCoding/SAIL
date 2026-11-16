@@ -186,3 +186,26 @@ fn end_states_serialize_with_the_contract_names() {
         serde_json::json!("needs_intervention")
     );
 }
+
+#[test]
+fn title_uses_the_owning_subsystem() {
+    let now = at("2026-11-16T18:00:00Z");
+    let outcomes = [
+        TaskOutcome {
+            owner: "flow".into(),
+            ..outcome("t1", "refactor", TaskEnd::Failed, now)
+        },
+        TaskOutcome {
+            owner: String::new(),
+            ..outcome("t2", "refactor", TaskEnd::Succeeded, now)
+        },
+        TaskOutcome {
+            owner: "   ".into(),
+            ..outcome("t3", "refactor", TaskEnd::NeedsIntervention, now)
+        },
+    ];
+    let signals = task_signals(&outcomes, now - Duration::hours(1), now);
+    assert_eq!(signals[0].title, "Flow: refactor failed");
+    assert_eq!(signals[1].title, "Task: refactor succeeded");
+    assert_eq!(signals[2].title, "Task: refactor needs you");
+}

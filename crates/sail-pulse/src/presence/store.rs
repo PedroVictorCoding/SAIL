@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
+use tokio::sync::broadcast;
 use tracing::warn;
 
 use super::estimate::{can_speak, estimate, is_live, surface_priority};
@@ -24,13 +25,31 @@ const MAX_IDLE_SECS: u32 = 86_400;
 /// range 0..=6 leaves room to turn it up without becoming spammy).
 const MAX_SPOKEN_PER_HOUR: u32 = 6;
 
+/// Away threshold range in seconds: under a minute is a glance, and beyond two hours the
+/// owner is better described as gone than merely idle (fixed a priori).
+const MIN_AWAY_AFTER_SECS: u64 = 60;
+const MAX_AWAY_AFTER_SECS: u64 = 7_200;
+
+/// Greeting threshold range in seconds: under five minutes a greeting is noise, and a day
+/// is the longest absence that still reads as "welcome back" (fixed a priori).
+const MIN_GREET_AFTER_AWAY_SECS: u64 = 300;
+const MAX_GREET_AFTER_AWAY_SECS: u64 = 86_400;
+
+/// Capacity of the presence event channel. A slow subscriber may lag and resync from
+/// `state` (fixed a priori: one heartbeat burst is far smaller than this).
+const EVENT_CHANNEL_CAPACITY: usize = 32;
+
 /// The file name under the Pulse data directory.
 const SETTINGS_FILE: &str = "presence.json";
 
 struct Inner {
     surfaces: HashMap<String, SurfaceStatus>,
     place: Place,
+    /// Time of the last place change, including `Away` <-> `Asleep`.
     since: Option<DateTime<Utc>>,
+    /// Start of the current absence. Set only when leaving an active place and kept across
+    /// `Away` <-> `Asleep`, so a night away is not mistaken for a short break.
+    absent_since: Option<DateTime<Utc>>,
     settings: PresenceSettings,
 }
 
@@ -42,16 +61,11 @@ impl Inner {
         if place != self.place {
             if place.is_active() {
                 if matches!(self.place, Place::Away | Place::Asleep | Place::Unknown) {
-                    let away_for_secs = if self.place == Place::Unknown {
-                        // No absence start was ever observed.
-                        0
-                    } else {
-                        self.since
-                            .map(|since| {
-                                now.signed_duration_since(since).num_seconds().max(0) as u64
-                            })
-                            .unwrap_or(0)
-                    };
+                    // No absence start means nothing was ever observed as a departure.
+                    let away_for_secs = self
+                        .absent_since
+                        .map(|since| now.signed_duration_since(since).num_seconds().max(0) as u64)
+                        .unwrap_or(0);
                     if let Some(device_id) = active {
                         events.push(PresenceEvent::Arrived {
                             place,
@@ -59,8 +73,12 @@ impl Inner {
                             away_for_secs,
                         });
                     }
+                    self.absent_since = None;
                 }
-            } else if matches!(place, Place::Away | Place::Asleep) {
+            } else if self.place.is_active() {
+                // Only leaving an active place starts an absence. `Unknown -> Away` and
+                // `Away <-> Asleep` are not departures and fire no event.
+                self.absent_since = Some(now);
                 events.push(PresenceEvent::Left { from: self.place });
             }
             self.place = place;
@@ -104,6 +122,7 @@ impl Inner {
 pub struct PresenceStore {
     inner: Mutex<Inner>,
     path: PathBuf,
+    events: broadcast::Sender<PresenceEvent>,
 }
 
 impl PresenceStore {
@@ -114,15 +133,24 @@ impl PresenceStore {
             .map_err(|error| format!("create {}: {error}", dir.display()))?;
         let path = dir.join(SETTINGS_FILE);
         let settings = load_settings(&path);
+        let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Ok(Self {
             inner: Mutex::new(Inner {
                 surfaces: HashMap::new(),
                 place: Place::Unknown,
                 since: None,
+                absent_since: None,
                 settings,
             }),
             path,
+            events,
         })
+    }
+
+    /// Place transitions from this store. A client that lags recovers the current truth
+    /// from [`state`](Self::state); events are not replayed.
+    pub fn subscribe(&self) -> broadcast::Receiver<PresenceEvent> {
+        self.events.subscribe()
     }
 
     /// Record one heartbeat. The server clock, not the client, stamps it.
@@ -153,6 +181,8 @@ impl PresenceStore {
         evict_oldest(&mut inner.surfaces);
         let events = inner.refresh(now, quiet_hours);
         let state = inner.state(now, quiet_hours);
+        drop(inner);
+        self.publish(&events);
         Ok((state, events))
     }
 
@@ -170,13 +200,18 @@ impl PresenceStore {
             surface.last_seen = now;
             surface.can_speak = can_speak(surface, &settings);
         }
-        inner.refresh(now, quiet_hours)
+        let events = inner.refresh(now, quiet_hours);
+        drop(inner);
+        self.publish(&events);
+        events
     }
 
-    /// Drop stale surfaces from the estimate; fires `Left` when the owner becomes
-    /// `Away` or `Asleep`.
+    /// Drop stale surfaces from the estimate; fires `Left` when the owner leaves an
+    /// active place.
     pub fn tick(&self, now: DateTime<Utc>, quiet_hours: bool) -> Vec<PresenceEvent> {
-        self.lock().refresh(now, quiet_hours)
+        let events = self.lock().refresh(now, quiet_hours);
+        self.publish(&events);
+        events
     }
 
     /// Current presence without mutating the place history.
@@ -189,14 +224,29 @@ impl PresenceStore {
         self.lock().settings.clone()
     }
 
-    /// Save settings, clamping `max_spoken_per_hour` to 0..=6, and return what was stored.
+    /// Save settings after clamping the ranges that would otherwise break presence:
+    /// `away_after_secs` to 60..=7200, `greet_after_away_secs` to 300..=86_400 and
+    /// `max_spoken_per_hour` to 0..=6. Returns what was stored.
     pub fn save_settings(&self, s: PresenceSettings) -> Result<PresenceSettings, String> {
         let mut s = s;
+        s.away_after_secs = s
+            .away_after_secs
+            .clamp(MIN_AWAY_AFTER_SECS, MAX_AWAY_AFTER_SECS);
+        s.greet_after_away_secs = s
+            .greet_after_away_secs
+            .clamp(MIN_GREET_AFTER_AWAY_SECS, MAX_GREET_AFTER_AWAY_SECS);
         s.max_spoken_per_hour = s.max_spoken_per_hour.min(MAX_SPOKEN_PER_HOUR);
         let mut inner = self.lock();
         persist_settings(&self.path, &s)?;
         inner.settings = s.clone();
         Ok(s)
+    }
+
+    fn publish(&self, events: &[PresenceEvent]) {
+        for event in events {
+            // No receiver is fine: the durable state still reflects the transition.
+            let _ = self.events.send(event.clone());
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {

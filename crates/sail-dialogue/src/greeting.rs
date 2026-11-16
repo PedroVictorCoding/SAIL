@@ -50,15 +50,24 @@ pub fn compose(
     let opening = opening(local_hour, lang);
     let mut item_ids = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
+    let mut held_clause: Option<String> = None;
 
     if let Some(item) = best_held(held)
         && let Some(clause) = clause_text(&item.signal.title)
     {
-        clauses.push(clause);
+        clauses.push(clause.clone());
+        held_clause = Some(clause);
         item_ids.push(item.id.clone());
     }
-    if let Some(clause) = event_clause(&briefing.events_to_watch, now, lang) {
-        clauses.push(clause);
+    if let Some((title, clause)) = event_clause(&briefing.events_to_watch, now, lang) {
+        // A quiz is often both a held item and a briefing event: do not mention its title
+        // twice just because the event clause adds a time.
+        let duplicate = held_clause
+            .as_deref()
+            .is_some_and(|held| same_clause(held, &title) || same_clause(held, &clause));
+        if !duplicate {
+            clauses.push(clause);
+        }
     }
     if let Some(continuity) = &briefing.project_continuity
         && let Some(clause) = clause_text(&continuity.suggested_action)
@@ -98,6 +107,20 @@ fn opening(local_hour: u32, lang: Lang) -> &'static str {
     }
 }
 
+/// Whether two clauses say the same thing, ignoring case and trailing punctuation. A quiz
+/// is often both a held item and a briefing event.
+fn same_clause(a: &str, b: &str) -> bool {
+    normalized_clause(a) == normalized_clause(b)
+}
+
+fn normalized_clause(text: &str) -> String {
+    text.trim()
+        .trim_end_matches(|c: char| {
+            c.is_whitespace() || matches!(c, '.' | ',' | '!' | '?' | ':' | ';')
+        })
+        .to_lowercase()
+}
+
 /// Highest-score held `Interrupt` or `Suggest`; newest first on ties.
 fn best_held(held: &[AttentionItem]) -> Option<&AttentionItem> {
     held.iter()
@@ -115,7 +138,13 @@ fn best_held(held: &[AttentionItem]) -> Option<&AttentionItem> {
         })
 }
 
-fn event_clause(events: &[BriefingEvent], now: DateTime<Utc>, lang: Lang) -> Option<String> {
+/// The earliest event due within the window, as (title clause, full clause). The title is
+/// returned separately so the caller can suppress a duplicate of the held-item clause.
+fn event_clause(
+    events: &[BriefingEvent],
+    now: DateTime<Utc>,
+    lang: Lang,
+) -> Option<(String, String)> {
     let event = events
         .iter()
         .filter(|event| {
@@ -124,10 +153,11 @@ fn event_clause(events: &[BriefingEvent], now: DateTime<Utc>, lang: Lang) -> Opt
         .min_by(|a, b| a.due_at.cmp(&b.due_at).then(a.id.cmp(&b.id)))?;
     let title = clause_text(&event.title)?;
     let relative = relative(due_seconds(event.due_at, now), lang);
-    Some(match lang {
+    let clause = match lang {
         Lang::En => format!("{title} is due {relative}"),
         Lang::PtPt => format!("{title} é {relative}"),
-    })
+    };
+    Some((title, clause))
 }
 
 fn due_seconds(due: DateTime<Utc>, now: DateTime<Utc>) -> i64 {
