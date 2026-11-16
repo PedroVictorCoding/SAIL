@@ -91,10 +91,15 @@ function connectWs() {
     window.sailLiveTranscript?.sync?.();
     if (orbState === 'disconnected') updateState('idle');
     sendAction('forge:list');
+    window.SailPresence?.attach?.(ws);
+    if (window.SailPresence?.isHandsFree?.() && document.visibilityState !== 'hidden' && !isRecording) {
+      startMic();
+    }
   };
   ws.onerror = () => showError('Voice connection failed. Check the local server and HTTPS certificate.');
   ws.onclose = () => {
     if (generation !== wsGeneration) return;
+    window.SailPresence?.onDisconnect?.();
     ambient({ type:'disconnect', socket:generation });
     liveContextReplyPending = false; liveContextEnabled = false; renderLiveContext(); document.getElementById('liveContextBtn').disabled = true;
     window.sailLiveTranscript?.sync?.();
@@ -184,6 +189,11 @@ function handleVoiceMessage(data) {
         break;
       case 'audio_chunk': queueAudio(data); break;
       case 'speech_text': queueClientSpeech(data); break;
+      case 'announce': window.SailAnnounce?.push?.(data); break;
+      case 'presence_greeting': window.SailAnnounce?.showGreeting?.(data); break;
+      case 'presence_state': window.SailPresence?.onServerState?.(data.state); break;
+      case 'hands_free': window.SailPresence?.onServerHandsFree?.(data.state); break;
+      case 'not_addressed': window.SailAnnounce?.onNotAddressed?.(); break;
       case 'client_speech': clientSpeechActive = { stt:data.stt === true, tts:data.tts === true }; renderSpeechPlacement(); break;
       case 'turn_finished':
         liveContextReplyPending = false;
@@ -921,6 +931,13 @@ function stopMic(discardClientCapture = true) {
   if (!playingSources.size && !turnInProgress) updateState('idle');
   window.sailLiveTranscript?.sync?.();
 }
+window.SailPresence?.onHandsFreeChange?.((enabled) => {
+  if (enabled) {
+    if (ws?.readyState === WebSocket.OPEN && document.visibilityState !== 'hidden' && !isRecording) startMic();
+  } else if (isRecording) {
+    stopMic();
+  }
+});
 function toggleMute() { sendAction('toggle_mute'); }
 function cycleTier() { sendAction('set_tier', { profile: tiers[(tierIdx + 1) % tiers.length] }); }
 function interrupt() { stopPlayback(); sendAction('interrupt'); updateState('interrupted'); }

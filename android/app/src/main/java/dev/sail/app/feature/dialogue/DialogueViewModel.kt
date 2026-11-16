@@ -275,6 +275,11 @@ class DialogueViewModel(private val api: SailApi) : ViewModel() {
                 mutable.update { it.copy(micOn = false, phase = Phase.Holding, liveTranscript = event.message) }
             }
             is VoiceEvent.Control -> Unit
+            is VoiceEvent.Announce,
+            is VoiceEvent.PresenceGreeting,
+            is VoiceEvent.PresenceStateEvent,
+            is VoiceEvent.HandsFreeState,
+            VoiceEvent.NotAddressed -> Unit
             is VoiceEvent.Error -> showError(event.message)
             VoiceEvent.Ignored -> Unit
         }

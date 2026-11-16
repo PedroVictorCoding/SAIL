@@ -119,6 +119,28 @@ class SailApi(
     suspend inline fun <reified B> postJsonForBytes(path: String, body: B): ApiResult<BinaryBody> =
         postForBytes(path, body, serializer<B>())
 
+    suspend fun presenceState(): ApiResult<dev.sail.app.feature.dock.PresenceState> =
+        get("/api/presence")
+
+    suspend fun postHeartbeat(
+        body: dev.sail.app.feature.dock.HeartbeatRequest,
+    ): ApiResult<dev.sail.app.feature.dock.HeartbeatResponse> =
+        postJson("/api/presence/heartbeat", body)
+
+    suspend fun presenceSettings(): ApiResult<dev.sail.app.feature.dock.PresenceSettings> =
+        get("/api/presence/settings")
+
+    suspend fun savePresenceSettings(
+        settings: dev.sail.app.feature.dock.PresenceSettings,
+    ): ApiResult<dev.sail.app.feature.dock.PresenceSettings> =
+        postJson("/api/presence/settings", settings)
+
+    suspend fun sendProactiveFeedback(itemId: String, feedback: String): ApiResult<kotlinx.serialization.json.JsonElement> =
+        postJson(
+            "/api/proactive/items/${android.net.Uri.encode(itemId)}/feedback",
+            dev.sail.app.feature.dock.FeedbackRequest(feedback),
+        )
+
     /** Absolute URL of a server path (covers, map tiles), or null when SAIL isn't configured. */
     fun url(path: String): HttpUrl? = config()?.baseUrl?.resolve(path)
 

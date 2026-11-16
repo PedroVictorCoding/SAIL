@@ -1,0 +1,11 @@
+{
+  "type": "announce",
+  "item_id": "a1b2",
+  "title": "Forge: refactor failed",
+  "body": "2 tests failed in sail-flow.",
+  "source": "projects",
+  "kind": "task_failed",
+  "link": "/#forge",
+  "speak": true,
+  "reasons": ["urgency 0.70", "owner project"]
+}

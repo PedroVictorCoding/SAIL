@@ -1,0 +1,16 @@
+{
+  "place": "dock",
+  "since": "2026-11-16T18:02:11Z",
+  "active_device": "dock-7c1e",
+  "surfaces": [
+    {
+      "device_id": "dock-7c1e",
+      "surface": "dock",
+      "visible": true,
+      "input_idle_secs": 12,
+      "last_seen": "2026-11-16T18:05:40Z",
+      "voice_ready": true,
+      "can_speak": true
+    }
+  ]
+}

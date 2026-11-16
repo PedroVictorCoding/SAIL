@@ -1,0 +1,11 @@
+{
+  "type": "announce",
+  "item_id": "c3d4",
+  "title": "Algorithms quiz tomorrow",
+  "body": "Quiz 3 is due tomorrow at 9:00.",
+  "source": "calendar",
+  "kind": "deadline",
+  "link": null,
+  "speak": false,
+  "reasons": ["due in 14 hours", "high relevance"]
+}
