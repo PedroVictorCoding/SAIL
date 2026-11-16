@@ -10,6 +10,9 @@
 //! foreground state, charging and whether a voice socket is open are accepted. Heartbeats
 //! live in memory; only [`PresenceSettings`] is persisted.
 
+pub mod estimate;
+pub mod store;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

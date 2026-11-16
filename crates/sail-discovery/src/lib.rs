@@ -2,7 +2,8 @@
 //!
 //! - [`detect`]: deterministic detectors that turn observations into attention signals;
 //! - [`agenda`]: the durable agenda of topics, investigations, commitments and open questions;
-//! - [`initiative`]: the loop that ties them to Pulse's attention inbox.
+//! - [`initiative`]: the loop that ties them to Pulse's attention inbox;
+//! - [`tasks`]: finished Continuity task outcomes as attention signals.
 //!
 //! See `docs/SAIL_PROACTIVE.md`.
 pub mod agenda;
@@ -10,6 +11,7 @@ pub mod curiosity;
 pub mod detect;
 pub mod github;
 pub mod initiative;
+pub mod tasks;
 
 use async_trait::async_trait;
 use tracing::info;

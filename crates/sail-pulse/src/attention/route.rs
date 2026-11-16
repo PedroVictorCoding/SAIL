@@ -2,12 +2,12 @@
 //!
 //! Routing decides *where* an [`AttentionItem`] goes, never *whether*: Pulse's
 //! [`score::assess`](super::score::assess) owns that decision, and routing never raises a
-//! delivery. K2 implements the rules; this module holds the fixed contract.
+//! delivery. It is pure: no clock, randomness, I/O or global state.
 
 use serde::{Deserialize, Serialize};
 
-use super::AttentionItem;
-use crate::presence::{PresenceSettings, PresenceState};
+use super::{AttentionItem, Delivery, score};
+use crate::presence::{Place, PresenceSettings, PresenceState, SurfaceStatus};
 
 /// One destination. Internally tagged.
 ///
@@ -33,12 +33,80 @@ pub struct RouteContext {
 /// Telegram is only used for items at least this urgent (fixed a priori).
 pub const TELEGRAM_MIN_URGENCY: f32 = 0.8;
 
-/// Choose the single destination for `item`. Pure; K2 implements the rules.
+/// Choose the single destination for `item`. Pure.
+///
+/// First match wins:
+/// 1. anything Pulse did not assess as `Interrupt` is held for the next greeting;
+/// 2. quiet hours / `Asleep` never speak: Telegram if away and allowed, else show on the
+///    active device, else hold;
+/// 3. the active device can speak, speech is enabled and the hourly cap is not spent;
+/// 4. otherwise show on the active device;
+/// 5. when away, Telegram if the owner allowed it, a bot is paired and the item (or its
+///    deadline) is at least [`TELEGRAM_MIN_URGENCY`];
+/// 6. otherwise hold.
+///
+/// The deadline pressure used by rule 5 is evaluated against `item.created_at`, the
+/// assessment clock: [`RouteContext`] carries no `now`, and `assess` already used that
+/// instant when it decided the delivery. This keeps routing deterministic.
 pub fn route(
-    _item: &AttentionItem,
-    _presence: &PresenceState,
-    _settings: &PresenceSettings,
-    _ctx: &RouteContext,
+    item: &AttentionItem,
+    presence: &PresenceState,
+    settings: &PresenceSettings,
+    ctx: &RouteContext,
 ) -> Route {
+    if item.assessment.delivery != Delivery::Interrupt {
+        return Route::Hold;
+    }
+
+    let active = active_surface(presence);
+
+    if matches!(presence.place, Place::Asleep) || ctx.quiet_hours {
+        if presence.place == Place::Away && settings.telegram_when_away && ctx.telegram_paired {
+            return Route::Telegram;
+        }
+        return match active {
+            Some(surface) => Route::Show {
+                device_id: surface.device_id.clone(),
+            },
+            None => Route::Hold,
+        };
+    }
+
+    if let Some(surface) = active
+        && surface.can_speak
+        && settings.speak_announcements
+        && ctx.spoken_last_hour < settings.max_spoken_per_hour
+    {
+        return Route::Speak {
+            device_id: surface.device_id.clone(),
+        };
+    }
+
+    if let Some(surface) = active {
+        return Route::Show {
+            device_id: surface.device_id.clone(),
+        };
+    }
+
+    let reach = item.signal.urgency.max(score::deadline_pressure(
+        item.signal.deadline,
+        item.created_at,
+    ));
+    if presence.place == Place::Away
+        && settings.telegram_when_away
+        && ctx.telegram_paired
+        && reach >= TELEGRAM_MIN_URGENCY
+    {
+        return Route::Telegram;
+    }
+
     Route::Hold
+}
+
+fn active_surface(presence: &PresenceState) -> Option<&SurfaceStatus> {
+    let device_id = presence.active_device.as_deref()?;
+    presence
+        .surfaces
+        .iter()
+        .find(|surface| surface.device_id == device_id)
 }

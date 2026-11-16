@@ -41,6 +41,7 @@ pub mod ogg_opus;
 pub mod orb;
 pub mod pipeline;
 pub mod plans;
+pub mod presence_http;
 pub mod proactive;
 pub mod proactive_http;
 pub mod prompt;

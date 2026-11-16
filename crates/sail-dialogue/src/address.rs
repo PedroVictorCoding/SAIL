@@ -38,8 +38,72 @@ pub enum Addressed {
     No,
 }
 
-/// Check whether `transcript` addresses SAIL. K3 implements the rules.
-pub fn addressed(_transcript: &str) -> Addressed {
+struct Word<'a> {
+    text: &'a str,
+    end: usize,
+}
+
+/// Split on everything that is not a Unicode alphanumeric character. Punctuation and
+/// whitespace therefore separate words, so "Sail." is the word "sail".
+fn words(text: &str) -> Vec<Word<'_>> {
+    let mut words = Vec::new();
+    let mut start = None;
+    for (offset, ch) in text.char_indices() {
+        if ch.is_alphanumeric() {
+            start.get_or_insert(offset);
+        } else if let Some(from) = start.take() {
+            words.push(Word {
+                text: &text[from..offset],
+                end: offset,
+            });
+        }
+    }
+    if let Some(from) = start {
+        words.push(Word {
+            text: &text[from..],
+            end: text.len(),
+        });
+    }
+    words
+}
+
+/// Check whether `transcript` addresses SAIL.
+///
+/// The transcript is lowercased for matching and split on non-alphanumeric characters.
+/// The wake name must start within the first three words and match whole words only; a
+/// longer name ("hey sail") is preferred over its tail. `rest` comes from the original
+/// transcript, so its case is preserved. Input over [`MAX_TRANSCRIPT_CHARS`] is rejected
+/// without scanning.
+pub fn addressed(transcript: &str) -> Addressed {
+    if transcript.chars().count() > MAX_TRANSCRIPT_CHARS {
+        return Addressed::No;
+    }
+    let words = words(transcript);
+    if words.is_empty() {
+        return Addressed::No;
+    }
+    let lowered: Vec<String> = words.iter().map(|word| word.text.to_lowercase()).collect();
+    let wake_words: Vec<Vec<String>> = WAKE_NAMES
+        .iter()
+        .map(|name| name.split_whitespace().map(str::to_lowercase).collect())
+        .collect();
+
+    for start in 0..lowered.len().min(3) {
+        for name in &wake_words {
+            let Some(last) = start.checked_add(name.len()) else {
+                continue;
+            };
+            if last > lowered.len() || lowered[start..last] != name[..] {
+                continue;
+            }
+            let rest = transcript[words[last - 1].end..].trim_start_matches(|c: char| {
+                c.is_whitespace() || matches!(c, ',' | '.' | '!' | '?' | ':' | '-')
+            });
+            return Addressed::Yes {
+                rest: rest.to_owned(),
+            };
+        }
+    }
     Addressed::No
 }
 
