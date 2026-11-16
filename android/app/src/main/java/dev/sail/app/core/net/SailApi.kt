@@ -137,7 +137,7 @@ class SailApi(
 
     suspend fun sendProactiveFeedback(itemId: String, feedback: String): ApiResult<kotlinx.serialization.json.JsonElement> =
         postJson(
-            "/api/proactive/items/${android.net.Uri.encode(itemId)}/feedback",
+            "/api/initiative/items/${android.net.Uri.encode(itemId)}/feedback",
             dev.sail.app.feature.dock.FeedbackRequest(feedback),
         )
 

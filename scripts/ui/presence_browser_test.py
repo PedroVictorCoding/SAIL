@@ -1,7 +1,7 @@
 """SAIL Presence & Announce browser test (round 26, Antigravity).
 
 Self-contained Playwright test: serves crates/sail-dialogue/web/ over an in-process
-HTTP server, mocks /api/presence* and /api/proactive/items/*/feedback, and drives
+HTTP server, mocks /api/presence* and /api/initiative/items/*/feedback, and drives
 /ws/voice through a fake WebSocket from scripts/ui/fixtures/presence/*.json.
 
     /home/main/SAIL/.venv-voice/bin/python scripts/ui/presence_browser_test.py [shots_dir]
@@ -168,7 +168,7 @@ def install_api_mocks(page, state_fixture, settings_store, feedback_calls):
         })
         route.fulfill(json={"ok": True})
 
-    page.route("**/api/proactive/items/*/feedback", handle_feedback)
+    page.route("**/api/initiative/items/*/feedback", handle_feedback)
 
 
 def run():

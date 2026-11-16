@@ -27,7 +27,7 @@
     }
     try {
       const fetchFn = window.SailPresence?.fetchJson;
-      const url = `/api/proactive/items/${encodeURIComponent(itemId)}/feedback`;
+      const url = `/api/initiative/items/${encodeURIComponent(itemId)}/feedback`;
       const options = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
