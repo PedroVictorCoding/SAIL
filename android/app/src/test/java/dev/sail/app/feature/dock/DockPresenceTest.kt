@@ -43,7 +43,13 @@ class DockPresenceTest {
         val greeting = VoiceProtocol.parse(fixture("presence_greeting.json"))
         assertTrue(greeting is VoiceEvent.PresenceGreeting)
         greeting as VoiceEvent.PresenceGreeting
-        assertEquals(listOf("a1b2", "c3d4"), greeting.itemIds)
+        assertEquals(
+            listOf(
+                GreetingItem("a1b2", "Forge: refactor failed"),
+                GreetingItem("c3d4", "Algorithms quiz tomorrow"),
+            ),
+            greeting.items,
+        )
         assertEquals(5400L, greeting.awayForSecs)
 
         assertEquals(VoiceEvent.HandsFreeState("listening"), VoiceProtocol.parse(fixture("hands_free_listening.json")))
@@ -128,5 +134,19 @@ class DockPresenceTest {
         assertEquals("dock-7c1e", hello["device_id"]!!.jsonPrimitive.content)
         assertEquals("dock", hello["surface"]!!.jsonPrimitive.content)
         assertEquals(true, hello["hands_free"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test
+    fun callingStartTwiceStartsCaptureOnce() {
+        var running = false
+        var starts = 0
+        val startCapture = {
+            starts++
+            running = true
+            true
+        }
+        assertTrue(DockViewModel.startCaptureOnce(isRunning = { running }, startCapture = startCapture))
+        assertTrue(DockViewModel.startCaptureOnce(isRunning = { running }, startCapture = startCapture))
+        assertEquals(1, starts)
     }
 }

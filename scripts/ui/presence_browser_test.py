@@ -220,6 +220,12 @@ def run():
                 expect(stack.locator(".announce-btn-open")).to_have_count(1)
                 expect(page.locator("#presenceGreeting")).to_be_visible()
                 expect(page.locator("#presenceGreeting")).to_contain_text("Welcome back.")
+                chips = page.locator("#presenceGreeting .presence-greeting-chip")
+                expect(chips).to_have_count(2)
+                expect(chips.nth(0)).to_have_text("Forge: refactor failed")
+                expect(chips.nth(1)).to_have_text("Algorithms quiz tomorrow")
+                greeting_text = page.locator("#presenceGreeting").inner_text()
+                assert "a1b2" not in greeting_text and "c3d4" not in greeting_text, greeting_text
 
                 # 3. Why? expands reasons
                 first_card = stack.locator('.announce-card[data-item-id="a1b2"]')
@@ -234,8 +240,17 @@ def run():
                 expect(stack.locator(".announce-card")).to_have_count(1)
                 assert any(c["body"].get("feedback") == "useful" for c in feedback_calls), feedback_calls
 
-                # 5. Hands-free states + not_addressed leaves no text in DOM
+                # 5. Hands-free states + hide/show resume + not_addressed leaves no text in DOM
+                page.evaluate("() => { window.__hfEvents = []; window.SailPresence.onHandsFreeChange(v => window.__hfEvents.push(v)); }")
                 page.locator("#handsFreeBtn").click()
+                page.evaluate("""() => {
+                  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+                  document.dispatchEvent(new Event('visibilitychange'));
+                  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+                  document.dispatchEvent(new Event('visibilitychange'));
+                }""")
+                hf_events = page.evaluate("() => window.__hfEvents")
+                assert hf_events == [True, False, True], f"Expected [True, False, True] on enable -> hide -> show, got {hf_events}"
                 page.evaluate("(m) => window.__sailPushWs(m)", hf_listening)
                 expect(page.locator("#handsFreeStatePill")).to_be_visible()
                 expect(page.locator("#handsFreeStateText")).to_have_text('Listening for "SAIL"')
