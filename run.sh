@@ -29,6 +29,17 @@ export SAIL_LLAMA_PERSIST="${SAIL_LLAMA_PERSIST:-1}"
 # helpers by default; set SAIL_MODEL_SIGNALS= (empty) to keep them off, or give a
 # comma list such as chronos,gbdt. The `-` (not `:-`) keeps an explicit empty value.
 export SAIL_MODEL_SIGNALS="${SAIL_MODEL_SIGNALS-chronos,yolo,yolo_trend,gbdt}"
+# Local forecast opt-in, written by the owner after installing the worker.
+# Read only supported settings as data; never execute the environment file.
+TIMESFM_ENV="${SAIL_DATA:-/srv/sail-data}/capital/timesfm.env"
+if [[ -f "$TIMESFM_ENV" ]]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      SAIL_TIMESFM_ENABLED|SAIL_TIMESFM_PYTHON|SAIL_TIMESFM_SCRIPT|SAIL_TIMESFM_CHECKPOINT|SAIL_PRICES_SOURCE)
+        if [[ ! -v "$key" ]]; then export "$key=$value"; fi ;;
+    esac
+  done < "$TIMESFM_ENV"
+fi
 # The sandbox runner reads PDFs (scripts/setup-sail-runner.sh). Use it when it's installed
 # and this shell can reach its socket (membership of the `sail` group).
 if [[ -z "${SAIL_RUNNER_SOCKET:-}" ]] && id -u sail-runner >/dev/null 2>&1; then
