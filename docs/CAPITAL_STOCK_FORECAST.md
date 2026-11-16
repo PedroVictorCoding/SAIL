@@ -59,6 +59,13 @@ SAIL_TIMESFM_ENABLED=1
 SAIL_PRICES_SOURCE=yfinance
 ```
 
+When launching with `run.sh`, persist these settings in
+`$SAIL_DATA/capital/timesfm.env` (default `/srv/sail-data/capital/timesfm.env`),
+one `KEY=value` per line, without shell quotes or `export`. The launcher reads only
+the TimesFM variables listed below and `SAIL_PRICES_SOURCE`; explicitly supplied
+environment variables take precedence, including `SAIL_TIMESFM_ENABLED=0`.
+Other launch methods must supply the variables themselves.
+
 `SAIL_PRICES_SOURCE=yahoo` is also accepted by this tab. This reuses the existing
 explicit Yahoo network opt-in; every run sends the entered ticker and chosen
 interval to `query1.finance.yahoo.com`. It sends no account, position or ledger
