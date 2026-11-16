@@ -59,15 +59,28 @@ impl TaskEnd {
         }
     }
 
-    fn title(self, task_title: &str) -> String {
-        // Keep room for "Forge: " and the verb inside MAX_TITLE_CHARS.
-        let title = excerpt(task_title, MAX_TITLE_CHARS - 40);
+    fn title(self, owner: &str, task_title: &str) -> String {
+        // Keep room for "Owner: " and the verb inside MAX_TITLE_CHARS.
+        let title = excerpt(task_title, MAX_TITLE_CHARS - 56);
+        let owner = owner_label(owner);
         match self {
-            TaskEnd::Succeeded => format!("Forge: {title} succeeded"),
-            TaskEnd::Failed => format!("Forge: {title} failed"),
-            TaskEnd::NeedsIntervention => format!("Forge: {title} needs you"),
+            TaskEnd::Succeeded => format!("{owner}: {title} succeeded"),
+            TaskEnd::Failed => format!("{owner}: {title} failed"),
+            TaskEnd::NeedsIntervention => format!("{owner}: {title} needs you"),
         }
     }
+}
+
+/// The owner as a display label: first letter uppercased, blank becomes "Task", and a
+/// hostilely long owner is bounded like any other title.
+fn owner_label(owner: &str) -> String {
+    let owner = owner.trim();
+    let Some(first) = owner.chars().next() else {
+        return "Task".into();
+    };
+    let mut label: String = first.to_uppercase().collect();
+    label.push_str(&owner[first.len_utf8()..]);
+    excerpt(&label, 32)
 }
 
 /// Outcomes that ended after `since` (exclusive) and not after `now` become signals.
@@ -85,7 +98,7 @@ pub fn task_signals(
                 source: Source::Projects,
                 kind: kind.to_owned(),
                 dedupe_key: format!("task:{}:{kind}", outcome.id),
-                title: outcome.end.title(&outcome.title),
+                title: outcome.end.title(&outcome.owner, &outcome.title),
                 body: excerpt(&outcome.summary, MAX_BODY_CHARS),
                 urgency: outcome.end.urgency(),
                 relevance: 0.8,

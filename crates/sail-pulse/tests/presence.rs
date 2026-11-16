@@ -274,7 +274,7 @@ fn note_addressed_turn_resets_idle_and_can_make_the_device_active() {
         vec![PresenceEvent::Arrived {
             place: Place::Dock,
             device_id: "dock-1".into(),
-            away_for_secs: 1,
+            away_for_secs: 0,
         }]
     );
     let state = store.state(t0 + Duration::seconds(1), false);
@@ -329,11 +329,27 @@ fn settings_persist_clamp_and_survive_corruption() {
         assert_eq!(store.settings(), PresenceSettings::default());
         let saved = store
             .save_settings(PresenceSettings {
+                away_after_secs: 0,
+                greet_after_away_secs: 1,
                 max_spoken_per_hour: 9,
                 telegram_when_away: true,
                 ..PresenceSettings::default()
             })
             .unwrap();
+        assert_eq!(saved.away_after_secs, 60);
+        assert_eq!(saved.greet_after_away_secs, 300);
+        assert_eq!(saved.max_spoken_per_hour, 6);
+        let saved = store
+            .save_settings(PresenceSettings {
+                away_after_secs: u64::MAX,
+                greet_after_away_secs: u64::MAX,
+                max_spoken_per_hour: 9,
+                telegram_when_away: true,
+                ..PresenceSettings::default()
+            })
+            .unwrap();
+        assert_eq!(saved.away_after_secs, 7_200);
+        assert_eq!(saved.greet_after_away_secs, 86_400);
         assert_eq!(saved.max_spoken_per_hour, 6);
         store
             .record(beat("web-1", SurfaceKind::Web, true, 0), t0, false)
@@ -351,6 +367,144 @@ fn settings_persist_clamp_and_survive_corruption() {
     std::fs::write(dir.join("presence.json"), b"{ not json").unwrap();
     let recovered = PresenceStore::open(&dir).unwrap();
     assert_eq!(recovered.settings(), PresenceSettings::default());
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn absence_survives_quiet_hours_across_a_whole_night() {
+    let dir = temp_dir();
+    let store = PresenceStore::open(&dir).unwrap();
+    let evening = at("2026-11-16T19:00:00Z");
+    store
+        .record(beat("web-1", SurfaceKind::Web, true, 0), evening, false)
+        .unwrap();
+
+    let left = at("2026-11-16T20:00:00Z");
+    let (state, events) = store
+        .record(beat("web-1", SurfaceKind::Web, false, 0), left, false)
+        .unwrap();
+    assert_eq!(state.place, Place::Away);
+    assert_eq!(events, vec![PresenceEvent::Left { from: Place::Desk }]);
+
+    // Quiet hours start and end: the place changes, but the absence clock does not.
+    assert!(store.tick(at("2026-11-16T23:00:00Z"), true).is_empty());
+    assert_eq!(
+        store.state(at("2026-11-16T23:00:00Z"), true).place,
+        Place::Asleep
+    );
+    assert!(store.tick(at("2026-11-17T07:00:00Z"), false).is_empty());
+    assert_eq!(
+        store.state(at("2026-11-17T07:00:00Z"), false).place,
+        Place::Away
+    );
+
+    let morning = at("2026-11-17T07:20:00Z");
+    let (state, events) = store
+        .record(beat("web-1", SurfaceKind::Web, true, 0), morning, false)
+        .unwrap();
+    assert_eq!(state.place, Place::Desk);
+    assert_eq!(
+        events,
+        vec![PresenceEvent::Arrived {
+            place: Place::Desk,
+            device_id: "web-1".into(),
+            away_for_secs: 11 * 3_600 + 20 * 60,
+        }]
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn no_left_before_any_heartbeat_or_between_away_and_asleep() {
+    let dir = temp_dir();
+    let store = PresenceStore::open(&dir).unwrap();
+    let now = at("2026-11-16T18:00:00Z");
+
+    // Nothing has ever been seen.
+    assert!(store.tick(now, false).is_empty());
+    assert_eq!(store.state(now, false).place, Place::Unknown);
+
+    // Unknown -> Away is not a departure.
+    let (state, events) = store
+        .record(beat("web-1", SurfaceKind::Web, false, 0), now, false)
+        .unwrap();
+    assert_eq!(state.place, Place::Away);
+    assert!(events.is_empty());
+
+    // Away -> Asleep and Asleep -> Away are quiet-hour changes, not departures.
+    assert!(store.tick(now, true).is_empty());
+    assert_eq!(store.state(now, true).place, Place::Asleep);
+    assert!(store.tick(now, false).is_empty());
+    assert_eq!(store.state(now, false).place, Place::Away);
+
+    // With no observed departure there is nothing to measure, so the arrival is 0 s.
+    let (_, events) = store
+        .record(
+            beat("web-1", SurfaceKind::Web, true, 0),
+            now + Duration::seconds(1),
+            false,
+        )
+        .unwrap();
+    assert_eq!(
+        events,
+        vec![PresenceEvent::Arrived {
+            place: Place::Desk,
+            device_id: "web-1".into(),
+            away_for_secs: 0,
+        }]
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn store_publishes_events_from_record_note_and_tick() {
+    let dir = temp_dir();
+    let store = PresenceStore::open(&dir).unwrap();
+    let mut events = store.subscribe();
+    let t0 = at("2026-11-16T18:00:00Z");
+
+    store
+        .record(beat("web-1", SurfaceKind::Web, true, 0), t0, false)
+        .unwrap();
+    assert_eq!(
+        events.try_recv().unwrap(),
+        PresenceEvent::Arrived {
+            place: Place::Desk,
+            device_id: "web-1".into(),
+            away_for_secs: 0,
+        }
+    );
+
+    store
+        .record(
+            beat("web-1", SurfaceKind::Web, true, 700),
+            t0 + Duration::seconds(1),
+            false,
+        )
+        .unwrap();
+    assert_eq!(
+        events.try_recv().unwrap(),
+        PresenceEvent::Left { from: Place::Desk }
+    );
+
+    store.note_addressed_turn("web-1", t0 + Duration::seconds(2), false);
+    assert_eq!(
+        events.try_recv().unwrap(),
+        PresenceEvent::Arrived {
+            place: Place::Desk,
+            device_id: "web-1".into(),
+            away_for_secs: 1,
+        }
+    );
+
+    store.tick(t0 + Duration::seconds(2 + 91), false);
+    assert_eq!(
+        events.try_recv().unwrap(),
+        PresenceEvent::Left { from: Place::Desk }
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -41,9 +41,45 @@ fn addressed_is_pure() {
 #[test]
 fn name_must_start_within_the_first_three_words() {
     assert_eq!(rest("so hey sail what next").as_deref(), Some("what next"));
-    assert_eq!(rest("one two sail now").as_deref(), Some("now"));
+    // Multi-word names may start at word 3.
+    assert_eq!(
+        rest("one two hey sail what next").as_deref(),
+        Some("what next")
+    );
     assert_eq!(rest("one two three hey sail"), None);
     assert_eq!(rest("one two three sail"), None);
+}
+
+#[test]
+fn a_bare_sail_needs_the_first_word_or_a_filler() {
+    // Overheard speech must not wake SAIL.
+    assert_eq!(rest("We should sail this weekend"), None);
+    assert_eq!(rest("I'll sail tomorrow"), None);
+    assert_eq!(rest("one two sail now"), None);
+    assert_eq!(rest("please sail"), None);
+    assert_eq!(rest("we sail"), None);
+
+    // The first word is a command.
+    assert_eq!(rest("sail what's next").as_deref(), Some("what's next"));
+
+    // Fillers may precede the bare name.
+    assert_eq!(
+        rest("so sail what time is it").as_deref(),
+        Some("what time is it")
+    );
+    assert_eq!(
+        rest("um, SAIL, what's next").as_deref(),
+        Some("what's next")
+    );
+    assert_eq!(
+        rest("uh sail open the map").as_deref(),
+        Some("open the map")
+    );
+    assert_eq!(rest("well sail now").as_deref(), Some("now"));
+    assert_eq!(rest("oh sail now").as_deref(), Some("now"));
+    assert_eq!(rest("então sail agora").as_deref(), Some("agora"));
+    assert_eq!(rest("olha sail agora").as_deref(), Some("agora"));
+    assert_eq!(rest("um so sail now").as_deref(), Some("now"));
 }
 
 #[test]
@@ -52,6 +88,7 @@ fn whole_words_only() {
     assert_eq!(rest("sailboat race"), None);
     assert_eq!(rest("sails"), None);
     assert_eq!(rest("sailor"), None);
+    assert_eq!(rest("We should sail this weekend"), None);
 }
 
 #[test]
@@ -382,4 +419,25 @@ fn speaks_portuguese_and_never_exceeds_the_cap() {
     );
     let greeting = compose(&plan, &[item], 3_600, now, 18, Lang::En);
     assert!(greeting.spoken.chars().count() <= MAX_SPOKEN_CHARS);
+}
+
+#[test]
+fn does_not_repeat_a_held_item_as_an_event() {
+    let now = at("2026-11-16T18:00:00Z");
+
+    // A Moodle quiz is often both a held item and a briefing event.
+    let mut plan = briefing();
+    plan.events_to_watch = vec![event("e1", "Quiz 3", now + Duration::hours(2))];
+    let item = held("a1", "Quiz 3", 0.9, Delivery::Suggest, now);
+    let greeting = compose(&plan, &[item], 3_600, now, 18, Lang::En);
+    assert_eq!(greeting.spoken, "Welcome back. Quiz 3.");
+    assert_eq!(greeting.item_ids, vec!["a1".to_owned()]);
+
+    // Case and trailing punctuation do not defeat the check.
+    let mut plan = briefing();
+    plan.events_to_watch = vec![event("e1", "quiz 3.", now + Duration::hours(2))];
+    let item = held("a2", "QUIZ 3", 0.9, Delivery::Suggest, now);
+    let greeting = compose(&plan, &[item], 3_600, now, 18, Lang::En);
+    assert_eq!(greeting.spoken, "Welcome back. QUIZ 3.");
+    assert_eq!(greeting.item_ids, vec!["a2".to_owned()]);
 }

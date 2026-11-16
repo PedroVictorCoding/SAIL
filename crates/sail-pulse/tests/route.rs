@@ -71,12 +71,27 @@ fn presence(place: Place, active: Option<&str>, can_speak: bool) -> PresenceStat
     }
 }
 
-fn ctx(quiet_hours: bool, spoken_last_hour: u32, telegram_paired: bool) -> RouteContext {
+fn ctx_at(
+    now: DateTime<Utc>,
+    quiet_hours: bool,
+    spoken_last_hour: u32,
+    telegram_paired: bool,
+) -> RouteContext {
     RouteContext {
+        now,
         quiet_hours,
         spoken_last_hour,
         telegram_paired,
     }
+}
+
+fn ctx(quiet_hours: bool, spoken_last_hour: u32, telegram_paired: bool) -> RouteContext {
+    ctx_at(
+        at("2026-11-16T18:00:00Z"),
+        quiet_hours,
+        spoken_last_hour,
+        telegram_paired,
+    )
 }
 
 #[test]
@@ -368,6 +383,78 @@ fn deadline_reach_uses_the_assessment_clock() {
             &away,
             &settings,
             &ctx(false, 0, true)
+        ),
+        Route::Hold
+    );
+}
+
+#[test]
+fn quiet_hour_override_reaches_telegram_from_asleep() {
+    let allowed = PresenceSettings {
+        telegram_when_away: true,
+        ..PresenceSettings::default()
+    };
+    let asleep = presence(Place::Asleep, None, false);
+    // The daily estimate never says Away during quiet hours, so Asleep must count too.
+    assert_eq!(
+        route(
+            &item(Delivery::Interrupt, None, 0.95),
+            &asleep,
+            &allowed,
+            &ctx(true, 0, true)
+        ),
+        Route::Telegram
+    );
+    assert_eq!(
+        route(
+            &item(Delivery::Interrupt, None, 0.95),
+            &asleep,
+            &allowed,
+            &ctx(false, 0, true)
+        ),
+        Route::Telegram,
+        "a place of Asleep is quiet even without the flag"
+    );
+    assert_eq!(
+        route(
+            &item(Delivery::Interrupt, None, 0.95),
+            &asleep,
+            &PresenceSettings::default(),
+            &ctx(true, 0, true)
+        ),
+        Route::Hold,
+        "Telegram when away is still opt-in"
+    );
+}
+
+#[test]
+fn deadline_pressure_uses_the_routing_clock() {
+    let settings = PresenceSettings {
+        telegram_when_away: true,
+        ..PresenceSettings::default()
+    };
+    let away = presence(Place::Away, None, false);
+    let deadline = at("2026-11-16T19:00:00Z");
+    let mut held_item = item(Delivery::Interrupt, Some(deadline), 0.7);
+    held_item.created_at = at("2026-11-10T00:00:00Z");
+
+    // Ingested days ago, routed 30 minutes before the deadline: urgent now.
+    assert_eq!(
+        route(
+            &held_item,
+            &away,
+            &settings,
+            &ctx_at(at("2026-11-16T18:30:00Z"), false, 0, true)
+        ),
+        Route::Telegram
+    );
+    // Routed after the deadline the pressure is gone and the base urgency is below 0.8.
+    assert_eq!(
+        route(
+            &held_item,
+            &away,
+            &settings,
+            &ctx_at(at("2026-11-16T19:30:00Z"), false, 0, true)
         ),
         Route::Hold
     );
