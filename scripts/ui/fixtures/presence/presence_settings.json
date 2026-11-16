@@ -1,0 +1,9 @@
+{
+  "away_after_secs": 600,
+  "greet_on_arrival": true,
+  "greet_after_away_secs": 2700,
+  "speak_announcements": true,
+  "speak_on": ["web", "dock"],
+  "max_spoken_per_hour": 3,
+  "telegram_when_away": false
+}
