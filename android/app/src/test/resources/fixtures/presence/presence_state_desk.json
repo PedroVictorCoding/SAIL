@@ -1,0 +1,16 @@
+{
+  "place": "desk",
+  "since": "2026-11-16T18:00:00Z",
+  "active_device": "web-desk1",
+  "surfaces": [
+    {
+      "device_id": "web-desk1",
+      "surface": "web",
+      "visible": true,
+      "input_idle_secs": 4,
+      "last_seen": "2026-11-16T18:05:40Z",
+      "voice_ready": true,
+      "can_speak": true
+    }
+  ]
+}

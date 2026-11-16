@@ -77,6 +77,7 @@ fun HomeScreen(
     onOpenBook: (bookId: String) -> Unit,
     onOpenDialogue: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenDock: () -> Unit = {},
 ) {
     val container = LocalAppContainer.current
     val repository = remember(container.api) { HomeRepository(container.api) }
@@ -94,6 +95,14 @@ fun HomeScreen(
             connection = connection,
             onSettings = onOpenSettings,
         )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = ScreenGutter, vertical = 4.dp),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            SecondaryButton(text = "Dock mode", onClick = onOpenDock)
+        }
 
         when (val current = uiState) {
             is UiState.Loading -> {

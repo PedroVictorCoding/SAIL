@@ -985,7 +985,7 @@ pub fn registry() -> Arc<ToolRegistry> {
         ),
         (
             "capital:income",
-            "The latest dividend income plan and what backs it: whether a search found a monthly allocation that beats the fixed choices (and the buys it suggests this month, never orders), the plan and the six fixed choices scored on simulated paths (10th-percentile and median income, median value), sensitivity to slower growth, no cuts and flat FX, names left out for dividend safety, and how well the dividend growth estimate held up in its backtest. Use for 'how do I maximize dividend income?', 'where should my monthly money go?', 'is my dividend income safe?'. Read-only: it reports the last plan the owner ran.",
+            "The latest dividend income plan and what backs it: whether a search found a monthly allocation that beats the fixed choices (and the buys it suggests this month, never orders), the plan and the six fixed choices scored on simulated paths (10th-percentile and median income, median value), sensitivity to slower growth, no cuts and flat FX, names left out for dividend safety, and how well the dividend growth estimate held up in its backtest. It also carries the latest early-retirement research note (`retirement_research.read_aloud` is the whole note as plain sentences to read out). Use for 'how do I maximize dividend income?', 'where should my monthly money go?', 'is my dividend income safe?', 'read me the research note', 'what did the retirement research say?'. Read-only: it reports the last plan the owner ran.",
             json!({}),
             &[],
             ToolEffect::ReadOnly,

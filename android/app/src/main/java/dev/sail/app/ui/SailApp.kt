@@ -23,6 +23,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -52,6 +53,8 @@ import dev.sail.app.feature.arena.CourseScreen
 import dev.sail.app.feature.arena.LessonScreen
 import dev.sail.app.feature.arena.ReviewScreen
 import dev.sail.app.feature.dialogue.DialogueScreen
+import dev.sail.app.feature.dock.DockScreen
+import dev.sail.app.feature.dock.SurfaceKind
 import dev.sail.app.feature.home.HomeScreen
 import dev.sail.app.feature.library.BookScreen
 import dev.sail.app.feature.library.LibraryScreen
@@ -70,6 +73,20 @@ fun SailApp() {
     // Fixed for the life of the NavHost; finishing Settings navigates to Home itself.
     val start = remember { if (config == null) Routes.SETTINGS else Routes.HOME }
     val navLock = remember { NavLock() }
+    val charging by container.heartbeats.charging.collectAsStateWithLifecycle()
+    val openDockOnCharge by container.heartbeats.openDockWhenCharging.collectAsStateWithLifecycle()
+
+    LaunchedEffect(route) {
+        if (route != Routes.DOCK) {
+            container.heartbeats.setSurface(SurfaceKind.PHONE, voiceReady = false)
+        }
+    }
+
+    LaunchedEffect(charging, openDockOnCharge, config) {
+        if (config != null && charging && openDockOnCharge && route != Routes.DOCK) {
+            nav.navigate(Routes.DOCK)
+        }
+    }
 
     Column(
         Modifier
@@ -112,7 +129,11 @@ private fun SailNavHost(nav: NavHostController, start: String) {
                 onOpenBook = { nav.navigate(Routes.book(it)) },
                 onOpenDialogue = { nav.navigateTopLevel(Routes.DIALOGUE) },
                 onOpenSettings = { nav.navigate(Routes.SETTINGS) },
+                onOpenDock = { nav.navigate(Routes.DOCK) },
             )
+        }
+        composable(Routes.DOCK) {
+            DockScreen(onExit = { nav.popBackStack() })
         }
         composable(Routes.TRACKER) {
             TrackerScreen(onBack = { nav.popBackStack() })

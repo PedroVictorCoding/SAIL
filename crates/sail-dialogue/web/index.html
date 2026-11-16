@@ -17,6 +17,7 @@
 <link rel="stylesheet" href="/gateway.css">
 <link rel="stylesheet" href="/memory-review.css">
 <link rel="stylesheet" href="/initiative.css">
+<link rel="stylesheet" href="/announce.css">
 <link rel="stylesheet" href="/escalation-usage.css">
 <link rel="stylesheet" href="/mesh.css">
 </head>
@@ -1036,6 +1037,8 @@
         <div class="orb-wrap" id="orbWrap"><canvas id="orbCanvas" width="360" height="360" role="img" aria-label="SAIL assistant orb"></canvas></div>
         <div class="state-label" id="statusBadge" role="status" aria-live="polite">Ready</div>
         <p class="context-line" id="transcript">Ready when you are.</p>
+        <div class="hands-free-pill" id="handsFreeStatePill" data-hf-state="off" role="status" aria-live="polite" hidden><span class="hands-free-dot" aria-hidden="true"></span><span id="handsFreeStateText"></span></div>
+        <div class="presence-greeting" id="presenceGreeting" role="status" aria-live="polite" hidden></div>
       </div>
       <div class="live-transcript" id="liveTranscript" aria-live="polite"></div>
       <section class="camera-panel" id="cameraPanel" aria-label="Camera preview" hidden>
@@ -1043,6 +1046,7 @@
         <video id="cameraPreview" autoplay muted playsinline aria-label="Live camera preview"></video>
         <button class="camera-capture" id="cameraCaptureBtn" type="button">Capture frame</button>
       </section>
+      <section class="announce-stack" id="announceStack" aria-label="Announcements" hidden></section>
       <div class="reminder-alerts" id="reminderAlerts" aria-live="assertive" aria-label="Due reminders"></div>
       <section class="initiative-panel" id="initiativePanel" aria-label="Initiative inbox"></section>
 
@@ -1055,6 +1059,7 @@
         <input id="textInput" type="text" aria-label="Message SAIL" placeholder="Ask SAIL anything…" maxlength="16000" autocomplete="off" required>
         <button class="composer-action dock-mute" id="muteDockBtn" type="button" aria-label="Mute microphone" aria-pressed="false" hidden><span aria-hidden="true">⊘</span></button>
         <button class="composer-action end-turn-action" id="endTurnBtn" type="button" aria-label="Finish speaking turn" title="Finish speaking turn" hidden><span>Send turn</span></button>
+        <button class="composer-action hands-free-action" id="handsFreeBtn" type="button" aria-label="Hands-free" aria-pressed="false" title="Turn on hands-free"><span aria-hidden="true">HF</span></button>
         <button class="composer-action mic-action" id="micBtn" type="button" aria-label="Start microphone" title="Start microphone"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg></button>
         <button class="composer-action stop-action" id="interruptBtn" type="button" aria-label="Interrupt current response" title="Interrupt" hidden><span aria-hidden="true">■</span></button>
         <button class="composer-action send-action" id="sendBtn" type="submit" aria-label="Send message" title="Send"><span aria-hidden="true">↑</span></button>
@@ -1192,6 +1197,10 @@
         <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#dialogue"></use></svg></span>
         <span class="vscode-nav-text">Voice & Audio</span>
       </button>
+      <button type="button" class="vscode-nav-item" data-settings-tab="presence">
+        <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#pulse"></use></svg></span>
+        <span class="vscode-nav-text">Presence</span>
+      </button>
       <button type="button" class="vscode-nav-item" data-settings-tab="guardian">
         <span class="vscode-nav-icon" aria-hidden="true"><svg><use href="/icons.svg#guardian"></use></svg></span>
         <span class="vscode-nav-text">Guardian Security</span>
@@ -1250,6 +1259,108 @@
           </div>
         </div>
 
+      </section>
+
+      <!-- 2b. Presence Category -->
+      <section class="vscode-category-panel" id="settingsPanel-presence" data-category="presence" hidden>
+        <div class="vscode-category-header">
+          <h3>Presence & Announcements</h3>
+          <p class="vscode-category-desc">Control hands-free listening on this device, spoken announcements, arrival greetings, and away notifications.</p>
+        </div>
+
+        <div class="presence-place-banner" id="presencePlaceBanner">
+          <span>Current place</span>
+          <strong id="presencePlaceValue">Unknown</strong>
+        </div>
+
+        <div class="vscode-setting-item" data-search-terms="presence hands free wake word listening device">
+          <div class="vscode-setting-info">
+            <label for="presenceHandsFreeToggle" class="vscode-setting-name">Hands-free on this device</label>
+            <p class="vscode-setting-desc">Keep the microphone open while this tab is active and listen for "SAIL". Off by default.</p>
+          </div>
+          <div class="vscode-setting-control">
+            <input type="checkbox" id="presenceHandsFreeToggle">
+          </div>
+        </div>
+
+        <form id="presenceSettingsForm" novalidate>
+          <div class="vscode-setting-item" data-search-terms="presence speak announcements voice">
+            <div class="vscode-setting-info">
+              <label for="presenceSpeakAnnouncements" class="vscode-setting-name">Speak announcements</label>
+              <p class="vscode-setting-desc">Read important announcements aloud on the active surface.</p>
+            </div>
+            <div class="vscode-setting-control">
+              <input type="checkbox" id="presenceSpeakAnnouncements" checked>
+            </div>
+          </div>
+
+          <div class="vscode-setting-item" data-search-terms="presence speak surfaces web dock phone">
+            <div class="vscode-setting-info">
+              <span class="vscode-setting-name">Speak on surfaces</span>
+              <p class="vscode-setting-desc">Choose which surfaces may speak announcements aloud.</p>
+            </div>
+            <div class="vscode-setting-control presence-speak-surfaces">
+              <label class="presence-check-inline"><input type="checkbox" id="presenceSpeakWeb" checked> Desk (browser)</label>
+              <label class="presence-check-inline"><input type="checkbox" id="presenceSpeakDock" checked> Dock</label>
+              <label class="presence-check-inline"><input type="checkbox" id="presenceSpeakPhone"> Phone</label>
+            </div>
+          </div>
+
+          <div class="vscode-setting-item" data-search-terms="presence greet arrival welcome back">
+            <div class="vscode-setting-info">
+              <label for="presenceGreetOnArrival" class="vscode-setting-name">Greet me when I come back</label>
+              <p class="vscode-setting-desc">Speak a short summary of held announcements when you return after being away.</p>
+            </div>
+            <div class="vscode-setting-control">
+              <input type="checkbox" id="presenceGreetOnArrival" checked>
+            </div>
+          </div>
+
+          <div class="vscode-setting-item" data-search-terms="presence telegram away notifications">
+            <div class="vscode-setting-info">
+              <label for="presenceTelegramAway" class="vscode-setting-name">Send urgent alerts to Telegram when away</label>
+              <p class="vscode-setting-desc">Opt-in. Only sends urgent interruptions when no local surface is active.</p>
+            </div>
+            <div class="vscode-setting-control">
+              <input type="checkbox" id="presenceTelegramAway">
+            </div>
+          </div>
+
+          <div class="vscode-setting-item" data-search-terms="presence away threshold minutes">
+            <div class="vscode-setting-info">
+              <label for="presenceAwayMins" class="vscode-setting-name">Away threshold (minutes)</label>
+              <p class="vscode-setting-desc">Minutes without input before SAIL considers you away.</p>
+            </div>
+            <div class="vscode-setting-control">
+              <input type="number" class="presence-number-input" id="presenceAwayMins" min="1" max="1440" value="10">
+            </div>
+          </div>
+
+          <div class="vscode-setting-item" data-search-terms="presence greeting threshold away minutes">
+            <div class="vscode-setting-info">
+              <label for="presenceGreetAfterMins" class="vscode-setting-name">Greet after being away (minutes)</label>
+              <p class="vscode-setting-desc">Minimum away time before speaking a return greeting.</p>
+            </div>
+            <div class="vscode-setting-control">
+              <input type="number" class="presence-number-input" id="presenceGreetAfterMins" min="1" max="1440" value="45">
+            </div>
+          </div>
+
+          <div class="vscode-setting-item" data-search-terms="presence max spoken per hour cap">
+            <div class="vscode-setting-info">
+              <label for="presenceMaxSpoken" class="vscode-setting-name">Max spoken announcements per hour</label>
+              <p class="vscode-setting-desc">Cap between 0 and 6 spoken announcements per hour.</p>
+            </div>
+            <div class="vscode-setting-control">
+              <input type="number" class="presence-number-input" id="presenceMaxSpoken" min="0" max="6" value="3">
+            </div>
+          </div>
+
+          <div class="presence-settings-actions">
+            <button type="submit" class="quiet-button" id="presenceSettingsSave">Save presence preferences</button>
+            <p class="presence-settings-status" id="presenceSettingsStatus" role="status"></p>
+          </div>
+        </form>
       </section>
 
       <!-- 2. Voice & Audio Category -->
@@ -1714,6 +1825,8 @@
 <script src="/ambient-state.js" defer></script>
 <script src="/vendor/paper-shaders.js" defer></script>
 <script src="/ambient-backdrop.js" defer></script>
+<script src="/presence.js" defer></script>
+<script src="/announce.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/forge.js" defer></script>
 <script src="/approvals.js" defer></script>

@@ -37,6 +37,75 @@ use crate::html_text;
 /// File under the Capital data directory that keeps the latest brief.
 pub const RESEARCH_FILE: &str = "retirement-research.json";
 
+/// Most tokens the model may write for one brief. Five strategies with their actions,
+/// tradeoffs and citations, plus the lists, need about 1,600; 1,100 cut answers off
+/// mid-JSON.
+const BRIEF_MAX_TOKENS: u32 = 2_400;
+
+/// Note shown when the answer was cut off and only its complete parts were kept.
+const CUT_OFF_NOTE: &str =
+    "The local model's answer was cut off before the end, so only its complete parts are shown.";
+
+/// Note shown when the answer was not structured at all.
+const UNSTRUCTURED_NOTE: &str = "The model's answer was not valid structured JSON, so this is its reply without checked citations.";
+
+/// Re-reads a stored brief that was kept as raw text: an answer that was cut off mid-JSON
+/// becomes the strategies it completed; raw JSON is never left on the page.
+pub fn repair_stored(brief: &mut Brief) {
+    if brief.structured {
+        return;
+    }
+    let raw = brief.summary.clone();
+    let (draft, structured) = retirement_research::draft_from_response(&raw, brief.sources.len());
+    brief.headline = draft.headline;
+    brief.summary = draft.summary;
+    brief.strategies = draft.strategies;
+    brief.risks = draft.risks;
+    brief.next_steps = draft.next_steps;
+    brief.assumptions = draft.assumptions;
+    if structured {
+        brief.structured = true;
+        let cited: Vec<u32> = brief
+            .strategies
+            .iter()
+            .flat_map(|strategy| strategy.citations.iter().copied())
+            .collect();
+        for source in &mut brief.sources {
+            source.cited = cited.contains(&source.number);
+        }
+        brief.notes.retain(|note| note != UNSTRUCTURED_NOTE);
+        if !brief.notes.iter().any(|note| note == CUT_OFF_NOTE) {
+            brief.notes.insert(0, CUT_OFF_NOTE.to_string());
+        }
+    }
+}
+
+/// The latest stored brief for the voice assistant, from `dir`: the status, when it was
+/// written, the headline, the strategy names and `read_aloud`, the whole brief as plain
+/// sentences for speech. `None` when no brief was ever written.
+pub fn brief_for_voice(dir: &Path) -> Option<serde_json::Value> {
+    let bytes = std::fs::read(dir.join(RESEARCH_FILE)).ok()?;
+    let snapshot: ResearchSnapshot = serde_json::from_slice(&bytes).ok()?;
+    let mut brief = snapshot.brief?;
+    repair_stored(&mut brief);
+    let draft = retirement_research::Draft {
+        headline: brief.headline.clone(),
+        summary: brief.summary.clone(),
+        strategies: brief.strategies.clone(),
+        risks: brief.risks.clone(),
+        next_steps: brief.next_steps.clone(),
+        assumptions: brief.assumptions.clone(),
+    };
+    Some(serde_json::json!({
+        "generated_at": brief.generated_at,
+        "headline": brief.headline,
+        "strategies": brief.strategies.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+        "next_steps": brief.next_steps,
+        "read_aloud": retirement_research::speakable(&draft),
+        "note": "Planning information from SAIL's local model and fetched public pages, not financial advice. Read `read_aloud` to the owner as it is.",
+    }))
+}
+
 /// Domains a run may fetch. A page is never fetched from anywhere else.
 const RESEARCH_HOSTS: &[&str] = &[
     "wikipedia.org",
@@ -179,7 +248,12 @@ impl ResearchEngine {
                 Ok(snapshot) if snapshot.status == ResearchStatus::Running => {
                     ResearchSnapshot::interrupted()
                 }
-                Ok(snapshot) => snapshot,
+                Ok(mut snapshot) => {
+                    if let Some(brief) = snapshot.brief.as_mut() {
+                        repair_stored(brief);
+                    }
+                    snapshot
+                }
                 Err(error) => {
                     tracing::warn!(error = %error, path = %path.display(), "retirement research state is unreadable");
                     ResearchSnapshot::default()
@@ -297,7 +371,7 @@ impl ResearchEngine {
             Message::text(Role::System, retirement_research::system_prompt()),
             Message::text(Role::User, user),
         ];
-        request.generation = Generation::direct(1_100, 0.25);
+        request.generation = Generation::direct(BRIEF_MAX_TOKENS, 0.25);
         let response = tokio::time::timeout(
             MODEL_TIMEOUT,
             self.mind.infer_with_priority(
@@ -320,6 +394,7 @@ impl ResearchEngine {
             return Err("The local model returned an empty research brief.".into());
         }
         let (draft, structured) = retirement_research::draft_from_response(&raw, excerpts.len());
+        let cut_off = structured && retirement_research::was_cut_off(&raw);
         let cited: Vec<u32> = draft
             .strategies
             .iter()
@@ -349,10 +424,10 @@ impl ResearchEngine {
             "This is planning information, not regulated financial advice.".into(),
         ];
         if !structured {
-            notes.insert(
-                0,
-                "The model's answer was not valid structured JSON, so this is its reply without checked citations.".into(),
-            );
+            notes.insert(0, UNSTRUCTURED_NOTE.into());
+        }
+        if cut_off {
+            notes.insert(0, CUT_OFF_NOTE.into());
         }
         if sources.len() < 4 {
             notes.insert(
@@ -511,6 +586,72 @@ fn persist(path: &Path, snapshot: &ResearchSnapshot) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A brief stored before the fix: the model's answer cut off mid-JSON, kept as raw text.
+    fn raw_stored_brief() -> Brief {
+        Brief {
+            headline: "Research note".into(),
+            summary: r#"{ "headline": "Early Retirement Feasibility", "summary": "There is a gap [S1].",
+              "strategies": [ { "name": "Increase Monthly Contribution", "why": "The most direct lever [S3].",
+                "actions": ["Raise the allowance"], "tradeoffs": ["Less to spend"], "citations": [3] },
+              { "name": "Optimize Tax Efficiency", "why": "Holding international ETFs (XMPL.DE"#
+                .into(),
+            strategies: Vec::new(),
+            risks: Vec::new(),
+            next_steps: Vec::new(),
+            assumptions: Vec::new(),
+            sources: (1..=4)
+                .map(|number| BriefSource {
+                    number,
+                    title: format!("Source {number}"),
+                    url: format!("https://en.wikipedia.org/wiki/S{number}"),
+                    retrieved_at: "2026-11-15T17:52:00Z".into(),
+                    cited: false,
+                })
+                .collect(),
+            model: "local".into(),
+            generated_at: "2026-11-15T17:53:00Z".into(),
+            structured: false,
+            notes: vec![UNSTRUCTURED_NOTE.into()],
+        }
+    }
+
+    #[test]
+    fn a_stored_cut_off_brief_is_repaired_on_load() {
+        let mut brief = raw_stored_brief();
+        repair_stored(&mut brief);
+        assert!(brief.structured);
+        assert_eq!(brief.headline, "Early Retirement Feasibility");
+        assert_eq!(brief.strategies.len(), 1);
+        assert!(brief.sources[2].cited && !brief.sources[0].cited);
+        assert_eq!(brief.notes, vec![CUT_OFF_NOTE.to_string()]);
+        // Idempotent.
+        let again = brief.clone();
+        repair_stored(&mut brief);
+        assert_eq!(brief, again);
+    }
+
+    #[test]
+    fn the_voice_tool_gets_the_brief_as_plain_sentences() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(brief_for_voice(dir.path()).is_none());
+        let snapshot = ResearchSnapshot {
+            status: ResearchStatus::Done,
+            brief: Some(raw_stored_brief()),
+            ..ResearchSnapshot::default()
+        };
+        std::fs::write(
+            dir.path().join(RESEARCH_FILE),
+            serde_json::to_vec(&snapshot).unwrap(),
+        )
+        .unwrap();
+        let voice = brief_for_voice(dir.path()).unwrap();
+        let spoken = voice["read_aloud"].as_str().unwrap();
+        assert!(spoken.starts_with("Early Retirement Feasibility. There is a gap."));
+        assert!(spoken.contains("Strategy 1: Increase Monthly Contribution."));
+        assert!(!spoken.contains('{') && !spoken.contains("[S"));
+        assert_eq!(voice["strategies"][0], "Increase Monthly Contribution");
+    }
 
     #[test]
     fn only_listed_domains_are_fetchable() {

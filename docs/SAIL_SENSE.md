@@ -2,6 +2,8 @@
 
 **Status:** Proposed / evolving — verify implementation against code · **Domain:** Interaction & Presence · **Roadmap issue:** [#12](https://github.com/PedroVictorCoding/SAIL/issues/12) · **Priority:** P4 · **Platforms:** Ubuntu server, Dioxus Web + Android
 
+> **First slice implemented:** owner presence (desk / dock / phone / away / asleep) from client heartbeats, used to route announcements and greet arrivals. See [SAIL Presence](SAIL_PRESENCE.md).
+
 ## 1. Mission
 Represent opted-in ambient device and user-context signals without always-on invasive collection.
 

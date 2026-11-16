@@ -35,6 +35,14 @@ class VoiceSession(private val api: SailApi, private val scope: CoroutineScope) 
     private var closed = false
     private var retryJob: Job? = null
     private var failures = 0
+    @Volatile private var surfaceHello: Triple<String, String, Boolean>? = null
+
+    fun setSurfaceHello(deviceId: String, surface: String, handsFree: Boolean) {
+        surfaceHello = Triple(deviceId, surface, handsFree)
+        if (mutableState.value == SocketState.Open) {
+            socket?.send(VoiceProtocol.surface(deviceId, surface, handsFree))
+        }
+    }
 
     fun open() {
         closed = false
@@ -71,6 +79,9 @@ class VoiceSession(private val api: SailApi, private val scope: CoroutineScope) 
                 if (mine != generation) return
                 failures = 0
                 mutableState.value = SocketState.Open
+                surfaceHello?.let { (deviceId, surface, handsFree) ->
+                    webSocket.send(VoiceProtocol.surface(deviceId, surface, handsFree))
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {

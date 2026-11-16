@@ -73,6 +73,7 @@
 //! → back to `Digest`, `Investigate` → state `Investigating`). `stats` counts items by
 //! delivery and state and feedback by kind, for observability.
 
+pub mod route;
 pub mod score;
 pub mod store;
 
