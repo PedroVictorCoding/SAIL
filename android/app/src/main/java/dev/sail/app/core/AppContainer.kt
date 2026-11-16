@@ -11,6 +11,7 @@ import coil.ImageLoader
 import dev.sail.app.core.net.Connection
 import dev.sail.app.core.net.SailApi
 import dev.sail.app.core.net.ServerSettings
+import dev.sail.app.feature.dock.Heartbeats
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,7 @@ class AppContainer(context: Context) {
     val settings = ServerSettings(context)
     val api = SailApi(config = { settings.config.value })
     val connection = Connection(api, settings, appScope)
+    val heartbeats = Heartbeats(context.applicationContext, api, appScope)
 
     /** Coil loader on the authenticated client, for covers and map tiles served by SAIL. */
     val imageLoader: ImageLoader = ImageLoader.Builder(context)

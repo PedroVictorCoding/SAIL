@@ -18,6 +18,7 @@ object Routes {
     const val READ = "library/read/{bookId}?section={section}"
     const val TRACKER = "tracker"
     const val SETTINGS = "settings"
+    const val DOCK = "dock"
 
     fun course(id: String) = "arena/course/${Uri.encode(id)}"
     fun lesson(id: String) = "arena/lesson/${Uri.encode(id)}"

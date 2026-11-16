@@ -1,7 +1,9 @@
 package dev.sail.app.feature.dialogue
 
+import dev.sail.app.feature.dock.PresenceState
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -9,6 +11,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
@@ -36,6 +40,24 @@ sealed interface VoiceEvent {
     data class SnapshotRequest(val requestId: String, val source: String, val question: String?) : VoiceEvent
     data class CaptureLimit(val message: String) : VoiceEvent
     data class Control(val muted: Boolean) : VoiceEvent
+    data class Announce(
+        val itemId: String,
+        val title: String,
+        val body: String,
+        val source: String,
+        val kind: String,
+        val link: String?,
+        val speak: Boolean,
+        val reasons: List<String>,
+    ) : VoiceEvent
+    data class PresenceGreeting(
+        val spoken: String,
+        val itemIds: List<String>,
+        val awayForSecs: Long,
+    ) : VoiceEvent
+    data class PresenceStateEvent(val state: PresenceState) : VoiceEvent
+    data class HandsFreeState(val state: String) : VoiceEvent
+    data object NotAddressed : VoiceEvent
     data class Error(val message: String) : VoiceEvent
     data object Ignored : VoiceEvent
 }
@@ -78,9 +100,51 @@ object VoiceProtocol {
         } ?: VoiceEvent.Ignored
         "capture_limit" -> VoiceEvent.CaptureLimit(m.str("message") ?: "Recording limit reached")
         "control" -> VoiceEvent.Control(m.obj("control")?.bool("is_muted") == true)
+        "announce" -> announce(m)
+        "presence_greeting" -> presenceGreeting(m)
+        "presence_state" -> presenceState(m.obj("state"))
+        "hands_free" -> VoiceEvent.HandsFreeState(m.str("state") ?: "off")
+        "not_addressed" -> VoiceEvent.NotAddressed
         "error" -> VoiceEvent.Error(m.str("message") ?: "SAIL reported an error")
         else -> VoiceEvent.Ignored
     }
+
+    private fun announce(m: JsonObject): VoiceEvent {
+        val itemId = m.str("item_id") ?: return VoiceEvent.Ignored
+        return VoiceEvent.Announce(
+            itemId = itemId,
+            title = m.str("title").orEmpty(),
+            body = m.str("body").orEmpty(),
+            source = m.str("source").orEmpty(),
+            kind = m.str("kind").orEmpty(),
+            link = m.str("link"),
+            speak = m.bool("speak") == true,
+            reasons = m.strList("reasons"),
+        )
+    }
+
+    private fun presenceGreeting(m: JsonObject): VoiceEvent {
+        val spoken = m.str("spoken") ?: return VoiceEvent.Ignored
+        val awaySecs = (m["away_for_secs"] as? JsonPrimitive)?.longOrNull ?: 0L
+        return VoiceEvent.PresenceGreeting(
+            spoken = spoken,
+            itemIds = m.strList("item_ids"),
+            awayForSecs = awaySecs,
+        )
+    }
+
+    private fun presenceState(obj: JsonObject?): VoiceEvent {
+        if (obj == null) return VoiceEvent.Ignored
+        return try {
+            VoiceEvent.PresenceStateEvent(json.decodeFromJsonElement<PresenceState>(obj))
+        } catch (_: SerializationException) {
+            VoiceEvent.Ignored
+        }
+    }
+
+    private fun JsonObject.strList(key: String): List<String> =
+        (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p !is JsonNull }?.contentOrNull }
+            ?: emptyList()
 
     private fun toolEvent(event: JsonObject?): VoiceEvent {
         if (event == null) return VoiceEvent.Ignored
@@ -154,6 +218,13 @@ object VoiceProtocol {
 
     /** interrupt, end_turn, speech_cancel, playback_finished, toggle_mute, reset. */
     fun action(name: String): String = buildJsonObject { put("action", name) }.toString()
+
+    fun surface(deviceId: String, surface: String, handsFree: Boolean): String = buildJsonObject {
+        put("type", "surface")
+        put("device_id", deviceId)
+        put("surface", surface)
+        put("hands_free", handsFree)
+    }.toString()
 
     /** Friendly label for the activity chip, matching voice.js. */
     fun toolLabel(tool: String): String = when (tool) {
