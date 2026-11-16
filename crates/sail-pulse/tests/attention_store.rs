@@ -443,3 +443,42 @@ fn simulated_week_acceptance_200_signals() {
     );
     assert!(digest_batches > 0 && digest_items > 0);
 }
+
+#[test]
+fn pending_interrupts_peeks_without_marking_and_matches_deliverable() {
+    let store = AttentionStore::open_in_memory().unwrap();
+    let now = t0();
+    let sig = make_signal(
+        Source::Reminders,
+        "task",
+        "task:peek",
+        0.95,
+        0.95,
+        0.9,
+        0.95,
+        Some(now + Duration::hours(1)),
+        Provenance::UserCommitment,
+        now,
+    );
+    let item = store.ingest(sig, ctx(now)).unwrap();
+    assert_eq!(item.assessment.delivery, Delivery::Interrupt);
+
+    let first = store.pending_interrupts(now).unwrap();
+    let second = store.pending_interrupts(now).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].state, ItemState::Pending);
+
+    store.mark_delivered(&item.id, now).unwrap();
+    assert!(store.pending_interrupts(now).unwrap().is_empty());
+    assert!(store.deliverable(now).unwrap().is_empty());
+
+    // A snoozed item comes back to the peek at its time, like `deliverable`.
+    let wake = now + Duration::minutes(30);
+    store
+        .feedback(&item.id, Feedback::Later(wake), now)
+        .unwrap();
+    assert!(store.pending_interrupts(now).unwrap().is_empty());
+    assert_eq!(store.pending_interrupts(wake).unwrap().len(), 1);
+    assert_eq!(store.deliverable(wake).unwrap().len(), 1);
+}

@@ -45,6 +45,8 @@ impl Plans {
     ) -> Result<Arc<Self>, sail_guardian::ExecutionDenied> {
         let scheduler = crate::execution::shared()?;
         let registry = scheduler.registry();
+        // Finished, failed and stuck tasks in this store are announced (round 26).
+        crate::proactive::watch_tasks(continuity.clone());
         Ok(Arc::new(Self {
             runner: Arc::new(PlanRunner::new(
                 continuity,

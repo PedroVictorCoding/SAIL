@@ -1,0 +1,9 @@
+{
+  "type": "presence_greeting",
+  "spoken": "Welcome back. Forge: refactor failed, and Quiz 3 is due in 14 hours.",
+  "items": [
+    { "id": "a1b2", "title": "Forge: refactor failed" },
+    { "id": "c3d4", "title": "Algorithms quiz tomorrow" }
+  ],
+  "away_for_secs": 5400
+}

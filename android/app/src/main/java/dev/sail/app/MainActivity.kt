@@ -33,9 +33,11 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         container.connection.start()
+        container.heartbeats.start()
     }
 
     override fun onStop() {
+        container.heartbeats.stop()
         container.connection.stop()
         super.onStop()
     }

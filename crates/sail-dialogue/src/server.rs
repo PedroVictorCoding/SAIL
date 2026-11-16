@@ -173,7 +173,10 @@ fn factory_routes(
     if let Err(error) = tasks.recover() {
         warn!(%error, "Course Factory job recovery failed; interrupted jobs may wait");
     }
-    let jobs = Arc::new(JobQueue::new(Arc::new(tasks)));
+    let tasks = Arc::new(tasks);
+    // Course Factory outcomes are announced like any other finished work (round 26).
+    crate::proactive::watch_tasks(tasks.clone());
+    let jobs = Arc::new(JobQueue::new(tasks));
     let pdf: Option<Arc<dyn PdfTextExtractor>> = sail_guardian::global_broker()
         .ok()
         .and_then(|broker| crate::learn_pdf::RunnerPdfText::from_env(blob_dir, broker))
@@ -413,6 +416,26 @@ pub async fn run_dialogue_server_with_plans(
         .map(|pulse| crate::pulse_http::router(pulse, authority()));
     // Proactive initiative and reasoning escalation (deterministic loop; no model calls).
     let proactive = crate::proactive::start(pulse.clone());
+    // Presence: where the owner is, for arrival greetings and announcement routing.
+    let presence_store = match sail_pulse::presence::store::PresenceStore::open(
+        &sail_common::storage::data_path("pulse"),
+    ) {
+        Ok(store) => Some(Arc::new(store)),
+        Err(error) => {
+            warn!(%error, "presence store unavailable; presence features off");
+            None
+        }
+    };
+    let presence_routes = presence_store
+        .clone()
+        .map(|store| crate::presence_http::router(store, pulse.clone(), authority()));
+    if let Some(store) = presence_store {
+        presence_hub::start(presence_hub::Wiring {
+            presence: store,
+            pulse: pulse.clone(),
+            briefing: Some(briefing_engine.clone()),
+        });
+    }
     if let Some(proactive) = &proactive {
         match sail_discovery::curiosity::CuriosityLedger::open(
             sail_common::storage::data_path("discovery").join("curiosity.db"),
@@ -492,6 +515,9 @@ pub async fn run_dialogue_server_with_plans(
     }
     if let Some(routes) = pulse_routes {
         app = app.nest_service("/api/pulse", routes);
+    }
+    if let Some(routes) = presence_routes {
+        app = app.nest_service("/api/presence", routes);
     }
     if let Some(routes) = initiative_routes {
         app = app.nest_service("/api/initiative", routes);
@@ -733,6 +759,8 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
         match warm_tts.warm_up().await {Ok(())=>info!(elapsed_ms=started.elapsed().as_millis(),"Kokoro pre-warmed for first spoken sentence"),Err(error)=>warn!(%error,"TTS pre-warm failed; synthesis will report availability on demand")}
     }.instrument(tracing::Span::current())));
     let epoch = Arc::new(AtomicU64::new(0));
+    // Drops this socket from presence routing when the handler returns.
+    let _presence_link = presence_hub::SessionGuard(session.clone());
     let (mut sender, mut receiver) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Outbound>(128);
     let mut turn: Option<AbortTask> = None;
@@ -973,7 +1001,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                     speech_frames+=1;
                                     let partial_done=partial.as_ref().is_none_or(|h|h.0.is_finished());
                                     let cadence=match pipe.control_state().profile{HardwareTierProfile::LowPower=>64,HardwareTierProfile::Balanced=>32,HardwareTierProfile::HighPerformance=>24};
-                                    if speech_frames.is_multiple_of(cadence) && partial_done
+                                    if speech_frames.is_multiple_of(cadence) && partial_done && !presence_hub::hub().hands_free(&session)
                                         && let Some(snapshot)=pipe.snapshot(){
                                             let stt=pipe.stt.clone();let tx=tx.clone();
                                             let partial_span=tracing::info_span!("partial_transcript",turn_id=current);
@@ -994,6 +1022,10 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                     },
                     Message::Text(text)=>{
                         let value:Value=match serde_json::from_str(&text){Ok(v)=>v,Err(_)=>{emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"error","message":"Invalid JSON command"})).await;continue;}};
+                        if value["type"].as_str()==Some("surface") {
+                            presence_hub::hub().register(&session,&value,presence_hub::SocketParts{tx:tx.clone(),epoch:epoch.clone(),tts:pipe.tts.clone(),speech:client_speech.output()},chrono::Utc::now());
+                            continue;
+                        }
                         let action=value["action"].as_str().unwrap_or_default();
                         debug!(action,epoch=epoch.load(Ordering::SeqCst),"Received voice client command");
                         match action {
@@ -1036,7 +1068,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                             "client_speech"=>{
                                 // What the browser verified it can run. Unreported parts stay on
                                 // the host workers; turning STT off discards any client capture.
-                                client_speech=ClientSpeech{stt:value["stt"].as_bool()==Some(true),tts:value["tts"].as_bool()==Some(true)};
+                                client_speech=ClientSpeech{stt:value["stt"].as_bool()==Some(true),tts:value["tts"].as_bool()==Some(true)};presence_hub::hub().set_speech(&session,client_speech.output());
                                 if !client_speech.stt{client_capture.take();capture_priority.take();}
                                 info!(stt=client_speech.stt,tts=client_speech.tts,engine=%value["engine"],"Client speech capabilities");
                                 emit_session(&tx,json!({"type":"client_speech","stt":client_speech.stt,"tts":client_speech.tts})).await;
@@ -1074,6 +1106,13 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                     emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"turn_finished","state":"idle"})).await;
                                     continue;
                                 }
+                                // Hands-free: unaddressed speech ends here, before any transcript.
+                                let gated=match presence_hub::hub().gate(&session,text,chrono::Utc::now()){
+                                    presence_hub::Gate::Pass(text)=>text,
+                                    presence_hub::Gate::Wake=>{capture_priority.take();let s=session.clone();tokio::spawn(async move{presence_hub::hub().acknowledge_wake(&s).await;});emit(&tx,epoch.load(Ordering::SeqCst),json!({"type":"turn_finished","state":"idle"})).await;continue;}
+                                    presence_hub::Gate::Discard=>{capture_priority.take();let current=epoch.load(Ordering::SeqCst);emit(&tx,current,json!({"type":"not_addressed"})).await;emit(&tx,current,json!({"type":"turn_finished","state":"idle"})).await;continue;}
+                                };
+                                let text=gated.as_str();
                                 // Learn only under the consent that was in force when capture
                                 // began; a change during capture means no learning for the turn.
                                 let consent=capture_learning_epoch.take().filter(|e|Some(*e)==state.arena.learning_epoch(&session));
@@ -1203,7 +1242,7 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                                     })).await;
                                 }
                             },
-                            "playback_finished"=>{pipe.set_orb_state(OrbState::Idle);},
+                            "playback_finished"=>{pipe.set_orb_state(OrbState::Idle);presence_hub::hub().playback_finished(&session,chrono::Utc::now());},
                             "snapshot"=>{
                                 // The browser's answer to a model-requested visual_snapshot.
                                 let Some(id)=value["request_id"].as_u64() else {continue};
@@ -1649,6 +1688,8 @@ fn start_turn(
         async move {
             let _voice_priority = voice_priority;
             info!("Starting voice turn");
+            // Marks the device busy for presence routing until the turn ends or is aborted.
+            let _presence_busy = presence_hub::BusyGuard::new(&session);
             if let Err(e) = run_turn(
                 state,
                 session,
@@ -1705,6 +1746,25 @@ async fn run_turn(
     let (prompt, vision, vision_source) = match input {
         TurnInput::Audio(audio, _) => {
             let (text, tokens) = stt.transcribe(&audio, false).await?;
+            // Hands-free: unaddressed speech ends here, before any transcript is emitted,
+            // observed or sent to a model. Live listening context keeps its own consent.
+            let text = if observe_only {
+                text
+            } else {
+                match presence_hub::hub().gate(&session, &text, chrono::Utc::now()) {
+                    presence_hub::Gate::Pass(text) => text,
+                    presence_hub::Gate::Wake => {
+                        presence_hub::hub().acknowledge_wake(&session).await;
+                        emit(&tx, current, json!({"type":"turn_finished","state":"idle"})).await;
+                        return Ok(());
+                    }
+                    presence_hub::Gate::Discard => {
+                        emit(&tx, current, json!({"type":"not_addressed"})).await;
+                        emit(&tx, current, json!({"type":"turn_finished","state":"idle"})).await;
+                        return Ok(());
+                    }
+                }
+            };
             emit(
                 &tx,
                 current,
@@ -1992,6 +2052,7 @@ async fn run_turn(
         }),
     )
     .await;
+    presence_hub::hub().answered(&session, chrono::Utc::now());
     if let Some(receipt) = compaction {
         debug!(?receipt, "Completed text response compacted by Arena");
         emit(
@@ -4385,6 +4446,7 @@ mod tests {
 #[cfg(test)]
 #[path = "server/live_context_tests.rs"]
 mod live_conversation_tests;
+mod presence_hub;
 
 #[cfg(test)]
 mod isolation_tests {

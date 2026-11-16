@@ -221,6 +221,26 @@ impl AttentionStore {
         Ok(items)
     }
 
+    /// The items [`deliverable`](Self::deliverable) would return, without marking them.
+    /// Presence routing peeks, sends each item to one place, and then calls
+    /// [`mark_delivered`](Self::mark_delivered) only for items that actually went
+    /// somewhere, so an item held for the owner's return is not lost. Oldest first.
+    pub fn pending_interrupts(&self, now: DateTime<Utc>) -> Result<Vec<AttentionItem>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, source, kind, dedupe_key, title, body, urgency, relevance, novelty,
+                    confidence, deadline, provenance, link, observed_at, score,
+                    interruption_cost, delivery, drop_reason, reasons_json, state,
+                    snoozed_until, created_at, updated_at, last_feedback_json
+             FROM attention_items
+             WHERE (delivery = 'interrupt' AND state = 'pending')
+                OR (state = 'snoozed' AND snoozed_until IS NOT NULL AND snoozed_until <= ?1)
+             ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![ts(now)], row_to_item)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// Collect pending `Digest` items into one batch (marks them `Digested`). `None` when empty.
     pub fn release_digest(&self, now: DateTime<Utc>) -> Result<Option<DigestBatch>> {
         let mut conn = self.lock()?;

@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, NaiveTime, Utc};
+use sail_continuity::{Continuity, TaskFilter, TaskState};
 use sail_discovery::agenda::AgendaStore;
 use sail_discovery::curiosity::{
     CuriosityLedger, CuriosityLimits, Gate, Investigator, Skip, admit, run_once,
@@ -24,6 +25,7 @@ use sail_discovery::curiosity::{
 use sail_discovery::detect::{ForgeJobState, Level, Observation, SchoolChangeKind, SchoolItemKind};
 use sail_discovery::github::{GhCliActivity, GithubActivity, GithubError, GithubPoller};
 use sail_discovery::initiative::{Initiative, TickReport};
+use sail_discovery::tasks::{TaskEnd, TaskOutcome, task_signals};
 use sail_mind::escalation::service::{self as escalation, EscalationService};
 use sail_mind::escalation::{JobState, Origin};
 use sail_pulse::Pulse;
@@ -421,6 +423,7 @@ impl Proactive {
     /// One tick: gather observations, run the initiative, release a due digest.
     pub fn tick_now(&self) -> TickReport {
         let now = Utc::now();
+        let since = *lock(&self.last_check);
         let mut observations = std::mem::take(&mut *lock(&self.answered));
         let offset = self
             .pulse
@@ -436,7 +439,12 @@ impl Proactive {
         }
         let settings = self.initiative.attention().settings().unwrap_or_default();
         let context = self.context(now, &settings);
-        let report = self.initiative.tick(&observations, context);
+        let report = self.initiative.tick(&observations, context.clone());
+        for signal in task_signals(&task_outcomes(since, now), since, now) {
+            if let Err(error) = self.initiative.attention().ingest(signal, context.clone()) {
+                warn!(%error, "task outcome not ingested");
+            }
+        }
         crate::escalation_outcomes::settle_forge_jobs();
         *lock(&self.last_tick) = report.clone();
         let previous = std::mem::replace(&mut *lock(&self.last_check), now);
@@ -555,6 +563,75 @@ fn forge_observations() -> Vec<Observation> {
             })
         })
         .collect()
+}
+
+/// Continuity stores whose finished work is announced. Forge jobs are not taken from
+/// here: `forge_observations` already reports them with richer states.
+static TASK_STORES: Mutex<Vec<Arc<Continuity>>> = Mutex::new(Vec::new());
+
+/// Most recent tasks read per store and tick (fixed a priori: far more than finish in one
+/// five-minute tick).
+const TASK_SCAN_LIMIT: usize = 100;
+
+/// Announce outcomes of tasks in `store` (idempotent per store).
+pub fn watch_tasks(store: Arc<Continuity>) {
+    let mut stores = lock(&TASK_STORES);
+    if !stores.iter().any(|s| Arc::ptr_eq(s, &store)) {
+        stores.push(store);
+    }
+}
+
+/// The owner as the owner reads it. Unknown owners keep their own name.
+fn task_owner_label(owner: &str) -> Option<String> {
+    match owner {
+        "sail-forge" | "forge" => None,
+        "sail-arena-learn" => Some("Course Factory".into()),
+        "sail-agents" | "agents" | "Agents" => Some("Plan".into()),
+        other => Some(other.to_owned()),
+    }
+}
+
+/// Tasks that reached an end state the owner cares about in `(since, now]`.
+fn task_outcomes(since: DateTime<Utc>, now: DateTime<Utc>) -> Vec<TaskOutcome> {
+    let stores = lock(&TASK_STORES).clone();
+    let filter = TaskFilter {
+        owner: None,
+        include_terminal: true,
+        limit: Some(TASK_SCAN_LIMIT),
+    };
+    let mut outcomes = Vec::new();
+    for store in stores {
+        let tasks = match store.list(&filter) {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                warn!(%error, "task outcomes unavailable");
+                continue;
+            }
+        };
+        for task in tasks {
+            let end = match task.state {
+                TaskState::Succeeded => TaskEnd::Succeeded,
+                TaskState::Failed => TaskEnd::Failed,
+                TaskState::NeedsIntervention => TaskEnd::NeedsIntervention,
+                _ => continue,
+            };
+            if task.updated_at <= since || task.updated_at > now {
+                continue;
+            }
+            let Some(owner) = task_owner_label(&task.owner) else {
+                continue;
+            };
+            outcomes.push(TaskOutcome {
+                id: task.id,
+                title: task.title,
+                owner,
+                end,
+                ended_at: task.updated_at,
+                summary: task.reason.or(task.stage).unwrap_or_default(),
+            });
+        }
+    }
+    outcomes
 }
 
 /// A readable course name: Moodle's full name, falling back to the short code.
@@ -682,6 +759,78 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn task_outcomes_report_ended_work_once_with_readable_owners_and_skip_forge() {
+        use sail_continuity::{Outcome, ResumePolicy, TaskSpec};
+        let store = Arc::new(Continuity::open_in_memory().expect("store"));
+        watch_tasks(store.clone());
+        watch_tasks(store.clone()); // idempotent
+        let since = Utc::now() - ChronoDuration::minutes(1);
+        let submit = |id: &str, owner: &str| {
+            store
+                .submit(TaskSpec {
+                    id: Some(id.into()),
+                    owner: owner.into(),
+                    kind: "test".into(),
+                    title: format!("{id} title"),
+                    dedupe_key: None,
+                    resume: ResumePolicy::Manual,
+                    checkpoint: serde_json::json!({}),
+                })
+                .expect("submit")
+        };
+        for (id, owner, outcome) in [
+            (
+                "r26-factory",
+                "sail-arena-learn",
+                Some(Outcome::Failed("2 sources unreadable".into())),
+            ),
+            ("r26-forge", "sail-forge", Some(Outcome::Succeeded)),
+            ("r26-plan", "sail-agents", Some(Outcome::Succeeded)),
+            (
+                "r26-cancel",
+                "sail-agents",
+                Some(Outcome::Cancelled("owner".into())),
+            ),
+            ("r26-running", "sail-agents", None),
+        ] {
+            submit(id, owner);
+            let lease = store.claim(id).expect("claim");
+            if let Some(outcome) = outcome {
+                store.finish(&lease, outcome).expect("finish");
+            }
+        }
+        let now = Utc::now() + ChronoDuration::minutes(1);
+        let mut mine: Vec<(String, String, TaskEnd)> = task_outcomes(since, now)
+            .into_iter()
+            .filter(|o| o.id.starts_with("r26-"))
+            .map(|o| (o.id, o.owner, o.end))
+            .collect();
+        mine.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            mine,
+            vec![
+                (
+                    "r26-factory".into(),
+                    "Course Factory".into(),
+                    TaskEnd::Failed
+                ),
+                ("r26-plan".into(), "Plan".into(), TaskEnd::Succeeded),
+            ]
+        );
+        let failed = task_outcomes(since, now)
+            .into_iter()
+            .find(|o| o.id == "r26-factory")
+            .expect("factory outcome");
+        assert_eq!(failed.summary, "2 sources unreadable");
+        // Nothing new after the window moves past them.
+        assert!(
+            task_outcomes(now, now + ChronoDuration::minutes(1))
+                .iter()
+                .all(|o| !o.id.starts_with("r26-"))
+        );
+    }
 
     fn at(h: u32, m: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 12, h, m, 0).unwrap()
