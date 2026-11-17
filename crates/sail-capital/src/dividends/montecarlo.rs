@@ -43,9 +43,6 @@ use super::calibrate::{CalibrationReport, cut_hazard};
 use super::safety::SafetyGrade;
 use super::{Allocation, Growth, HIGH_YIELD, HIGH_YIELD_TOTAL_RETURN, MAX_YEARS, Payment};
 
-/// The Portuguese rate the optional reserve uses.
-const PT_TAX: f64 = 0.28;
-
 /// Most paths in one run.
 pub const MAX_PATHS: u32 = 20_000;
 
@@ -72,6 +69,10 @@ pub struct McHolding {
     pub history: Vec<Payment>,
     /// Withholding on gross payments, 0..1.
     pub withholding: f64,
+    /// Portuguese rate on the gross payment before crediting withholding, for the
+    /// optional reserve (round 25 B7, [`super::tax::pt_rate`]).
+    #[serde(default = "super::default_pt_rate")]
+    pub pt_rate: f64,
     /// Annual price trend (shrunk and capped as in the projection), or `None` for the
     /// payout growth.
     pub price_growth: Option<f64>,
@@ -446,7 +447,7 @@ pub fn run(inputs: &McInputs, rules: &Rules, policy: &Policy, mc: McSettings) ->
                 let gross = units[i] * per_share * fxs[i];
                 let withheld = gross * h.withholding.clamp(0.0, 1.0);
                 let pt = if rules.reserve_pt_tax {
-                    (PT_TAX * gross - withheld).max(0.0)
+                    super::tax::pt_reserve(gross, withheld, h.pt_rate)
                 } else {
                     0.0
                 };

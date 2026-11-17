@@ -369,6 +369,7 @@ impl CapitalService {
         now: DateTime<Utc>,
     ) -> Result<(McInputs, Vec<String>), ServiceError> {
         let (holdings, _, notes) = self.cached_dividend_inputs(account, now)?;
+        let tax = self.tax_profile(account)?;
         let projection = self.portfolio(account, AsOf::now())?;
         let account_currency = projection
             .cash
@@ -400,6 +401,7 @@ impl CapitalService {
                 fx: holding.fx,
                 history: holding.history.clone(),
                 withholding: holding.withholding,
+                pt_rate: holding.pt_rate,
                 price_growth: holding.price_growth,
                 price_vol: annual_vol(&closes.iter().map(|c| c.1).collect::<Vec<_>>())
                     .unwrap_or(crate::dividends::montecarlo::DEFAULT_PRICE_VOL),
@@ -455,6 +457,7 @@ impl CapitalService {
                 .filter_map(|o| Some((o.session, o.close.to_f64()?)))
                 .collect();
             let foreign = item.currency != account_currency;
+            let domicile = crate::dividends::tax::domicile(None, &item.symbol);
             let fx = super::fx_rate(&item.currency, &account_currency, &fx_closes).unwrap_or(1.0);
             out.push(McHolding {
                 key,
@@ -462,7 +465,18 @@ impl CapitalService {
                 units: 0.0,
                 price,
                 fx,
-                withholding: crate::dividends::default_withholding(&item.symbol),
+                withholding: crate::dividends::tax::source_withholding(
+                    &tax,
+                    domicile.as_deref(),
+                    &item.symbol,
+                    item.class == AssetClass::Etf,
+                )
+                .0,
+                pt_rate: crate::dividends::tax::pt_rate(
+                    &tax,
+                    domicile.as_deref(),
+                    item.class == AssetClass::Etf,
+                ),
                 price_growth: super::dividends_run::price_trend(&observations),
                 price_vol: annual_vol(&closes.iter().map(|c| c.1).collect::<Vec<_>>())
                     .unwrap_or(crate::dividends::montecarlo::DEFAULT_PRICE_VOL),
@@ -549,6 +563,49 @@ impl CapitalService {
         );
         distribution.notes.extend(notes);
         Ok(distribution)
+    }
+
+    /// Round 25 B7: the Monte Carlo p10 and p90 of next year's net income from the
+    /// current holdings, with nothing reinvested and no allowance (the same question the
+    /// monthly snapshot's scenarios answer). Seeded by `month`, so it can be reproduced.
+    /// `None` when nothing pays.
+    pub(super) fn year_one_band(
+        &self,
+        account: &AccountId,
+        now: DateTime<Utc>,
+        month: NaiveDate,
+    ) -> Result<Option<(f64, f64)>, ServiceError> {
+        let (mut inputs, _) = self.mc_inputs(account, now)?;
+        inputs.holdings.retain(|h| !h.candidate);
+        if inputs.holdings.is_empty() {
+            return Ok(None);
+        }
+        let rules = Rules {
+            years: 1,
+            reinvest_pct: 0.0,
+            monthly_contribution: 0.0,
+            reserve_pt_tax: false,
+            limits: Limits::default(),
+            stress: Default::default(),
+        };
+        let distribution = crate::dividends::montecarlo::simulate(
+            &inputs,
+            &rules,
+            &Policy::Mode {
+                allocation: Allocation::Proportional,
+                top_n: crate::dividends::DEFAULT_TOP_N,
+            },
+            McSettings {
+                paths: DEFAULT_PATHS,
+                seed: day_seed(month),
+            },
+            None,
+        );
+        Ok(distribution
+            .years
+            .first()
+            .map(|y| (y.net.p10, y.net.p90))
+            .filter(|(lo, hi)| lo.is_finite() && hi.is_finite() && *hi > 0.0))
     }
 
     /// The default plan constraints: the confirmed largest position and the drafts.

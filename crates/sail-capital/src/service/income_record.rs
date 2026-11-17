@@ -9,6 +9,7 @@ use rust_decimal::prelude::ToPrimitive;
 use super::{CapitalService, ServiceError};
 use crate::contracts::AccountId;
 use crate::dividends::record::{IncomeSnapshot, Receipt, RecordSummary, SnapshotHolding};
+use crate::dividends::tax::TaxProfile;
 use crate::dividends::{Allocation, Scenario};
 
 /// Months of ledger receipts read for grading: 12 for the newest graded snapshot plus
@@ -61,6 +62,9 @@ impl CapitalService {
                 .map_or(0.0, |y| y.net)
         };
         let currency = self.account_currency(account)?;
+        // The band is optional: a failed simulation leaves it empty rather than skipping
+        // the month's snapshot.
+        let band = self.year_one_band(account, now, month).ok().flatten();
         let snapshot = crate::dividends::record::snapshot(
             month,
             now,
@@ -69,9 +73,29 @@ impl CapitalService {
             year1(Scenario::Low),
             year1(Scenario::Base),
             year1(Scenario::High),
-            None,
+            band,
         );
         Ok(self.store.record_income_snapshot(account, &snapshot)?)
+    }
+
+    /// Round 25 B7: the owner's tax profile, or the default (W-8BEN on file, flat 28%).
+    pub fn tax_profile(&self, account: &AccountId) -> Result<TaxProfile, ServiceError> {
+        Ok(self
+            .store
+            .tax_profile(account)?
+            .unwrap_or_default()
+            .clamped())
+    }
+
+    /// Saves the tax profile (clamped) and returns what was stored.
+    pub fn set_tax_profile(
+        &self,
+        account: &AccountId,
+        profile: TaxProfile,
+    ) -> Result<TaxProfile, ServiceError> {
+        let profile = profile.clamped();
+        self.store.set_tax_profile(account, &profile, Utc::now())?;
+        Ok(profile)
     }
 
     /// The projection's record for `account`.

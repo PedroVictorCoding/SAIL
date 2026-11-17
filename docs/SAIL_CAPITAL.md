@@ -363,8 +363,8 @@ month (`dividends/`).
 - FX from the watchlist pairs, else the rate implied by XTB's own valuation;
 - the per-share payout history from Yahoo (`scripts/prices/dividends.py`, refreshed
   weekly; only symbols are sent);
-- the withholding actually observed in the ledger over 24 months, else a default by
-  listing country.
+- the withholding actually observed in the ledger over 24 months, else a default from
+  the tax profile by country of domicile (see **Tax**).
 
 **Reinvestment.** A share of each net payment buys more units the same month. The
 allocation can be:
@@ -405,13 +405,47 @@ least `yield − 8%` a year. Total return from yield alone is therefore capped a
 fund paying out of its capital can't compound at its headline yield. On real holdings
 an 81%-yield fund otherwise turned about 1,100 a year into 337,000.
 
-**Tax.** Withholding is subtracted. The optional Portuguese reserve is 28% of the gross
-minus what was withheld, floored at zero (simplified).
+**Tax** (round 25 B7, `dividends::tax`). Withholding is subtracted. When a holding
+hasn't paid in the last 24 months, its default comes from the owner's **tax profile**
+(Income → Tax profile, `GET`/`POST /dividends/tax`) and the country of domicile: the
+ISIN's first two letters, else the XTB suffix.
+- **US:** 15% with a W-8BEN on file (the US–PT treaty rate, the default), 30% without.
+- **Funds (ETFs) not domiciled in the US:** 0%, whatever exchange they're listed on.
+  Irish and Luxembourg UCITS distribute without withholding, and so do German funds to
+  non-residents. An Irish fund already paid US tax on its own US dividends, so it isn't
+  taken again. XTB's reports carry no ISIN, so the listing suffix can't tell where a
+  fund is domiciled.
+- **Portugal:** 28%, the final rate withheld from residents.
+- **Elsewhere:** GB 0%, DE 26.375%, FR 25%, NL 15%, ES 19%, IT 26%, otherwise 15%.
+
+The optional Portuguese reserve is `max(0, rate × gross − withheld)`. Foreign tax is
+credited up to the Portuguese tax and never refunded.
+- **28% flat** (the default).
+- **Englobamento:** the owner's marginal rate (0–53%) on 50% of dividends from EU and
+  EEA companies (CIRS art. 40.º-A), and on 100% of everything else, funds included.
+  The election covers all of the year's capital income; SAIL only models dividends.
+
+**Accumulating funds** pay nothing, so they're listed separately with an **income
+equivalent**: selling 4% of their value a year (the classic withdrawal rule). It's before
+the 28% tax on the gain part of each sale, which depends on cost, and it isn't added to
+the projection's totals.
 
 **Cross-check with the ledger.** Each receipt is matched to the published payment it
 came from, using the units held on the payment date. A history is scaled only when the
 receipts consistently differ by more than 1.6× (for example a fund quoted in its base
 currency), and a note says so.
+
+**The projection's record** (round 25). On the first run each month, SAIL stores what
+the projection expects the current holdings to pay over the next 12 months. This is a
+one-year projection with nothing reinvested and no allowance. It stores the base figure
+per holding and the low/base/high totals. Since B7 it also stores the Monte Carlo
+p10/p90 for that year, from 2,000 paths seeded by the month. Snapshots are append-only.
+Twelve months later, each one is graded against the net dividends actually received,
+scaled to the units held at the snapshot, so later buys and sales don't count as
+forecast errors. Income → "How the projection has done" shows the bias, the mean error
+and how often the result fell inside each band. The scorecard counts it as Earned only
+with 12 or more graded months, |bias| ≤ 10% and p10–p90 coverage between 65% and 95%.
+The calendar above the fan lists the payments expected in the next 90 days.
 
 ## Early retirement and the researched strategy
 
@@ -926,6 +960,9 @@ scoreboard.
 | `POST /dividends/distribution?account=` | Income percentiles per year for the posted controls (round 24) |
 | `GET`/`POST /dividends/maximize?account=` | The latest plan job / starts a plan search (202) |
 | `GET /dividends/calibration` | The latest growth backtest, or `null` |
+| `GET /dividends/record?account=` | The projection's record: graded snapshots, pending count, bias, mean absolute error, scenario and p10–p90 coverage (round 25) |
+| `GET /dividends/calendar?account=&days=` | Payments expected in the next 1–366 days (default 90), net in the account currency (round 25) |
+| `GET`/`POST /dividends/tax?account=` | The tax profile `{"w8ben": bool, "pt_regime": {"kind": "flat"}` or `{"kind": "englobamento", "marginal_rate": 0–0.53}}`; the reply is what was stored (clamped); 1 KiB body limit (round 25 B7) |
 | `GET`/`POST /dividends/candidates` | Watchlist stocks and ETFs as dividend candidates / mark one |
 | `GET /dividends/retirement?account=&years=&reinvest_pct=&allocation=&monthly_contribution=&top_n=&reserve_pt_tax=&current_age=&retire_age=&target_monthly=&inflation_pct=&withdrawal_rate_pct=` | The early-retirement plan: required capital, progress, the allowance that reaches the income target, per-scenario funding and notes |
 | `GET /dividends/retirement/research` | The latest researched brief, run status, error and every source attempted |
@@ -968,14 +1005,16 @@ Data lives in `$SAIL_CAPITAL_DIR`, or by default in SAIL's data dir under `capit
 | — | — | Monthly salary allowance in the dividend projection |
 | 18 | #465 | The board's forward record, the stock drawer, model signals over the whole universe |
 | — | — | Candidate trade ideas: positive in both periods, half size, their own live record |
-| 24 | — | Volume, dividend-aware replays, regime conditioning, event setups, portfolio heat; specials, growth backtest, safety grades, income Monte Carlo and maximizer |
+| 24 | #485 | Volume, dividend-aware replays, regime conditioning, event setups, portfolio heat; specials, growth backtest, safety grades, income Monte Carlo and maximizer |
+| 25 | #489 | Research-universe signal evidence, meta-labeling, Form 4 insider clusters, the dividend calendar and the projection's record |
+| 25 B7 | — | Treaty-aware withholding and the tax profile (W-8BEN, flat or englobamento), the accumulating-fund income equivalent, Monte Carlo p10/p90 in the monthly snapshot |
 
 ## Not built yet
 
 - FX conversion and EUR totals across currencies. Prices are stored in the trading
   currency.
-- Portuguese tax beyond the projection's optional 28% reserve. Withholding is recorded
-  and matched to dividends.
+- Portuguese tax beyond dividends: capital gains, interest under englobamento and the
+  annual IRS return itself. Withholding is recorded and matched to dividends.
 - Spin-offs. They import as unsupported rows, and the reconciliation shows the difference.
 - Research beyond SEC filings: House/Senate disclosures, FRED/ECB, Polymarket, and
   dossiers built from research proposals.

@@ -27,6 +27,7 @@ fn quarterly_holding(symbol: &str, last_year: i32) -> Holding {
         history,
         withholding: 0.15,
         withholding_source: "observed".into(),
+        pt_rate: 0.28,
         price_growth: None,
     }
 }

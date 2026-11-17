@@ -458,6 +458,17 @@ fn dividends(service: &CapitalService, input: &Value) -> Result<Value, String> {
     {
         without.remove("monthly_net");
     }
+    // Round 25 B7: the tax basis behind the withholding defaults and the reserve.
+    let tax = service
+        .tax_profile(&account)
+        .map_err(|error| error.to_string())?;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("tax_profile".into(), value(tax)?);
+        object.insert(
+            "tax_note".into(),
+            json!("Withholding defaults follow the tax profile (W-8BEN: US 15%, else 30%; Irish funds 0%); the Portuguese reserve uses 28% flat or the owner's englobamento rate. Accumulating funds show a 4%-a-year sale as an income equivalent, before tax on gains."),
+        );
+    }
     Ok(payload)
 }
 

@@ -16,8 +16,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Holding, MAX_MONTHLY_CONTRIBUTION, MAX_YEARS, PT_TAX, Projection, Scenario, Settings, growth,
-    project,
+    Holding, MAX_MONTHLY_CONTRIBUTION, MAX_YEARS, Projection, Scenario, Settings, growth, project,
 };
 
 /// Youngest age accepted in the assumptions.
@@ -284,7 +283,7 @@ fn current_annual_net(holdings: &[Holding], settings: &Settings) -> f64 {
             }
             let withheld = gross * holding.withholding.clamp(0.0, 1.0);
             let pt_tax = if settings.reserve_pt_tax {
-                (gross * PT_TAX - withheld).max(0.0)
+                super::tax::pt_reserve(gross, withheld, holding.pt_rate)
             } else {
                 0.0
             };
@@ -421,6 +420,7 @@ mod tests {
             history,
             withholding: 0.0,
             withholding_source: "observed".into(),
+            pt_rate: 0.28,
             price_growth: None,
         }
     }
