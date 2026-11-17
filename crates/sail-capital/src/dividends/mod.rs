@@ -55,6 +55,7 @@ pub mod record;
 pub mod retirement;
 pub mod retirement_research;
 pub mod safety;
+pub mod tax;
 
 pub use self::growth::{DEFAULT_SHRINK_K, PaymentKind, classify, growth, growth_with, specials};
 pub use self::project::project;
@@ -100,6 +101,11 @@ pub enum Allocation {
     TopYield,
     /// Toward the paying holdings furthest below their equal-weight target.
     Underweight,
+}
+
+/// The flat Portuguese rate, for inputs saved before round 25 B7.
+pub(crate) fn default_pt_rate() -> f64 {
+    PT_TAX
 }
 
 fn default_top_n() -> u32 {
@@ -153,8 +159,13 @@ pub struct Holding {
     pub history: Vec<Payment>,
     /// Withholding rate applied to gross payments, 0..1.
     pub withholding: f64,
-    /// Where `withholding` came from: "observed" or "default".
+    /// Where `withholding` came from: "observed", or "default: <reason>" (round 25 B7).
     pub withholding_source: String,
+    /// Portuguese rate on the gross payment before crediting withholding, for the
+    /// optional reserve: 28% flat, or the englobamento rate (round 25 B7,
+    /// [`tax::pt_rate`]).
+    #[serde(default = "default_pt_rate")]
+    pub pt_rate: f64,
     /// Annual price trend measured from stored prices (shrunk and capped by the
     /// service), or `None` to keep the yield constant (the price grows with dividends).
     #[serde(default)]
@@ -279,6 +290,21 @@ pub struct DividendOutlook {
     /// Round 24: dividend safety per holding symbol (filled by the service).
     #[serde(default)]
     pub safety: std::collections::BTreeMap<String, safety::Safety>,
+    /// Round 25 B7: the yearly income equivalent of each holding that pays nothing
+    /// ([`tax::income_equivalent`]), largest first.
+    #[serde(default)]
+    pub accumulating: Vec<AccumulatingRow>,
+}
+
+/// Round 25 B7: what an accumulating (non-paying) holding could give as income.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AccumulatingRow {
+    /// Symbol.
+    pub symbol: String,
+    /// Value now, account currency.
+    pub value: f64,
+    /// Selling [`tax::ACCUMULATING_WITHDRAWAL`] of it a year, before tax on the gain.
+    pub annual_equivalent: f64,
 }
 
 /// Round 24: one special payment, by holding.

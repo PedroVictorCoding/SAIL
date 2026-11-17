@@ -957,7 +957,7 @@ pub fn registry() -> Arc<ToolRegistry> {
                 "reinvest_pct": {"type":"number","minimum":0,"maximum":100,"description":"Share of net dividends reinvested; default 100"},
                 "allocation": {"type":"string","maxLength":16,"enum":["same_holding","proportional"],"description":"Where reinvestment goes; default proportional"},
                 "monthly_contribution": {"type":"number","minimum":0,"maximum":10000,"description":"Monthly allowance from salary to invest, in the account currency; default 0"},
-                "reserve_pt_tax": {"type":"boolean","description":"Apply the simplified 28% Portuguese tax reserve"}
+                "reserve_pt_tax": {"type":"boolean","description":"Set aside Portuguese tax (28% flat or the englobamento rate from the owner's tax profile, less withholding)"}
             }),
             &[],
             ToolEffect::ReadOnly,

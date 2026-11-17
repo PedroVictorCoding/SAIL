@@ -397,6 +397,7 @@ function setupDividendProjectionControls() {
   }
   updateProjTopNVisibility();
   renderAllocHelp();
+  setupTaxProfile();
 
   const reserveTaxCheckbox = document.getElementById("cpProjReserveTax");
   if (reserveTaxCheckbox) {
@@ -814,6 +815,8 @@ function renderProjHoldingsTable(data) {
     }).join("");
   }
 
+  renderAccumulating(data);
+
   const nonPaying = data.non_paying || [];
   if (nonPayingBox && nonPayingList) {
     if (nonPaying.length > 0) {
@@ -823,6 +826,113 @@ function renderProjHoldingsTable(data) {
       nonPayingBox.hidden = true;
     }
   }
+}
+
+// --- Round 25 B7: tax profile and accumulating-fund income equivalent ----------------
+
+function renderAccumulating(data) {
+  const box = document.getElementById("cpProjAccumulating");
+  const list = document.getElementById("cpProjAccumulatingList");
+  const total = document.getElementById("cpProjAccumulatingTotal");
+  if (!box || !list || !total) return;
+  const rows = Array.isArray(data && data.accumulating) ? data.accumulating : [];
+  list.replaceChildren();
+  if (rows.length === 0) {
+    box.hidden = true;
+    total.textContent = "";
+    return;
+  }
+  let sum = 0;
+  for (const row of rows) {
+    const yearly = Number(row.annual_equivalent) || 0;
+    sum += yearly;
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "cp-accumulating-symbol";
+    name.textContent = String(row.symbol || "");
+    const amount = document.createElement("span");
+    amount.className = "num";
+    amount.textContent = `${formatProjMoney(yearly)} a year (${formatProjMoney(yearly / 12)} a month) from ${formatProjMoney(Number(row.value) || 0)}`;
+    li.append(name, amount);
+    list.appendChild(li);
+  }
+  total.textContent = `Together: ${formatProjMoney(sum)} a year, ${formatProjMoney(sum / 12)} a month.`;
+  box.hidden = false;
+}
+
+function taxQuery() {
+  return currentAccount ? `?account=${encodeURIComponent(currentAccount)}` : "";
+}
+
+function applyTaxProfile(profile) {
+  const w8ben = document.getElementById("cpTaxW8ben");
+  const regime = document.getElementById("cpTaxRegime");
+  const marginal = document.getElementById("cpTaxMarginal");
+  const rateLabel = document.getElementById("cpProjReserveRate");
+  if (!w8ben || !regime || !marginal) return;
+  w8ben.checked = profile.w8ben !== false;
+  const kind = profile.pt_regime && profile.pt_regime.kind === "englobamento" ? "englobamento" : "flat";
+  regime.value = kind;
+  if (kind === "englobamento") {
+    marginal.value = String(Math.round(Number(profile.pt_regime.marginal_rate || 0) * 1000) / 10);
+  }
+  updateTaxMarginalVisibility();
+  if (rateLabel) {
+    rateLabel.textContent = kind === "englobamento" ? `englobamento ${marginal.value}%` : "28%";
+  }
+}
+
+function updateTaxMarginalVisibility() {
+  const regime = document.getElementById("cpTaxRegime");
+  const wrap = document.getElementById("cpTaxMarginalWrap");
+  if (regime && wrap) wrap.hidden = regime.value !== "englobamento";
+}
+
+async function loadTaxProfile() {
+  try {
+    applyTaxProfile(await fetchJson(`/api/capital/dividends/tax${taxQuery()}`));
+  } catch (_) {
+    // The defaults in the markup stay; the projection still loads.
+  }
+}
+
+function setupTaxProfile() {
+  const regime = document.getElementById("cpTaxRegime");
+  const save = document.getElementById("cpTaxSave");
+  const status = document.getElementById("cpTaxStatus");
+  if (!regime || !save || !status) return;
+  regime.addEventListener("change", updateTaxMarginalVisibility);
+  save.addEventListener("click", async () => {
+    const w8ben = document.getElementById("cpTaxW8ben").checked;
+    const pct = Number(document.getElementById("cpTaxMarginal").value);
+    if (regime.value === "englobamento" && !(Number.isFinite(pct) && pct >= 0 && pct <= 53)) {
+      status.textContent = "The marginal rate must be between 0 and 53%.";
+      return;
+    }
+    const body = {
+      w8ben,
+      pt_regime: regime.value === "englobamento"
+        ? { kind: "englobamento", marginal_rate: pct / 100 }
+        : { kind: "flat" },
+    };
+    save.disabled = true;
+    status.textContent = "Saving…";
+    try {
+      const stored = await fetchJson(`/api/capital/dividends/tax${taxQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      applyTaxProfile(stored);
+      status.textContent = "Saved. Projection updated.";
+      await loadDividendProjection(true);
+    } catch (err) {
+      status.textContent = `Couldn't save: ${err.message}`;
+    } finally {
+      save.disabled = false;
+    }
+  });
+  loadTaxProfile();
 }
 
 function renderProjAssumptions(data) {
@@ -835,7 +945,7 @@ function renderProjAssumptions(data) {
     "Exchange rates between instrument trading currencies and account currency are held constant at current spot rates.",
     "Low and High scenarios represent ±1 standard deviation of historical annual payout changes.",
     "Withholding tax reflects observed ledger rates over the past 24 months, else standard country defaults.",
-    "Portuguese tax reserve applies a 28% flat rate offset by foreign tax withholding (simplified foreign tax credit).",
+    "Portuguese tax reserve applies 28% flat, or your englobamento rate (half of EU and EEA company dividends), less tax withheld abroad.",
     "A monthly allowance, when set, is invested each month after that month's dividends and is not taxed as a dividend."
   ];
 

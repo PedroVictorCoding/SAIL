@@ -84,6 +84,7 @@ fn holding(symbol: &str, units: f64, price: f64, history: Vec<Payment>) -> Holdi
         history,
         withholding: 0.0,
         withholding_source: "default".to_string(),
+        pt_rate: 0.28,
         price_growth: None,
     }
 }

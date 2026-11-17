@@ -32,6 +32,7 @@ mod replays;
 mod research;
 mod signals;
 mod suggest;
+mod tax;
 mod trade;
 
 pub use dividends::DividendHistory;
@@ -207,6 +208,7 @@ impl CapitalStore {
         conn.execute_batch(insider::SCHEMA)?;
         conn.execute_batch(dividend_record::SCHEMA)?;
         conn.execute_batch(forecast_records::SCHEMA)?;
+        conn.execute_batch(tax::SCHEMA)?;
         prices::init_price_schema(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),

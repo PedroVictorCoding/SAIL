@@ -256,12 +256,13 @@ impl CapitalService {
         now: DateTime<Utc>,
     ) -> Result<Inputs, ServiceError> {
         let version = format!(
-            "{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{:?}",
             account.as_str(),
             self.store.ledger_version(account)?,
             self.store.price_version()?,
             self.store.dividend_history_version()?,
-            now.date_naive()
+            now.date_naive(),
+            self.tax_profile(account)?
         );
         if let Ok(cache) = self.dividend_inputs_cache.lock()
             && let Some((v, inputs)) = cache.as_ref()
@@ -289,6 +290,7 @@ impl CapitalService {
             .map(|m| m.currency.as_str().to_string())
             .unwrap_or_else(|| "EUR".into());
         let fx_closes = self.watch_fx_closes(now)?;
+        let tax = self.tax_profile(account)?;
         let received = self.dividends(account, Some(now - Duration::days(730)), None)?;
         // Units held at each payment, from one replay of the ledger (not one projection per
         // receipt, which took seconds on a real account).
@@ -350,14 +352,21 @@ impl CapitalService {
                 .filter_map(|(d, _)| d.withheld.as_ref().and_then(|w| w.amount.to_f64()))
                 .map(f64::abs)
                 .sum();
+            let domicile =
+                crate::dividends::tax::domicile(position.instrument.isin.as_deref(), &symbol);
+            let fund = position.instrument.kind == crate::contracts::InstrumentKind::Etf;
             let (withholding, source) = if gross > 0.0 {
                 ((withheld / gross).clamp(0.0, 0.6), "observed".to_string())
             } else {
-                (
-                    crate::dividends::default_withholding(&symbol),
-                    "default".to_string(),
-                )
+                let (rate, why) = crate::dividends::tax::source_withholding(
+                    &tax,
+                    domicile.as_deref(),
+                    &symbol,
+                    fund,
+                );
+                (rate, format!("default: {why}"))
             };
+            let pt_rate = crate::dividends::tax::pt_rate(&tax, domicile.as_deref(), fund);
 
             // Calibration: each receipt against the payment it came from, using the units
             // held on the payment date (positions change through the year).
@@ -387,6 +396,7 @@ impl CapitalService {
                 history,
                 withholding,
                 withholding_source: source,
+                pt_rate,
                 price_growth,
             });
         }

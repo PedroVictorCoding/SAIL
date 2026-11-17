@@ -100,6 +100,7 @@ pub fn router_with_research(
         .route("/dividends/calibration", get(dividend_calibration))
         .route("/dividends/record", get(dividend_record))
         .route("/dividends/calendar", get(dividend_calendar))
+        .route("/dividends/tax", get(tax_profile).post(set_tax_profile))
         .route("/signals/insider", get(insider_clusters))
         .route(
             "/dividends/candidates",
@@ -1218,6 +1219,50 @@ async fn dividend_record(
     })
     .await?;
     Ok(no_store(to_json(&summary)?))
+}
+
+/// Round 25 B7: the owner's tax profile (W-8BEN, Portuguese regime).
+async fn tax_profile(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    let profile = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.tax_profile(&account)
+    })
+    .await?;
+    Ok(no_store(to_json(&profile)?))
+}
+
+/// Saves the tax profile; the reply is what was stored (rates clamped).
+async fn set_tax_profile(
+    State(s): State<Arc<CapitalState>>,
+    h: HeaderMap,
+    Query(q): Query<AccountQuery>,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    authorize(&s, &h)?;
+    if body.len() > 1024 {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({"error": "The tax profile is too large."})),
+        ));
+    }
+    let input: sail_capital::dividends::tax::TaxProfile =
+        serde_json::from_slice(&body).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "The tax profile must be JSON with w8ben and pt_regime."})),
+            )
+        })?;
+    let profile = blocking(&s, move |svc| {
+        let account = svc.resolve_account(q.account.as_deref())?;
+        svc.set_tax_profile(&account, input)
+    })
+    .await?;
+    Ok(no_store(to_json(&profile)?))
 }
 
 #[derive(Deserialize, Default)]

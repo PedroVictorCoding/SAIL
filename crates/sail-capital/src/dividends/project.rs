@@ -5,8 +5,8 @@ use chrono::Datelike;
 
 use super::growth::growth;
 use super::{
-    Allocation, DividendOutlook, Growth, Holding, HoldingRow, MAX_GROWTH, MAX_YEARS, PT_TAX,
-    Projection, Scenario, Settings, YearRow,
+    Allocation, DividendOutlook, Growth, Holding, HoldingRow, MAX_GROWTH, MAX_YEARS, Projection,
+    Scenario, Settings, YearRow,
 };
 
 /// One holding's mutable state while a scenario is simulated.
@@ -153,6 +153,22 @@ pub fn project(
         .map(|(holding, _)| holding.symbol.clone())
         .collect();
 
+    let mut accumulating: Vec<super::AccumulatingRow> = holdings
+        .iter()
+        .zip(&growths)
+        .filter(|(_, growth)| growth.ttm_per_share <= 0.0)
+        .filter_map(|(holding, _)| {
+            let value = holding.units * holding.price * holding.fx;
+            let annual_equivalent = super::tax::income_equivalent(value);
+            (annual_equivalent > 0.0).then(|| super::AccumulatingRow {
+                symbol: holding.symbol.clone(),
+                value,
+                annual_equivalent,
+            })
+        })
+        .collect();
+    accumulating.sort_by(|a, b| b.value.total_cmp(&a.value).then(a.symbol.cmp(&b.symbol)));
+
     let notes = notes(holdings, &growths, settings);
 
     let specials = holdings
@@ -178,6 +194,7 @@ pub fn project(
         non_paying,
         without_reinvestment,
         notes,
+        accumulating,
     }
 }
 
@@ -244,7 +261,7 @@ fn simulate(
             let gross = sim.units * per_share * sim.holding.fx;
             let withheld = gross * sim.holding.withholding.clamp(0.0, 1.0);
             let pt_tax = if settings.reserve_pt_tax {
-                (PT_TAX * gross - withheld).max(0.0)
+                super::tax::pt_reserve(gross, withheld, sim.holding.pt_rate)
             } else {
                 0.0
             };

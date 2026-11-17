@@ -184,6 +184,7 @@ fn holding(key: &str, units: f64, price: f64, yield_: f64, g: f64) -> McHolding 
         fx: 1.0,
         history: quarterly(2016, 2026, price * yield_ / (1.0 + g).powi(10), g),
         withholding: 0.15,
+        pt_rate: 0.28,
         price_growth: Some(0.04),
         price_vol: 0.2,
         fx_vol: 0.0,

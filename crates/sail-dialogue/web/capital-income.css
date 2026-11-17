@@ -708,3 +708,19 @@
   font-size: 1rem;
   font-variant-numeric: tabular-nums;
 }
+
+/* Round 25 B7: tax profile and accumulating-fund income equivalent */
+.cp-tax-profile { margin-top: 0.5rem; }
+.cp-tax-fields { display: grid; gap: 0.6rem; padding-top: 0.5rem; }
+.cp-tax-field { display: grid; gap: 0.25rem; max-width: 22rem; }
+.cp-tax-field[hidden],
+.cp-accumulating[hidden] { display: none; }
+.cp-tax-field select,
+.cp-tax-field input { width: 100%; min-width: 0; }
+.cp-tax-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+.cp-accumulating { margin-top: 0.75rem; }
+.cp-accumulating-title { margin: 0 0 0.25rem; font-size: 0.95rem; }
+.cp-accumulating-list { list-style: none; margin: 0.4rem 0; padding: 0; display: grid; gap: 0.3rem; }
+.cp-accumulating-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 1rem; }
+.cp-accumulating-symbol { font-weight: 600; }
+.cp-accumulating-total { margin: 0; font-weight: 600; }

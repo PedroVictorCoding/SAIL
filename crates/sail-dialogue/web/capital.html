@@ -334,9 +334,34 @@
         <div class="cp-control-group cp-control-checkbox">
           <label class="cp-checkbox-label" for="cpProjReserveTax">
             <input type="checkbox" id="cpProjReserveTax">
-            <span>Set aside Portuguese tax (28%)</span>
+            <span>Set aside Portuguese tax (<span id="cpProjReserveRate">28%</span>)</span>
           </label>
-          <p class="cp-muted cp-proj-help">Shows income after the 28% Portuguese rate, less the tax already withheld abroad. Turn on to see what you keep.</p>
+          <p class="cp-muted cp-proj-help">Shows income after Portuguese tax, less the tax already withheld abroad. Turn on to see what you keep.</p>
+          <details class="cp-more cp-tax-profile" id="cpTaxProfile">
+            <summary>Tax profile</summary>
+            <div class="cp-tax-fields">
+              <label class="cp-checkbox-label" for="cpTaxW8ben">
+                <input type="checkbox" id="cpTaxW8ben" checked>
+                <span>W-8BEN on file (US dividends withheld at 15%, else 30%)</span>
+              </label>
+              <label class="cp-tax-field" for="cpTaxRegime">
+                <span>Portuguese tax</span>
+                <select id="cpTaxRegime">
+                  <option value="flat">28% flat</option>
+                  <option value="englobamento">Englobamento (my marginal rate)</option>
+                </select>
+              </label>
+              <label class="cp-tax-field" for="cpTaxMarginal" id="cpTaxMarginalWrap" hidden>
+                <span>Marginal rate (%)</span>
+                <input type="number" id="cpTaxMarginal" min="0" max="53" step="0.5" value="28" inputmode="decimal">
+              </label>
+              <p class="cp-muted cp-proj-help">Used only when a holding hasn't paid yet: once it pays, the withholding seen in the ledger wins. With englobamento, half of EU and EEA company dividends is taxed; funds count in full. The election covers all your capital income for the year.</p>
+              <div class="cp-tax-actions">
+                <button type="button" class="cp-button cp-btn-sm" id="cpTaxSave">Save tax profile</button>
+                <span class="cp-muted" id="cpTaxStatus" role="status" aria-live="polite"></span>
+              </div>
+            </div>
+          </details>
         </div>
       </div>
 
@@ -451,6 +476,12 @@
           <p class="cp-note" id="cpProjNonPaying" hidden>
             Non-paying holdings: <span id="cpProjNonPayingList"></span>
           </p>
+          <div class="cp-accumulating" id="cpProjAccumulating" hidden>
+            <h4 class="cp-accumulating-title">Income equivalent of funds that don't pay</h4>
+            <p class="cp-muted cp-proj-help">Selling 4% of each one a year, before the 28% tax on the gain part of each sale. Not included in the totals above.</p>
+            <ul class="cp-accumulating-list" id="cpProjAccumulatingList"></ul>
+            <p class="cp-accumulating-total" id="cpProjAccumulatingTotal"></p>
+          </div>
         </div>
       </details>
 

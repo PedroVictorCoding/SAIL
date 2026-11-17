@@ -146,6 +146,7 @@ fn the_calendar_lists_the_next_quarterly_payments() {
         history,
         withholding: 0.15,
         withholding_source: "observed".into(),
+        pt_rate: 0.28,
         price_growth: None,
     };
     let paid = BTreeMap::from([(
