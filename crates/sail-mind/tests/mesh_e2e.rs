@@ -626,3 +626,40 @@ async fn a_resting_worker_is_skipped_without_counting_as_failed() {
     assert_eq!(status.state, MeshWorkerState::Ready);
     assert_eq!(status.busy, None);
 }
+
+#[tokio::test]
+async fn night_shift_gets_a_ready_worker_and_its_pinned_client_reaches_the_model() {
+    let s = setup(MeshMode::Offload, paired).await;
+    let worker = s.pool.night_worker().expect("a ready worker");
+    assert!(worker.url.ends_with("/v1/chat/completions"));
+    assert_eq!(worker.model, "remote-qwen.gguf");
+    assert!(!format!("{worker:?}").contains(&paired(&s.worker).secret));
+    let response = worker
+        .client
+        .post(&worker.url)
+        .json(&json!({"model":"x","messages":[{"role":"user","content":"hi"}],"stream":false}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success(), "{}", response.status());
+    assert_eq!(s.remote.state.generations.load(Ordering::SeqCst), 1);
+    assert_eq!(s.host.state.generations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn night_shift_gets_no_worker_when_mesh_is_off_disabled_or_unreachable() {
+    let off = setup(MeshMode::Off, paired).await;
+    assert!(off.pool.night_worker().is_none());
+    let disabled = setup(MeshMode::Offload, |w| WorkerRecord {
+        enabled: false,
+        ..paired(w)
+    })
+    .await;
+    assert!(disabled.pool.night_worker().is_none());
+    let wrong_secret = setup(MeshMode::Offload, |w| WorkerRecord {
+        secret: sail_mesh::identity::new_secret(),
+        ..paired(w)
+    })
+    .await;
+    assert!(wrong_secret.pool.night_worker().is_none());
+}
