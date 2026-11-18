@@ -12,6 +12,7 @@ pub mod github;
 pub mod model_bench;
 pub mod mutation;
 pub mod nightly;
+pub mod nightshift;
 pub mod orchestrator;
 pub mod persistence;
 pub mod publish;
