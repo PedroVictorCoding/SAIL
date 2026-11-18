@@ -141,6 +141,80 @@ class SailApi(
             dev.sail.app.feature.dock.FeedbackRequest(feedback),
         )
 
+    suspend fun nightShiftState(): ApiResult<dev.sail.app.feature.nightshift.NightShiftResponse> =
+        get("/api/nightshift")
+
+    suspend fun createNightShiftErrand(ask: String): ApiResult<dev.sail.app.feature.nightshift.Errand> =
+        postJson("/api/nightshift/errands", dev.sail.app.feature.nightshift.AskErrandRequest(ask, "phone"))
+
+    suspend fun approveNightShiftErrand(
+        id: String,
+        order: dev.sail.app.feature.nightshift.WorkOrder? = null,
+    ): ApiResult<dev.sail.app.feature.nightshift.Errand> =
+        postJson(
+            "/api/nightshift/errands/${android.net.Uri.encode(id)}/approve",
+            dev.sail.app.feature.nightshift.ApproveErrandRequest(order),
+        )
+
+    suspend fun reshapeNightShiftErrand(
+        id: String,
+        note: String,
+    ): ApiResult<dev.sail.app.feature.nightshift.Errand> =
+        postJson(
+            "/api/nightshift/errands/${android.net.Uri.encode(id)}/reshape",
+            dev.sail.app.feature.nightshift.NoteRequest(note),
+        )
+
+    suspend fun redoNightShiftErrand(
+        id: String,
+        note: String,
+    ): ApiResult<dev.sail.app.feature.nightshift.Errand> =
+        postJson(
+            "/api/nightshift/errands/${android.net.Uri.encode(id)}/redo",
+            dev.sail.app.feature.nightshift.NoteRequest(note),
+        )
+
+    suspend fun shipNightShiftErrand(id: String): ApiResult<dev.sail.app.feature.nightshift.Errand> =
+        post("/api/nightshift/errands/${android.net.Uri.encode(id)}/ship")
+
+    suspend fun dropNightShiftErrand(id: String): ApiResult<dev.sail.app.feature.nightshift.Errand> =
+        post("/api/nightshift/errands/${android.net.Uri.encode(id)}/drop")
+
+    suspend fun nightShiftDiff(id: String): ApiResult<String> =
+        getText("/api/nightshift/errands/${android.net.Uri.encode(id)}/diff")
+
+    suspend fun saveNightShiftSettings(
+        settings: dev.sail.app.feature.nightshift.NightShiftSettings,
+    ): ApiResult<dev.sail.app.feature.nightshift.NightShiftSettings> =
+        putJson("/api/nightshift/settings", settings)
+
+    private suspend fun getText(path: String): ApiResult<String> {
+        val target = url(path) ?: return ApiResult.Err(0, "SAIL isn't set up yet")
+        val request = Request.Builder()
+            .url(target)
+            .header("Accept", "text/x-diff, text/plain")
+            .header("Cache-Control", "no-store")
+            .get()
+            .build()
+        val response = try {
+            client.newCall(request).await()
+        } catch (error: SSLException) {
+            return ApiResult.Err(0, "This phone doesn't trust SAIL's certificate")
+        } catch (error: IOException) {
+            return ApiResult.Err(0, "SAIL is unreachable")
+        }
+        return response.use {
+            accessRefusal(it)?.let { refusal -> return@use refusal }
+            val text = try {
+                it.body?.string().orEmpty()
+            } catch (error: IOException) {
+                return@use ApiResult.Err(0, "The response from SAIL was cut off")
+            }
+            if (!it.isSuccessful) ApiResult.Err(it.code, errorMessage(it.code, text))
+            else ApiResult.Ok(text)
+        }
+    }
+
     /** Absolute URL of a server path (covers, map tiles), or null when SAIL isn't configured. */
     fun url(path: String): HttpUrl? = config()?.baseUrl?.resolve(path)
 

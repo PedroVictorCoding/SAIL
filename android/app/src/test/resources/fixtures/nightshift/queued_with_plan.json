@@ -1,0 +1,110 @@
+{
+  "settings": {
+    "enabled": true,
+    "window_start_hour": 1,
+    "window_end_hour": 7,
+    "max_items": 5,
+    "include_forge_ready_issues": true,
+    "use_mesh": true,
+    "external_solves_per_night": 1,
+    "external_provider": "claude_cli",
+    "morning_greeting": true
+  },
+  "tonight": {
+    "window": "01:00–07:00",
+    "plan": {
+      "items": [
+        {
+          "kind": "errand",
+          "id": "e-0a1b2c3d4e5f"
+        },
+        {
+          "kind": "errand",
+          "id": "e-2c3d4e5f6071"
+        }
+      ],
+      "deferred": [
+        {
+          "item": {
+            "kind": "issue",
+            "number": 125
+          },
+          "reason": "doesn't fit in tonight's window"
+        }
+      ]
+    }
+  },
+  "errands": [
+    {
+      "id": "e-0a1b2c3d4e5f",
+      "ask": "Make the Capital Today tab show the next ex-dividend date next to each holding.",
+      "source": "web",
+      "created_at": "2026-11-18T14:05:00Z",
+      "updated_at": "2026-11-18T14:12:00Z",
+      "attempts": 0,
+      "external_used": false,
+      "notes": [],
+      "state": {
+        "state": "queued",
+        "order": {
+          "title": "Show next ex-dividend date in Capital Today tab",
+          "why": "Helps spot upcoming dividend cutoffs without opening each ticker detail.",
+          "acceptance": [
+            "Each holding row in Capital Today displays its next ex-dividend date when known",
+            "Missing dates render an em dash without shifting column alignment"
+          ],
+          "target_files": [
+            "crates/sail-dialogue/web/capital.js",
+            "crates/sail-dialogue/web/capital.css"
+          ],
+          "size": "s",
+          "notes_for_solver": "Reuse the existing date formatter in capital-core.js."
+        },
+        "approved_at": "2026-11-18T14:12:00Z"
+      }
+    },
+    {
+      "id": "e-2c3d4e5f6071",
+      "ask": "Fix the search ranking when a query has leading or trailing spaces.",
+      "source": "phone",
+      "created_at": "2026-11-18T16:30:00Z",
+      "updated_at": "2026-11-18T16:35:00Z",
+      "attempts": 1,
+      "external_used": false,
+      "notes": [
+        {
+          "at": "2026-11-18T16:34:30Z",
+          "text": "Also trim internal double spaces before tokenizing."
+        }
+      ],
+      "state": {
+        "state": "queued",
+        "order": {
+          "title": "Trim whitespace in search query ranking",
+          "why": "Queries with extra spaces currently miss exact-prefix boosts.",
+          "acceptance": [
+            "Leading, trailing, and repeated spaces are normalized before scoring",
+            "Unit test covers padded query strings"
+          ],
+          "target_files": [
+            "crates/sail-forge/src/repo_map.rs"
+          ],
+          "size": "m",
+          "notes_for_solver": ""
+        },
+        "approved_at": "2026-11-18T16:35:00Z"
+      }
+    }
+  ],
+  "morning": null,
+  "mesh": {
+    "available": true,
+    "name": "windows",
+    "resting": false
+  },
+  "external": {
+    "provider": "claude_cli",
+    "used_tonight": 0,
+    "allowed": 1
+  }
+}
