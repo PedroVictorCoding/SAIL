@@ -460,8 +460,11 @@ pub enum Transition {
     MarkExternalUsed,
 }
 
-/// Stub: the errand store is implemented in K1 (`nightshift/store.rs`).
+/// The errand store: one mutex over `<state dir>/nightshift/errands.json`, the stored
+/// patches, and a broadcast of every successful change.
 #[derive(Debug)]
 pub struct ErrandStore {
+    root: std::path::PathBuf,
+    inner: std::sync::Mutex<store::Inner>,
     events: tokio::sync::broadcast::Sender<Errand>,
 }
