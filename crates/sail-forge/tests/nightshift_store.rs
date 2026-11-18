@@ -568,6 +568,26 @@ fn corrupt_state_is_moved_aside_and_the_store_starts_empty() {
 }
 
 #[test]
+fn invalid_utf8_state_is_quarantined_too() {
+    let tmp = TempDir::new();
+    let dir = tmp.0.join("nightshift");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join("errands.json"), [0xff, 0xfe, 0x00]).expect("write");
+    let store = ErrandStore::open(&tmp.0).expect("open empty");
+    assert!(store.list().is_empty());
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("dir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with("errands.json.corrupt-"))
+    );
+}
+
+#[test]
 fn mark_external_used_is_persisted() {
     let tmp = TempDir::new();
     let store = ErrandStore::open(&tmp.0).expect("open");

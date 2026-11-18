@@ -60,37 +60,44 @@ impl ErrandStore {
         let path = root.join("errands.json");
         let mut inner = Inner::default();
         let mut migrated = false;
-        match std::fs::read_to_string(&path) {
-            Ok(text) => match serde_json::from_str::<Persisted>(&text) {
-                Ok(persisted) => {
-                    for errand in persisted.errands {
-                        if ErrandId::parse(errand.id.as_str()).is_none() {
-                            tracing::warn!(
-                                target: "forge::nightshift",
-                                "ignoring a stored errand with an invalid id"
-                            );
-                            continue;
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                let parsed = String::from_utf8(bytes)
+                    .map_err(|error| format!("invalid UTF-8: {error}"))
+                    .and_then(|text| {
+                        serde_json::from_str::<Persisted>(&text).map_err(|error| error.to_string())
+                    });
+                match parsed {
+                    Ok(persisted) => {
+                        for errand in persisted.errands {
+                            if ErrandId::parse(errand.id.as_str()).is_none() {
+                                tracing::warn!(
+                                    target: "forge::nightshift",
+                                    "ignoring a stored errand with an invalid id"
+                                );
+                                continue;
+                            }
+                            inner.errands.insert(errand.id.as_str().to_string(), errand);
                         }
-                        inner.errands.insert(errand.id.as_str().to_string(), errand);
+                    }
+                    Err(error) => {
+                        let stamp = Utc::now().format("%Y%m%dT%H%M%SZ");
+                        let renamed = root.join(format!("errands.json.corrupt-{stamp}"));
+                        if let Err(rename_error) = std::fs::rename(&path, &renamed) {
+                            tracing::error!(
+                                target: "forge::nightshift",
+                                "errands.json is corrupt ({error}) and could not be renamed ({rename_error}); starting empty"
+                            );
+                        } else {
+                            tracing::error!(
+                                target: "forge::nightshift",
+                                "errands.json is corrupt ({error}); moved to {} and starting empty",
+                                renamed.display()
+                            );
+                        }
                     }
                 }
-                Err(error) => {
-                    let stamp = Utc::now().format("%Y%m%dT%H%M%SZ");
-                    let renamed = root.join(format!("errands.json.corrupt-{stamp}"));
-                    if let Err(rename_error) = std::fs::rename(&path, &renamed) {
-                        tracing::error!(
-                            target: "forge::nightshift",
-                            "errands.json is corrupt ({error}) and could not be renamed ({rename_error}); starting empty"
-                        );
-                    } else {
-                        tracing::error!(
-                            target: "forge::nightshift",
-                            "errands.json is corrupt ({error}); moved to {} and starting empty",
-                            renamed.display()
-                        );
-                    }
-                }
-            },
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(format!("could not read the night shift errands: {error}"));
