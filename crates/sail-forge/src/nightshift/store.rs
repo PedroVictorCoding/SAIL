@@ -427,7 +427,9 @@ fn next_state(
                 outcome,
                 question_or_reason,
             },
-            ErrandState::Working { order, .. },
+            ErrandState::Working { order, .. }
+            | ErrandState::Failed { order, .. }
+            | ErrandState::NeedsYou { order, .. },
         ) => match outcome {
             MorningOutcome::Ready => Ok(ErrandState::Ready {
                 order: order.clone(),

@@ -440,7 +440,8 @@ pub enum Transition {
     },
     /// Working → Working with a new stage.
     Stage(String),
-    /// Working → Ready / NeedsYou / Failed.
+    /// Working → Ready / NeedsYou / Failed. Also accepted from Failed/NeedsYou so an
+    /// external solve can replace tonight's failed local result.
     Finished {
         result: NightResult,
         outcome: MorningOutcome,
