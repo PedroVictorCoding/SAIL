@@ -15,6 +15,13 @@ use tracing::{info, warn};
 use crate::admission::{AdmissionPolicy, IssueCandidate};
 use crate::contracts::{ForgeJobReport, IssueEnqueueRequest};
 use crate::github::{GithubClient, mark_open_prs};
+use crate::nightshift::morning::compose_morning;
+use crate::nightshift::plan::{PlanErrand, PlanIssue, SizeDurations, plan_night};
+use crate::nightshift::result::{result_from_report, summary};
+use crate::nightshift::{
+    Endpoint, EndpointPicker, Errand, ErrandId, ErrandState, ErrandStore, MorningOutcome,
+    NightItem, NightResult, NightShiftSettings, RanOn, RanOnKind,
+};
 use crate::orchestrator::{EFFECT_PUBLISH, ForgeOrchestrator};
 use crate::publish::{PublishConfig, publish_draft_pr};
 use sail_continuity::{ContinuityError, EffectGate};
@@ -31,6 +38,9 @@ pub struct NightlyConfig {
     pub max_attempts_per_issue: u32,
     pub max_prs_per_day: u32,
     pub publish: bool,
+    /// True when `SAIL_FORGE_PUBLISH` was set explicitly. Night Shift's default for
+    /// GitHub issues is on-approval; only an explicit setting keeps auto-publishing.
+    pub publish_explicit: bool,
     pub state_dir: PathBuf,
     pub admission: AdmissionPolicy,
     pub pr_labels: Vec<String>,
@@ -89,6 +99,7 @@ impl Default for NightlyConfig {
             max_attempts_per_issue: 2,
             max_prs_per_day: 3,
             publish: true,
+            publish_explicit: false,
             state_dir: default_state_dir(),
             admission: AdmissionPolicy::default(),
             pr_labels: vec!["forge-generated".into()],
@@ -118,6 +129,7 @@ impl NightlyConfig {
             max_attempts_per_issue: env_num("SAIL_FORGE_MAX_ATTEMPTS", d.max_attempts_per_issue),
             max_prs_per_day: env_num("SAIL_FORGE_MAX_PRS_PER_DAY", d.max_prs_per_day),
             publish: std::env::var("SAIL_FORGE_PUBLISH").map_or(true, |v| v != "0"),
+            publish_explicit: std::env::var_os("SAIL_FORGE_PUBLISH").is_some(),
             ..d
         }
     }
@@ -150,6 +162,9 @@ pub struct IssueRecord {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NightlyState {
     pub issues: BTreeMap<u64, IssueRecord>,
+    /// Night Shift errand history by errand id. `#[serde(default)]` keeps old state files.
+    #[serde(default)]
+    pub errands: BTreeMap<String, IssueRecord>,
     /// PRs opened per local date (`YYYY-MM-DD`).
     pub prs_opened: BTreeMap<String, u32>,
     pub last_run_date: Option<String>,
@@ -310,6 +325,13 @@ pub struct ForgeNightlyRunner {
     executor: Arc<dyn JobExecutor>,
     config: NightlyConfig,
     publish: Option<PublishConfig>,
+    night_shift: Option<NightShiftRuntime>,
+    endpoint_picker: Option<Arc<dyn EndpointPicker>>,
+}
+
+struct NightShiftRuntime {
+    store: Arc<ErrandStore>,
+    settings: NightShiftSettings,
 }
 
 impl ForgeNightlyRunner {
@@ -331,7 +353,26 @@ impl ForgeNightlyRunner {
             executor: Arc::new(LocalSolverExecutor),
             config,
             publish,
+            night_shift: None,
+            endpoint_picker: None,
         }
+    }
+
+    /// Enable the Night Shift errand path. Without it the existing GitHub-issue nightly
+    /// path runs unchanged.
+    pub fn with_night_shift(
+        mut self,
+        store: Arc<ErrandStore>,
+        settings: NightShiftSettings,
+    ) -> Self {
+        self.night_shift = Some(NightShiftRuntime { store, settings });
+        self
+    }
+
+    /// Choose the endpoint for each Night Shift attempt; the host remains the fallback.
+    pub fn with_endpoint_picker(mut self, picker: Arc<dyn EndpointPicker>) -> Self {
+        self.endpoint_picker = Some(picker);
+        self
     }
 
     pub fn with_executor(mut self, executor: Arc<dyn JobExecutor>) -> Self {
@@ -533,6 +574,9 @@ impl ForgeNightlyRunner {
             digest.halted = Some(stop);
             return self.finish(digest);
         }
+        if self.night_shift.is_some() {
+            return self.run_night_shift(dry_run, respect_window).await;
+        }
 
         let mut state = NightlyState::load(&self.config.state_dir);
         let work = match self.select_work(&state, &mut digest) {
@@ -676,6 +720,544 @@ impl ForgeNightlyRunner {
         state.last_run_date = Some(Self::today());
         let _ = state.save(&self.config.state_dir);
         self.finish(digest)
+    }
+
+    fn night_window_secs(settings: &NightShiftSettings) -> u64 {
+        let start = u64::from(settings.window_start_hour % 24);
+        let end = u64::from(settings.window_end_hour % 24);
+        let hours = if end >= start {
+            end - start
+        } else {
+            24 - start + end
+        };
+        hours * 3_600
+    }
+
+    fn errand_issue_number(id: &ErrandId) -> u64 {
+        let hex = id.as_str().trim_start_matches("e-");
+        u64::from_str_radix(hex, 16)
+            .map(|n| n | (1 << 63))
+            .unwrap_or(1 << 63)
+    }
+
+    fn host_endpoint() -> Endpoint {
+        Endpoint {
+            url: std::env::var("SAIL_FORGE_MODEL_URL").unwrap_or_else(|_| "local".into()),
+            ran_on: RanOn {
+                kind: RanOnKind::Host,
+                name: "host".into(),
+                model: "local".into(),
+            },
+        }
+    }
+
+    fn pick_endpoint(&self, use_mesh: bool) -> Endpoint {
+        self.endpoint_picker
+            .as_ref()
+            .map(|picker| picker.pick(use_mesh))
+            .unwrap_or_else(Self::host_endpoint)
+    }
+
+    fn set_checkpoint_endpoint(&self, job_id: &str, endpoint: &Endpoint) {
+        let store = self.orchestrator.checkpoint_store();
+        match store.load(job_id) {
+            Ok(Some(mut checkpoint)) => {
+                checkpoint.model_endpoint = Some(endpoint.url.clone());
+                if let Err(error) = store.save(&checkpoint) {
+                    warn!("Forge nightly: could not set the endpoint for {job_id}: {error}");
+                }
+            }
+            Ok(None) => warn!("Forge nightly: checkpoint missing for {job_id}"),
+            Err(error) => warn!("Forge nightly: could not load {job_id} for its endpoint: {error}"),
+        }
+    }
+
+    fn failed_result(job_id: &str, base_commit: &str, ran_on: RanOn) -> NightResult {
+        let mut result = NightResult {
+            job_id: job_id.to_string(),
+            base_commit: base_commit.to_string(),
+            ran_on,
+            files: Vec::new(),
+            tests: None,
+            gates: Vec::new(),
+            review: None,
+            summary: String::new(),
+            model_note: None,
+            patch_bytes: 0,
+            finished_at: Utc::now(),
+        };
+        result.summary = summary(&result);
+        result
+    }
+
+    fn record_errand(
+        state: &mut NightlyState,
+        errand: &Errand,
+        job_id: &str,
+        outcome: MorningOutcome,
+        detail: Option<String>,
+    ) {
+        let record = state
+            .errands
+            .entry(errand.id.as_str().to_string())
+            .or_default();
+        record.attempts = errand.attempts;
+        record.last_outcome = match outcome {
+            MorningOutcome::Ready => "ready",
+            MorningOutcome::NeedsYou => "needs_you",
+            MorningOutcome::Failed => "failed",
+            MorningOutcome::NotReached => "not_reached",
+        }
+        .into();
+        record.last_reason = detail;
+        record.last_job_id = Some(job_id.to_string());
+        record.updated_at = Some(Utc::now());
+    }
+
+    async fn run_night_shift(&self, dry_run: bool, respect_window: bool) -> NightlyDigest {
+        let mut digest = NightlyDigest {
+            date: Self::today(),
+            dry_run,
+            ..Default::default()
+        };
+        let Some(runtime) = self.night_shift.as_ref() else {
+            return self.finish(digest);
+        };
+        let store = runtime.store.clone();
+        let settings = runtime.settings.clone();
+        if !settings.enabled {
+            digest.halted = Some("night shift is disabled in Settings".into());
+            return self.finish(digest);
+        }
+
+        let mut state = NightlyState::load(&self.config.state_dir);
+        let mut issues = Vec::new();
+        if settings.include_forge_ready_issues {
+            match self.select_work(&state, &mut digest) {
+                Ok(work) => issues = work,
+                Err(error) => {
+                    digest.halted = Some(format!("GitHub intake failed: {error}"));
+                }
+            }
+        }
+
+        let errands = store.list();
+        let plan_errands: Vec<PlanErrand> = errands
+            .iter()
+            .filter_map(|errand| match &errand.state {
+                ErrandState::Queued { order, approved_at } => Some(PlanErrand {
+                    id: errand.id.clone(),
+                    size: order.size,
+                    approved_at: *approved_at,
+                    has_redo_note: !errand.notes.is_empty(),
+                    attempts: errand.attempts,
+                }),
+                _ => None,
+            })
+            .collect();
+        let plan_issues: Vec<PlanIssue> = issues
+            .iter()
+            .map(|issue| PlanIssue {
+                number: issue.number,
+            })
+            .collect();
+        let max_items = settings.max_items.clamp(1, 10);
+        let plan = plan_night(
+            &plan_errands,
+            &plan_issues,
+            Self::night_window_secs(&settings),
+            max_items,
+            &SizeDurations::default(),
+        );
+
+        if dry_run {
+            for item in &plan.items {
+                let (number, title) = match item {
+                    NightItem::Errand { id } => (
+                        Self::errand_issue_number(id),
+                        errands
+                            .iter()
+                            .find(|errand| &errand.id == id)
+                            .and_then(|errand| match &errand.state {
+                                ErrandState::Queued { order, .. } => Some(order.title.clone()),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| "a Night Shift errand".into()),
+                    ),
+                    NightItem::Issue { number } => (
+                        *number,
+                        issues
+                            .iter()
+                            .find(|issue| issue.number == *number)
+                            .map(|issue| issue.title.clone())
+                            .unwrap_or_else(|| format!("Issue #{number}")),
+                    ),
+                };
+                digest.entries.push(DigestEntry {
+                    issue: number,
+                    title,
+                    outcome: "would_attempt".into(),
+                    detail: String::new(),
+                });
+            }
+            return self.finish(digest);
+        }
+
+        let issue_titles: BTreeMap<u64, String> = issues
+            .iter()
+            .map(|issue| (issue.number, issue.title.clone()))
+            .collect();
+        for item in plan.items.clone() {
+            if let Some(stop) = self.should_stop(respect_window) {
+                digest.halted = Some(stop);
+                break;
+            }
+            let keep_going = match item {
+                NightItem::Errand { id } => {
+                    self.run_errand_item(&mut state, &store, &settings, &id, &mut digest)
+                        .await
+                }
+                NightItem::Issue { number } => {
+                    let Some(issue) = issues.iter().find(|issue| issue.number == number) else {
+                        continue;
+                    };
+                    self.run_night_shift_issue(&mut state, &settings, issue, &mut digest)
+                        .await
+                }
+            };
+            let _ = state.save(&self.config.state_dir);
+            if !keep_going {
+                break;
+            }
+        }
+
+        state.last_run_date = Some(Self::today());
+        let _ = state.save(&self.config.state_dir);
+        let report = compose_morning(
+            &Self::today(),
+            &plan,
+            &store.list(),
+            &issue_titles,
+            digest.halted.clone(),
+        );
+        let dir = self.config.state_dir.join("nightshift/morning");
+        if std::fs::create_dir_all(&dir).is_ok() {
+            match serde_json::to_string_pretty(&report) {
+                Ok(json) => {
+                    if let Err(error) =
+                        std::fs::write(dir.join(format!("{}.json", report.date)), json)
+                    {
+                        warn!("Forge nightly: could not save the morning report: {error}");
+                    }
+                }
+                Err(error) => warn!("Forge nightly: could not encode the morning report: {error}"),
+            }
+        }
+        self.finish(digest)
+    }
+
+    async fn run_errand_item(
+        &self,
+        state: &mut NightlyState,
+        store: &Arc<ErrandStore>,
+        settings: &NightShiftSettings,
+        id: &ErrandId,
+        digest: &mut NightlyDigest,
+    ) -> bool {
+        let Some(errand) = store.get(id) else {
+            return true;
+        };
+        let ErrandState::Queued { order, .. } = errand.state.clone() else {
+            return true;
+        };
+        let mut endpoint = self.pick_endpoint(settings.use_mesh);
+        let request = IssueEnqueueRequest {
+            repo: self.config.repo_slug.clone(),
+            issue_number: Self::errand_issue_number(id),
+            priority: Some("nightly".into()),
+            issue_title: Some(order.title.clone()),
+            issue_body: Some(order.to_issue_body(&errand.notes)),
+            ..Default::default()
+        };
+        let job_id = match self.orchestrator.enqueue_managed_issue(request) {
+            Ok(id) => id,
+            Err(error) => {
+                digest.halted = Some(format!("enqueue failed: {error}"));
+                return false;
+            }
+        };
+        self.set_checkpoint_endpoint(&job_id, &endpoint);
+        let working = match store.transition(
+            id,
+            Utc::now(),
+            crate::nightshift::Transition::Working {
+                job_id: job_id.clone(),
+                stage: "planning".into(),
+                ran_on: endpoint.ran_on.clone(),
+            },
+        ) {
+            Ok(errand) => errand,
+            Err(error) => {
+                warn!(
+                    "Forge nightly: could not start errand {}: {error}",
+                    id.as_str()
+                );
+                return false;
+            }
+        };
+
+        let mut executed = self.executor.execute(&self.orchestrator, &job_id).await;
+        if let Err(reason) = &executed {
+            if endpoint.ran_on.kind == RanOnKind::Mesh && is_infrastructure_failure(reason) {
+                endpoint = self
+                    .endpoint_picker
+                    .as_ref()
+                    .map(|picker| picker.host())
+                    .unwrap_or_else(Self::host_endpoint);
+                self.set_checkpoint_endpoint(&job_id, &endpoint);
+                executed = self.executor.execute(&self.orchestrator, &job_id).await;
+            }
+        }
+
+        let report = match executed {
+            Ok(report) => report,
+            Err(reason) => {
+                let base_commit = self
+                    .orchestrator
+                    .checkpoint_store()
+                    .load(&job_id)
+                    .ok()
+                    .flatten()
+                    .map(|checkpoint| checkpoint.base_commit)
+                    .unwrap_or_default();
+                let result = Self::failed_result(&job_id, &base_commit, endpoint.ran_on);
+                let _ = store.transition(
+                    id,
+                    Utc::now(),
+                    crate::nightshift::Transition::Finished {
+                        result,
+                        outcome: MorningOutcome::Failed,
+                        question_or_reason: Some(reason.clone()),
+                    },
+                );
+                Self::record_errand(
+                    state,
+                    &working,
+                    &job_id,
+                    MorningOutcome::Failed,
+                    Some(reason.clone()),
+                );
+                let infrastructure = is_infrastructure_failure(&reason);
+                digest.entries.push(DigestEntry {
+                    issue: Self::errand_issue_number(id),
+                    title: order.title.clone(),
+                    outcome: "failed".into(),
+                    detail: reason.clone(),
+                });
+                if infrastructure {
+                    digest.halted = Some(format!("infrastructure failure: {reason}"));
+                }
+                return !infrastructure;
+            }
+        };
+
+        let patch = if report.patch_ref.trim_start().starts_with("diff --git ")
+            || report.patch_ref.trim_start().starts_with("--- a/")
+        {
+            report.patch_ref.clone()
+        } else {
+            self.orchestrator
+                .checkpoint_store()
+                .load(&job_id)
+                .ok()
+                .flatten()
+                .and_then(|checkpoint| checkpoint.patch)
+                .unwrap_or_default()
+        };
+        let mut review_report = report;
+        review_report.patch_ref = patch.clone();
+        let (mut result, mut outcome, mut reason, patch) =
+            result_from_report(&review_report, endpoint.ran_on.clone(), Utc::now());
+        result.job_id = job_id.clone();
+        if let Err(error) = store.save_patch(id, &patch) {
+            outcome = MorningOutcome::Failed;
+            reason = Some(error);
+            result.summary = summary(&result);
+        } else if patch.trim().is_empty() && outcome == MorningOutcome::Ready {
+            outcome = MorningOutcome::Failed;
+            reason = Some("the patch was empty".into());
+        }
+        let updated = match store.transition(
+            id,
+            Utc::now(),
+            crate::nightshift::Transition::Finished {
+                result,
+                outcome,
+                question_or_reason: reason.clone(),
+            },
+        ) {
+            Ok(errand) => errand,
+            Err(error) => {
+                warn!(
+                    "Forge nightly: could not finish errand {}: {error}",
+                    id.as_str()
+                );
+                return false;
+            }
+        };
+        Self::record_errand(state, &updated, &job_id, outcome, reason.clone());
+        digest.entries.push(DigestEntry {
+            issue: Self::errand_issue_number(id),
+            title: order.title.clone(),
+            outcome: match outcome {
+                MorningOutcome::Ready => "ready",
+                MorningOutcome::NeedsYou => "needs_you",
+                MorningOutcome::Failed => "failed",
+                MorningOutcome::NotReached => "not_reached",
+            }
+            .into(),
+            detail: reason.unwrap_or_default(),
+        });
+        true
+    }
+
+    async fn run_night_shift_issue(
+        &self,
+        state: &mut NightlyState,
+        settings: &NightShiftSettings,
+        issue: &IssueCandidate,
+        digest: &mut NightlyDigest,
+    ) -> bool {
+        let mut record = state.issues.get(&issue.number).cloned().unwrap_or_default();
+        if record.attempts >= self.config.max_attempts_per_issue {
+            return true;
+        }
+        let mut endpoint = self.pick_endpoint(settings.use_mesh);
+        let request = IssueEnqueueRequest {
+            repo: self.config.repo_slug.clone(),
+            issue_number: issue.number,
+            priority: Some("nightly".into()),
+            issue_title: Some(issue.title.clone()),
+            issue_body: Some(feedback_body(issue, &record)),
+            ..Default::default()
+        };
+        let job_id = match self.orchestrator.enqueue_managed_issue(request) {
+            Ok(id) => id,
+            Err(error) => {
+                digest.halted = Some(format!("enqueue failed: {error}"));
+                return false;
+            }
+        };
+        record.attempts += 1;
+        record.last_job_id = Some(job_id.clone());
+        record.last_outcome = "running".into();
+        record.updated_at = Some(Utc::now());
+        state.issues.insert(issue.number, record.clone());
+        self.set_checkpoint_endpoint(&job_id, &endpoint);
+
+        let mut executed = self.executor.execute(&self.orchestrator, &job_id).await;
+        if let Err(reason) = &executed {
+            if endpoint.ran_on.kind == RanOnKind::Mesh && is_infrastructure_failure(reason) {
+                endpoint = self
+                    .endpoint_picker
+                    .as_ref()
+                    .map(|picker| picker.host())
+                    .unwrap_or_else(Self::host_endpoint);
+                self.set_checkpoint_endpoint(&job_id, &endpoint);
+                executed = self.executor.execute(&self.orchestrator, &job_id).await;
+            }
+        }
+
+        match executed {
+            Ok(report) => {
+                let patch = if report.patch_ref.trim_start().starts_with("diff --git ")
+                    || report.patch_ref.trim_start().starts_with("--- a/")
+                {
+                    report.patch_ref.clone()
+                } else {
+                    self.orchestrator
+                        .checkpoint_store()
+                        .load(&job_id)
+                        .ok()
+                        .flatten()
+                        .and_then(|checkpoint| checkpoint.patch)
+                        .unwrap_or_default()
+                };
+                let mut report = report;
+                report.patch_ref = patch.clone();
+                let (mut result, outcome, reason, _) =
+                    result_from_report(&report, endpoint.ran_on, Utc::now());
+                result.job_id = job_id.clone();
+                let detail = reason.unwrap_or_else(|| result.summary.clone());
+                if outcome == MorningOutcome::Ready
+                    && !patch.trim().is_empty()
+                    && self.config.publish
+                    && self.config.publish_explicit
+                {
+                    let (publish_outcome, publish_detail) = self.try_publish(state, &job_id);
+                    record.last_outcome = publish_outcome.clone();
+                    record.last_reason =
+                        (publish_outcome != "published").then(|| publish_detail.clone());
+                    if publish_outcome == "published" {
+                        record.pr_url = Some(publish_detail.clone());
+                    }
+                    digest.entries.push(DigestEntry {
+                        issue: issue.number,
+                        title: issue.title.clone(),
+                        outcome: publish_outcome,
+                        detail: publish_detail,
+                    });
+                } else {
+                    record.last_outcome = if outcome == MorningOutcome::Ready {
+                        "ready".into()
+                    } else {
+                        match outcome {
+                            MorningOutcome::NeedsYou => "needs_you",
+                            MorningOutcome::Failed => "failed",
+                            _ => "not_reached",
+                        }
+                        .into()
+                    };
+                    record.last_reason = (outcome != MorningOutcome::Ready).then(|| detail.clone());
+                    digest.entries.push(DigestEntry {
+                        issue: issue.number,
+                        title: issue.title.clone(),
+                        outcome: record.last_outcome.clone(),
+                        detail,
+                    });
+                }
+                record.updated_at = Some(Utc::now());
+                state.issues.insert(issue.number, record);
+                true
+            }
+            Err(reason) => {
+                if is_infrastructure_failure(&reason) {
+                    record.attempts = record.attempts.saturating_sub(1);
+                    record.last_outcome = "aborted".into();
+                    record.last_reason = Some(reason.clone());
+                    state.issues.insert(issue.number, record);
+                    digest.entries.push(DigestEntry {
+                        issue: issue.number,
+                        title: issue.title.clone(),
+                        outcome: "aborted".into(),
+                        detail: reason.clone(),
+                    });
+                    digest.halted = Some(format!("infrastructure failure: {reason}"));
+                    return false;
+                }
+                record.last_outcome = "failed".into();
+                record.last_reason = Some(reason.clone());
+                record.updated_at = Some(Utc::now());
+                state.issues.insert(issue.number, record);
+                digest.entries.push(DigestEntry {
+                    issue: issue.number,
+                    title: issue.title.clone(),
+                    outcome: "failed".into(),
+                    detail: reason,
+                });
+                true
+            }
+        }
     }
 
     fn finish(&self, digest: NightlyDigest) -> NightlyDigest {

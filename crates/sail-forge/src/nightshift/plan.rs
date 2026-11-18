@@ -69,7 +69,7 @@ pub fn plan_night(
     let mut used = 0u64;
 
     for errand in ordered {
-        if errand.attempts >= 3 {
+        if errand.attempts >= 3 && !errand.has_redo_note {
             deferred.push(Deferred {
                 item: NightItem::Errand {
                     id: errand.id.clone(),

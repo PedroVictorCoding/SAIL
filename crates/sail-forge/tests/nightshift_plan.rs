@@ -168,6 +168,14 @@ fn a_later_small_item_still_fits_after_a_large_one_is_skipped() {
 }
 
 #[test]
+fn a_redo_note_allows_a_fourth_attempt() {
+    let errands = vec![errand(1, Size::S, 1, true, 3)];
+    let plan = plan_night(&errands, &[], 5_000, 5, &SizeDurations::default());
+    assert_eq!(plan.items.len(), 1);
+    assert!(plan.deferred.is_empty());
+}
+
+#[test]
 fn max_items_caps_errands_and_issues_together() {
     let errands = vec![
         errand(1, Size::S, 1, false, 0),
