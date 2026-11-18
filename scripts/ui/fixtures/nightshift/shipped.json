@@ -1,0 +1,99 @@
+{
+  "settings": {
+    "enabled": true,
+    "window_start_hour": 1,
+    "window_end_hour": 7,
+    "max_items": 5,
+    "include_forge_ready_issues": true,
+    "use_mesh": true,
+    "external_solves_per_night": 0,
+    "external_provider": null,
+    "morning_greeting": true
+  },
+  "tonight": {
+    "window": "01:00–07:00",
+    "plan": {
+      "items": [],
+      "deferred": []
+    }
+  },
+  "errands": [
+    {
+      "id": "e-0a1b2c3d4e5f",
+      "ask": "Make the Capital Today tab show the next ex-dividend date next to each holding.",
+      "source": "web",
+      "created_at": "2026-11-18T14:05:00Z",
+      "updated_at": "2026-11-19T08:15:00Z",
+      "attempts": 1,
+      "external_used": false,
+      "notes": [],
+      "state": {
+        "state": "shipped",
+        "order": {
+          "title": "Show next ex-dividend date in Capital Today tab",
+          "why": "Helps spot upcoming dividend cutoffs without opening each ticker detail.",
+          "acceptance": [
+            "Each holding row in Capital Today displays its next ex-dividend date when known"
+          ],
+          "target_files": [
+            "crates/sail-dialogue/web/capital.js"
+          ],
+          "size": "s",
+          "notes_for_solver": ""
+        },
+        "result": {
+          "job_id": "job-20261119-0112",
+          "base_commit": "98fa697000000000000000000000000000000000",
+          "ran_on": {
+            "kind": "mesh",
+            "name": "windows",
+            "model": "qwen3-32b"
+          },
+          "files": [
+            {
+              "path": "crates/sail-dialogue/web/capital.js",
+              "added": 42,
+              "removed": 6
+            }
+          ],
+          "tests": {
+            "passed": 18,
+            "failed": 0,
+            "ignored": 0,
+            "duration_secs": 24,
+            "exit_ok": true
+          },
+          "gates": [
+            {
+              "name": "web_assets_test",
+              "passed": true,
+              "blocking": true,
+              "detail": "2 passed, 0 failed"
+            }
+          ],
+          "review": {
+            "passed": true,
+            "concerns": []
+          },
+          "summary": "Changed 1 file (+42 −6). 18 tests passed. All checks passed. Self-review: no concerns.",
+          "model_note": null,
+          "patch_bytes": 11200,
+          "finished_at": "2026-11-19T01:38:00Z"
+        },
+        "pr_url": "https://github.com/PedroVictorCoding/SAIL/pull/499",
+        "shipped_at": "2026-11-19T08:15:00Z"
+      }
+    }
+  ],
+  "morning": null,
+  "mesh": {
+    "available": true,
+    "name": "windows",
+    "resting": false
+  },
+  "external": {
+    "provider": null,
+    "used_tonight": 0,
+    "allowed": 0
+  }
+}

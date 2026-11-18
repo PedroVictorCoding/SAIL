@@ -78,6 +78,7 @@ fun HomeScreen(
     onOpenDialogue: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenDock: () -> Unit = {},
+    onOpenNightShift: () -> Unit = {},
 ) {
     val container = LocalAppContainer.current
     val repository = remember(container.api) { HomeRepository(container.api) }
@@ -99,8 +100,9 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = ScreenGutter, vertical = 4.dp),
-            horizontalArrangement = Arrangement.End,
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
         ) {
+            SecondaryButton(text = "Overnight", onClick = onOpenNightShift)
             SecondaryButton(text = "Dock mode", onClick = onOpenDock)
         }
 

@@ -1,0 +1,32 @@
+{
+  "settings": {
+    "enabled": true,
+    "window_start_hour": 1,
+    "window_end_hour": 7,
+    "max_items": 5,
+    "include_forge_ready_issues": true,
+    "use_mesh": true,
+    "external_solves_per_night": 0,
+    "external_provider": null,
+    "morning_greeting": true
+  },
+  "tonight": {
+    "window": "01:00–07:00",
+    "plan": {
+      "items": [],
+      "deferred": []
+    }
+  },
+  "errands": [],
+  "morning": null,
+  "mesh": {
+    "available": true,
+    "name": "windows",
+    "resting": false
+  },
+  "external": {
+    "provider": null,
+    "used_tonight": 0,
+    "allowed": 0
+  }
+}

@@ -19,6 +19,7 @@ object Routes {
     const val TRACKER = "tracker"
     const val SETTINGS = "settings"
     const val DOCK = "dock"
+    const val NIGHT_SHIFT = "nightshift"
 
     fun course(id: String) = "arena/course/${Uri.encode(id)}"
     fun lesson(id: String) = "arena/lesson/${Uri.encode(id)}"

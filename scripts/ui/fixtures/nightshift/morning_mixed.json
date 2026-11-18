@@ -1,0 +1,285 @@
+{
+  "settings": {
+    "enabled": true,
+    "window_start_hour": 1,
+    "window_end_hour": 7,
+    "max_items": 5,
+    "include_forge_ready_issues": true,
+    "use_mesh": true,
+    "external_solves_per_night": 1,
+    "external_provider": "claude_cli",
+    "morning_greeting": true
+  },
+  "tonight": {
+    "window": "01:00–07:00",
+    "plan": {
+      "items": [],
+      "deferred": []
+    }
+  },
+  "errands": [
+    {
+      "id": "e-0a1b2c3d4e5f",
+      "ask": "Make the Capital Today tab show the next ex-dividend date next to each holding.",
+      "source": "web",
+      "created_at": "2026-11-18T14:05:00Z",
+      "updated_at": "2026-11-19T01:38:00Z",
+      "attempts": 1,
+      "external_used": false,
+      "notes": [],
+      "state": {
+        "state": "ready",
+        "order": {
+          "title": "Show next ex-dividend date in Capital Today tab",
+          "why": "Helps spot upcoming dividend cutoffs without opening each ticker detail.",
+          "acceptance": [
+            "Each holding row in Capital Today displays its next ex-dividend date when known",
+            "Missing dates render an em dash"
+          ],
+          "target_files": [
+            "crates/sail-dialogue/web/capital.js",
+            "crates/sail-dialogue/web/capital.css"
+          ],
+          "size": "s",
+          "notes_for_solver": ""
+        },
+        "result": {
+          "job_id": "job-20261119-0112",
+          "base_commit": "98fa697000000000000000000000000000000000",
+          "ran_on": {
+            "kind": "mesh",
+            "name": "windows",
+            "model": "qwen3-32b"
+          },
+          "files": [
+            {
+              "path": "crates/sail-dialogue/web/capital.js",
+              "added": 42,
+              "removed": 6
+            },
+            {
+              "path": "crates/sail-dialogue/web/capital.css",
+              "added": 14,
+              "removed": 2
+            }
+          ],
+          "tests": {
+            "passed": 18,
+            "failed": 0,
+            "ignored": 0,
+            "duration_secs": 24,
+            "exit_ok": true
+          },
+          "gates": [
+            {
+              "name": "web_assets_test",
+              "passed": true,
+              "blocking": true,
+              "detail": "2 passed, 0 failed"
+            },
+            {
+              "name": "diff_size",
+              "passed": true,
+              "blocking": true,
+              "detail": "64 lines changed (limit 400)"
+            }
+          ],
+          "review": {
+            "passed": true,
+            "concerns": []
+          },
+          "summary": "Changed 2 files (+56 −8). 18 tests passed. All checks passed. Self-review: no concerns.",
+          "model_note": "Added ex_dividend_date column using existing formatShortDate helper.",
+          "patch_bytes": 14820,
+          "finished_at": "2026-11-19T01:38:00Z"
+        }
+      }
+    },
+    {
+      "id": "e-2c3d4e5f6071",
+      "ask": "Fix the search ranking when a query has leading or trailing spaces.",
+      "source": "voice",
+      "created_at": "2026-11-18T16:30:00Z",
+      "updated_at": "2026-11-19T02:21:00Z",
+      "attempts": 1,
+      "external_used": false,
+      "notes": [],
+      "state": {
+        "state": "needs_you",
+        "order": {
+          "title": "Trim whitespace in search query ranking",
+          "why": "Queries with extra spaces currently miss exact-prefix boosts.",
+          "acceptance": [
+            "Leading, trailing, and repeated spaces are normalized before scoring"
+          ],
+          "target_files": [
+            "crates/sail-forge/src/repo_map.rs"
+          ],
+          "size": "m",
+          "notes_for_solver": ""
+        },
+        "result": {
+          "job_id": "job-20261119-0145",
+          "base_commit": "98fa697000000000000000000000000000000000",
+          "ran_on": {
+            "kind": "host",
+            "name": "host",
+            "model": "qwen3-14b"
+          },
+          "files": [
+            {
+              "path": "crates/sail-forge/src/repo_map.rs",
+              "added": 19,
+              "removed": 4
+            }
+          ],
+          "tests": {
+            "passed": 12,
+            "failed": 0,
+            "ignored": 0,
+            "duration_secs": 19,
+            "exit_ok": true
+          },
+          "gates": [
+            {
+              "name": "cargo_test",
+              "passed": true,
+              "blocking": true,
+              "detail": "12 passed, 0 failed"
+            }
+          ],
+          "review": {
+            "passed": false,
+            "concerns": [
+              "Unclear whether tab characters in pasted queries should also collapse."
+            ]
+          },
+          "summary": "Changed 1 file (+19 −4). 12 tests passed. Self-review raised 1 concern.",
+          "model_note": "Normalized ASCII spaces; left tabs untouched pending your preference.",
+          "patch_bytes": 1840,
+          "finished_at": "2026-11-19T02:21:00Z"
+        },
+        "question": "Should pasted tabs also collapse to single spaces, or only space characters?"
+      }
+    },
+    {
+      "id": "e-3d4e5f607182",
+      "ask": "Add a keyboard shortcut for muting the desk mic.",
+      "source": "web",
+      "created_at": "2026-11-18T18:00:00Z",
+      "updated_at": "2026-11-19T03:05:00Z",
+      "attempts": 1,
+      "external_used": false,
+      "notes": [],
+      "state": {
+        "state": "failed",
+        "order": {
+          "title": "Add desk mic mute keyboard shortcut",
+          "why": "Quickly mute during calls without reaching for the mouse.",
+          "acceptance": [
+            "Pressing M outside text inputs toggles desk mic mute"
+          ],
+          "target_files": [
+            "crates/sail-dialogue/web/voice.js"
+          ],
+          "size": "s",
+          "notes_for_solver": ""
+        },
+        "result": {
+          "job_id": "job-20261119-0230",
+          "base_commit": "98fa697000000000000000000000000000000000",
+          "ran_on": {
+            "kind": "host",
+            "name": "host",
+            "model": "qwen3-14b"
+          },
+          "files": [
+            {
+              "path": "crates/sail-dialogue/web/voice.js",
+              "added": 8,
+              "removed": 1
+            }
+          ],
+          "tests": {
+            "passed": 4,
+            "failed": 2,
+            "ignored": 0,
+            "duration_secs": 15,
+            "exit_ok": false
+          },
+          "gates": [
+            {
+              "name": "voice_browser_test",
+              "passed": false,
+              "blocking": true,
+              "detail": "2 assertions failed on input focus guard"
+            }
+          ],
+          "review": null,
+          "summary": "Changed 1 file (+8 −1). 4 passed, 2 failed. Blocking gate voice_browser_test failed.",
+          "model_note": null,
+          "patch_bytes": 920,
+          "finished_at": "2026-11-19T03:05:00Z"
+        },
+        "reason": "2 tests failed: shortcut triggered while typing inside the composer."
+      }
+    }
+  ],
+  "morning": {
+    "date": "2026-11-19",
+    "ready": 1,
+    "needs_you": 1,
+    "failed": 1,
+    "not_reached": 1,
+    "items": [
+      {
+        "item": {
+          "kind": "errand",
+          "id": "e-0a1b2c3d4e5f"
+        },
+        "title": "Show next ex-dividend date in Capital Today tab",
+        "outcome": "ready",
+        "line": "Ready to review (+56 −8 across 2 files)."
+      },
+      {
+        "item": {
+          "kind": "errand",
+          "id": "e-2c3d4e5f6071"
+        },
+        "title": "Trim whitespace in search query ranking",
+        "outcome": "needs_you",
+        "line": "Needs a decision on tab whitespace handling."
+      },
+      {
+        "item": {
+          "kind": "errand",
+          "id": "e-3d4e5f607182"
+        },
+        "title": "Add desk mic mute keyboard shortcut",
+        "outcome": "failed",
+        "line": "Failed: 2 tests failed on input focus guard."
+      },
+      {
+        "item": {
+          "kind": "issue",
+          "number": 125
+        },
+        "title": "Issue #125",
+        "outcome": "not_reached",
+        "line": "Not reached before 07:00 window close."
+      }
+    ],
+    "spoken": "Overnight I finished two of four jobs; one is ready to review. The search fix needs a decision from you.",
+    "halted": null
+  },
+  "mesh": {
+    "available": true,
+    "name": "windows",
+    "resting": false
+  },
+  "external": {
+    "provider": "claude_cli",
+    "used_tonight": 0,
+    "allowed": 1
+  }
+}

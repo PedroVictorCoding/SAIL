@@ -54,6 +54,7 @@ import dev.sail.app.feature.arena.LessonScreen
 import dev.sail.app.feature.arena.ReviewScreen
 import dev.sail.app.feature.dialogue.DialogueScreen
 import dev.sail.app.feature.dock.DockScreen
+import dev.sail.app.feature.nightshift.NightShiftScreen
 import dev.sail.app.feature.dock.SurfaceKind
 import dev.sail.app.feature.home.HomeScreen
 import dev.sail.app.feature.library.BookScreen
@@ -130,10 +131,18 @@ private fun SailNavHost(nav: NavHostController, start: String) {
                 onOpenDialogue = { nav.navigateTopLevel(Routes.DIALOGUE) },
                 onOpenSettings = { nav.navigate(Routes.SETTINGS) },
                 onOpenDock = { nav.navigate(Routes.DOCK) },
+                onOpenNightShift = { nav.navigate(Routes.NIGHT_SHIFT) },
             )
         }
         composable(Routes.DOCK) {
             DockScreen(onExit = { nav.popBackStack() })
+        }
+        composable(Routes.NIGHT_SHIFT) {
+            NightShiftScreen(
+                onBack = { nav.popBackStack() },
+                onOpenSettings = { nav.navigate(Routes.SETTINGS) },
+                onAskInDialogue = { nav.navigateTopLevel(Routes.DIALOGUE) },
+            )
         }
         composable(Routes.TRACKER) {
             TrackerScreen(onBack = { nav.popBackStack() })
