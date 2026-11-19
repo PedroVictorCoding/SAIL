@@ -7,7 +7,9 @@
 //! local patch.
 
 use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
 use sail_guardian::sandbox::SandboxPolicy;
@@ -27,6 +29,9 @@ const MAX_EXTERNAL_PROMPT_CHARS: usize = 24_000;
 /// A vendor reply longer than 256 000 characters is rejected before parsing (fixed a
 /// priori to bound work on a runaway CLI).
 const MAX_EXTERNAL_REPLY_CHARS: usize = 256_000;
+
+/// Timeout for reading one target file from git (same order as git operations).
+const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Try one external solve, then verify the patch like a local one. `Err` means the attempt
 /// did not produce a verified result; an errand already marked external is never sent twice.
@@ -54,7 +59,8 @@ pub async fn external_attempt(
         return Err("the external solve was cancelled".into());
     }
     let repo_root = orchestrator.config().workspace_root.clone();
-    let prompt = external_prompt(&order, &errand.notes, &failure, &repo_root)?;
+    let base = errand_base_commit(errand).unwrap_or_else(|| "HEAD".into());
+    let prompt = external_prompt(&order, &errand.notes, &failure, &repo_root, &base)?;
     if prompt.chars().count() > MAX_EXTERNAL_PROMPT_CHARS {
         return Err("too large to send".into());
     }
@@ -86,7 +92,6 @@ pub async fn external_attempt(
         errand.id.as_str().trim_start_matches("e-"),
         uuid::Uuid::new_v4().simple()
     );
-    let base = errand_base_commit(errand).unwrap_or_else(|| "HEAD".into());
     let worktree = IsolatedWorktree::create(
         &worktree_id,
         &repo_root,
@@ -141,6 +146,7 @@ fn external_prompt(
     notes: &[crate::nightshift::OwnerNote],
     failure: &str,
     repo_root: &Path,
+    base: &str,
 ) -> Result<String, String> {
     let mut prompt = String::new();
     prompt.push_str("Work order:\n");
@@ -149,7 +155,7 @@ fn external_prompt(
     prompt.push_str(failure.trim());
     prompt.push_str("\n\nTarget files (with line numbers):\n");
     for (index, path) in order.target_files.iter().enumerate() {
-        let numbered = numbered_file(repo_root, path, MAX_EXTERNAL_PROMPT_CHARS)?;
+        let numbered = numbered_file_at(repo_root, base, path, MAX_EXTERNAL_PROMPT_CHARS)?;
         let block = format!("--- {}. {path} ---\n{numbered}\n", index + 1);
         if prompt.chars().count() + block.chars().count() > MAX_EXTERNAL_PROMPT_CHARS {
             return Err("too large to send".into());
@@ -159,17 +165,23 @@ fn external_prompt(
     Ok(prompt)
 }
 
-fn numbered_file(repo_root: &Path, path: &str, budget: usize) -> Result<String, String> {
-    let full = repo_root.join(path);
-    let metadata =
-        std::fs::metadata(&full).map_err(|_| format!("target file {path} does not exist"))?;
-    if metadata.len() as usize > budget {
-        return Err("too large to send".into());
-    }
-    let content = std::fs::read_to_string(&full)
-        .map_err(|error| format!("target file {path} is unreadable: {error}"))?;
+fn numbered_file_at(
+    repo_root: &Path,
+    base: &str,
+    path: &str,
+    budget: usize,
+) -> Result<String, String> {
+    let spec = format!("{base}:{path}");
+    let output = crate::github::run_with_timeout(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args(["show", &spec]),
+        GIT_TIMEOUT,
+    )
+    .map_err(|_| format!("target file {path} is not available at {base}"))?;
     let mut out = String::new();
-    for (line, text) in content.lines().enumerate() {
+    for (line, text) in output.lines().enumerate() {
         out.push_str(&format!("{:5}: {text}\n", line + 1));
         if out.chars().count() > budget {
             return Err("too large to send".into());

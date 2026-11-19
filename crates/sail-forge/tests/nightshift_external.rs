@@ -296,6 +296,8 @@ async fn an_oversized_prompt_is_skipped_before_marking_or_sending() {
     let tmp = TempDir::new();
     let repo = setup_repo(&tmp.0);
     std::fs::write(repo.join("big.rs"), "x".repeat(30_000)).expect("big");
+    git(&repo, &["add", "big.rs"]);
+    git(&repo, &["commit", "-m", "big"]);
     let orchestrator = boot(&tmp.0, &repo);
     let store = ErrandStore::open(&tmp.0.join("state")).expect("store");
     let errand = failed_errand(&store, "big.rs", &head(&repo), 2);
@@ -392,6 +394,40 @@ async fn a_verified_external_patch_replaces_the_failed_result() {
     assert!(prompts[0].contains("Last local attempt failed"));
     assert!(prompts[0].contains("the local tests failed"));
     assert!(prompts[0].contains("src/lib.rs"));
+}
+
+#[tokio::test]
+async fn the_prompt_reads_target_files_at_the_base_not_the_dirty_checkout() {
+    let tmp = TempDir::new();
+    let repo = setup_repo(&tmp.0);
+    let base = head(&repo);
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn value() -> u32 { 999 } // dirty working copy\n",
+    )
+    .expect("dirty");
+    let orchestrator = boot(&tmp.0, &repo);
+    let store = ErrandStore::open(&tmp.0.join("state")).expect("store");
+    let errand = failed_errand(&store, "src/lib.rs", &base, 7);
+    let solver = FakeSolver::new(Ok("no blocks".into()));
+
+    assert!(
+        external_attempt(
+            &orchestrator,
+            &store,
+            &solver,
+            "local/test-repo",
+            &errand,
+            CancellationToken::new(),
+        )
+        .await
+        .is_err()
+    );
+    let prompts = solver.prompts.lock().expect("prompts");
+    assert_eq!(prompts.len(), 1);
+    assert!(prompts[0].contains("pub fn value() -> u32 { 1 }"));
+    assert!(!prompts[0].contains("999"));
+    assert!(!prompts[0].contains("dirty working copy"));
 }
 
 #[tokio::test]
