@@ -266,6 +266,7 @@ async fn only_failed_or_needs_you_errands_without_a_previous_external_try() {
         &orchestrator,
         &store,
         &solver,
+        "local/test-repo",
         &marked,
         CancellationToken::new(),
     )
@@ -281,6 +282,7 @@ async fn only_failed_or_needs_you_errands_without_a_previous_external_try() {
         &orchestrator,
         &store,
         &solver,
+        "local/test-repo",
         &queued,
         CancellationToken::new(),
     )
@@ -303,6 +305,7 @@ async fn an_oversized_prompt_is_skipped_before_marking_or_sending() {
         &orchestrator,
         &store,
         &solver,
+        "local/test-repo",
         &errand,
         CancellationToken::new(),
     )
@@ -326,6 +329,7 @@ async fn a_failed_cli_call_or_an_unparseable_reply_marks_external_used() {
         &orchestrator,
         &store,
         &solver,
+        "local/test-repo",
         &errand,
         CancellationToken::new(),
     )
@@ -340,6 +344,7 @@ async fn a_failed_cli_call_or_an_unparseable_reply_marks_external_used() {
         &orchestrator,
         &store,
         &solver,
+        "local/test-repo",
         &errand,
         CancellationToken::new(),
     )
@@ -362,6 +367,7 @@ async fn a_verified_external_patch_replaces_the_failed_result() {
         &orchestrator,
         &store,
         &solver,
+        "local/test-repo",
         &errand,
         CancellationToken::new(),
     )
@@ -400,9 +406,16 @@ async fn a_cancelled_token_stops_before_the_cli() {
     cancel.cancel();
 
     assert!(
-        external_attempt(&orchestrator, &store, &solver, &errand, cancel)
-            .await
-            .is_err()
+        external_attempt(
+            &orchestrator,
+            &store,
+            &solver,
+            "local/test-repo",
+            &errand,
+            cancel,
+        )
+        .await
+        .is_err()
     );
     assert_eq!(solver.calls.load(Ordering::SeqCst), 0);
     assert!(!store.get(&errand.id).expect("errand").external_used);

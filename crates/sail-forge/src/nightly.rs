@@ -15,12 +15,13 @@ use tracing::{info, warn};
 use crate::admission::{AdmissionPolicy, IssueCandidate};
 use crate::contracts::{ForgeJobReport, IssueEnqueueRequest};
 use crate::github::{GithubClient, mark_open_prs};
+use crate::nightshift::external::external_attempt;
 use crate::nightshift::morning::compose_morning;
 use crate::nightshift::plan::{PlanErrand, PlanIssue, SizeDurations, plan_night};
 use crate::nightshift::result::{job_patch, result_from_report, summary};
 use crate::nightshift::{
-    Endpoint, EndpointPicker, Errand, ErrandId, ErrandState, ErrandStore, MorningOutcome,
-    NightItem, NightResult, NightShiftSettings, RanOn, RanOnKind,
+    Endpoint, EndpointPicker, Errand, ErrandId, ErrandState, ErrandStore, ExternalSolver,
+    MorningOutcome, NightItem, NightResult, NightShiftSettings, RanOn, RanOnKind,
 };
 use crate::orchestrator::{EFFECT_PUBLISH, ForgeOrchestrator};
 use crate::publish::{PublishConfig, publish_draft_pr};
@@ -160,6 +161,9 @@ pub struct NightlyState {
     /// Night Shift errand history by errand id. `#[serde(default)]` keeps old state files.
     #[serde(default)]
     pub errands: BTreeMap<String, IssueRecord>,
+    /// External solves used per local date, so the nightly budget survives restarts.
+    #[serde(default)]
+    pub external_used: BTreeMap<String, u32>,
     /// PRs opened per local date (`YYYY-MM-DD`).
     pub prs_opened: BTreeMap<String, u32>,
     pub last_run_date: Option<String>,
@@ -322,6 +326,7 @@ pub struct ForgeNightlyRunner {
     publish: Option<PublishConfig>,
     night_shift: Option<NightShiftRuntime>,
     endpoint_picker: Option<Arc<dyn EndpointPicker>>,
+    external_solver: Option<Arc<dyn ExternalSolver>>,
 }
 
 struct NightShiftRuntime {
@@ -349,6 +354,7 @@ impl ForgeNightlyRunner {
             publish,
             night_shift: None,
             endpoint_picker: None,
+            external_solver: None,
         }
     }
 
@@ -362,6 +368,12 @@ impl ForgeNightlyRunner {
     /// Choose the endpoint for each Night Shift attempt; the host remains the fallback.
     pub fn with_endpoint_picker(mut self, picker: Arc<dyn EndpointPicker>) -> Self {
         self.endpoint_picker = Some(picker);
+        self
+    }
+
+    /// Attach the vendor CLI used after a failed local errand attempt, within budget.
+    pub fn with_external_solver(mut self, solver: Arc<dyn ExternalSolver>) -> Self {
+        self.external_solver = Some(solver);
         self
     }
 
@@ -1144,6 +1156,8 @@ impl ForgeNightlyRunner {
             }
         };
         Self::record_errand(state, &updated, &job_id, outcome, reason.clone());
+        self.maybe_external(state, store, settings, id, digest)
+            .await;
         digest.entries.push(DigestEntry {
             issue: Self::errand_issue_number(id),
             title: order.title.clone(),
@@ -1157,6 +1171,76 @@ impl ForgeNightlyRunner {
             detail: reason.unwrap_or_default(),
         });
         true
+    }
+
+    async fn maybe_external(
+        &self,
+        state: &mut NightlyState,
+        store: &Arc<ErrandStore>,
+        settings: &NightShiftSettings,
+        id: &ErrandId,
+        digest: &NightlyDigest,
+    ) {
+        let Some(solver) = self.external_solver.as_ref() else {
+            return;
+        };
+        if settings.external_provider.is_none() || digest.halted.is_some() {
+            return;
+        }
+        let today = Self::today();
+        let used = state.external_used.get(&today).copied().unwrap_or(0);
+        if used >= u32::from(settings.external_solves_per_night) {
+            return;
+        }
+        let Some(errand) = store.get(id) else {
+            return;
+        };
+        if errand.external_used {
+            return;
+        }
+        if !matches!(
+            errand.state,
+            ErrandState::Failed { .. } | ErrandState::NeedsYou { .. }
+        ) {
+            return;
+        }
+        state.external_used.insert(today, used.saturating_add(1));
+        let _ = state.save(&self.config.state_dir);
+        match external_attempt(
+            &self.orchestrator,
+            store,
+            solver.as_ref(),
+            &self.config.repo_slug,
+            &errand,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        {
+            Ok(()) => {
+                if let Some(current) = store.get(id) {
+                    let outcome = match current.state {
+                        ErrandState::Ready { .. } => MorningOutcome::Ready,
+                        ErrandState::NeedsYou { .. } => MorningOutcome::NeedsYou,
+                        _ => MorningOutcome::Failed,
+                    };
+                    let record = state.errands.entry(id.as_str().to_string()).or_default();
+                    record.last_outcome = match outcome {
+                        MorningOutcome::Ready => "ready",
+                        MorningOutcome::NeedsYou => "needs_you",
+                        MorningOutcome::Failed => "failed",
+                        MorningOutcome::NotReached => "not_reached",
+                    }
+                    .into();
+                    record.updated_at = Some(Utc::now());
+                }
+            }
+            Err(error) => {
+                warn!(
+                    "Forge nightly: external solve for {} failed: {error}",
+                    id.as_str()
+                );
+            }
+        }
     }
 
     async fn run_night_shift_issue(

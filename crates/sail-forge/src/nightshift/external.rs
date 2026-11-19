@@ -34,6 +34,7 @@ pub async fn external_attempt(
     orchestrator: &ForgeOrchestrator,
     store: &ErrandStore,
     solver: &dyn ExternalSolver,
+    repo: &str,
     errand: &Errand,
     cancel: CancellationToken,
 ) -> Result<(), String> {
@@ -103,9 +104,8 @@ pub async fn external_attempt(
         return Err("the external reply produced no changes".into());
     }
 
-    let repo = repo_slug(orchestrator);
     let request = IssueEnqueueRequest {
-        repo,
+        repo: repo.to_string(),
         issue_number: external_issue_number(errand.id.as_str()),
         priority: Some("nightly".into()),
         issue_title: Some(order.title.clone()),
@@ -189,20 +189,6 @@ fn errand_base_commit(errand: &Errand) -> Option<String> {
         }
         _ => None,
     }
-}
-
-fn repo_slug(orchestrator: &ForgeOrchestrator) -> String {
-    let mut repos: Vec<String> = orchestrator
-        .config()
-        .allowed_repos
-        .iter()
-        .cloned()
-        .collect();
-    repos.sort();
-    repos
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| "local/test-repo".into())
 }
 
 fn external_issue_number(id: &str) -> u64 {

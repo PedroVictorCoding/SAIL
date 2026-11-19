@@ -15,8 +15,8 @@ use sail_forge::github::{DraftPr, GithubClient, OpenPullRequest};
 use sail_forge::nightly::{ForgeNightlyRunner, JobExecutor, NightlyConfig, NightlyState};
 use sail_forge::nightshift::plan::{PlanErrand, PlanIssue, SizeDurations};
 use sail_forge::nightshift::{
-    Endpoint, EndpointPicker, ErrandSource, ErrandState, ErrandStore, NightShiftSettings, RanOn,
-    RanOnKind, Size, Transition, WorkOrder,
+    Endpoint, EndpointPicker, ErrandSource, ErrandState, ErrandStore, ExternalSolver,
+    NightShiftSettings, RanOn, RanOnKind, Size, Transition, WorkOrder,
 };
 use sail_forge::orchestrator::{ForgeOrchestrator, OrchestratorConfig};
 use sail_forge::persistence::TaskCheckpointStore;
@@ -55,7 +55,26 @@ fn boot(root: &Path) -> Arc<ForgeOrchestrator> {
         workspace_root: root.join("workspace"),
         ..OrchestratorConfig::default()
     };
-    let _ = std::fs::create_dir_all(&config.workspace_root);
+    let _ = std::fs::create_dir_all(config.workspace_root.join("src"));
+    let _ = std::fs::write(
+        config.workspace_root.join("src/lib.rs"),
+        "pub fn value() -> u32 { 1 }\n",
+    );
+    let _ = std::process::Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(&config.workspace_root)
+        .output();
+    for args in [
+        vec!["config", "user.name", "Test"],
+        vec!["config", "user.email", "test@test.local"],
+        vec!["add", "."],
+        vec!["commit", "-m", "init"],
+    ] {
+        let _ = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&config.workspace_root)
+            .output();
+    }
     let broker = Arc::new(
         ReviewBroker::new(ReviewPolicyConfig::default())
             .with_mock_mode(true)
@@ -207,7 +226,7 @@ fn report(outcome: Outcome, job_id: &str, repo: &str) -> ForgeJobReport {
     let needs_you = outcome == Outcome::NeedsYou;
     ForgeJobReport {
         issue: format!("{repo}#1"),
-        base_commit: "b".repeat(40),
+        base_commit: "HEAD".into(),
         branch: format!("agent/forge-issue-1-{job_id}"),
         model_id: "test".into(),
         model_hash: "h".into(),
@@ -227,6 +246,31 @@ fn report(outcome: Outcome, job_id: &str, repo: &str) -> ForgeJobReport {
         remaining_risks: Vec::new(),
         status: sail_forge::contracts::ForgeTaskState::Completed,
         ready_to_publish: true,
+    }
+}
+
+#[derive(Default)]
+struct FakeExternal {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl ExternalSolver for FakeExternal {
+    fn ran_on(&self) -> RanOn {
+        RanOn {
+            kind: RanOnKind::External,
+            name: "Claude Code".into(),
+            model: "claude-sonnet".into(),
+        }
+    }
+    async fn solve(
+        &self,
+        _system: &str,
+        _prompt: &str,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<String, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err("the CLI is unavailable in this test".into())
     }
 }
 
@@ -577,6 +621,58 @@ async fn ready_issue_waits_for_approval_when_publishing_is_off() {
     assert_eq!(state.issues[&125].last_outcome, "ready");
     assert!(state.issues[&125].pr_url.is_none());
     assert!(gh.created.lock().expect("created").is_empty());
+}
+
+#[tokio::test]
+async fn external_budget_allows_exactly_one_call_for_two_failed_errands() {
+    let tmp = TempDir::new("budget");
+    let orchestrator = boot(&tmp.0);
+    let exec = FakeExecutor::new(vec![
+        Reply::Report(Outcome::NeedsYou),
+        Reply::Report(Outcome::NeedsYou),
+    ]);
+    let store = Arc::new(ErrandStore::open(&tmp.0.join("state")).expect("store"));
+    let first = approve(&store);
+    let second = store
+        .add("Another job", ErrandSource::Web, chrono::Utc::now(), [7; 6])
+        .expect("add");
+    store
+        .transition(
+            &second.id,
+            chrono::Utc::now(),
+            Transition::Proposed(order()),
+        )
+        .expect("propose");
+    store
+        .transition(&second.id, chrono::Utc::now(), Transition::Approve(None))
+        .expect("approve");
+    let solver = Arc::new(FakeExternal {
+        calls: AtomicUsize::new(0),
+    });
+    let mut budget = settings(false);
+    budget.external_solves_per_night = 1;
+    budget.external_provider = Some("claude_cli".into());
+    let runner = runner(
+        &tmp.0,
+        orchestrator,
+        Arc::new(FakeGithub::default()),
+        exec,
+        store.clone(),
+        Arc::new(FakePicker::new()),
+        budget,
+    )
+    .with_external_solver(solver.clone());
+
+    let digest = runner.run_once(false, false).await;
+    assert_eq!(digest.halted, None);
+    assert_eq!(solver.calls.load(Ordering::SeqCst), 1);
+    let state = NightlyState::load(&tmp.0.join("state"));
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    assert_eq!(state.external_used.get(&today), Some(&1));
+    let first = store.get(&first.id).expect("first");
+    let second = store.get(&second.id).expect("second");
+    assert!(first.external_used);
+    assert!(!second.external_used);
 }
 
 #[tokio::test]
