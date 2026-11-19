@@ -792,9 +792,10 @@ impl ForgeNightlyRunner {
     }
 
     fn set_checkpoint_endpoint(&self, job_id: &str, endpoint: &Endpoint) {
-        if !endpoint.url.trim().is_empty() {
-            self.orchestrator.set_job_endpoint(job_id, endpoint.clone());
+        if endpoint.url.trim().is_empty() {
+            return;
         }
+        self.orchestrator.set_job_endpoint(job_id, endpoint.clone());
         let store = self.orchestrator.checkpoint_store();
         match store.load(job_id) {
             Ok(Some(mut checkpoint)) => {
