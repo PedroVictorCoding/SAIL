@@ -632,6 +632,8 @@ fn next_state(
             | ErrandState::Failed { order, .. },
         ) => {
             check_note(&note)?;
+            let mut note = note;
+            note.at = now;
             errand.notes.push(note);
             Ok(ErrandState::Queued {
                 order: order.clone(),
