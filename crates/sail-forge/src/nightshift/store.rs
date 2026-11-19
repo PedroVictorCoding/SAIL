@@ -46,6 +46,9 @@ struct Persisted {
 #[derive(Debug, Default)]
 pub(super) struct Inner {
     errands: BTreeMap<String, Errand>,
+    /// Pre-attempt `(approved_at, attempts)` for a Working errand, so Requeue can put
+    /// tonight's attempt back exactly as it was.
+    before_working: BTreeMap<String, (DateTime<Utc>, u32)>,
 }
 
 impl ErrandStore {
@@ -222,9 +225,20 @@ impl ErrandStore {
                 .get(id.as_str())
                 .cloned()
                 .ok_or_else(|| "no such errand".to_string())?;
+            if let ErrandState::Queued { approved_at, .. } = &current.state
+                && matches!(&f, Transition::Working { .. })
+            {
+                inner
+                    .before_working
+                    .insert(id.as_str().to_string(), (*approved_at, current.attempts));
+            }
+            let restore = inner.before_working.get(id.as_str()).copied();
             let mut updated = current.clone();
-            updated.state = next_state(&mut updated, &current.state, f, now)?;
+            updated.state = next_state(&mut updated, &current.state, f, now, restore)?;
             updated.updated_at = now;
+            if !matches!(updated.state, ErrandState::Working { .. }) {
+                inner.before_working.remove(id.as_str());
+            }
             inner
                 .errands
                 .insert(id.as_str().to_string(), updated.clone());
@@ -356,6 +370,7 @@ fn next_state(
     current: &ErrandState,
     f: Transition,
     now: DateTime<Utc>,
+    restore: Option<(DateTime<Utc>, u32)>,
 ) -> Result<ErrandState, String> {
     let f_verb_before = f_verb(&f).unwrap_or("change");
     match (f, current) {
@@ -471,6 +486,24 @@ fn next_state(
                 approved_at: now,
             })
         }
+        (
+            Transition::Requeue { reason },
+            ErrandState::Working {
+                order, started_at, ..
+            },
+        ) => {
+            let (approved_at, attempts) =
+                restore.unwrap_or((*started_at, errand.attempts.saturating_sub(1)));
+            tracing::info!(
+                target: "forge::nightshift",
+                "requeueing errand without spending the attempt: {reason}"
+            );
+            errand.attempts = attempts;
+            Ok(ErrandState::Queued {
+                order: order.clone(),
+                approved_at,
+            })
+        }
         (Transition::Shipping, ErrandState::Ready { order, result }) => Ok(ErrandState::Shipping {
             order: order.clone(),
             result: result.clone(),
@@ -515,6 +548,7 @@ fn f_verb(f: &Transition) -> Option<&'static str> {
         Transition::Stage(_) => Some("change stage"),
         Transition::Finished { .. } => Some("finish"),
         Transition::Redo(_) => Some("redo"),
+        Transition::Requeue { .. } => Some("requeue"),
         Transition::Shipping => Some("ship"),
         Transition::Shipped(_) => Some("mark shipped"),
         Transition::ShipFailed(_) => Some("fail shipping"),

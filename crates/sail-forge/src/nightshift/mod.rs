@@ -455,6 +455,9 @@ pub enum Transition {
     Shipped(String),
     /// Shipping → Ready again; the failure is reported without a note.
     ShipFailed(String),
+    /// Working → Queued for another try without spending the attempt: used for a host
+    /// infrastructure failure or a voice pre-emption.
+    Requeue { reason: String },
     /// Any state but Shipping or Shipped → Dropped.
     Drop,
     /// Record that an external CLI saw this errand.

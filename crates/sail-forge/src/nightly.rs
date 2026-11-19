@@ -990,41 +990,80 @@ impl ForgeNightlyRunner {
             }
         };
         self.set_checkpoint_endpoint(&job_id, &endpoint);
-        let working = match store.transition(
-            id,
-            Utc::now(),
-            crate::nightshift::Transition::Working {
-                job_id: job_id.clone(),
-                stage: "planning".into(),
-                ran_on: endpoint.ran_on.clone(),
-            },
-        ) {
-            Ok(errand) => errand,
-            Err(error) => {
-                warn!(
-                    "Forge nightly: could not start errand {}: {error}",
+        let mut voice_pauses = 0u32;
+        let (last_working, executed) = loop {
+            let working = match store.transition(
+                id,
+                Utc::now(),
+                crate::nightshift::Transition::Working {
+                    job_id: job_id.clone(),
+                    stage: "planning".into(),
+                    ran_on: endpoint.ran_on.clone(),
+                },
+            ) {
+                Ok(errand) => errand,
+                Err(error) => {
+                    warn!(
+                        "Forge nightly: could not start errand {}: {error}",
+                        id.as_str()
+                    );
+                    return false;
+                }
+            };
+            let mut executed = self.executor.execute(&self.orchestrator, &job_id).await;
+            if let Err(reason) = &executed {
+                if endpoint.ran_on.kind == RanOnKind::Mesh && is_infrastructure_failure(reason) {
+                    endpoint = self
+                        .endpoint_picker
+                        .as_ref()
+                        .map(|picker| picker.host())
+                        .unwrap_or_else(Self::host_endpoint);
+                    self.set_checkpoint_endpoint(&job_id, &endpoint);
+                    executed = self.executor.execute(&self.orchestrator, &job_id).await;
+                }
+            }
+            if let Err(reason) = &executed
+                && is_voice_preemption(reason)
+                && voice_pauses < MAX_VOICE_PAUSES_PER_ISSUE
+            {
+                let _ = store.transition(
+                    id,
+                    Utc::now(),
+                    crate::nightshift::Transition::Requeue {
+                        reason: reason.clone(),
+                    },
+                );
+                voice_pauses += 1;
+                info!(
+                    "Forge nightly: errand {} paused for live voice; retrying when quiet",
                     id.as_str()
                 );
-                return false;
+                sail_common::resources::global()
+                    .voice_idle(self.config.voice_quiet)
+                    .await;
+                continue;
             }
+            break (working, executed);
         };
-
-        let mut executed = self.executor.execute(&self.orchestrator, &job_id).await;
-        if let Err(reason) = &executed {
-            if endpoint.ran_on.kind == RanOnKind::Mesh && is_infrastructure_failure(reason) {
-                endpoint = self
-                    .endpoint_picker
-                    .as_ref()
-                    .map(|picker| picker.host())
-                    .unwrap_or_else(Self::host_endpoint);
-                self.set_checkpoint_endpoint(&job_id, &endpoint);
-                executed = self.executor.execute(&self.orchestrator, &job_id).await;
-            }
-        }
 
         let report = match executed {
             Ok(report) => report,
             Err(reason) => {
+                if is_infrastructure_failure(&reason) || is_voice_preemption(&reason) {
+                    let _ = store.transition(
+                        id,
+                        Utc::now(),
+                        crate::nightshift::Transition::Requeue {
+                            reason: reason.clone(),
+                        },
+                    );
+                    digest.halted = Some(if is_voice_preemption(&reason) {
+                        format!("errand paused for live voice: {reason}")
+                    } else {
+                        format!("infrastructure failure: {reason}")
+                    });
+                    return false;
+                }
                 let base_commit = self
                     .orchestrator
                     .checkpoint_store()
@@ -1045,22 +1084,18 @@ impl ForgeNightlyRunner {
                 );
                 Self::record_errand(
                     state,
-                    &working,
+                    &last_working,
                     &job_id,
                     MorningOutcome::Failed,
                     Some(reason.clone()),
                 );
-                let infrastructure = is_infrastructure_failure(&reason);
                 digest.entries.push(DigestEntry {
                     issue: Self::errand_issue_number(id),
                     title: order.title.clone(),
                     outcome: "failed".into(),
                     detail: reason.clone(),
                 });
-                if infrastructure {
-                    digest.halted = Some(format!("infrastructure failure: {reason}"));
-                }
-                return !infrastructure;
+                return true;
             }
         };
 

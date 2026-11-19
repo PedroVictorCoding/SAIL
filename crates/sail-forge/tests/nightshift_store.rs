@@ -416,6 +416,63 @@ fn illegal_transitions_name_the_state() {
 }
 
 #[test]
+fn requeue_restores_approved_at_and_does_not_spend_the_attempt() {
+    let tmp = TempDir::new();
+    let store = ErrandStore::open(&tmp.0).expect("open");
+    let errand = add(&store, 1);
+    store
+        .transition(&errand.id, now_at(1), Transition::Proposed(order("One")))
+        .expect("propose");
+    let approved = store
+        .transition(&errand.id, now_at(2), Transition::Approve(None))
+        .expect("approve");
+    let approved_at = match approved.state {
+        ErrandState::Queued { approved_at, .. } => approved_at,
+        other => panic!("expected queued, got {other:?}"),
+    };
+    let working = store
+        .transition(
+            &errand.id,
+            now_at(3),
+            Transition::Working {
+                job_id: "job-1".into(),
+                stage: "planning".into(),
+                ran_on: host(),
+            },
+        )
+        .expect("work");
+    assert_eq!(working.attempts, 1);
+
+    let requeued = store
+        .transition(
+            &errand.id,
+            now_at(4),
+            Transition::Requeue {
+                reason: "the owner spoke".into(),
+            },
+        )
+        .expect("requeue");
+    assert_eq!(requeued.attempts, 0);
+    match requeued.state {
+        ErrandState::Queued {
+            approved_at: same, ..
+        } => assert_eq!(same, approved_at),
+        other => panic!("expected queued, got {other:?}"),
+    }
+
+    let error = store
+        .transition(
+            &errand.id,
+            now_at(5),
+            Transition::Requeue {
+                reason: "again".into(),
+            },
+        )
+        .expect_err("requeue is only from working");
+    assert_eq!(error, "can't requeue while queued");
+}
+
+#[test]
 fn ship_failure_returns_to_ready_and_reports_the_reason() {
     let tmp = TempDir::new();
     let store = ErrandStore::open(&tmp.0).expect("open");

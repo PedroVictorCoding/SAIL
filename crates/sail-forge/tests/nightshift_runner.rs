@@ -302,6 +302,7 @@ fn runner(
         base_branch: "main".into(),
         publish: false,
         max_issues_per_run: 5,
+        voice_quiet: std::time::Duration::ZERO,
         ..NightlyConfig::default()
     };
     ForgeNightlyRunner::new(orchestrator, gh, config)
@@ -420,7 +421,7 @@ async fn mesh_transport_failure_retries_once_on_host_without_spending_an_attempt
 }
 
 #[tokio::test]
-async fn host_failure_marks_the_errand_failed_and_halts_the_night() {
+async fn host_failure_requeues_without_spending_the_attempt_and_halts() {
     let tmp = TempDir::new("host-fail");
     let orchestrator = boot(&tmp.0);
     let gh = Arc::new(FakeGithub::default());
@@ -447,13 +448,39 @@ async fn host_failure_marks_the_errand_failed_and_halts_the_night() {
             .as_deref()
             .is_some_and(|h| h.contains("infrastructure failure"))
     );
-    match store.get(&errand.id).expect("errand").state {
-        ErrandState::Failed { reason, .. } => assert!(reason.contains("Cannot connect")),
-        other => panic!("expected failed, got {other:?}"),
-    }
+    let requeued = store.get(&errand.id).expect("errand");
+    assert!(matches!(requeued.state, ErrandState::Queued { .. }));
+    assert_eq!(requeued.attempts, 0);
     let state = NightlyState::load(&tmp.0.join("state"));
-    assert_eq!(state.errands[errand.id.as_str()].last_outcome, "failed");
-    assert_eq!(state.errands[errand.id.as_str()].attempts, 1);
+    assert!(!state.errands.contains_key(errand.id.as_str()));
+}
+
+#[tokio::test]
+async fn live_voice_requeues_and_retries_without_spending_the_attempt() {
+    let tmp = TempDir::new("voice");
+    let orchestrator = boot(&tmp.0);
+    let exec = FakeExecutor::new(vec![
+        Reply::Error("live voice is active; background work paused".into()),
+        Reply::Report(Outcome::Ready),
+    ]);
+    let store = Arc::new(ErrandStore::open(&tmp.0.join("state")).expect("store"));
+    let errand = approve(&store);
+    let runner = runner(
+        &tmp.0,
+        orchestrator,
+        Arc::new(FakeGithub::default()),
+        exec.clone(),
+        store.clone(),
+        Arc::new(FakePicker::new()),
+        settings(false),
+    );
+
+    let digest = runner.run_once(false, false).await;
+    assert_eq!(digest.halted, None);
+    let finished = store.get(&errand.id).expect("errand");
+    assert!(matches!(finished.state, ErrandState::Ready { .. }));
+    assert_eq!(finished.attempts, 1);
+    assert_eq!(exec.calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
