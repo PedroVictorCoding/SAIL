@@ -167,7 +167,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut forge = ForgeSubsystem::new(orchestrator.clone());
     let nightly_config = NightlyConfig::from_env();
-    if nightly_config.enabled {
+    // Night Shift (round 27): the owner's errands are shaped by day and solved overnight.
+    // The runner always starts when its store opens; it stays idle until Settings → Night
+    // Shift is turned on (off by default), so SAIL_FORGE_NIGHTLY no longer gates it.
+    let night_store = match sail_forge::nightshift::ErrandStore::open(&nightly_config.state_dir) {
+        Ok(store) => Some(Arc::new(store)),
+        Err(error) => {
+            error!(%error, "Night Shift store unavailable; Night Shift off");
+            None
+        }
+    };
+    if let Some(store) = night_store {
+        let publish = sail_forge::publish::PublishConfig {
+            repo_root: orchestrator.config().workspace_root.clone(),
+            repo_slug: nightly_config.repo_slug.clone(),
+            scratch_dir: nightly_config.state_dir.join("publish"),
+            base_branch: nightly_config.base_branch.clone(),
+            labels: nightly_config.pr_labels.clone(),
+        };
+        let service = sail_dialogue::nightshift::NightShift::new(
+            store.clone(),
+            Arc::new(sail_dialogue::nightshift::MindShaper::new(
+                model_service.clone(),
+            )),
+            Arc::new(sail_dialogue::nightshift::ForgeShipper::new(publish)),
+            orchestrator.config().workspace_root.clone(),
+        );
+        service.start();
+        sail_dialogue::nightshift::install(service);
+        info!(
+            "Night Shift ready for {} (on/off in Settings)",
+            nightly_config.repo_slug
+        );
+        forge = forge.with_nightly_runner(Arc::new(
+            ForgeNightlyRunner::new(orchestrator, Arc::new(GhCliClient::new()), nightly_config)
+                .with_night_shift(store.clone())
+                .with_endpoint_picker(sail_dialogue::nightshift::endpoint_picker(
+                    model_service.clone(),
+                ))
+                .with_external_solver(Arc::new(
+                    sail_dialogue::nightshift::SettingsExternalSolver::new(store),
+                )),
+        ));
+    } else if nightly_config.enabled {
         info!(
             "Forge nightly runner enabled for {} (publish: {})",
             nightly_config.repo_slug, nightly_config.publish

@@ -83,6 +83,15 @@ If a gate or the self-review rejects the patch, the reason is appended to the is
 - Retry an exhausted issue: delete its entry from `nightly_state.json`.
 - Labels Forge expects to exist on GitHub: `forge-ready`, `forge-generated`, and optionally `blocked`, `needs-decision`, `needs-decomposition`, `forge-failed`.
 
+### Night Shift (round 27)
+
+The nightly runner also solves the owner's own **errands**: asks shaped into work orders and
+approved in the app. Approved errands come before `forge-ready` issues. A job can run on a
+paired Mesh PC, and a result waits for the owner to press Ship before its draft PR opens. While
+Night Shift is attached, its live settings (window, items per night, include issues, on/off)
+replace `SAIL_FORGE_WINDOW`, `SAIL_FORGE_MAX_ISSUES` and `SAIL_FORGE_NIGHTLY`. See
+[SAIL_NIGHT_SHIFT.md](SAIL_NIGHT_SHIFT.md).
+
 ### Test evidence and model outages
 
 Pinned-patch jobs record the measured wall time of the sandboxed `cargo test` command

@@ -1594,6 +1594,27 @@ fn mentions_capital(query: &str) -> bool {
     .any(|phrase| lower.contains(phrase))
 }
 
+/// Words that make Night Shift (overnight work on SAIL's own code) relevant. English and
+/// Portuguese, as voice is.
+fn mentions_night_shift(query: &str) -> bool {
+    let lower = query.to_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    tokens
+        .iter()
+        .any(|token| ["tonight", "overnight", "nightshift", "errand", "errands"].contains(token))
+        || [
+            "night shift",
+            "esta noite",
+            "durante a noite",
+            "de madrugada",
+        ]
+        .iter()
+        .any(|phrase| lower.contains(phrase))
+}
+
 /// Words that make an earlier photo relevant. Kept narrow so the archive tool does not
 /// displace tools that the current request needs.
 fn mentions_visual_context(query: &str) -> bool {
@@ -1701,6 +1722,11 @@ fn prefers_web_read(text: &str) -> bool {
 /// whatever other words the request shares.
 fn structural_boost(query: &str, tool: &str, capital_context: bool) -> usize {
     const BOOST: usize = 10;
+    // Night Shift outranks the Capital pack: "tonight, make the Capital tab …" is a build
+    // request about Capital, not a finance question.
+    if tool.starts_with("nightshift_") && mentions_night_shift(query) {
+        return BOOST;
+    }
     if tool.starts_with("capital_") && capital_context {
         let capital_boost = 8;
         return if tool == "capital_overview" {
@@ -2043,6 +2069,38 @@ mod schema_selection_tests {
     }
 
     #[test]
+    fn night_shift_prompts_offer_night_shift_tools() {
+        let cases: [(&str, &str); 5] = [
+            (
+                "Tonight, make the Capital Today tab show the next dividend date",
+                "nightshift_add",
+            ),
+            ("Overnight, fix the slow Moodle sync", "nightshift_add"),
+            ("What did you work on overnight?", "nightshift_status"),
+            (
+                "Ship the night shift result as a draft pull request",
+                "nightshift_review",
+            ),
+            ("Drop that night shift errand", "nightshift_review"),
+        ];
+        for (prompt, expected) in cases {
+            let tools = super::selected_tool_definitions(&[
+                serde_json::json!({"role":"user","content":prompt}),
+            ]);
+            let names: Vec<_> = tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+                .collect();
+            assert!(
+                names.iter().any(|name| name == expected),
+                "{prompt}: expected {expected} in {names:?}"
+            );
+        }
+    }
+
+    #[test]
     fn finance_prompts_offer_capital_tools() {
         let cases: [(&str, &str); 7] = [
             ("What are my signals today?", "capital_signals"),
@@ -2109,8 +2167,8 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        // 54 since round 24 added `capital:income`.
-        assert_eq!(tools.len(), 54);
+        // 57 since round 27 added the three Night Shift tools.
+        assert_eq!(tools.len(), 57);
 
         let names: Vec<_> = tools
             .iter()
@@ -2135,6 +2193,9 @@ mod schema_selection_tests {
         assert!(names.contains(&"forge_enqueue"));
         assert!(names.contains(&"forge_status"));
         assert!(names.contains(&"capital_income"));
+        assert!(names.contains(&"nightshift_add"));
+        assert!(names.contains(&"nightshift_status"));
+        assert!(names.contains(&"nightshift_review"));
         assert!(names.contains(&"forge_list"));
         assert!(names.contains(&"forge_cancel"));
         assert!(names.contains(&"forge_clear"));

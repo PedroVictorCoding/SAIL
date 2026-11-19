@@ -576,6 +576,7 @@ impl GatewayService {
             }),
             Command::Approve(short) => self.decide(update, key, short, true).await,
             Command::Deny(short) => self.decide(update, key, short, false).await,
+            Command::Tonight(ask) => reply(&tonight(&ask)),
             Command::Unknown(_) => reply(&commands::help_text()),
             Command::Skill { name, input } => {
                 let prompt = format!(
@@ -839,6 +840,24 @@ impl BotApi for ReqwestBot {
             }
         }
         Ok(out)
+    }
+}
+
+/// `/tonight <ask>`: add a Night Shift errand from chat. The work order is drafted in the
+/// background and approved in the app, never from this message alone.
+fn tonight(ask: &str) -> String {
+    if ask.trim().is_empty() {
+        return "Tell me what to build, e.g. /tonight make the Capital Today tab show the next dividend date".into();
+    }
+    match crate::nightshift::global() {
+        Some(service) => match service.add(ask, sail_forge::nightshift::ErrandSource::Telegram) {
+            Ok(errand) => format!(
+                "Got it ({}). I'll draft a work order; approve it in Night Shift before tonight.",
+                errand.id.as_str()
+            ),
+            Err(error) => format!("I couldn't add that: {error}"),
+        },
+        None => "Night Shift isn't running on SAIL right now.".into(),
     }
 }
 
