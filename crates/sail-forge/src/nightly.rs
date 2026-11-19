@@ -746,6 +746,14 @@ impl ForgeNightlyRunner {
         self.finish(digest)
     }
 
+    fn is_redo(errand: &Errand, approved_at: DateTime<Utc>) -> bool {
+        errand.attempts > 0
+            && errand
+                .notes
+                .last()
+                .is_some_and(|note| note.at >= approved_at)
+    }
+
     fn night_window_secs(settings: &NightShiftSettings) -> u64 {
         let start = u64::from(settings.window_start_hour % 24);
         let end = u64::from(settings.window_end_hour % 24);
@@ -877,7 +885,7 @@ impl ForgeNightlyRunner {
                     id: errand.id.clone(),
                     size: order.size,
                     approved_at: *approved_at,
-                    has_redo_note: !errand.notes.is_empty(),
+                    has_redo_note: Self::is_redo(errand, *approved_at),
                     attempts: errand.attempts,
                 }),
                 _ => None,
@@ -1428,6 +1436,49 @@ impl ForgeNightlyRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn errand_with(attempts: u32, notes: Vec<crate::nightshift::OwnerNote>) -> Errand {
+        Errand {
+            id: ErrandId::new([1; 6]),
+            ask: "work".into(),
+            source: crate::nightshift::ErrandSource::Web,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            attempts,
+            external_used: false,
+            notes,
+            state: ErrandState::Dropped { at: Utc::now() },
+        }
+    }
+
+    #[test]
+    fn only_a_note_written_after_approval_counts_as_redo() {
+        let approved: DateTime<Utc> = "2026-11-19T08:00:00Z".parse().expect("time");
+        let before = crate::nightshift::OwnerNote {
+            at: approved - chrono::Duration::hours(1),
+            text: "reshape before approval".into(),
+        };
+        let after = crate::nightshift::OwnerNote {
+            at: approved,
+            text: "redo".into(),
+        };
+        assert!(!ForgeNightlyRunner::is_redo(
+            &errand_with(0, vec![after.clone()]),
+            approved
+        ));
+        assert!(!ForgeNightlyRunner::is_redo(
+            &errand_with(3, Vec::new()),
+            approved
+        ));
+        assert!(!ForgeNightlyRunner::is_redo(
+            &errand_with(3, vec![before]),
+            approved
+        ));
+        assert!(ForgeNightlyRunner::is_redo(
+            &errand_with(3, vec![after]),
+            approved
+        ));
+    }
 
     #[test]
     fn window_handles_wraparound() {
