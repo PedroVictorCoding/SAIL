@@ -313,3 +313,14 @@ data class ApproveErrandRequest(
 data class NoteRequest(
     val note: String,
 )
+
+private const val DRAFT_PR_PREFIX = "Draft PR opened: https://github.com/"
+
+fun parseIssueDraftPrUrl(item: MorningItem): String? {
+    if (item.item !is NightItem.IssueRef) return null
+    if (!item.line.startsWith(DRAFT_PR_PREFIX)) return null
+    val raw = item.line.removePrefix("Draft PR opened: ").trim()
+    val uri = runCatching { java.net.URI(raw) }.getOrNull() ?: return null
+    if (uri.scheme != "https" || uri.host != "github.com") return null
+    return uri.toASCIIString()
+}

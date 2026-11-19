@@ -27,6 +27,7 @@ class NightShiftTest {
             "shipped.json",
             "external_used.json",
             "mesh_resting.json",
+            "morning_issue_and_halt.json",
         )
         for (name in getFixtures) {
             val parsed = NightShiftJson.decodeFromString(NightShiftResponse.serializer(), loadFixture(name))
@@ -92,5 +93,32 @@ class NightShiftTest {
         assertEquals("big.kt", parsed[1].path)
         assertEquals(405, parsed[1].added)
         assertTrue(parsed[1].collapsedByDefault)
+    }
+
+    @Test
+    fun morningIssueAndHaltParsesHaltedAndGitHubPrLinkOnly() {
+        val report = NightShiftJson.decodeFromString(
+            NightShiftResponse.serializer(),
+            loadFixture("morning_issue_and_halt.json"),
+        ).morning
+        assertNotNull(report)
+        assertEquals(
+            "The night stopped early: the model server stopped responding at 03:12.",
+            report?.halted,
+        )
+        val items = report!!.items
+        assertEquals(3, items.size)
+        assertEquals(
+            "https://github.com/PedroVictorCoding/SAIL/pull/501",
+            parseIssueDraftPrUrl(items[0]),
+        )
+        assertEquals(null, parseIssueDraftPrUrl(items[1]))
+        assertEquals(null, parseIssueDraftPrUrl(items[2]))
+
+        // Non-github URL or errand with same prefix must NOT become a link
+        val evilIssue = items[0].copy(line = "Draft PR opened: https://evil.example/pr/1")
+        assertEquals(null, parseIssueDraftPrUrl(evilIssue))
+        val errandWithPrefix = items[2].copy(line = "Draft PR opened: https://github.com/PedroVictorCoding/SAIL/pull/501")
+        assertEquals(null, parseIssueDraftPrUrl(errandWithPrefix))
     }
 }
