@@ -13,8 +13,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Errand, ErrandId, ErrandSource, ErrandState, ErrandStore, MorningOutcome, NightShiftSettings,
-    OwnerNote, Transition, WorkOrder,
+    Errand, ErrandId, ErrandSource, ErrandState, ErrandStore, MorningOutcome, MorningReport,
+    NightShiftSettings, OwnerNote, Transition, WorkOrder,
 };
 
 /// The owner's ask is capped at 2 000 characters (invariant 7, owner decision).
@@ -155,10 +155,12 @@ impl ErrandStore {
         }
 
         let (events, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (morning_events, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Ok(Self {
             root,
             inner: Mutex::new(inner),
             events,
+            morning_events,
         })
     }
 
@@ -357,6 +359,67 @@ impl ErrandStore {
         Ok(settings)
     }
 
+    /// Persist and broadcast the morning report for its date.
+    pub fn set_morning(&self, report: MorningReport) {
+        if !safe_date(&report.date) {
+            tracing::error!(
+                target: "forge::nightshift",
+                "refusing a morning report with an invalid date"
+            );
+            return;
+        }
+        let dir = self.root.join("morning");
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            tracing::error!(
+                target: "forge::nightshift",
+                "could not create the morning directory: {error}"
+            );
+            return;
+        }
+        let json = match serde_json::to_string_pretty(&report) {
+            Ok(json) => json,
+            Err(error) => {
+                tracing::error!(
+                    target: "forge::nightshift",
+                    "could not encode the morning report: {error}"
+                );
+                return;
+            }
+        };
+        let path = dir.join(format!("{}.json", report.date));
+        let tmp = dir.join(format!("{}.json.tmp.{}", report.date, uuid::Uuid::new_v4()));
+        if let Err(error) = std::fs::write(&tmp, json) {
+            tracing::error!(
+                target: "forge::nightshift",
+                "could not write the morning report: {error}"
+            );
+            return;
+        }
+        if let Err(error) = std::fs::rename(&tmp, &path) {
+            tracing::error!(
+                target: "forge::nightshift",
+                "could not store the morning report atomically: {error}"
+            );
+            return;
+        }
+        let _ = self.morning_events.send(report);
+    }
+
+    /// Read the saved morning report for a local date.
+    pub fn morning(&self, date: &str) -> Option<MorningReport> {
+        if !safe_date(date) {
+            return None;
+        }
+        let text =
+            std::fs::read_to_string(self.root.join("morning").join(format!("{date}.json"))).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    /// Subscribe to new morning reports.
+    pub fn subscribe_morning(&self) -> tokio::sync::broadcast::Receiver<MorningReport> {
+        self.morning_events.subscribe()
+    }
+
     /// Subscribe to every successful change.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Errand> {
         self.events.subscribe()
@@ -372,6 +435,15 @@ impl ErrandStore {
         // A broadcast with no receivers is not an error for the store.
         let _ = self.events.send(errand.clone());
     }
+}
+
+/// Morning report dates are local `YYYY-MM-DD`; anything else never reaches a path.
+fn safe_date(date: &str) -> bool {
+    date.len() == 10
+        && date.bytes().enumerate().all(|(index, byte)| match index {
+            4 | 7 => byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
 }
 
 /// An errand is open until the owner ships or drops it.

@@ -964,19 +964,7 @@ impl ForgeNightlyRunner {
             &issue_results,
             digest.halted.clone(),
         );
-        let dir = self.config.state_dir.join("nightshift/morning");
-        if std::fs::create_dir_all(&dir).is_ok() {
-            match serde_json::to_string_pretty(&report) {
-                Ok(json) => {
-                    if let Err(error) =
-                        std::fs::write(dir.join(format!("{}.json", report.date)), json)
-                    {
-                        warn!("Forge nightly: could not save the morning report: {error}");
-                    }
-                }
-                Err(error) => warn!("Forge nightly: could not encode the morning report: {error}"),
-            }
-        }
+        store.set_morning(report);
         self.finish(digest)
     }
 

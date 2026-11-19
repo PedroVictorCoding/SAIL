@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use sail_forge::nightshift::{
-    Errand, ErrandId, ErrandSource, ErrandState, ErrandStore, MorningOutcome, NightResult,
-    NightShiftSettings, OwnerNote, RanOn, RanOnKind, Size, Transition, WorkOrder,
+    Errand, ErrandId, ErrandSource, ErrandState, ErrandStore, MorningOutcome, MorningReport,
+    NightResult, NightShiftSettings, OwnerNote, RanOn, RanOnKind, Size, Transition, WorkOrder,
 };
 
 struct TempDir(PathBuf);
@@ -565,6 +565,36 @@ async fn every_change_is_broadcast() {
         .expect("approve");
     let event = events.recv().await.expect("broadcast");
     assert!(matches!(event.state, ErrandState::Queued { .. }));
+}
+
+#[tokio::test]
+async fn morning_report_is_persisted_read_back_and_broadcast() {
+    let tmp = TempDir::new();
+    let store = ErrandStore::open(&tmp.0).expect("open");
+    let report = MorningReport {
+        date: "2026-11-19".into(),
+        ready: 1,
+        needs_you: 0,
+        failed: 0,
+        not_reached: 0,
+        items: Vec::new(),
+        spoken: "Overnight I finished 1 of 1 jobs; one is ready to review.".into(),
+        halted: None,
+    };
+    let mut events = store.subscribe_morning();
+    store.set_morning(report.clone());
+    assert_eq!(store.morning("2026-11-19"), Some(report.clone()));
+    assert!(tmp.0.join("nightshift/morning/2026-11-19.json").is_file());
+    assert_eq!(events.recv().await.expect("morning event"), report);
+    drop(store);
+
+    let reopened = ErrandStore::open(&tmp.0).expect("reopen");
+    assert_eq!(reopened.morning("2026-11-19"), Some(report));
+
+    let mut bad = reopened.morning("2026-11-19").expect("report");
+    bad.date = "../escape".into();
+    reopened.set_morning(bad);
+    assert_eq!(reopened.morning("../escape"), None);
 }
 
 #[test]

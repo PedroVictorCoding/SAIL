@@ -499,4 +499,5 @@ pub struct ErrandStore {
     root: std::path::PathBuf,
     inner: std::sync::Mutex<store::Inner>,
     events: tokio::sync::broadcast::Sender<Errand>,
+    morning_events: tokio::sync::broadcast::Sender<MorningReport>,
 }
