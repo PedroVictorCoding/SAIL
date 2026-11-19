@@ -326,7 +326,6 @@ pub struct ForgeNightlyRunner {
 
 struct NightShiftRuntime {
     store: Arc<ErrandStore>,
-    settings: NightShiftSettings,
 }
 
 impl ForgeNightlyRunner {
@@ -355,12 +354,8 @@ impl ForgeNightlyRunner {
 
     /// Enable the Night Shift errand path. Without it the existing GitHub-issue nightly
     /// path runs unchanged.
-    pub fn with_night_shift(
-        mut self,
-        store: Arc<ErrandStore>,
-        settings: NightShiftSettings,
-    ) -> Self {
-        self.night_shift = Some(NightShiftRuntime { store, settings });
+    pub fn with_night_shift(mut self, store: Arc<ErrandStore>) -> Self {
+        self.night_shift = Some(NightShiftRuntime { store });
         self
     }
 
@@ -392,6 +387,28 @@ impl ForgeNightlyRunner {
         Local::now().format("%Y-%m-%d").to_string()
     }
 
+    fn in_window_now(&self) -> bool {
+        let hour = Local::now().hour();
+        match self.night_shift.as_ref() {
+            Some(runtime) => {
+                let settings = runtime.store.settings();
+                Self::in_window_hours(hour, settings.window_start_hour, settings.window_end_hour)
+            }
+            None => self.config.in_window(hour),
+        }
+    }
+
+    fn in_window_hours(hour: u32, start: u8, end: u8) -> bool {
+        let (start, end) = (u32::from(start % 24), u32::from(end % 24));
+        if start == end {
+            false
+        } else if start < end {
+            hour >= start && hour < end
+        } else {
+            hour >= start || hour < end
+        }
+    }
+
     fn should_stop(&self, respect_window: bool) -> Option<String> {
         if self.is_paused() {
             return Some(format!(
@@ -399,7 +416,7 @@ impl ForgeNightlyRunner {
                 self.config.kill_switch_path().display()
             ));
         }
-        if respect_window && !self.config.in_window(Local::now().hour()) {
+        if respect_window && !self.in_window_now() {
             return Some("outside the configured run window".into());
         }
         None
@@ -823,7 +840,7 @@ impl ForgeNightlyRunner {
             return self.finish(digest);
         };
         let store = runtime.store.clone();
-        let settings = runtime.settings.clone();
+        let settings = store.settings();
         if !settings.enabled {
             digest.halted = Some("night shift is disabled in Settings".into());
             return self.finish(digest);
@@ -1327,7 +1344,7 @@ impl ForgeNightlyRunner {
                     .last_run_date
                     .as_deref()
                     == Some(today.as_str());
-                if !ran_today && !self.is_paused() && self.config.in_window(Local::now().hour()) {
+                if !ran_today && !self.is_paused() && self.in_window_now() {
                     self.run_once(false, true).await;
                 }
                 tokio::time::sleep(Duration::from_secs(600)).await;

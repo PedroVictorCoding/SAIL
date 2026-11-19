@@ -307,9 +307,10 @@ fn runner(
         voice_quiet: std::time::Duration::ZERO,
         ..NightlyConfig::default()
     };
+    store.set_settings(settings).expect("settings valid");
     ForgeNightlyRunner::new(orchestrator, gh, config)
         .with_executor(exec)
-        .with_night_shift(store, settings)
+        .with_night_shift(store)
         .with_endpoint_picker(picker)
 }
 
@@ -576,6 +577,32 @@ async fn ready_issue_waits_for_approval_when_publishing_is_off() {
     assert_eq!(state.issues[&125].last_outcome, "ready");
     assert!(state.issues[&125].pr_url.is_none());
     assert!(gh.created.lock().expect("created").is_empty());
+}
+
+#[tokio::test]
+async fn the_runner_window_comes_from_live_store_settings() {
+    let tmp = TempDir::new("window");
+    let orchestrator = boot(&tmp.0);
+    let exec = FakeExecutor::new(Vec::new());
+    let store = Arc::new(ErrandStore::open(&tmp.0.join("state")).expect("store"));
+    let mut windowless = settings(false);
+    windowless.window_start_hour = 0;
+    windowless.window_end_hour = 0;
+    store.set_settings(windowless).expect("settings");
+    let runner = runner(
+        &tmp.0,
+        orchestrator,
+        Arc::new(FakeGithub::default()),
+        exec,
+        store,
+        Arc::new(FakePicker::new()),
+        settings(false),
+    );
+    let digest = runner.run_once(false, true).await;
+    assert_eq!(
+        digest.halted.as_deref(),
+        Some("outside the configured run window")
+    );
 }
 
 #[tokio::test]

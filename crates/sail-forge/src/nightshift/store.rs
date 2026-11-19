@@ -13,8 +13,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Errand, ErrandId, ErrandSource, ErrandState, ErrandStore, MorningOutcome, OwnerNote,
-    Transition, WorkOrder,
+    Errand, ErrandId, ErrandSource, ErrandState, ErrandStore, MorningOutcome, NightShiftSettings,
+    OwnerNote, Transition, WorkOrder,
 };
 
 /// The owner's ask is capped at 2 000 characters (invariant 7, owner decision).
@@ -46,6 +46,7 @@ struct Persisted {
 #[derive(Debug, Default)]
 pub(super) struct Inner {
     errands: BTreeMap<String, Errand>,
+    settings: NightShiftSettings,
     /// Pre-attempt `(approved_at, attempts)` for a Working errand, so Requeue can put
     /// tonight's attempt back exactly as it was.
     before_working: BTreeMap<String, (DateTime<Utc>, u32)>,
@@ -126,6 +127,27 @@ impl ErrandStore {
                     migrated = true;
                 }
                 _ => {}
+            }
+        }
+        match std::fs::read(root.join("settings.json")) {
+            Ok(bytes) => match String::from_utf8(bytes)
+                .ok()
+                .and_then(|text| serde_json::from_str::<NightShiftSettings>(&text).ok())
+            {
+                Some(settings) => inner.settings = settings,
+                None => {
+                    tracing::error!(
+                        target: "forge::nightshift",
+                        "nightshift/settings.json is invalid; using defaults"
+                    );
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::error!(
+                    target: "forge::nightshift",
+                    "could not read nightshift/settings.json: {error}"
+                );
             }
         }
         if migrated {
@@ -288,6 +310,53 @@ impl ErrandStore {
         .ok()
     }
 
+    /// Current Night Shift settings, including changes made over HTTP.
+    pub fn settings(&self) -> NightShiftSettings {
+        self.lock()
+            .map(|inner| inner.settings.clone())
+            .unwrap_or_default()
+    }
+
+    /// Validate, persist and apply settings. All reasons are returned when invalid.
+    pub fn set_settings(
+        &self,
+        settings: NightShiftSettings,
+    ) -> Result<NightShiftSettings, Vec<String>> {
+        let mut reasons = Vec::new();
+        if settings.window_start_hour > 23 {
+            reasons.push("window_start_hour must be 0-23".to_string());
+        }
+        if settings.window_end_hour > 23 {
+            reasons.push("window_end_hour must be 0-23".to_string());
+        }
+        if !(1..=10).contains(&settings.max_items) {
+            reasons.push("max_items must be 1-10".to_string());
+        }
+        if settings.external_solves_per_night > 3 {
+            reasons.push("external_solves_per_night must be 0-3".to_string());
+        }
+        if let Some(provider) = &settings.external_provider {
+            if !matches!(provider.as_str(), "claude_cli" | "codex_cli") {
+                reasons.push("external_provider must be null, claude_cli or codex_cli".to_string());
+            }
+        }
+        if !reasons.is_empty() {
+            return Err(reasons);
+        }
+        {
+            let mut inner = self
+                .lock()
+                .map_err(|_| vec!["the night shift store lock is poisoned".to_string()])?;
+            let previous = inner.settings.clone();
+            inner.settings = settings.clone();
+            if let Err(error) = save_settings(&self.root, &settings) {
+                inner.settings = previous;
+                return Err(vec![error]);
+            }
+        }
+        Ok(settings)
+    }
+
     /// Subscribe to every successful change.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Errand> {
         self.events.subscribe()
@@ -311,6 +380,17 @@ fn is_open(state: &ErrandState) -> bool {
         state,
         ErrandState::Shipped { .. } | ErrandState::Dropped { .. }
     )
+}
+
+fn save_settings(root: &Path, settings: &NightShiftSettings) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("could not serialize the night shift settings: {e}"))?;
+    let path = root.join("settings.json");
+    let tmp = root.join(format!("settings.json.tmp.{}", uuid::Uuid::new_v4()));
+    std::fs::write(&tmp, json)
+        .map_err(|e| format!("could not write the night shift settings: {e}"))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| format!("could not store the night shift settings atomically: {e}"))
 }
 
 fn save_inner(root: &Path, inner: &Inner) -> Result<(), String> {

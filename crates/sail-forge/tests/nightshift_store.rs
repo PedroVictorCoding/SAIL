@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use sail_forge::nightshift::{
     Errand, ErrandId, ErrandSource, ErrandState, ErrandStore, MorningOutcome, NightResult,
-    OwnerNote, RanOn, RanOnKind, Size, Transition, WorkOrder,
+    NightShiftSettings, OwnerNote, RanOn, RanOnKind, Size, Transition, WorkOrder,
 };
 
 struct TempDir(PathBuf);
@@ -622,6 +622,40 @@ fn corrupt_state_is_moved_aside_and_the_store_starts_empty() {
         "corrupt file was not moved aside: {names:?}"
     );
     assert!(!names.iter().any(|name| name == "errands.json"));
+}
+
+#[test]
+fn settings_are_validated_persisted_and_reloaded() {
+    let tmp = TempDir::new();
+    let store = ErrandStore::open(&tmp.0).expect("open");
+    assert_eq!(store.settings(), NightShiftSettings::default());
+
+    let wanted = NightShiftSettings {
+        enabled: true,
+        max_items: 8,
+        external_solves_per_night: 2,
+        external_provider: Some("claude_cli".into()),
+        ..NightShiftSettings::default()
+    };
+    assert_eq!(store.set_settings(wanted.clone()), Ok(wanted.clone()));
+    assert_eq!(store.settings(), wanted);
+    assert!(tmp.0.join("nightshift/settings.json").is_file());
+    drop(store);
+
+    let reopened = ErrandStore::open(&tmp.0).expect("reopen");
+    assert_eq!(reopened.settings(), wanted);
+
+    let bad = NightShiftSettings {
+        window_start_hour: 24,
+        window_end_hour: 25,
+        max_items: 0,
+        external_solves_per_night: 4,
+        external_provider: Some("other".into()),
+        ..NightShiftSettings::default()
+    };
+    let reasons = reopened.set_settings(bad).expect_err("invalid");
+    assert_eq!(reasons.len(), 5, "{reasons:?}");
+    assert_eq!(reopened.settings(), wanted);
 }
 
 #[test]
