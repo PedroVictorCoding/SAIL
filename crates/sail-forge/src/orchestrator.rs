@@ -39,6 +39,9 @@ pub struct OrchestratorConfig {
     pub workspace_root: PathBuf,
     pub model_path: Option<PathBuf>,
     pub diff_gates: DiffGatePolicy,
+    /// Give the solver the graphify code graph of each job worktree (`graph.rs`). Off in
+    /// `default()` so tests and fixtures never shell out; the server and binaries turn it on.
+    pub code_graph: bool,
 }
 
 impl Default for OrchestratorConfig {
@@ -58,6 +61,7 @@ impl Default for OrchestratorConfig {
             workspace_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             model_path,
             diff_gates: DiffGatePolicy::default(),
+            code_graph: false,
         }
     }
 }
@@ -1502,7 +1506,8 @@ impl ForgeOrchestrator {
             }
 
             let controller =
-                crate::solver::LocalSolverController::new(4, 180, self.config.model_path.clone());
+                crate::solver::LocalSolverController::new(4, 180, self.config.model_path.clone())
+                    .with_code_graph(self.config.code_graph);
             let controller = if let Some(endpoint) = self
                 .job_endpoints
                 .lock()

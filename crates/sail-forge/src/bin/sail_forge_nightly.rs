@@ -39,7 +39,10 @@ async fn main() {
 
     sail_common::storage::log_data_root();
     sail_forge::nightly::migrate_legacy_forge_data();
-    let mut config = OrchestratorConfig::default();
+    let mut config = OrchestratorConfig {
+        code_graph: true,
+        ..OrchestratorConfig::default()
+    };
     if let Some(root) = repo_root {
         config.workspace_root = root;
     }

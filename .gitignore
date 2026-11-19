@@ -41,8 +41,11 @@ models/voice/
 .local/
 __pycache__/
 
-# Agent scratch state (worktrees live here) and runtime job logs
-.claude/
+# Agent scratch state (worktrees live here) and runtime job logs. Shared Claude Code
+# project settings (graphify hooks) and skills stay tracked.
+.claude/*
+!.claude/settings.json
+!.claude/skills/
 logs/
 
 # Credentials and machine-specific environment (keep sanitized templates public)
@@ -81,3 +84,6 @@ playwright-report/
 test-results/
 android/local.properties
 android/key.properties
+
+# graphify code graph: built per worktree by scripts/graphify-refresh.sh (see AGENTS.md)
+graphify-out/

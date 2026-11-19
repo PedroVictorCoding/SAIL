@@ -284,6 +284,32 @@ pub enum RepoToolCall {
         #[serde(alias = "symbol", alias = "query")]
         name: String,
     },
+    /// Scoped subgraph from the graphify knowledge graph (`graph.rs`).
+    #[serde(rename = "graph:query", alias = "query_graph")]
+    GraphQuery {
+        #[serde(alias = "query")]
+        question: String,
+        /// File paths or symbol names to start from: one string or a list.
+        #[serde(default)]
+        seed: Option<serde_json::Value>,
+        /// Output cap in tokens (default 1200, at most 3000).
+        #[serde(default)]
+        budget: Option<u32>,
+    },
+    /// One graph node with its callers and callees.
+    #[serde(rename = "graph:explain", alias = "get_node")]
+    GraphExplain {
+        #[serde(alias = "symbol", alias = "query")]
+        name: String,
+    },
+    /// Shortest relationship chain between two graph nodes.
+    #[serde(rename = "graph:path", alias = "shortest_path")]
+    GraphPath {
+        #[serde(alias = "source", alias = "a")]
+        from: String,
+        #[serde(alias = "target", alias = "b")]
+        to: String,
+    },
     #[serde(rename = "repo:test", alias = "test")]
     Test {
         #[serde(default)]
@@ -426,6 +452,39 @@ const TARGET_CONTEXT_CHARS: usize = 8_000;
 const REPO_MAP_CHARS: usize = 4_000;
 const HISTORY_BUDGET_CHARS: usize = 36_000;
 
+/// Tool result for a read-only graph call.
+fn graph_result(tool: &str, ok: bool, output: String) -> RepoToolResult {
+    RepoToolResult {
+        resource_blocked: false,
+        tool: tool.into(),
+        ok,
+        output,
+        modified_files: Vec::new(),
+        test_record: None,
+    }
+}
+
+/// Tool lines added to the solver prompt when the job worktree has a code graph.
+pub const GRAPH_TOOLS_PROMPT: &str = r#"Code graph tools (graphify). Use these FIRST to find code instead of repo:search/repo:list;
+they return a small scoped subgraph (NODE = symbol [src=file loc=line], with call/use edges):
+- {"tool": "graph:query", "question": "words from the issue", "seed": ["crates/x/src/y.rs"]}  (seed: file paths or symbol names; optional)
+- {"tool": "graph:explain", "name": "fn_or_type_name"}  (definition location, callers, callees)
+- {"tool": "graph:path", "from": "A", "to": "B"}  (how two symbols are connected)
+The graph reflects the code at job start: after you edit a file, read it again with repo:read_range.
+Then read only the line ranges the graph located.
+"#;
+
+/// The solver system prompt, with the graph tools inserted before the edit rules.
+pub fn solver_system_prompt(base: &str, graph_ready: bool) -> String {
+    if !graph_ready {
+        return base.to_string();
+    }
+    match base.find("\nEdits (preferred") {
+        Some(i) => format!("{}\n\n{}{}", &base[..i], GRAPH_TOOLS_PROMPT, &base[i..]),
+        None => format!("{base}\n\n{GRAPH_TOOLS_PROMPT}"),
+    }
+}
+
 /// Execute a bounded repository tool strictly inside `worktree`.
 pub fn execute_repo_tool(
     worktree: &IsolatedWorktree,
@@ -478,6 +537,25 @@ pub fn execute_repo_tool(
                 modified_files: Vec::new(),
                 test_record: None,
             }
+        }
+        RepoToolCall::GraphQuery {
+            question,
+            seed,
+            budget,
+        } => {
+            let seeds = crate::graph::normalize_seeds(seed.as_ref());
+            let budget = budget.unwrap_or(crate::graph::DEFAULT_QUERY_BUDGET);
+            let (ok, output) =
+                crate::graph::run_tool(|g| g.query(&worktree.root_dir, question, &seeds, budget));
+            graph_result("graph:query", ok, output)
+        }
+        RepoToolCall::GraphExplain { name } => {
+            let (ok, output) = crate::graph::run_tool(|g| g.explain(&worktree.root_dir, name));
+            graph_result("graph:explain", ok, output)
+        }
+        RepoToolCall::GraphPath { from, to } => {
+            let (ok, output) = crate::graph::run_tool(|g| g.path(&worktree.root_dir, from, to));
+            graph_result("graph:path", ok, output)
         }
         RepoToolCall::FindSymbol { name } | RepoToolCall::FindReferences { name } => {
             let refs = matches!(call, RepoToolCall::FindReferences { .. });
@@ -895,7 +973,11 @@ fn collect_files_bounded(root_dir: &Path, curr: &Path, out: &mut Vec<String>, ca
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        if name == ".git" || name == "target" || name == "node_modules" {
+        if name == ".git"
+            || name == "target"
+            || name == "node_modules"
+            || name == crate::graph::OUT_DIR
+        {
             continue;
         }
         if path.is_dir() {
@@ -1333,6 +1415,9 @@ pub struct LocalSolverController {
     pub endpoint_client: Option<reqwest::Client>,
     resource_scheduler: std::sync::Arc<sail_common::resources::ResourceScheduler>,
     voice_quiet: Duration,
+    /// Build a graphify code graph of the worktree and give the model graph tools
+    /// (`graph.rs`). Off by default so fixtures and evals keep their deterministic context.
+    code_graph: bool,
 }
 
 /// `SAIL_FORGE_VOICE_QUIET_SECS` (default 5, 0–300): quiet time after a voice turn before
@@ -1363,7 +1448,14 @@ impl LocalSolverController {
             endpoint_client: None,
             resource_scheduler: sail_common::resources::global(),
             voice_quiet: voice_quiet_from_env(),
+            code_graph: false,
         }
+    }
+
+    /// Navigate the worktree through the graphify code graph when graphify is installed.
+    pub fn with_code_graph(mut self, enabled: bool) -> Self {
+        self.code_graph = enabled;
+        self
     }
 
     pub fn with_resource_scheduler(
@@ -1558,12 +1650,37 @@ impl LocalSolverController {
             .endpoint_override
             .clone()
             .unwrap_or_else(Self::candidate_endpoints);
-        let initial_ctx = crate::repo_map::build_issue_context(
+        // Build (or incrementally refresh from the shared seed) the graphify code graph so
+        // the model navigates a scoped subgraph instead of scanning the repository.
+        let graph_prep = if self.code_graph {
+            let graph_root = worktree.root_dir.clone();
+            tokio::task::spawn_blocking(move || crate::graph::prepare(&graph_root))
+                .await
+                .unwrap_or_else(|e| Err(format!("graph build task failed: {e}")))
+        } else {
+            Err("not enabled for this solver".to_string())
+        };
+        let graph_note = match &graph_prep {
+            Ok(p) => format!(
+                "Code graph ready in {:.0}s ({})",
+                p.elapsed.as_secs_f64(),
+                if p.seeded { "seeded" } else { "refreshed" }
+            ),
+            Err(e) => format!("Code graph unavailable ({e}); using the repo map"),
+        };
+        tracing::info!(job = %worktree.job_id, "{graph_note}");
+        let graph = graph_prep
+            .is_ok()
+            .then(crate::graph::Graphify::from_env)
+            .flatten();
+        let graph_ready = graph.is_some();
+        let initial_ctx = crate::repo_map::build_issue_context_with(
             &worktree.root_dir,
             issue_title,
             issue_body,
             TARGET_CONTEXT_CHARS,
             REPO_MAP_CHARS,
+            graph.as_ref(),
         );
 
         on_progress(SolverProgress {
@@ -1579,11 +1696,12 @@ impl LocalSolverController {
             activity: None,
             logs: Some(vec![
                 format!("Loaded issue: {}", issue_title),
+                graph_note.clone(),
                 "Inspecting workspace crates and candidate target files...".into(),
             ]),
         });
 
-        let system_prompt = r#"You are SAIL Forge Local Issue Solver v0.2, an autonomous Rust coding agent operating inside an isolated sandbox worktree.
+        let base_prompt = r#"You are SAIL Forge Local Issue Solver v0.2, an autonomous Rust coding agent operating inside an isolated sandbox worktree.
 Each reply must be EITHER one JSON tool call OR one or more SEARCH/REPLACE edit blocks.
 
 Tools (JSON):
@@ -1615,6 +1733,7 @@ Rules:
 - Fix the root cause in real Rust code; never emit comment-only changes.
 - Keep existing tests; do not delete or #[ignore] them.
 - Edits are tested automatically; finish with done once tests pass."#;
+        let system_prompt = solver_system_prompt(base_prompt, graph_ready);
 
         let user_prompt = format!(
             "Issue Title: {}\nIssue Description:\n{}\n\n{}",
@@ -2577,6 +2696,13 @@ Rules:
                         }
                         RepoToolCall::Diff => "repo:diff".into(),
                         RepoToolCall::FindSymbol { name } => format!("code:find_symbol {name}"),
+                        RepoToolCall::GraphQuery { question, .. } => {
+                            format!("graph:query \"{question}\"")
+                        }
+                        RepoToolCall::GraphExplain { name } => format!("graph:explain {name}"),
+                        RepoToolCall::GraphPath { from, to } => {
+                            format!("graph:path {from} -> {to}")
+                        }
                         RepoToolCall::FindReferences { name } => {
                             format!("code:find_references {name}")
                         }

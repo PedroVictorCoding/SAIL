@@ -45,7 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Initialized isolated worktree at {:?}", worktree.root_dir);
 
     let budget = ForgeBudgetConfig::default();
-    let controller = LocalSolverController::new(budget.max_iterations as u32, 180, None);
+    let controller =
+        LocalSolverController::new(budget.max_iterations as u32, 180, None).with_code_graph(true);
 
     let log_dir = std::env::temp_dir().join(format!("sail-forge-cli-{}", job_id));
     let outcome = controller
