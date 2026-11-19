@@ -17,7 +17,7 @@ use crate::contracts::{ForgeJobReport, IssueEnqueueRequest};
 use crate::github::{GithubClient, mark_open_prs};
 use crate::nightshift::morning::compose_morning;
 use crate::nightshift::plan::{PlanErrand, PlanIssue, SizeDurations, plan_night};
-use crate::nightshift::result::{result_from_report, summary};
+use crate::nightshift::result::{job_patch, result_from_report, summary};
 use crate::nightshift::{
     Endpoint, EndpointPicker, Errand, ErrandId, ErrandState, ErrandStore, MorningOutcome,
     NightItem, NightResult, NightShiftSettings, RanOn, RanOnKind,
@@ -38,9 +38,6 @@ pub struct NightlyConfig {
     pub max_attempts_per_issue: u32,
     pub max_prs_per_day: u32,
     pub publish: bool,
-    /// True when `SAIL_FORGE_PUBLISH` was set explicitly. Night Shift's default for
-    /// GitHub issues is on-approval; only an explicit setting keeps auto-publishing.
-    pub publish_explicit: bool,
     pub state_dir: PathBuf,
     pub admission: AdmissionPolicy,
     pub pr_labels: Vec<String>,
@@ -99,7 +96,6 @@ impl Default for NightlyConfig {
             max_attempts_per_issue: 2,
             max_prs_per_day: 3,
             publish: true,
-            publish_explicit: false,
             state_dir: default_state_dir(),
             admission: AdmissionPolicy::default(),
             pr_labels: vec!["forge-generated".into()],
@@ -129,7 +125,6 @@ impl NightlyConfig {
             max_attempts_per_issue: env_num("SAIL_FORGE_MAX_ATTEMPTS", d.max_attempts_per_issue),
             max_prs_per_day: env_num("SAIL_FORGE_MAX_PRS_PER_DAY", d.max_prs_per_day),
             publish: std::env::var("SAIL_FORGE_PUBLISH").map_or(true, |v| v != "0"),
-            publish_explicit: std::env::var_os("SAIL_FORGE_PUBLISH").is_some(),
             ..d
         }
     }
@@ -907,6 +902,7 @@ impl ForgeNightlyRunner {
             .iter()
             .map(|issue| (issue.number, issue.title.clone()))
             .collect();
+        let mut issue_results: BTreeMap<u64, (MorningOutcome, String)> = BTreeMap::new();
         for item in plan.items.clone() {
             if let Some(stop) = self.should_stop(respect_window) {
                 digest.halted = Some(stop);
@@ -921,8 +917,14 @@ impl ForgeNightlyRunner {
                     let Some(issue) = issues.iter().find(|issue| issue.number == number) else {
                         continue;
                     };
-                    self.run_night_shift_issue(&mut state, &settings, issue, &mut digest)
-                        .await
+                    self.run_night_shift_issue(
+                        &mut state,
+                        &settings,
+                        issue,
+                        &mut digest,
+                        &mut issue_results,
+                    )
+                    .await
                 }
             };
             let _ = state.save(&self.config.state_dir);
@@ -938,6 +940,7 @@ impl ForgeNightlyRunner {
             &plan,
             &store.list(),
             &issue_titles,
+            &issue_results,
             digest.halted.clone(),
         );
         let dir = self.config.state_dir.join("nightshift/morning");
@@ -1061,20 +1064,8 @@ impl ForgeNightlyRunner {
             }
         };
 
-        let patch = if report.patch_ref.trim_start().starts_with("diff --git ")
-            || report.patch_ref.trim_start().starts_with("--- a/")
-        {
-            report.patch_ref.clone()
-        } else {
-            self.orchestrator
-                .checkpoint_store()
-                .load(&job_id)
-                .ok()
-                .flatten()
-                .and_then(|checkpoint| checkpoint.patch)
-                .unwrap_or_default()
-        };
         let mut review_report = report;
+        let patch = job_patch(&self.orchestrator, &job_id, &review_report);
         review_report.patch_ref = patch.clone();
         let (mut result, mut outcome, mut reason, patch) =
             result_from_report(&review_report, endpoint.ran_on.clone(), Utc::now());
@@ -1127,6 +1118,7 @@ impl ForgeNightlyRunner {
         settings: &NightShiftSettings,
         issue: &IssueCandidate,
         digest: &mut NightlyDigest,
+        issue_results: &mut BTreeMap<u64, (MorningOutcome, String)>,
     ) -> bool {
         let mut record = state.issues.get(&issue.number).cloned().unwrap_or_default();
         if record.attempts >= self.config.max_attempts_per_issue {
@@ -1170,20 +1162,8 @@ impl ForgeNightlyRunner {
 
         match executed {
             Ok(report) => {
-                let patch = if report.patch_ref.trim_start().starts_with("diff --git ")
-                    || report.patch_ref.trim_start().starts_with("--- a/")
-                {
-                    report.patch_ref.clone()
-                } else {
-                    self.orchestrator
-                        .checkpoint_store()
-                        .load(&job_id)
-                        .ok()
-                        .flatten()
-                        .and_then(|checkpoint| checkpoint.patch)
-                        .unwrap_or_default()
-                };
                 let mut report = report;
+                let patch = job_patch(&self.orchestrator, &job_id, &report);
                 report.patch_ref = patch.clone();
                 let (mut result, outcome, reason, _) =
                     result_from_report(&report, endpoint.ran_on, Utc::now());
@@ -1192,7 +1172,6 @@ impl ForgeNightlyRunner {
                 if outcome == MorningOutcome::Ready
                     && !patch.trim().is_empty()
                     && self.config.publish
-                    && self.config.publish_explicit
                 {
                     let (publish_outcome, publish_detail) = self.try_publish(state, &job_id);
                     record.last_outcome = publish_outcome.clone();
@@ -1201,6 +1180,12 @@ impl ForgeNightlyRunner {
                     if publish_outcome == "published" {
                         record.pr_url = Some(publish_detail.clone());
                     }
+                    let line = if publish_outcome == "published" {
+                        format!("Draft PR opened: {publish_detail}")
+                    } else {
+                        publish_detail.clone()
+                    };
+                    issue_results.insert(issue.number, (outcome, line));
                     digest.entries.push(DigestEntry {
                         issue: issue.number,
                         title: issue.title.clone(),
@@ -1219,6 +1204,7 @@ impl ForgeNightlyRunner {
                         .into()
                     };
                     record.last_reason = (outcome != MorningOutcome::Ready).then(|| detail.clone());
+                    issue_results.insert(issue.number, (outcome, detail.clone()));
                     digest.entries.push(DigestEntry {
                         issue: issue.number,
                         title: issue.title.clone(),
@@ -1242,9 +1228,11 @@ impl ForgeNightlyRunner {
                         outcome: "aborted".into(),
                         detail: reason.clone(),
                     });
+                    issue_results.insert(issue.number, (MorningOutcome::Failed, reason.clone()));
                     digest.halted = Some(format!("infrastructure failure: {reason}"));
                     return false;
                 }
+                issue_results.insert(issue.number, (MorningOutcome::Failed, reason.clone()));
                 record.last_outcome = "failed".into();
                 record.last_reason = Some(reason.clone());
                 record.updated_at = Some(Utc::now());

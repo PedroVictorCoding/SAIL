@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::contracts::IssueEnqueueRequest;
 use crate::edit::{apply_edit_blocks, parse_edit_blocks};
-use crate::nightshift::result::result_from_report;
+use crate::nightshift::result::{job_patch, result_from_report};
 use crate::nightshift::{Errand, ErrandState, ErrandStore, ExternalSolver, Transition, WorkOrder};
 use crate::orchestrator::ForgeOrchestrator;
 use crate::worktree::IsolatedWorktree;
@@ -119,10 +119,11 @@ pub async fn external_attempt(
         .map_err(|error| format!("the external patch failed verification: {error}"))?;
 
     let mut report = report;
-    report.patch_ref = diff.clone();
+    let patch = job_patch(orchestrator, &job_id, &report);
+    report.patch_ref = patch.clone();
     let (mut result, outcome, reason, _) = result_from_report(&report, solver.ran_on(), Utc::now());
     result.job_id = job_id;
-    store.save_patch(&errand.id, &diff)?;
+    store.save_patch(&errand.id, &patch)?;
     store.transition(
         &errand.id,
         Utc::now(),

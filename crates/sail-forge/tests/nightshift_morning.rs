@@ -138,7 +138,14 @@ fn pinned_morning_example() {
             .collect(),
         deferred: Vec::new(),
     };
-    let report = compose_morning("2026-11-18", &plan, &errands, &BTreeMap::new(), None);
+    let report = compose_morning(
+        "2026-11-18",
+        &plan,
+        &errands,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        None,
+    );
     assert_eq!(
         report.spoken,
         "Overnight I finished 2 of 3 jobs; both are ready to review. The search fix needs a decision from you."
@@ -161,6 +168,7 @@ fn nothing_ran_has_no_spoken_text() {
             deferred: Vec::new(),
         },
         &[],
+        &BTreeMap::new(),
         &BTreeMap::new(),
         None,
     );
@@ -191,7 +199,14 @@ fn queued_items_are_not_reached_and_counted() {
             .collect(),
         deferred: Vec::new(),
     };
-    let report = compose_morning("2026-11-18", &plan, &errands, &BTreeMap::new(), None);
+    let report = compose_morning(
+        "2026-11-18",
+        &plan,
+        &errands,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        None,
+    );
     assert_eq!(report.ready, 1);
     assert_eq!(report.not_reached, 1);
     assert_eq!(report.items[1].outcome, MorningOutcome::NotReached);
@@ -226,6 +241,7 @@ fn halted_night_uses_a_short_second_sentence() {
         &plan,
         &errands,
         &BTreeMap::new(),
+        &BTreeMap::new(),
         Some("the model server stopped responding at 03:12".into()),
     );
     assert_eq!(report.not_reached, 1);
@@ -250,6 +266,7 @@ fn halted_night_uses_a_short_second_sentence() {
         "2026-11-18",
         &plan,
         &errands,
+        &BTreeMap::new(),
         &BTreeMap::new(),
         Some("the model server stopped responding at 03:12".into()),
     );
@@ -276,7 +293,14 @@ fn titles_are_short_and_never_file_paths() {
         }],
         deferred: Vec::new(),
     };
-    let report = compose_morning("2026-11-18", &plan, &errands, &BTreeMap::new(), None);
+    let report = compose_morning(
+        "2026-11-18",
+        &plan,
+        &errands,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        None,
+    );
     assert!(!report.spoken.contains("crates/"));
     assert!(!report.items[0].title.contains("crates/"));
     assert_eq!(report.items[0].title, "fix and the thing");
@@ -296,11 +320,38 @@ fn issues_use_their_titles_and_are_not_reached_without_a_mapping() {
         deferred: Vec::new(),
     };
     let titles = BTreeMap::from([(125u64, "Search crash".to_string())]);
-    let report = compose_morning("2026-11-18", &plan, &[], &titles, None);
+    let report = compose_morning("2026-11-18", &plan, &[], &titles, &BTreeMap::new(), None);
     assert_eq!(report.items[0].title, "Search crash");
     assert_eq!(report.items[1].title, "Issue #126");
     assert_eq!(report.not_reached, 2);
     assert_eq!(report.spoken, "");
+}
+
+#[test]
+fn issue_results_replace_not_reached_with_the_server_line() {
+    let plan = NightPlan {
+        items: vec![NightItem::Issue { number: 125 }],
+        deferred: Vec::new(),
+    };
+    let titles = BTreeMap::from([(125u64, "Search crash".to_string())]);
+    let results = BTreeMap::from([(
+        125u64,
+        (
+            MorningOutcome::Ready,
+            "Draft PR opened: https://github.com/o/r/pull/9".to_string(),
+        ),
+    )]);
+    let report = compose_morning("2026-11-18", &plan, &[], &titles, &results, None);
+    assert_eq!(report.ready, 1);
+    assert_eq!(report.not_reached, 0);
+    assert_eq!(
+        report.items[0].line,
+        "Draft PR opened: https://github.com/o/r/pull/9"
+    );
+    assert_eq!(
+        report.spoken,
+        "Overnight I finished 1 of 1 jobs; one is ready to review."
+    );
 }
 
 #[test]
@@ -315,8 +366,22 @@ fn morning_composition_is_deterministic() {
             .collect(),
         deferred: Vec::new(),
     };
-    let first = compose_morning("2026-11-18", &plan, &errands, &BTreeMap::new(), None);
-    let second = compose_morning("2026-11-18", &plan, &errands, &BTreeMap::new(), None);
+    let first = compose_morning(
+        "2026-11-18",
+        &plan,
+        &errands,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        None,
+    );
+    let second = compose_morning(
+        "2026-11-18",
+        &plan,
+        &errands,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        None,
+    );
     assert_eq!(first, second);
 }
 
@@ -686,6 +751,7 @@ fn every_result_is_deterministic_except_for_the_patch_path_branch() {
             deferred: Vec::new(),
         },
         &[],
+        &BTreeMap::new(),
         &BTreeMap::new(),
         None,
     );

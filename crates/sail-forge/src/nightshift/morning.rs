@@ -85,6 +85,7 @@ pub fn compose_morning(
     plan: &NightPlan,
     errands: &[Errand],
     issue_titles: &BTreeMap<u64, String>,
+    issue_results: &BTreeMap<u64, (MorningOutcome, String)>,
     halted: Option<String>,
 ) -> MorningReport {
     let by_id: BTreeMap<&str, &Errand> = errands
@@ -121,11 +122,14 @@ pub fn compose_morning(
                     .get(number)
                     .map(|title| sanitize_title(title))
                     .unwrap_or_else(|| format!("Issue #{number}"));
-                (
-                    title,
-                    MorningOutcome::NotReached,
-                    "Not reached before the morning.".into(),
-                )
+                match issue_results.get(number) {
+                    Some((outcome, line)) => (title, *outcome, line.clone()),
+                    None => (
+                        title,
+                        MorningOutcome::NotReached,
+                        "Not reached before the morning.".into(),
+                    ),
+                }
             }
         };
         match outcome {

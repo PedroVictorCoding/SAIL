@@ -17,12 +17,34 @@ use chrono::{DateTime, Utc};
 use crate::contracts::ForgeJobReport;
 use crate::gates::DiffGatePolicy;
 use crate::nightshift::{FileChange, GateResult, ReviewSummary, TestSummary};
+use crate::orchestrator::ForgeOrchestrator;
 
 use super::{MorningOutcome, NightResult, RanOn};
 
 /// Review questions shown to the owner are capped at 500 characters (fixed a priori to
 /// keep the morning card readable). The full concerns stay in `review.concerns`.
 const MAX_QUESTION_CHARS: usize = 500;
+
+/// The patch for a finished job: the report's diff when the caller put one in `patch_ref`,
+/// else the job checkpoint's stored patch. Shared by the runner and the external solve.
+pub(crate) fn job_patch(
+    orchestrator: &ForgeOrchestrator,
+    job_id: &str,
+    report: &ForgeJobReport,
+) -> String {
+    if report.patch_ref.trim_start().starts_with("diff --git ")
+        || report.patch_ref.trim_start().starts_with("--- a/")
+    {
+        return report.patch_ref.clone();
+    }
+    orchestrator
+        .checkpoint_store()
+        .load(job_id)
+        .ok()
+        .flatten()
+        .and_then(|checkpoint| checkpoint.patch)
+        .unwrap_or_default()
+}
 
 /// Extract the reviewable result from a Forge report. The patch is returned separately so
 /// the caller can store it in the errand store. Not pure: it may read a test log or a
