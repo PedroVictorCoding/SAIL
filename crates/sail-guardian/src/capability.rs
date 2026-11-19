@@ -134,6 +134,11 @@ impl Capability {
                         || tool == "capital:policy"
                         || tool == "capital:filings"
                         || tool == "capital:income"
+                        // Night Shift: the owner's own errands; ship opens a draft PR only
+                        // after the owner's spoken yes (the tool asks first).
+                        || tool == "nightshift:add"
+                        || tool == "nightshift:status"
+                        || tool == "nightshift:review"
                         || tool == "studio:audio_analyze"
                         || tool == "skill:list"
                         || tool == "skill:view"

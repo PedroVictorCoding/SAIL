@@ -465,6 +465,10 @@ pub async fn run_dialogue_server_with_plans(
     let proxy_guard = crate::proxy_guard::ProxyGuard::new(active_token.as_deref());
     let gateway_authority = authority();
     let mesh_routes = crate::mesh_http::router(inference.clone(), authority());
+    // Night Shift (round 27): installed by the daemon when Forge's state directory opened.
+    let nightshift_routes = crate::nightshift::global().map(|service| {
+        crate::nightshift_http::router(service, Some(inference.clone()), authority())
+    });
     let owner_token = active_token;
     let server_state = Arc::new(ServerState {
         live_context_authority,
@@ -542,6 +546,9 @@ pub async fn run_dialogue_server_with_plans(
     }
     if let Some(routes) = music_routes {
         app = app.nest_service("/api/music", routes);
+    }
+    if let Some(routes) = nightshift_routes {
+        app = app.nest_service("/api/nightshift", routes);
     }
     let app = app
         .layer(axum::middleware::from_fn_with_state(
@@ -941,6 +948,28 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
             }
         }
     }));
+    // Night Shift: every errand change and the morning report reach each open socket.
+    let _nightshift_forwarder = crate::nightshift::global().map(|service| {
+        let mut errands = service.store().subscribe();
+        let mut mornings = service.store().subscribe_morning();
+        let tx = tx.clone();
+        AbortTask(tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    errand = errands.recv() => match errand {
+                        Ok(errand) => emit_session(&tx, json!({"type":"nightshift","errand":errand})).await,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    },
+                    report = mornings.recv() => match report {
+                        Ok(report) => emit_session(&tx, json!({"type":"nightshift_morning","report":report})).await,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    },
+                }
+            }
+        }))
+    });
     let _reminder_forwarder = state.pulse.as_ref().map(|pulse| {
         let mut events = pulse.subscribe();
         let tx = tx.clone();

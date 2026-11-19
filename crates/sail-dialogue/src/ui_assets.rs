@@ -128,6 +128,8 @@ assets![
     ("/presence.js", "web/presence.js", JS),
     ("/announce.js", "web/announce.js", JS),
     ("/announce.css", "web/announce.css", CSS),
+    ("/nightshift.js", "web/nightshift.js", JS),
+    ("/nightshift.css", "web/nightshift.css", CSS),
     ("/forge.js", "web/forge.js", JS),
     ("/approvals.js", "web/approvals.js", JS),
     ("/app.css", "web/app.css", CSS),

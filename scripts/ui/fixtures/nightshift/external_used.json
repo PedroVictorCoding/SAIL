@@ -1,0 +1,98 @@
+{
+  "settings": {
+    "enabled": true,
+    "window_start_hour": 1,
+    "window_end_hour": 7,
+    "max_items": 5,
+    "include_forge_ready_issues": true,
+    "use_mesh": true,
+    "external_solves_per_night": 2,
+    "external_provider": "claude_cli",
+    "morning_greeting": true
+  },
+  "tonight": {
+    "window": "01:00–07:00",
+    "plan": {
+      "items": [],
+      "deferred": []
+    }
+  },
+  "errands": [
+    {
+      "id": "e-4e5f60718293",
+      "ask": "Fix flaky reconnection timer in VoiceSession when the network drops briefly.",
+      "source": "phone",
+      "created_at": "2026-11-18T20:10:00Z",
+      "updated_at": "2026-11-19T04:12:00Z",
+      "attempts": 1,
+      "external_used": true,
+      "notes": [],
+      "state": {
+        "state": "ready",
+        "order": {
+          "title": "Fix VoiceSession reconnect timer backoff",
+          "why": "Avoid overlapping reconnect loops on brief Wi-Fi drops.",
+          "acceptance": [
+            "Only one reconnect timer is active at a time",
+            "JVM unit test verifies backoff resets on open"
+          ],
+          "target_files": [
+            "android/app/src/main/java/dev/sail/app/feature/dialogue/VoiceSession.kt"
+          ],
+          "size": "m",
+          "notes_for_solver": ""
+        },
+        "result": {
+          "job_id": "job-20261119-0340",
+          "base_commit": "98fa697000000000000000000000000000000000",
+          "ran_on": {
+            "kind": "external",
+            "name": "Claude Code",
+            "model": "claude-sonnet-4-6"
+          },
+          "files": [
+            {
+              "path": "android/app/src/main/java/dev/sail/app/feature/dialogue/VoiceSession.kt",
+              "added": 28,
+              "removed": 11
+            }
+          ],
+          "tests": {
+            "passed": 22,
+            "failed": 0,
+            "ignored": 0,
+            "duration_secs": 31,
+            "exit_ok": true
+          },
+          "gates": [
+            {
+              "name": "gradle_test",
+              "passed": true,
+              "blocking": true,
+              "detail": "22 passed, 0 failed"
+            }
+          ],
+          "review": {
+            "passed": true,
+            "concerns": []
+          },
+          "summary": "Changed 1 file (+28 −11). 22 tests passed. All checks passed. Self-review: no concerns.",
+          "model_note": "Sent to Claude Code after local attempt failed; cancelled prior timer job before scheduling.",
+          "patch_bytes": 3210,
+          "finished_at": "2026-11-19T04:12:00Z"
+        }
+      }
+    }
+  ],
+  "morning": null,
+  "mesh": {
+    "available": true,
+    "name": "windows",
+    "resting": false
+  },
+  "external": {
+    "provider": "claude_cli",
+    "used_tonight": 1,
+    "allowed": 2
+  }
+}

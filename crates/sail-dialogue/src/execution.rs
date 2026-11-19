@@ -130,6 +130,25 @@ impl Tool for CapitalTool {
     }
 }
 
+/// Night Shift tools over the daemon's service (round 27): add an errand, ask about one, and
+/// ship (after a yes/no), redo, drop or approve a result.
+struct NightShiftTool(&'static str);
+#[async_trait]
+impl Tool for NightShiftTool {
+    async fn execute(&self, _context: ToolContext, input: Value) -> Result<Value, ToolFailure> {
+        let service = crate::nightshift::global().ok_or_else(|| ToolFailure {
+            message: "Night Shift is not available in this session".into(),
+            retryable: false,
+        })?;
+        crate::nightshift_tools::execute(&service, self.0, &input)
+            .map(|value| Value::String(value.to_string()))
+            .map_err(|message| ToolFailure {
+                message,
+                retryable: false,
+            })
+    }
+}
+
 /// Run the `escalate_reasoning` tool against the installed escalation service.
 pub async fn execute_escalation(
     input: &Value,
@@ -393,7 +412,7 @@ impl Tool for Canvas {
 #[cfg(test)]
 pub(crate) const OWNER_GATED_TOOLS: [&str; 1] = ["escalate:reasoning"];
 
-pub(crate) const MODEL_TOOL_ORDER: [&str; 49] = [
+pub(crate) const MODEL_TOOL_ORDER: [&str; 52] = [
     "os:status",
     "proc:list",
     "fs:query",
@@ -437,6 +456,9 @@ pub(crate) const MODEL_TOOL_ORDER: [&str; 49] = [
     "forge:list",
     "forge:cancel",
     "forge:clear",
+    "nightshift:add",
+    "nightshift:status",
+    "nightshift:review",
     "skill:list",
     "skill:view",
     "skill:propose",
@@ -1027,6 +1049,58 @@ pub fn registry() -> Arc<ToolRegistry> {
             .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
     }
 
+    let errand_id = || string(16, "The errand id, e.g. e-0a1b2c3d4e5f");
+    let nightshift_tools: [KernelTool; 3] = [
+        (
+            "nightshift:add",
+            "Night Shift: queue something the owner wants built in SAIL's own code overnight (\"tonight, make …\", \"overnight, fix …\"). Pass the owner's words as ask. SAIL drafts a work order the owner approves before anything runs.",
+            json!({"ask": string(2000, "What the owner wants built, in their words")}),
+            &["ask"],
+            ToolEffect::Mutating,
+            1,
+        ),
+        (
+            "nightshift:status",
+            "Night Shift: what SAIL is working on overnight and what is ready for review. Without errand_id, lists recent errands. With errand_id, gives that result's summary, files, where it ran and a diff excerpt so you can answer questions about the change. Read-only.",
+            json!({"errand_id": errand_id()}),
+            &[],
+            ToolEffect::ReadOnly,
+            2,
+        ),
+        (
+            "nightshift:review",
+            "Night Shift: act on an errand for the owner. action ship opens a draft pull request (first call without confirmed and ask the owner the returned question; call again with confirmed=true only after they say yes). redo queues it again tonight with note; drop discards it; approve accepts SAIL's drafted work order for tonight.",
+            json!({
+                "errand_id": errand_id(),
+                "action": {"type":"string","maxLength":8,"enum":["ship","redo","drop","approve"],"description":"What to do"},
+                "note": string(1000, "For redo: what to change"),
+                "confirmed": {"type":"boolean","description":"For ship: true only after the owner said yes"}
+            }),
+            &["errand_id", "action"],
+            ToolEffect::Mutating,
+            1,
+        ),
+    ];
+    for (id, description, properties, required, effect, concurrency_limit) in nightshift_tools {
+        registry
+            .register(
+                ToolDescriptor {
+                    id: id.into(),
+                    version: 1,
+                    description: description.into(),
+                    input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+                    output_schema: json!({"type":"string","maxLength":32768}),
+                    security_effect: effect,
+                    required_capabilities: vec![id.into()],
+                    timeout_ms: 15_000,
+                    resource_class: "io".into(),
+                    concurrency_limit,
+                },
+                Arc::new(NightShiftTool(id)),
+            )
+            .unwrap_or_else(|e| panic!("{id} descriptor: {e}"));
+    }
+
     registry.register(ToolDescriptor {
         id:"command:execute".into(),version:1,description:"Execute a command in the isolated no-network runner after exact owner approval. Never host shell execution. Runner may be unavailable.".into(),
         input_schema:json!({"type":"object","properties":{"executable":{"type":"string","maxLength":4096},"argv":{"type":"array","maxItems":128,"items":{"type":"string","maxLength":8192}}},"required":["executable","argv"],"additionalProperties":false}),
@@ -1366,6 +1440,20 @@ mod tests {
                     .unwrap()
                     .starts_with("Local ")
             );
+        }
+    }
+    #[test]
+    fn nightshift_tools_are_registered_and_ordered() {
+        let registry = registry();
+        for id in crate::nightshift_tools::TOOL_IDS {
+            let descriptor = registry.descriptor(id).unwrap();
+            let expected = if id == "nightshift:status" {
+                ToolEffect::ReadOnly
+            } else {
+                ToolEffect::Mutating
+            };
+            assert_eq!(descriptor.security_effect, expected, "{id}");
+            assert!(MODEL_TOOL_ORDER.contains(&id), "{id}");
         }
     }
     #[test]

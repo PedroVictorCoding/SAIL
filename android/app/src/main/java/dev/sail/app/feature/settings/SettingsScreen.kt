@@ -122,6 +122,7 @@ fun SettingsScreen(onDone: () -> Unit, onBack: (() -> Unit)?) {
             }
             if (state.configured) {
                 PresenceSettingsSection()
+                NightShiftSettingsSection()
                 SecondaryButton("Forget this server", onClick = vm::forget, enabled = !state.busy)
             }
         }

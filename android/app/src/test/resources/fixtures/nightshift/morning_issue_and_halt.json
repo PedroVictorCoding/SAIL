@@ -1,0 +1,96 @@
+{
+  "settings": {
+    "enabled": true,
+    "window_start_hour": 1,
+    "window_end_hour": 7,
+    "max_items": 5,
+    "include_forge_ready_issues": true,
+    "use_mesh": true,
+    "external_solves_per_night": 0,
+    "external_provider": null,
+    "morning_greeting": true
+  },
+  "tonight": {
+    "window": "01:00–07:00",
+    "plan": {
+      "items": [],
+      "deferred": []
+    }
+  },
+  "errands": [
+    {
+      "id": "e-0a1b2c3d4e5f",
+      "ask": "Make the Capital Today tab show the next ex-dividend date next to each holding.",
+      "source": "web",
+      "created_at": "2026-11-18T14:05:00Z",
+      "updated_at": "2026-11-19T03:12:00Z",
+      "attempts": 0,
+      "external_used": false,
+      "notes": [],
+      "state": {
+        "state": "queued",
+        "order": {
+          "title": "Show next ex-dividend date in Capital Today tab",
+          "why": "Helps spot upcoming dividend cutoffs without opening each ticker detail.",
+          "acceptance": [
+            "Each holding row in Capital Today displays its next ex-dividend date when known"
+          ],
+          "target_files": [
+            "crates/sail-dialogue/web/capital.js"
+          ],
+          "size": "s",
+          "notes_for_solver": ""
+        },
+        "approved_at": "2026-11-18T14:12:00Z"
+      }
+    }
+  ],
+  "morning": {
+    "date": "2026-11-19",
+    "ready": 1,
+    "needs_you": 0,
+    "failed": 1,
+    "not_reached": 1,
+    "items": [
+      {
+        "item": {
+          "kind": "issue",
+          "number": 125
+        },
+        "title": "Fix nightly digest link formatting",
+        "outcome": "ready",
+        "line": "Draft PR opened: https://github.com/PedroVictorCoding/SAIL/pull/501"
+      },
+      {
+        "item": {
+          "kind": "issue",
+          "number": 126
+        },
+        "title": "Tidy forge gate diagnostics",
+        "outcome": "failed",
+        "line": "Tests failed on host."
+      },
+      {
+        "item": {
+          "kind": "errand",
+          "id": "e-0a1b2c3d4e5f"
+        },
+        "title": "Show next ex-dividend date in Capital Today tab",
+        "outcome": "not_reached",
+        "line": "Not reached before halt."
+      }
+    ],
+    "spoken": "Overnight I finished two of three jobs; one draft PR is open. The night stopped early because the model server stopped responding.",
+    "halted": "The night stopped early: the model server stopped responding at 03:12."
+  },
+  "mesh": {
+    "available": true,
+    "name": "windows",
+    "resting": false
+  },
+  "external": {
+    "provider": null,
+    "used_tonight": 0,
+    "allowed": 0
+  }
+}

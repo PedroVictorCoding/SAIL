@@ -579,6 +579,82 @@ impl MeshPool {
             fell_back: self.fell_back.load(Ordering::Relaxed),
         }
     }
+
+    /// A worker that can take a whole Night Shift coding job right now (round 27): enabled,
+    /// `Ready` (so not resting for a game or music), not backing off, below its parallel limit
+    /// and serving a model. Least loaded first, then the fastest to answer. `None` when Mesh is
+    /// off or background work isn't offloaded (`SAIL_MESH_PRIORITIES`).
+    ///
+    /// Forge sends its own OpenAI-style requests, so this returns the worker's pinned client
+    /// (certificate pin + bearer secret) instead of a lease on a [`LocalGemmaBackend`].
+    pub fn night_worker(&self) -> Option<NightWorker> {
+        if self.settings.mode == MeshMode::Off
+            || !self.settings.priorities.contains(&WorkPriority::Background)
+        {
+            return None;
+        }
+        let now = Instant::now();
+        let mut best: Option<(NightWorker, (usize, u64))> = None;
+        for worker in self.workers() {
+            if !worker.record.enabled {
+                continue;
+            }
+            let Ok(client) = worker.client.as_ref() else {
+                continue;
+            };
+            let state = worker.lock();
+            let Some(hello) = state.hello.as_ref() else {
+                continue;
+            };
+            let Some(model) = hello.model.as_ref() else {
+                continue;
+            };
+            if state.status != MeshWorkerState::Ready
+                || state.skip_until.is_some_and(|t| t > now)
+                || state.active >= hello.max_parallel.max(1)
+            {
+                continue;
+            }
+            let rank = (
+                state.active * 1000 / hello.max_parallel.max(1),
+                state.last_rtt_ms.unwrap_or(u64::MAX),
+            );
+            let candidate = NightWorker {
+                name: worker.record.name.clone(),
+                url: format!("{}/v1/chat/completions", worker.record.base_url()),
+                model: model.file_name.clone(),
+                client: client.clone(),
+            };
+            drop(state);
+            if best.as_ref().is_none_or(|(_, r)| rank < *r) {
+                best = Some((candidate, rank));
+            }
+        }
+        best.map(|(worker, _)| worker)
+    }
+}
+
+/// A paired worker chosen for a Night Shift job: where to send chat completions and the
+/// pinned client to send them with. `Debug` never prints the client (it carries the secret).
+#[derive(Clone)]
+pub struct NightWorker {
+    pub name: String,
+    /// `https://host:port/v1/chat/completions` on the worker.
+    pub url: String,
+    /// GGUF file name the worker serves.
+    pub model: String,
+    pub client: reqwest::Client,
+}
+
+impl std::fmt::Debug for NightWorker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NightWorker")
+            .field("name", &self.name)
+            .field("url", &self.url)
+            .field("model", &self.model)
+            .field("client", &"<pinned>")
+            .finish()
+    }
 }
 
 /// Why an owner operation on the pairing file failed.

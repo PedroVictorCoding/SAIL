@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use crate::github::{DraftPr, GithubClient, run_with_timeout};
+use crate::github::{DraftPr, GhCliClient, GithubClient, run_with_timeout};
 use crate::persistence::TaskCheckpoint;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -170,5 +170,115 @@ pub fn publish_draft_pr(
     })();
 
     let _ = git(&cfg.repo_root, &["worktree", "remove", "--force", &dir_str]);
+    result
+}
+
+/// Ship a stored Night Shift patch: apply it in a throwaway worktree on `origin/<base>`,
+/// push `branch`, and open a **draft** PR labelled `forge-generated`. Never merges and
+/// never touches the owner's checkout. Returns the PR URL.
+pub fn ship_patch(
+    config: &PublishConfig,
+    branch: &str,
+    title: &str,
+    body: &str,
+    patch: &str,
+) -> Result<String, String> {
+    if patch.trim().is_empty() {
+        return Err("the stored patch is empty".into());
+    }
+    if branch.trim().is_empty()
+        || branch.starts_with('-')
+        || branch.contains("..")
+        || branch.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(format!("invalid Night Shift branch `{branch}`"));
+    }
+    git(
+        &config.repo_root,
+        &["fetch", "--quiet", "origin", &config.base_branch],
+    )?;
+    let remote_ref = git(
+        &config.repo_root,
+        &[
+            "ls-remote",
+            "--heads",
+            "origin",
+            &format!("refs/heads/{branch}"),
+        ],
+    )?;
+    if !remote_ref.trim().is_empty() {
+        return Err(format!(
+            "remote branch {branch} already exists; refusing to overwrite"
+        ));
+    }
+
+    std::fs::create_dir_all(&config.scratch_dir).map_err(|e| e.to_string())?;
+    let safe = branch.replace('/', "-");
+    let dir = config.scratch_dir.join(format!("nightshift-{safe}"));
+    let dir_str = dir.to_string_lossy().to_string();
+    if dir.exists() {
+        let _ = git(
+            &config.repo_root,
+            &["worktree", "remove", "--force", &dir_str],
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    git(
+        &config.repo_root,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            &dir_str,
+            &format!("origin/{}", config.base_branch),
+        ],
+    )?;
+
+    let result = (|| {
+        let patch_file = config.scratch_dir.join(format!("nightshift-{safe}.patch"));
+        std::fs::write(&patch_file, patch).map_err(|e| e.to_string())?;
+        git(&dir, &["apply", "--index", &patch_file.to_string_lossy()]).map_err(|e| {
+            format!(
+                "stale base: the patch no longer applies to origin/{}: {e}",
+                config.base_branch
+            )
+        })?;
+        let _ = std::fs::remove_file(&patch_file);
+
+        let message = format!(
+            "{title}\n\nGenerated overnight by SAIL Night Shift.\n\n{}",
+            body.lines().take(20).collect::<Vec<_>>().join("\n")
+        );
+        git(&dir, &["commit", "--quiet", "-m", &message])?;
+        git(
+            &dir,
+            &[
+                "push",
+                "--quiet",
+                "origin",
+                &format!("HEAD:refs/heads/{branch}"),
+            ],
+        )?;
+
+        let mut labels = config.labels.clone();
+        if !labels.iter().any(|label| label == "forge-generated") {
+            labels.push("forge-generated".into());
+        }
+        GhCliClient::new().create_draft_pr(
+            &config.repo_slug,
+            &DraftPr {
+                head_branch: branch.to_string(),
+                base_branch: config.base_branch.clone(),
+                title: title.to_string(),
+                body: body.to_string(),
+                labels,
+            },
+        )
+    })();
+
+    let _ = git(
+        &config.repo_root,
+        &["worktree", "remove", "--force", &dir_str],
+    );
     result
 }

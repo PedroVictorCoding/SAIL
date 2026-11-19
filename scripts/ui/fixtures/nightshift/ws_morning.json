@@ -1,0 +1,32 @@
+{
+  "type": "nightshift_morning",
+  "report": {
+    "date": "2026-11-19",
+    "ready": 1,
+    "needs_you": 1,
+    "failed": 0,
+    "not_reached": 0,
+    "items": [
+      {
+        "item": {
+          "kind": "errand",
+          "id": "e-0a1b2c3d4e5f"
+        },
+        "title": "Show next ex-dividend date in Capital Today tab",
+        "outcome": "ready",
+        "line": "Ready to review (+56 −8 across 2 files)."
+      },
+      {
+        "item": {
+          "kind": "errand",
+          "id": "e-2c3d4e5f6071"
+        },
+        "title": "Trim whitespace in search query ranking",
+        "outcome": "needs_you",
+        "line": "Needs a decision on tab whitespace handling."
+      }
+    ],
+    "spoken": "Overnight I finished both jobs; one is ready to review. The search fix needs a decision from you.",
+    "halted": null
+  }
+}

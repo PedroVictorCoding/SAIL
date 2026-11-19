@@ -445,6 +445,22 @@ impl Proactive {
                 warn!(%error, "task outcome not ingested");
             }
         }
+        if let Some(signal) = crate::nightshift::global().and_then(|service| {
+            let store = service.store();
+            let today = now
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string();
+            store
+                .settings()
+                .morning_greeting
+                .then(|| store.morning(&today))
+                .flatten()
+                .and_then(|report| nightshift_signal(&report, now))
+        }) && let Err(error) = self.initiative.attention().ingest(signal, context.clone())
+        {
+            warn!(%error, "Night Shift morning report not ingested");
+        }
         crate::escalation_outcomes::settle_forge_jobs();
         *lock(&self.last_tick) = report.clone();
         let previous = std::mem::replace(&mut *lock(&self.last_check), now);
@@ -862,5 +878,95 @@ mod tests {
             at(17, 0),
             at(19, 0)
         ));
+    }
+}
+
+/// Pure. The morning report as one attention signal: the spoken template is the title (so the
+/// arrival greeting can say it), one line per item is the body. One signal per date (the
+/// dedupe key), none when nothing ran.
+pub(crate) fn nightshift_signal(
+    report: &sail_forge::nightshift::MorningReport,
+    now: DateTime<Utc>,
+) -> Option<sail_pulse::attention::Signal> {
+    use sail_pulse::attention::{Provenance, Signal, Source};
+    if report.spoken.trim().is_empty() {
+        return None;
+    }
+    let body = report
+        .items
+        .iter()
+        .map(|item| format!("{}: {}", item.title, item.line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(Signal {
+        source: Source::Projects,
+        kind: "night_shift_morning".into(),
+        dedupe_key: format!("nightshift:morning:{}", report.date),
+        title: report.spoken.clone(),
+        body: body.chars().take(600).collect(),
+        // Owner-requested work finished overnight: worth saying on arrival, never urgent.
+        urgency: if report.needs_you > 0 { 0.7 } else { 0.5 },
+        relevance: 0.9,
+        novelty: 1.0,
+        confidence: 1.0,
+        deadline: None,
+        provenance: Provenance::Observation,
+        link: None,
+        observed_at: now,
+    })
+}
+
+#[cfg(test)]
+mod nightshift_signal_tests {
+    use super::*;
+    use sail_forge::nightshift::{ErrandId, MorningItem, MorningOutcome, MorningReport, NightItem};
+
+    fn report(spoken: &str, needs_you: u32) -> MorningReport {
+        MorningReport {
+            date: "2026-11-19".into(),
+            ready: 1,
+            needs_you,
+            failed: 0,
+            not_reached: 0,
+            items: vec![MorningItem {
+                item: NightItem::Errand {
+                    id: ErrandId::parse("e-0a1b2c3d4e5f").unwrap(),
+                },
+                title: "Show the next dividend date".into(),
+                outcome: MorningOutcome::Ready,
+                line: "Changed 2 files (+40 −3). 41 tests passed.".into(),
+            }],
+            spoken: spoken.into(),
+            halted: None,
+        }
+    }
+
+    #[test]
+    fn the_morning_report_becomes_one_dated_signal() {
+        let now = Utc::now();
+        let signal =
+            nightshift_signal(&report("Overnight I finished 1 of 1 jobs.", 0), now).unwrap();
+        assert_eq!(signal.dedupe_key, "nightshift:morning:2026-11-19");
+        assert_eq!(signal.title, "Overnight I finished 1 of 1 jobs.");
+        assert!(
+            signal
+                .body
+                .contains("Show the next dividend date: Changed 2 files")
+        );
+        assert_eq!(signal.urgency, 0.5);
+        assert_eq!(
+            nightshift_signal(&report("x", 1), now).unwrap().urgency,
+            0.7
+        );
+        assert_eq!(
+            nightshift_signal(&report("x", 0), now),
+            nightshift_signal(&report("x", 0), now)
+        );
+    }
+
+    #[test]
+    fn nothing_ran_means_no_signal() {
+        assert!(nightshift_signal(&report("", 0), Utc::now()).is_none());
+        assert!(nightshift_signal(&report("   ", 0), Utc::now()).is_none());
     }
 }

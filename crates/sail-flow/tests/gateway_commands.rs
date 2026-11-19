@@ -123,3 +123,16 @@ fn help_lists_every_command() {
     assert!(help.len() < 4096);
     assert_eq!(help, help_text());
 }
+
+#[test]
+fn tonight_carries_the_owners_words() {
+    assert_eq!(
+        parse("/tonight make the Today tab show dividends", &[]),
+        Command::Tonight("make the Today tab show dividends".to_string())
+    );
+    assert_eq!(
+        parse("/Tonight@SailBot", &[]),
+        Command::Tonight(String::new())
+    );
+    assert!(help_text().contains("/tonight"));
+}

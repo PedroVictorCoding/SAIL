@@ -23,6 +23,8 @@ pub enum Command {
     Approve(Option<String>),
     /// Deny a pending Guardian request, optionally naming its short id.
     Deny(Option<String>),
+    /// Night Shift (round 27): something to build overnight, in the owner's words.
+    Tonight(String),
     /// Run an installed skill with optional input.
     Skill { name: String, input: String },
     /// `/something` that is neither a command nor a skill.
@@ -56,6 +58,7 @@ pub fn parse(text: &str, skills: &[String]) -> Command {
         "skills" => Command::Skills,
         "approve" => Command::Approve(first_token(arguments)),
         "deny" => Command::Deny(first_token(arguments)),
+        "tonight" => Command::Tonight(arguments.to_string()),
         _ => {
             let normalized = command_word.replace('_', "-");
             let skill = skills
@@ -101,6 +104,7 @@ pub fn help_text() -> String {
         "/skills — list installed skills",
         "/approve [id] — approve a request",
         "/deny [id] — deny a request",
+        "/tonight <what to build> — add a Night Shift errand",
         "/<skill> [input] — run a skill",
     ]
     .join("\n")
