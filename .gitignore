@@ -85,5 +85,6 @@ test-results/
 android/local.properties
 android/key.properties
 
-# graphify code graph: built per worktree by scripts/graphify-refresh.sh (see AGENTS.md)
-graphify-out/
+# graphify code graph: built per worktree by scripts/graphify-refresh.sh (see AGENTS.md).
+# No trailing slash: it is a symlink to the HDD store, which `graphify-out/` would not match.
+graphify-out
