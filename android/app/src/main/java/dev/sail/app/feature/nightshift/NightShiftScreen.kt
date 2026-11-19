@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.sail.app.core.LocalAppContainer
@@ -206,6 +208,7 @@ private fun StatusPill(text: String, color: Color = SailColors.TextMuted) {
 
 @Composable
 private fun MorningReportCard(morning: MorningReport) {
+    val context = LocalContext.current
     FlatCard {
         Text(
             text = "Morning report · ${morning.date}",
@@ -229,7 +232,22 @@ private fun MorningReportCard(morning: MorningReport) {
         )
         morning.items.forEach { item ->
             Spacer(Modifier.height(4.dp))
-            Text("• ${item.title}: ${item.line}", color = SailColors.TextMuted, fontSize = 12.sp)
+            val prUrl = parseIssueDraftPrUrl(item)
+            if (prUrl != null) {
+                Text(
+                    text = "• ${item.title}: ${item.line}",
+                    color = SailColors.Thinking,
+                    fontSize = 12.sp,
+                    textDecoration = TextDecoration.Underline,
+                    modifier = Modifier.clickable {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(prUrl)))
+                        }
+                    },
+                )
+            } else {
+                Text("• ${item.title}: ${item.line}", color = SailColors.TextMuted, fontSize = 12.sp)
+            }
         }
     }
 }

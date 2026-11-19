@@ -233,6 +233,18 @@ def run_viewport(browser, base_url, width, height):
     page.evaluate("(p) => window.__sailPushWs(p)", ws_morning)
     expect(ns_page).to_contain_text("Overnight I finished both jobs")
 
+    # Test R8 morning_issue_and_halt fixture (halted sentence + GitHub issue PR link vs plain line)
+    current_payload["data"] = load_fixture("morning_issue_and_halt.json")
+    page.evaluate("() => window.SailNightShift.refresh()")
+    expect(ns_page.locator(".ns-morning-halted")).to_contain_text(
+        "The night stopped early: the model server stopped responding at 03:12."
+    )
+    pr_links = ns_page.locator("a.ns-morning-pr-link")
+    assert pr_links.count() == 1, f"Expected 1 PR link, got {pr_links.count()}"
+    assert pr_links.first.get_attribute("href") == "https://github.com/PedroVictorCoding/SAIL/pull/501"
+    expect(ns_page).to_contain_text("Tests failed on host.")
+    assert_no_horizontal_overflow(page, f"{width}x{height} morning_issue_and_halt")
+
     # Test Settings -> Night Shift
     page.locator("#nightshiftPage").get_by_role("button", name="Settings").click()
     ns_settings = page.locator("#settingsPanel-nightshift")

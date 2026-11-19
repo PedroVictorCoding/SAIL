@@ -209,6 +209,12 @@
   gap: 8px;
 }
 
+.ns-morning-pr-link {
+  color: #a7d0ff;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
 .ns-plan-row {
   display: flex;
   flex-wrap: wrap;

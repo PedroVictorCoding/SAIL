@@ -92,6 +92,18 @@
     return null;
   }
 
+  const DRAFT_PR_PREFIX = "Draft PR opened: https://github.com/";
+
+  function parseIssuePrHref(item) {
+    if (item?.item?.kind !== "issue" || typeof item.line !== "string") return null;
+    if (!item.line.startsWith(DRAFT_PR_PREFIX)) return null;
+    try {
+      const u = new URL(item.line.slice("Draft PR opened: ".length).trim());
+      if (u.protocol === "https:" && u.hostname === "github.com") return u.href;
+    } catch (_) {}
+    return null;
+  }
+
   function formatRanOn(ranOn) {
     if (!ranOn) return "";
     if (ranOn.kind === "external") return `Sent to ${ranOn.name} · ${ranOn.model}`;
@@ -684,12 +696,24 @@
       mTop.appendChild(mCounts);
       mCard.appendChild(mTop);
       if (m.spoken) mCard.appendChild(el("p", "ns-morning-spoken", m.spoken));
-      if (m.halted) mCard.appendChild(el("div", "ns-callout error", m.halted));
+      if (m.halted) mCard.appendChild(el("div", "ns-callout error ns-morning-halted", m.halted));
       if (Array.isArray(m.items) && m.items.length > 0) {
         const list = el("div", "ns-morning-items");
         for (const item of m.items) {
           const row = el("div", "ns-plan-row");
-          row.appendChild(el("span", "", `${item.title} — ${item.line}`));
+          const textWrap = el("span");
+          textWrap.appendChild(document.createTextNode(`${item.title} — `));
+          const prHref = parseIssuePrHref(item);
+          if (prHref) {
+            const link = el("a", "ns-morning-pr-link", item.line);
+            link.href = prHref;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            textWrap.appendChild(link);
+          } else {
+            textWrap.appendChild(document.createTextNode(item.line || ""));
+          }
+          row.appendChild(textWrap);
           row.appendChild(el("span", "ns-pill", item.outcome));
           list.appendChild(row);
         }
