@@ -11,7 +11,14 @@ use std::path::Path;
 
 use crate::admission::parse_target_files;
 
-const SKIP_DIRS: &[&str] = &["target", ".git", ".claude", "node_modules", "vendor"];
+const SKIP_DIRS: &[&str] = &[
+    "target",
+    ".git",
+    ".claude",
+    "node_modules",
+    "vendor",
+    crate::graph::OUT_DIR,
+];
 const MAX_FILES: usize = 3_000;
 const MAX_LINES_PER_FILE: usize = 2_000;
 const ITEM_KEYWORDS: &[&str] = &[
@@ -311,8 +318,30 @@ pub fn build_issue_context(
     target_budget: usize,
     map_budget: usize,
 ) -> String {
+    build_issue_context_with(
+        root,
+        issue_title,
+        issue_body,
+        target_budget,
+        map_budget,
+        None,
+    )
+}
+
+/// [`build_issue_context`], with the repo map replaced by a graphify subgraph when `graph`
+/// is given: the scoped neighbourhood (definitions, callers, callees, tests) of the issue's
+/// target files, or of the three best-ranked files when the issue names none. The ranked
+/// map remains the fallback when the graph cannot answer.
+pub fn build_issue_context_with(
+    root: &Path,
+    issue_title: &str,
+    issue_body: &str,
+    target_budget: usize,
+    map_budget: usize,
+    graph: Option<&crate::graph::Graphify>,
+) -> String {
     let targets = parse_target_files(issue_body);
-    let files = scan_repo(root);
+    let issue_text = format!("{issue_title}\n{issue_body}");
     let mut out = String::new();
 
     let crates = workspace_crates(root);
@@ -348,7 +377,17 @@ pub fn build_issue_context(
         }
     }
 
-    let ranked = rank(&files, &format!("{issue_title}\n{issue_body}"), &targets);
+    if let Some(graph) = graph {
+        if let Some(section) =
+            graph_section(root, graph, issue_title, &issue_text, &targets, map_budget)
+        {
+            out.push_str(&section);
+            return out;
+        }
+    }
+
+    let files = scan_repo(root);
+    let ranked = rank(&files, &issue_text, &targets);
     let map = render_map(&ranked, map_budget);
     if !map.is_empty() {
         out.push_str("\n## Repository map (most relevant first; line: signature)\n");
@@ -357,6 +396,49 @@ pub fn build_issue_context(
         out.push_str("\n(no Rust files found)\n");
     }
     out
+}
+
+/// Graph neighbourhood of the issue for the initial context, within `budget` characters.
+fn graph_section(
+    root: &Path,
+    graph: &crate::graph::Graphify,
+    issue_title: &str,
+    issue_text: &str,
+    targets: &[String],
+    budget: usize,
+) -> Option<String> {
+    let mut seeds: Vec<String> = targets
+        .iter()
+        .filter(|t| !t.ends_with('/') && root.join(t).is_file())
+        .cloned()
+        .collect();
+    if seeds.is_empty() {
+        // No usable targets: let the lexical ranking pick entry points and the graph
+        // supply their structure.
+        let files = scan_repo(root);
+        seeds = rank(&files, issue_text, targets)
+            .into_iter()
+            .take(3)
+            .map(|f| f.path.clone())
+            .collect();
+    }
+    if seeds.is_empty() {
+        return None;
+    }
+    // graphify budgets in tokens; about 3.5 characters per token for Rust.
+    let tokens = (budget * 2 / 7).max(200) as u32;
+    let (ok, text) = graph.query(root, issue_title, &seeds, tokens);
+    if !ok || text.trim().is_empty() {
+        return None;
+    }
+    let mut body: String = text.chars().take(budget).collect();
+    if body.len() < text.len() {
+        body.push_str("\n[graph truncated; use graph:query with a narrower seed]\n");
+    }
+    Some(format!(
+        "\n## Code graph around {} (graphify; NODE = symbol [src=file loc=line], edges show calls/uses)\n{body}\n",
+        seeds.join(", ")
+    ))
 }
 
 #[cfg(test)]

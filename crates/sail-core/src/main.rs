@@ -102,7 +102,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dialogue = dialogue.with_pulse(pulse.clone());
     let checkpoint_store = Arc::new(TaskCheckpointStore::default_store());
     let mut forge = ForgeOrchestrator::new(
-        OrchestratorConfig::default(),
+        OrchestratorConfig {
+            // The local model navigates job worktrees through the graphify code graph when
+            // graphify is installed (`SAIL_GRAPHIFY=off` disables it).
+            code_graph: true,
+            ..OrchestratorConfig::default()
+        },
         checkpoint_store,
         review_broker,
         guardian.sandbox(),

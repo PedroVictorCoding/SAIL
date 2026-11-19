@@ -9,6 +9,7 @@ pub mod failure_memory;
 pub mod fixtures;
 pub mod gates;
 pub mod github;
+pub mod graph;
 pub mod model_bench;
 pub mod mutation;
 pub mod nightly;

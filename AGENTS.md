@@ -75,10 +75,42 @@ and list the relevant validation. Include material limitations or risks. Keep th
 PR focused on the task and avoid conversational history or claims of checks that
 were not performed.
 
+## Code navigation with graphify
+
+This repository is indexed by [graphify](https://github.com/Graphify-Labs/graphify) as a code
+knowledge graph in `graphify-out/`: files, symbols, and their call/use/contain edges. The build
+is AST-only (`GRAPHIFY_BACKEND=none`), so no model runs and nothing leaves the host. Every agent
+(Claude Code, Codex, Antigravity, Kilo, and SAIL Forge's local model) navigates code through the
+graph instead of grepping or reading the whole tree.
+
+1. **Build it once per worktree.** Run `scripts/graphify-refresh.sh` in a new worktree. It copies
+   this repository's shared seed graph from `/srv/sail-data/graphify/seeds/` and re-extracts only
+   changed files (about 15 seconds; about 4 minutes only when no seed exists yet).
+   `graphify-out/` is git-ignored; never commit it.
+2. **Query before you search.** Before the first grep, glob, search, or source-file read for a
+   codebase question, run `graphify query "<question>"`. Add `--seed <file path or symbol>` to start
+   from a known place, and `--budget <tokens>` to widen or narrow the answer (default 2000). Use
+   `graphify explain "<symbol>"` for a symbol's definition, callers, and callees;
+   `graphify path "<A>" "<B>"` for how two symbols connect; and `graphify section "<heading>"` for
+   one Markdown section without opening the file.
+3. **Read only what the graph located.** Open raw files only for the line ranges that the graph or
+   an earlier read pointed to. Put this rule in every subagent prompt that explores code.
+4. Read `graphify-out/GRAPH_REPORT.md` only for broad architecture reviews, or when query, path,
+   and explain do not surface enough context.
+5. **Keep it current.** After changing code, run `scripts/graphify-refresh.sh` (or
+   `graphify update .`) so later queries see your edits.
+6. If `graphify` is not installed or cannot answer, fall back to normal search.
+
+Client entry points that carry this rule: `CLAUDE.md`, `.claude/settings.json` hooks and
+`.claude/skills/graphify/` (Claude Code); this file and `.codex/` (Codex); `GEMINI.md` and
+`.agents/rules/`, `.agents/workflows/`, `.agents/skills/` (Antigravity); this file and
+`.kilocode/rules/graphify.md` (Kilo); `crates/sail-forge/src/graph.rs` (SAIL Forge).
+
 ## Instructions for other agent clients
 
 `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, and
-`.cursor/rules/agent-workflow.mdc` point to this policy. `AGENTS.md` is the shared
+`.cursor/rules/agent-workflow.mdc` point to this policy; `.agents/rules/graphify.md` and
+`.kilocode/rules/graphify.md` repeat the graphify rule above. `AGENTS.md` is the shared
 source of truth; keep those entry points consistent when changing this workflow.
 These files define agent behavior. Server-side branch protections, if separately
 configured, remain additional requirements and must not be bypassed.
