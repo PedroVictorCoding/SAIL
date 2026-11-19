@@ -737,12 +737,13 @@ impl ForgeNightlyRunner {
 
     fn host_endpoint() -> Endpoint {
         Endpoint {
-            url: std::env::var("SAIL_FORGE_MODEL_URL").unwrap_or_else(|_| "local".into()),
+            url: String::new(),
             ran_on: RanOn {
                 kind: RanOnKind::Host,
                 name: "host".into(),
                 model: "local".into(),
             },
+            client: None,
         }
     }
 
@@ -754,6 +755,9 @@ impl ForgeNightlyRunner {
     }
 
     fn set_checkpoint_endpoint(&self, job_id: &str, endpoint: &Endpoint) {
+        if !endpoint.url.trim().is_empty() {
+            self.orchestrator.set_job_endpoint(job_id, endpoint.clone());
+        }
         let store = self.orchestrator.checkpoint_store();
         match store.load(job_id) {
             Ok(Some(mut checkpoint)) => {
@@ -1100,6 +1104,9 @@ impl ForgeNightlyRunner {
         };
 
         let mut review_report = report;
+        if !review_report.model_id.trim().is_empty() {
+            endpoint.ran_on.model = review_report.model_id.clone();
+        }
         let patch = job_patch(&self.orchestrator, &job_id, &review_report);
         review_report.patch_ref = patch.clone();
         let (mut result, mut outcome, mut reason, patch) =
@@ -1198,6 +1205,9 @@ impl ForgeNightlyRunner {
         match executed {
             Ok(report) => {
                 let mut report = report;
+                if !report.model_id.trim().is_empty() {
+                    endpoint.ran_on.model = report.model_id.clone();
+                }
                 let patch = job_patch(&self.orchestrator, &job_id, &report);
                 report.patch_ref = patch.clone();
                 let (mut result, outcome, reason, _) =

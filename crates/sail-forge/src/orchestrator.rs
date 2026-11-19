@@ -72,6 +72,7 @@ pub struct ActiveJob {
 /// Central autonomous issue solver orchestrator.
 pub struct ForgeOrchestrator {
     config: OrchestratorConfig,
+    job_endpoints: Mutex<std::collections::HashMap<String, crate::nightshift::Endpoint>>,
     checkpoint_store: Arc<TaskCheckpointStore>,
     review_broker: Arc<ReviewBroker>,
     self_reviewer: Option<Arc<dyn ReviewProvider>>,
@@ -115,6 +116,7 @@ impl ForgeOrchestrator {
         let max_jobs = config.max_concurrent_heavy_jobs.max(1);
         Self {
             config,
+            job_endpoints: Mutex::new(HashMap::new()),
             checkpoint_store,
             review_broker,
             self_reviewer: None,
@@ -222,6 +224,14 @@ impl ForgeOrchestrator {
 
     pub fn config(&self) -> &OrchestratorConfig {
         &self.config
+    }
+
+    /// Set the endpoint and pinned client used by this job's next solver attempt. The
+    /// entry is in-memory only because the client can hold a bearer secret.
+    pub fn set_job_endpoint(&self, job_id: &str, endpoint: crate::nightshift::Endpoint) {
+        if let Ok(mut endpoints) = self.job_endpoints.lock() {
+            endpoints.insert(job_id.to_string(), endpoint);
+        }
     }
 
     pub fn checkpoint_store(&self) -> Arc<TaskCheckpointStore> {
@@ -1493,6 +1503,16 @@ impl ForgeOrchestrator {
 
             let controller =
                 crate::solver::LocalSolverController::new(4, 180, self.config.model_path.clone());
+            let controller = if let Some(endpoint) = self
+                .job_endpoints
+                .lock()
+                .ok()
+                .and_then(|endpoints| endpoints.get(job_id).cloned())
+            {
+                controller.with_job_endpoint(endpoint.url, endpoint.client)
+            } else {
+                controller
+            };
 
             let logs_dir = self.config.workspace_root.join("logs").join(job_id);
             let event_bus = self.event_bus.clone();

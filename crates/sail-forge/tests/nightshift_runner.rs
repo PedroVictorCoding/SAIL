@@ -110,6 +110,7 @@ impl EndpointPicker for FakePicker {
         Endpoint {
             url: "http://mesh.test:8080".into(),
             ran_on: mesh(),
+            client: None,
         }
     }
 
@@ -118,6 +119,7 @@ impl EndpointPicker for FakePicker {
         Endpoint {
             url: "http://host.test:8080".into(),
             ran_on: host(),
+            client: None,
         }
     }
 }
@@ -356,6 +358,10 @@ async fn errand_runs_on_the_picked_endpoint_and_owns_its_patch() {
     );
     assert_eq!(picker.mesh_calls.load(Ordering::SeqCst), 1);
     assert_eq!(picker.host_calls.load(Ordering::SeqCst), 0);
+    match finished.state {
+        ErrandState::Ready { result, .. } => assert_eq!(result.ran_on.model, "test"),
+        other => panic!("expected ready, got {other:?}"),
+    }
 
     let morning: sail_forge::nightshift::MorningReport = serde_json::from_str(
         &std::fs::read_to_string(
@@ -539,7 +545,7 @@ async fn redo_note_becomes_owner_feedback_for_the_next_solver() {
 }
 
 #[tokio::test]
-async fn ready_issue_waits_for_approval_unless_publish_is_explicit() {
+async fn ready_issue_waits_for_approval_when_publishing_is_off() {
     let tmp = TempDir::new("issue-review");
     let orchestrator = boot(&tmp.0);
     let gh = Arc::new(FakeGithub {
@@ -663,6 +669,37 @@ fn planning_inputs_round_trip_to_the_public_plan_types() {
         &SizeDurations::default(),
     );
     assert_eq!(plan.items.len(), 2);
+}
+
+#[test]
+fn endpoints_compare_by_url_and_machine_and_never_print_the_client() {
+    let a = Endpoint {
+        url: "https://mesh.test".into(),
+        ran_on: mesh(),
+        client: Some(reqwest::Client::new()),
+    };
+    let b = Endpoint {
+        url: "https://mesh.test".into(),
+        ran_on: mesh(),
+        client: None,
+    };
+    assert_eq!(a, b);
+    let debug = format!("{a:?}");
+    assert!(debug.contains("client: \"<set>\""));
+    assert!(!debug.contains("bearer"));
+    let plain = format!("{b:?}");
+    assert!(plain.contains("client: \"<none>\""));
+
+    let controller = sail_forge::solver::LocalSolverController::new(1, 10, None)
+        .with_job_endpoint("https://mesh.test".into(), a.client.clone());
+    assert_eq!(
+        controller.endpoint_override,
+        Some(vec!["https://mesh.test".to_string()])
+    );
+    assert!(controller.endpoint_client.is_some());
+    let probing = sail_forge::solver::LocalSolverController::new(1, 10, None)
+        .with_job_endpoint(String::new(), None);
+    assert!(probing.endpoint_override.is_none());
 }
 
 #[test]

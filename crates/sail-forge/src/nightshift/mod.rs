@@ -379,11 +379,39 @@ pub trait ShaperModel: Send + Sync {
     ) -> Result<String, String>;
 }
 
-/// A solver endpoint and the machine it runs on.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A solver endpoint and the machine it runs on. `client` carries the pinned TLS and
+/// bearer for a Mesh worker; `None` means a plain local URL. The client is never
+/// persisted or printed.
+#[derive(Clone)]
 pub struct Endpoint {
     pub url: String,
     pub ran_on: RanOn,
+    pub client: Option<reqwest::Client>,
+}
+
+impl PartialEq for Endpoint {
+    fn eq(&self, other: &Self) -> bool {
+        self.url == other.url && self.ran_on == other.ran_on
+    }
+}
+
+impl Eq for Endpoint {}
+
+impl std::fmt::Debug for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Endpoint")
+            .field("url", &self.url)
+            .field("ran_on", &self.ran_on)
+            .field(
+                "client",
+                &if self.client.is_some() {
+                    "<set>"
+                } else {
+                    "<none>"
+                },
+            )
+            .finish()
+    }
 }
 
 /// Chooses an endpoint once per job attempt. The host is always the fallback.

@@ -1329,6 +1329,8 @@ pub struct LocalSolverController {
     pub model_timeouts: ModelTimeouts,
     /// Explicit endpoints instead of `candidate_endpoints()` (environment-based).
     pub endpoint_override: Option<Vec<String>>,
+    /// Pinned client for `endpoint_override` (a Mesh worker's TLS + bearer).
+    pub endpoint_client: Option<reqwest::Client>,
     resource_scheduler: std::sync::Arc<sail_common::resources::ResourceScheduler>,
     voice_quiet: Duration,
 }
@@ -1358,6 +1360,7 @@ impl LocalSolverController {
             configured_model_path,
             model_timeouts: ModelTimeouts::default(),
             endpoint_override: None,
+            endpoint_client: None,
             resource_scheduler: sail_common::resources::global(),
             voice_quiet: voice_quiet_from_env(),
         }
@@ -1418,6 +1421,15 @@ impl LocalSolverController {
 
     pub fn with_endpoints(mut self, endpoints: Vec<String>) -> Self {
         self.endpoint_override = Some(endpoints);
+        self
+    }
+
+    /// Use one job-specific endpoint and its pinned client instead of probing.
+    pub fn with_job_endpoint(mut self, url: String, client: Option<reqwest::Client>) -> Self {
+        if !url.trim().is_empty() {
+            self.endpoint_override = Some(vec![url]);
+            self.endpoint_client = client;
+        }
         self
     }
 
@@ -1534,11 +1546,13 @@ impl LocalSolverController {
         // No total timeout: a request may legitimately wait for the single model slot
         // and then stream for minutes on CPU. Bound connection setup and silence instead;
         // each response gets its own thinking-aware generation window below.
-        let client = reqwest::Client::builder()
-            .connect_timeout(self.model_timeouts.connect)
-            .read_timeout(self.model_timeouts.idle)
-            .build()
-            .unwrap_or_default();
+        let client = self.endpoint_client.clone().unwrap_or_else(|| {
+            reqwest::Client::builder()
+                .connect_timeout(self.model_timeouts.connect)
+                .read_timeout(self.model_timeouts.idle)
+                .build()
+                .unwrap_or_default()
+        });
 
         let endpoints = self
             .endpoint_override
