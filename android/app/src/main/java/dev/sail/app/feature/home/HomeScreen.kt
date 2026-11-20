@@ -66,6 +66,15 @@ import dev.sail.app.core.design.ScreenGutter
 import dev.sail.app.core.design.SecondaryButton
 import dev.sail.app.core.design.animationsEnabled
 import dev.sail.app.core.sailViewModel
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import dev.sail.app.feature.calendar.Occurrence
+import dev.sail.app.feature.calendar.formatOccurrenceTime
+import dev.sail.app.feature.calendar.nextUpOccurrences
+import java.time.LocalDate
+import java.time.ZoneOffset
 
 @Composable
 fun HomeScreen(
@@ -79,6 +88,7 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     onOpenDock: () -> Unit = {},
     onOpenNightShift: () -> Unit = {},
+    onOpenCalendar: () -> Unit = {},
 ) {
     val container = LocalAppContainer.current
     val repository = remember(container.api) { HomeRepository(container.api) }
@@ -102,9 +112,11 @@ fun HomeScreen(
                 .padding(horizontal = ScreenGutter, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
         ) {
+            SecondaryButton(text = "Calendar", onClick = onOpenCalendar)
             SecondaryButton(text = "Overnight", onClick = onOpenNightShift)
             SecondaryButton(text = "Dock mode", onClick = onOpenDock)
         }
+        HomeNextUpCard(api = container.api, onOpenCalendar = onOpenCalendar)
 
         when (val current = uiState) {
             is UiState.Loading -> {
@@ -835,6 +847,49 @@ private fun HomeNewsRadarCard(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeNextUpCard(
+    api: dev.sail.app.core.net.SailApi,
+    onOpenCalendar: () -> Unit,
+) {
+    var nextUp by remember { mutableStateOf<List<Occurrence>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        val today = LocalDate.now()
+        val start = today.atStartOfDay(ZoneOffset.UTC).toInstant().toString()
+        val end = today.plusDays(2).atStartOfDay(ZoneOffset.UTC).toInstant().toString()
+        val res = api.calendarEvents(start, end)
+        if (res is dev.sail.app.core.net.ApiResult.Ok) {
+            nextUp = nextUpOccurrences(res.data.occurrences, limit = 3)
+        }
+    }
+    if (nextUp.isEmpty()) return
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = ScreenGutter, vertical = 4.dp)
+            .clickable(onClick = onOpenCalendar),
+    ) {
+        FlatCard {
+            Text(
+                text = "Next up",
+                style = MaterialTheme.typography.labelMedium,
+                color = SailColors.TextMuted,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            nextUp.forEach { occ ->
+                Text(
+                    text = "${formatOccurrenceTime(occ)} · ${occ.title}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SailColors.Text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
