@@ -1,10 +1,7 @@
 'use strict';
-// SAIL Announce — ambient glass announcement stack, arrival greeting line, and
-// silent not-addressed Orb dim. All server text is written via textContent.
+// SAIL Announce — conversation messages and silent not-addressed Orb dim.
 (() => {
-  const MAX_VISIBLE = 3;
-  let items = [];
-  let showAll = false;
+  const messages = new Map();
   let dimTimer = null;
 
   function isSafeLink(link) {
@@ -39,8 +36,11 @@
         const res = await fetch(url, { ...options, cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
       }
-      items = items.filter((it) => it.item_id !== itemId);
-      renderStack();
+      const message = messages.get(itemId);
+      if (message?.contains(cardEl)) {
+        message.remove();
+        messages.delete(itemId);
+      }
     } catch (err) {
       buttons.forEach((b) => { b.disabled = false; });
       if (errorEl) {
@@ -51,7 +51,7 @@
   }
 
   function buildCard(item) {
-    const card = el('article', 'announce-card');
+    const card = el('div', 'announce-card');
     card.dataset.itemId = item.item_id || '';
 
     const head = el('div', 'announce-card-head');
@@ -124,70 +124,30 @@
     return card;
   }
 
-  function renderStack() {
-    const container = document.getElementById('announceStack');
-    if (!container) return;
-    container.replaceChildren();
-    if (items.length === 0) {
-      container.hidden = true;
-      return;
-    }
-    container.hidden = false;
-    const visible = showAll ? items : items.slice(0, MAX_VISIBLE);
-    for (const item of visible) {
-      container.append(buildCard(item));
-    }
-    if (items.length > MAX_VISIBLE) {
-      const hiddenCount = items.length - MAX_VISIBLE;
-      const toggleLabel = showAll
-        ? 'Show fewer'
-        : `+${hiddenCount} earlier announcement${hiddenCount === 1 ? '' : 's'}`;
-      const moreBtn = el('button', 'announce-more-btn', toggleLabel);
-      moreBtn.type = 'button';
-      moreBtn.addEventListener('click', () => {
-        showAll = !showAll;
-        renderStack();
-      });
-      container.append(moreBtn);
-    }
-  }
-
   function push(msg) {
-    if (!msg || typeof msg !== 'object' || !msg.item_id) return;
-    const idx = items.findIndex((it) => it.item_id === msg.item_id);
-    if (idx >= 0) items[idx] = msg;
-    else items.unshift(msg);
-    renderStack();
+    if (!msg?.item_id) return;
+    const card = buildCard(msg);
+    const existing = messages.get(msg.item_id);
+    if (existing) {
+      existing.lastChild.replaceChildren(card);
+    } else {
+      messages.set(msg.item_id, appendConversation('SAIL', card));
+    }
   }
 
   function showGreeting(msg) {
-    const box = document.getElementById('presenceGreeting');
-    if (!box || !msg || !msg.spoken) return;
-    box.replaceChildren();
+    if (typeof msg?.spoken !== 'string' || !msg.spoken.trim()) return;
+    const body = el('div', 'presence-greeting');
+    body.append(el('p', 'presence-greeting-text', msg.spoken));
 
-    const row = el('div', 'presence-greeting-row');
-    row.append(el('p', 'presence-greeting-text', msg.spoken));
-
-    const dismissBtn = el('button', 'presence-greeting-dismiss', '×');
-    dismissBtn.type = 'button';
-    dismissBtn.setAttribute('aria-label', 'Dismiss greeting');
-    dismissBtn.addEventListener('click', () => {
-      box.replaceChildren();
-      box.hidden = true;
-    });
-    row.append(dismissBtn);
-    box.append(row);
-
-    const greetingItems = Array.isArray(msg.items) ? msg.items : [];
-    const titled = greetingItems.filter((it) => it && typeof it.title === 'string' && it.title.trim().length > 0);
-    if (titled.length > 0) {
-      const chips = el('div', 'presence-greeting-chips');
-      for (const it of titled) {
-        chips.append(el('span', 'presence-greeting-chip', it.title));
+    const chips = el('div', 'presence-greeting-chips');
+    for (const item of Array.isArray(msg.items) ? msg.items : []) {
+      if (typeof item?.title === 'string' && item.title.trim()) {
+        chips.append(el('span', 'presence-greeting-chip', item.title));
       }
-      box.append(chips);
     }
-    box.hidden = false;
+    if (chips.childElementCount) body.append(chips);
+    appendConversation('SAIL', body);
   }
 
   function onNotAddressed() {
@@ -206,9 +166,7 @@
     showGreeting,
     onNotAddressed,
     clear() {
-      items = [];
-      showAll = false;
-      renderStack();
+      messages.clear();
     },
   };
 })();

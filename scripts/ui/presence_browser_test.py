@@ -213,22 +213,30 @@ def run():
                 page.evaluate("(m) => window.__sailPushWs(m)", announce_show)
                 page.evaluate("(m) => window.__sailPushWs(m)", greeting)
 
-                stack = page.locator("#announceStack")
-                expect(stack).to_be_visible()
-                expect(stack.locator(".announce-card")).to_have_count(2)
-                expect(stack.locator(".announce-spoken-badge")).to_have_count(1)
-                expect(stack.locator(".announce-btn-open")).to_have_count(1)
-                expect(page.locator("#presenceGreeting")).to_be_visible()
-                expect(page.locator("#presenceGreeting")).to_contain_text("Welcome back.")
-                chips = page.locator("#presenceGreeting .presence-greeting-chip")
+                conversation = page.locator("#conversation")
+                expect(conversation).to_be_visible()
+                expect(conversation.locator(".announce-card")).to_have_count(2)
+                expect(conversation.locator(".announce-spoken-badge")).to_have_count(1)
+                expect(conversation.locator(".announce-btn-open")).to_have_count(1)
+                expect(conversation.locator(".presence-greeting")).to_be_visible()
+                expect(conversation.locator(".presence-greeting")).to_contain_text("Welcome back.")
+                chips = conversation.locator(".presence-greeting-chip")
                 expect(chips).to_have_count(2)
                 expect(chips.nth(0)).to_have_text("Forge: refactor failed")
                 expect(chips.nth(1)).to_have_text("Algorithms quiz tomorrow")
-                greeting_text = page.locator("#presenceGreeting").inner_text()
+                greeting_text = conversation.locator(".presence-greeting").inner_text()
                 assert "a1b2" not in greeting_text and "c3d4" not in greeting_text, greeting_text
 
+                messages = conversation.locator(":scope > .message-sail")
+                expect(messages).to_have_count(3)
+                expect(messages.nth(0).locator(".announce-card")).to_have_attribute("data-item-id", "a1b2")
+                expect(messages.nth(2)).to_contain_text("Welcome back.")
+                assert page.locator(".assistant-identity .presence-greeting").count() == 0
+                page.evaluate("(m) => window.__sailPushWs(m)", announce_speak)
+                expect(messages).to_have_count(3)
+
                 # 3. Why? expands reasons
-                first_card = stack.locator('.announce-card[data-item-id="a1b2"]')
+                first_card = conversation.locator('.announce-card[data-item-id="a1b2"]')
                 first_card.locator(".announce-why-btn").click()
                 expect(first_card.locator(".announce-reasons")).to_be_visible()
                 expect(first_card.locator(".announce-reasons")).to_contain_text("urgency 0.70")
@@ -237,7 +245,7 @@ def run():
                 useful_btn = first_card.get_by_role("button", name="Useful")
                 useful_btn.evaluate("el => el.scrollIntoView({block: 'center'})")
                 useful_btn.click()
-                expect(stack.locator(".announce-card")).to_have_count(1)
+                expect(conversation.locator(".announce-card")).to_have_count(1)
                 assert any(c["body"].get("feedback") == "useful" for c in feedback_calls), feedback_calls
 
                 # 5. Hands-free states + hide/show resume + not_addressed leaves no text in DOM
@@ -258,7 +266,7 @@ def run():
                 page.evaluate("(m) => window.__sailPushWs(m)", hf_follow_up)
                 expect(page.locator("#handsFreeStateText")).to_have_text("Go ahead")
 
-                snap_expr = "() => ['#announceStack','#presenceGreeting','#conversation','#liveTranscript','#transcript','#handsFreeStatePill'].map(s => document.querySelector(s)?.innerText || '')"
+                snap_expr = "() => ['#conversation','#liveTranscript','#transcript','#handsFreeStatePill'].map(s => document.querySelector(s)?.innerText || '')"
                 snap_before = page.evaluate(snap_expr)
                 page.evaluate("(m) => window.__sailPushWs(m)", not_addressed)
                 snap_after = page.evaluate(snap_expr)
