@@ -196,6 +196,7 @@ function handleVoiceMessage(data) {
       case 'not_addressed': window.SailAnnounce?.onNotAddressed?.(); break;
       case 'nightshift': window.SailNightShift?.onErrandUpdate?.(data.errand); break;
       case 'nightshift_morning': window.SailNightShift?.onMorningReport?.(data.report); break;
+      case 'calendar_changed': window.SailCalendar?.onChanged?.(data); break;
       case 'client_speech': clientSpeechActive = { stt:data.stt === true, tts:data.tts === true }; renderSpeechPlacement(); break;
       case 'turn_finished':
         liveContextReplyPending = false;
