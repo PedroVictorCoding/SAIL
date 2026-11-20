@@ -10,6 +10,7 @@ publish.workspace = true
 sail-common.workspace = true
 sail-pulse.workspace = true
 chrono.workspace = true
+chrono-tz = { version = "0.10", features = ["serde"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 tokio.workspace = true
 tokio-util.workspace = true

@@ -99,6 +99,30 @@ pub enum Observation {
         summary: String,
         sources: Vec<String>,
     },
+    /// A calendar event that may need preparation (#452).
+    CalendarEvent {
+        id: String,
+        title: String,
+        start: DateTime<Utc>,
+        all_day: bool,
+        prepare: bool,
+        location: Option<String>,
+    },
+    /// A subscribed feed event moved or was cancelled.
+    CalendarChange {
+        id: String,
+        title: String,
+        kind: CalendarChangeKind,
+        new_start: Option<DateTime<Utc>>,
+        observed_at: DateTime<Utc>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CalendarChangeKind {
+    Moved,
+    Cancelled,
 }
 
 /// How much a source says something matters (Capital's severity).
@@ -127,6 +151,15 @@ pub const SCHOOL_HORIZON_DAYS: i64 = 14;
 
 /// The signals one observation produces (zero or more).
 pub fn detect(observation: &Observation, now: DateTime<Utc>) -> Vec<Signal> {
+    detect_in_tz(observation, now, chrono_tz::Europe::Lisbon)
+}
+
+/// Same rules, with the owner's time zone for calendar change wording.
+pub fn detect_in_tz(
+    observation: &Observation,
+    now: DateTime<Utc>,
+    owner_tz: chrono_tz::Tz,
+) -> Vec<Signal> {
     match observation {
         Observation::GitHub(event) => crate::github::github_signal(event, now),
         Observation::CapitalSuggestion {
@@ -192,6 +225,20 @@ pub fn detect(observation: &Observation, now: DateTime<Utc>) -> Vec<Signal> {
             link: None,
             observed_at: now,
         }],
+        Observation::CalendarEvent {
+            id,
+            title,
+            start,
+            prepare,
+            ..
+        } => calendar_event(id, title, *start, *prepare, now),
+        Observation::CalendarChange {
+            id,
+            title,
+            kind,
+            new_start,
+            observed_at,
+        } => calendar_change(id, title, *kind, *new_start, *observed_at, now, owner_tz),
         Observation::DiskSpace {
             mount,
             free_percent,
@@ -219,6 +266,96 @@ pub fn detect(observation: &Observation, now: DateTime<Utc>) -> Vec<Signal> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// A prepared calendar event within 48 h becomes a Commitment. All other calendar
+/// events are handled by the greeting/briefing.
+fn calendar_event(
+    id: &str,
+    title: &str,
+    start: DateTime<Utc>,
+    prepare: bool,
+    now: DateTime<Utc>,
+) -> Vec<Signal> {
+    if !prepare || start <= now || start - now > Duration::hours(48) {
+        return Vec::new();
+    }
+    let until = start - now;
+    let urgency = if until <= Duration::hours(6) {
+        0.8
+    } else {
+        0.4
+    };
+    vec![Signal {
+        source: Source::Calendar,
+        kind: "calendar_prep".into(),
+        dedupe_key: format!("cal-prep:{id}"),
+        title: format!("Prepare: {}", excerpt(title, 90)),
+        body: "This event needs preparation.".into(),
+        urgency,
+        relevance: 0.75,
+        novelty: 0.6,
+        confidence: 0.9,
+        deadline: Some(start),
+        provenance: Provenance::UserCommitment,
+        link: Some("/calendar".into()),
+        observed_at: now,
+    }]
+}
+
+fn calendar_change(
+    id: &str,
+    title: &str,
+    kind: CalendarChangeKind,
+    new_start: Option<DateTime<Utc>>,
+    observed_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+    owner_tz: chrono_tz::Tz,
+) -> Vec<Signal> {
+    if now - observed_at > Duration::days(7) {
+        return Vec::new();
+    }
+    let (kind_name, label) = match kind {
+        CalendarChangeKind::Moved => {
+            let when = new_start
+                .map(|start| {
+                    start
+                        .with_timezone(&owner_tz)
+                        .format("%a %H:%M")
+                        .to_string()
+                })
+                .unwrap_or_else(|| "a new time".into());
+            (
+                "calendar_moved",
+                format!("Moved: {} → {when}", excerpt(title, 80)),
+            )
+        }
+        CalendarChangeKind::Cancelled => (
+            "calendar_cancelled",
+            format!("Cancelled: {}", excerpt(title, 90)),
+        ),
+    };
+    vec![Signal {
+        source: Source::Calendar,
+        kind: kind_name.into(),
+        dedupe_key: format!(
+            "cal-chg:{id}:{}",
+            new_start
+                .map(|start| start.to_rfc3339())
+                .unwrap_or_else(|| "x".into())
+        ),
+        title: label,
+        body: "A subscribed calendar changed.".into(),
+        urgency: 0.45,
+        relevance: 0.8,
+        novelty: 1.0,
+        confidence: 0.9,
+        deadline: new_start,
+        provenance: Provenance::Observation,
+        link: Some("/calendar".into()),
+        observed_at: now,
+    }]
+}
+
+#[allow(clippy::too_many_arguments)] // pre-existing signature; logged in LLM_Handoff
 fn school_item(
     id: &str,
     course: &str,
