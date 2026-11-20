@@ -86,7 +86,8 @@ graph instead of grepping or reading the whole tree.
 1. **Build it once per worktree.** Run `scripts/graphify-refresh.sh` in a new worktree. It copies
    this repository's shared seed graph from `/srv/sail-data/graphify/seeds/` and re-extracts only
    changed files (about 15 seconds; about 4 minutes only when no seed exists yet).
-   `graphify-out/` is git-ignored; never commit it.
+   `graphify-out` is a git-ignored symlink to `/srv/sail-data/graphify/worktrees/` (HDD); never
+   commit it.
 2. **Query before you search.** Before the first grep, glob, search, or source-file read for a
    codebase question, run `graphify query "<question>"`. Add `--seed <file path or symbol>` to start
    from a known place, and `--budget <tokens>` to widen or narrow the answer (default 2000). Use
