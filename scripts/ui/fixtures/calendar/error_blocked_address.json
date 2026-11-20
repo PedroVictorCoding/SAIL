@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "blocked_address",
+    "message": "that address points inside a private network"
+  }
+}

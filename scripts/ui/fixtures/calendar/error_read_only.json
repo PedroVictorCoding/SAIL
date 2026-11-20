@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "read_only",
+    "message": "this calendar is read-only"
+  }
+}

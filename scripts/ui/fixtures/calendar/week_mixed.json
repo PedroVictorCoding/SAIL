@@ -1,0 +1,123 @@
+{
+  "occurrences": [
+    {
+      "key": "loc_112233445566@2026-11-23T09:00:00Z",
+      "event_id": "loc_112233445566",
+      "source_id": "src_local000000",
+      "title": "Algorithms lecture",
+      "time": {
+        "type": "timed",
+        "start": "2026-11-23T09:00:00Z",
+        "end": "2026-11-23T10:30:00Z",
+        "tz": "Europe/Lisbon"
+      },
+      "location": "Room B203",
+      "status": "confirmed",
+      "recurring": true,
+      "prepare": true,
+      "writable": true
+    },
+    {
+      "key": "fe_0123456789abcdef@2026-11-23T09:30:00Z",
+      "event_id": "fe_0123456789abcdef",
+      "source_id": "src_a1b2c3d4e5f6",
+      "title": "Study group check-in",
+      "time": {
+        "type": "timed",
+        "start": "2026-11-23T09:30:00Z",
+        "end": "2026-11-23T10:30:00Z",
+        "tz": "Europe/Lisbon"
+      },
+      "location": "Library 2F",
+      "status": "confirmed",
+      "recurring": false,
+      "prepare": false,
+      "writable": false
+    },
+    {
+      "key": "loc_223344556677@2026-11-24",
+      "event_id": "loc_223344556677",
+      "source_id": "src_local000000",
+      "title": "Exam prep week",
+      "time": {
+        "type": "all_day",
+        "start_date": "2026-11-24",
+        "end_date": "2026-11-27"
+      },
+      "location": null,
+      "status": "confirmed",
+      "recurring": false,
+      "prepare": false,
+      "writable": true
+    },
+    {
+      "key": "loc_334455667788@2026-11-24",
+      "event_id": "loc_334455667788",
+      "source_id": "src_local000000",
+      "title": "Project milestone",
+      "time": {
+        "type": "all_day",
+        "start_date": "2026-11-24",
+        "end_date": "2026-11-25"
+      },
+      "location": null,
+      "status": "confirmed",
+      "recurring": false,
+      "prepare": true,
+      "writable": true
+    },
+    {
+      "key": "loc_445566778899@2026-11-25T15:00:00Z",
+      "event_id": "loc_445566778899",
+      "source_id": "src_local000000",
+      "title": "Dentist",
+      "time": {
+        "type": "timed",
+        "start": "2026-11-25T15:00:00Z",
+        "end": "2026-11-25T16:00:00Z",
+        "tz": "Europe/Lisbon"
+      },
+      "location": "Av. da Republica 42",
+      "status": "confirmed",
+      "recurring": false,
+      "prepare": false,
+      "writable": true
+    },
+    {
+      "key": "fe_fedcba9876543210@2026-11-26T14:00:00Z",
+      "event_id": "fe_fedcba9876543210",
+      "source_id": "src_b2c3d4e5f601",
+      "title": "Physics lab (optional)",
+      "time": {
+        "type": "timed",
+        "start": "2026-11-26T14:00:00Z",
+        "end": "2026-11-26T16:00:00Z",
+        "tz": "Europe/Lisbon"
+      },
+      "location": "Lab 1.04",
+      "status": "tentative",
+      "recurring": false,
+      "prepare": false,
+      "writable": false
+    }
+  ],
+  "truncated": false,
+  "sources": [
+    {
+      "id": "src_local000000",
+      "freshness": "fresh",
+      "last_sync_at": null
+    },
+    {
+      "id": "src_a1b2c3d4e5f6",
+      "freshness": "fresh",
+      "last_sync_at": "2026-11-20T12:55:00Z"
+    },
+    {
+      "id": "src_b2c3d4e5f601",
+      "freshness": "stale",
+      "last_sync_at": "2026-11-20T09:10:00Z"
+    }
+  ],
+  "revision": 12
+}
