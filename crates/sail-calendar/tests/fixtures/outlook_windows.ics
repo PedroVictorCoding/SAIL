@@ -1,0 +1,20 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Microsoft Corporation//Outlook 16.0 MIMEDIR//EN
+BEGIN:VEVENT
+UID:london-review@example.test
+DTSTAMP:20261102T090000Z
+DTSTART;TZID="GMT Standard Time":20261201T140000
+DTEND;TZID="GMT Standard Time":20261201T150000
+SUMMARY:Project review with a deliberately long summary that is folded
+  across two physical lines
+LOCATION:London office
+END:VEVENT
+BEGIN:VEVENT
+UID:berlin-call@example.test
+DTSTAMP:20261102T090000Z
+DTSTART;TZID="W. Europe Standard Time":20261202T090000
+DTEND;TZID="W. Europe Standard Time":20261202T100000
+SUMMARY:Berlin call
+END:VEVENT
+END:VCALENDAR
