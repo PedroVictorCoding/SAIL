@@ -426,6 +426,14 @@ impl CalendarService {
             })
             .collect();
         let mut skipped = Vec::new();
+        for warning in &parsed.warnings {
+            if warning.contains("skipped") {
+                skipped.push(SkipReason {
+                    reason: warning.clone(),
+                    count: 1,
+                });
+            }
+        }
         if parsed.truncated {
             skipped.push(SkipReason {
                 reason: "the file had more events than can be imported at once".into(),
