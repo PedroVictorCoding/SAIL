@@ -1,0 +1,49 @@
+{
+  "preview_id": "imp_0123456789ab",
+  "events": [
+    {
+      "uid": "import-lab-1@example.edu",
+      "title": "Lab report draft",
+      "time": {
+        "type": "timed",
+        "start": "2026-11-27T14:00:00Z",
+        "end": "2026-11-27T15:30:00Z",
+        "tz": "Europe/Lisbon"
+      },
+      "recurring": false,
+      "duplicate": false
+    },
+    {
+      "uid": "import-holiday-1@example.edu",
+      "title": "University holiday",
+      "time": {
+        "type": "all_day",
+        "start_date": "2026-12-01",
+        "end_date": "2026-12-02"
+      },
+      "recurring": false,
+      "duplicate": false
+    },
+    {
+      "uid": "loc_445566778899@sail.local",
+      "title": "Dentist",
+      "time": {
+        "type": "timed",
+        "start": "2026-11-25T15:00:00Z",
+        "end": "2026-11-25T16:00:00Z",
+        "tz": "Europe/Lisbon"
+      },
+      "recurring": false,
+      "duplicate": true
+    }
+  ],
+  "skipped": [
+    {
+      "reason": "missing DTSTART",
+      "count": 1
+    }
+  ],
+  "warnings": [
+    "Unknown timezone \"Mars/Olympus\" treated as Europe/Lisbon."
+  ]
+}

@@ -434,6 +434,7 @@ impl Proactive {
         observations.extend(forge_observations());
         observations.extend(self.capital_observations(now));
         observations.extend(self.github_observations(now));
+        observations.extend(crate::calendar::observations(now));
         if let Some(disk) = disk_observation() {
             observations.push(disk);
         }

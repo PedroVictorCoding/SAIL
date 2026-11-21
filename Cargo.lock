@@ -2816,6 +2816,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
+name = "rrule"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "720acfb4980b9d8a6a430f6d7a11933e701ebbeba5eee39cc9d8c5f932aaff74"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "log",
+ "regex",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3047,6 +3060,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-calendar"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "futures-util",
+ "reqwest",
+ "rrule",
+ "rusqlite",
+ "sail-common",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "sail-canvas"
 version = "0.1.0"
 dependencies = [
@@ -3152,6 +3187,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "chrono-tz",
  "futures-util",
  "image",
  "libc",
@@ -3163,6 +3199,7 @@ dependencies = [
  "sail-arena",
  "sail-arena-learn",
  "sail-bridge",
+ "sail-calendar",
  "sail-canvas",
  "sail-capital",
  "sail-common",
@@ -3196,6 +3233,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "chrono-tz",
  "rusqlite",
  "sail-common",
  "sail-pulse",

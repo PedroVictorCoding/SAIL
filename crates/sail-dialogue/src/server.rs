@@ -377,6 +377,9 @@ pub async fn run_dialogue_server_with_plans(
     );
     let tracker_routes = tracker_routes(authority());
     let moodle_routes = moodle_routes(&inference, authority());
+    // SAIL Calendar (round 28): local events + read-only ICS feeds, zero model calls.
+    let calendar_routes = crate::calendar::start(&sail_common::storage::data_path("calendar"))
+        .map(|service| crate::calendar_http::router(service, authority()));
     let capital_routes = capital_routes(authority(), &inference);
     let reader_routes = crate::reader_http::routes(authority(), services.clone());
     let music_routes = crate::music_http::routes(authority());
@@ -534,6 +537,9 @@ pub async fn run_dialogue_server_with_plans(
     }
     if let Some(routes) = tracker_routes {
         app = app.nest_service("/api/tracker", routes);
+    }
+    if let Some(routes) = calendar_routes {
+        app = app.nest_service("/api/calendar", routes);
     }
     if let Some(routes) = moodle_routes {
         app = app.nest_service("/api/moodle", routes);
@@ -966,6 +972,26 @@ async fn handle_session(socket: WebSocket, state: Arc<ServerState>, session: Str
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(_) => break,
                     },
+                }
+            }
+        }))
+    });
+    // Calendar: a revision bump tells open clients to refetch their visible window.
+    let _calendar_forwarder = crate::calendar::global().map(|service| {
+        let mut changes = service.subscribe();
+        let tx = tx.clone();
+        AbortTask(tokio::spawn(async move {
+            loop {
+                match changes.recv().await {
+                    Ok(change) => {
+                        emit_session(
+                            &tx,
+                            json!({"type":"calendar_changed","revision":change.revision,"source_id":change.source_id}),
+                        )
+                        .await
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
                 }
             }
         }))

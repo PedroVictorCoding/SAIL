@@ -335,7 +335,7 @@ impl BriefingEngine {
         })
     }
 
-    /// Stage vigilance events from Pulse.
+    /// Stage vigilance events from Pulse and the calendar.
     fn stage_events(&self, now: &DateTime<Utc>) -> Vec<BriefingEvent> {
         let mut events = Vec::new();
 
@@ -374,6 +374,8 @@ impl BriefingEngine {
                 });
             }
         }
+
+        events.extend(calendar_events(now));
 
         if events.is_empty() {
             events.push(BriefingEvent {
@@ -540,6 +542,45 @@ fn get_memory_summary() -> String {
         }
     }
     "Headroom normal".to_string()
+}
+
+/// How far ahead the briefing looks in the calendar. Fixed a priori: the greeting only
+/// mentions events within 12 h, and the briefing card shows the same horizon.
+const CALENDAR_HORIZON_HOURS: i64 = 12;
+
+/// Most calendar entries on the briefing. Fixed a priori: one screen of the card.
+const MAX_CALENDAR_EVENTS: usize = 5;
+
+/// Timed calendar occurrences starting in the next 12 h (all-day ones have no start the
+/// greeting could name). Empty when the daemon has no calendar.
+fn calendar_events(now: &DateTime<Utc>) -> Vec<BriefingEvent> {
+    crate::calendar::occurrences(*now, *now + chrono::Duration::hours(CALENDAR_HORIZON_HOURS))
+        .into_iter()
+        .filter_map(|occ| match occ.time {
+            sail_calendar::contracts::EventTime::Timed { start, .. } if start >= *now => {
+                Some((occ, start))
+            }
+            _ => None,
+        })
+        .take(MAX_CALENDAR_EVENTS)
+        .map(|(occ, start)| {
+            let mins = start.signed_duration_since(*now).num_minutes().max(0);
+            let (urgency, due_relative) = if mins <= 60 {
+                ("high", format!("Starts in {mins}m"))
+            } else {
+                ("normal", format!("Starts in {}h", mins / 60))
+            };
+            BriefingEvent {
+                id: occ.key,
+                title: occ.title,
+                due_at: start,
+                due_relative,
+                urgency: urgency.to_string(),
+                source: "Calendar".to_string(),
+                action_type: "calendar_event".to_string(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

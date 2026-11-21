@@ -27,6 +27,8 @@ sail-agents.workspace = true
 sail-arena-learn.workspace = true
 sail-continuity.workspace = true
 sail-pulse.workspace = true
+sail-calendar.workspace = true
+chrono-tz = { version = "0.10", features = ["serde"] }
 sail-discovery.workspace = true
 sail-tracker.workspace = true
 sail-moodle.workspace = true

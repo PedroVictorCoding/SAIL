@@ -1,0 +1,19 @@
+{
+  "sources": [
+    {
+      "id": "src_local000000",
+      "kind": "local",
+      "name": "SAIL calendar",
+      "color": "#496f9d",
+      "visible": true,
+      "writable": true,
+      "url_hint": null,
+      "refresh_minutes": 30,
+      "event_count": 0,
+      "last_sync_at": null,
+      "last_error": null,
+      "freshness": "fresh",
+      "truncated": false
+    }
+  ]
+}

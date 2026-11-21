@@ -1594,6 +1594,51 @@ fn mentions_capital(query: &str) -> bool {
     .any(|phrase| lower.contains(phrase))
 }
 
+/// Words that make the calendar relevant. English and Portuguese, as voice is. "Add …"
+/// counts only with a day word and without "remind" (reminders are Pulse's).
+fn mentions_calendar(query: &str) -> bool {
+    let lower = query.to_lowercase();
+    let phrases = [
+        "calendar",
+        "calendário",
+        "calendario",
+        "agenda",
+        "what's on",
+        "whats on",
+        "what is on",
+        "what do i have",
+        "what have i got",
+        "am i free",
+        "am i busy",
+        "appointment",
+        "o que tenho",
+        "tenho alguma coisa",
+        "marcação",
+        "marcacao",
+    ];
+    if phrases.iter().any(|phrase| lower.contains(phrase)) {
+        return true;
+    }
+    let days = [
+        "today",
+        "tomorrow",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "hoje",
+        "amanhã",
+        "amanha",
+    ];
+    (lower.starts_with("add ") || lower.contains(" add ") || lower.starts_with("marca "))
+        && !lower.contains("remind")
+        && !lower.contains("lembra")
+        && days.iter().any(|day| lower.contains(day))
+}
+
 /// Words that make Night Shift (overnight work on SAIL's own code) relevant. English and
 /// Portuguese, as voice is.
 fn mentions_night_shift(query: &str) -> bool {
@@ -1722,9 +1767,16 @@ fn prefers_web_read(text: &str) -> bool {
 /// whatever other words the request shares.
 fn structural_boost(query: &str, tool: &str, capital_context: bool) -> usize {
     const BOOST: usize = 10;
+    // The calendar outranks Night Shift: "what's on tonight?" asks about the owner's
+    // evening, not about overnight work, so a calendar cue also withholds Night Shift's
+    // boost (its descriptions say "tonight", which already earns it a word hit).
+    let calendar = mentions_calendar(query);
+    if tool.starts_with("calendar_") && calendar {
+        return BOOST + 1;
+    }
     // Night Shift outranks the Capital pack: "tonight, make the Capital tab …" is a build
     // request about Capital, not a finance question.
-    if tool.starts_with("nightshift_") && mentions_night_shift(query) {
+    if tool.starts_with("nightshift_") && mentions_night_shift(query) && !calendar {
         return BOOST;
     }
     if tool.starts_with("capital_") && capital_context {
@@ -2069,6 +2121,38 @@ mod schema_selection_tests {
     }
 
     #[test]
+    fn calendar_prompts_offer_calendar_tools_first() {
+        let cases: [(&str, &str); 5] = [
+            ("What's on today?", "calendar_agenda"),
+            ("What's on tonight?", "calendar_agenda"),
+            ("What do I have tomorrow?", "calendar_agenda"),
+            ("Add dentist on Tuesday at 3pm", "calendar_add"),
+            ("O que tenho amanhã?", "calendar_agenda"),
+        ];
+        for (prompt, expected) in cases {
+            let tools = super::selected_tool_definitions(&[
+                serde_json::json!({"role":"user","content":prompt}),
+            ]);
+            let names: Vec<_> = tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|t| t["function"]["name"].as_str().map(str::to_string))
+                .collect();
+            assert!(names.iter().any(|n| n == expected), "{prompt}: {names:?}");
+            let calendar = names.iter().position(|n| n.starts_with("calendar_"));
+            let night = names.iter().position(|n| n.starts_with("nightshift_"));
+            if let (Some(calendar), Some(night)) = (calendar, night) {
+                assert!(calendar < night, "{prompt}: {names:?}");
+            }
+        }
+        assert!(!super::mentions_calendar("Remind me tomorrow to call mum"));
+        assert!(!super::mentions_calendar(
+            "Tonight, make the Capital Today tab show the next dividend date"
+        ));
+    }
+
+    #[test]
     fn night_shift_prompts_offer_night_shift_tools() {
         let cases: [(&str, &str); 5] = [
             (
@@ -2167,8 +2251,8 @@ mod schema_selection_tests {
     fn all_tools_are_represented_in_definitions() {
         let all = super::tool_definitions();
         let tools = all.as_array().expect("array of tools");
-        // 57 since round 27 added the three Night Shift tools.
-        assert_eq!(tools.len(), 57);
+        // 59 since round 28 added the two calendar tools.
+        assert_eq!(tools.len(), 59);
 
         let names: Vec<_> = tools
             .iter()

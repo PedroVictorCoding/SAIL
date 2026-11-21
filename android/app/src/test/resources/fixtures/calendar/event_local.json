@@ -1,0 +1,23 @@
+{
+  "id": "loc_445566778899",
+  "source_id": "src_local000000",
+  "uid": "loc_445566778899@sail.local",
+  "recurrence_id": null,
+  "title": "Dentist",
+  "time": {
+    "type": "timed",
+    "start": "2026-11-25T15:00:00Z",
+    "end": "2026-11-25T16:00:00Z",
+    "tz": "Europe/Lisbon"
+  },
+  "location": "Av. da Republica 42",
+  "notes": "Bring insurance card and X-ray link: https://clinic.example.com/forms",
+  "status": "confirmed",
+  "rrule": null,
+  "exdates": [],
+  "repeat": "none",
+  "repeat_until": null,
+  "prepare": false,
+  "writable": true,
+  "updated_at": "2026-11-20T10:00:00Z"
+}

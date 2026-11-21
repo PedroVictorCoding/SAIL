@@ -1,0 +1,7 @@
+{
+  "time_zone": "Europe/Lisbon",
+  "first_weekday": "monday",
+  "default_view": "week",
+  "day_start_hour": 7,
+  "day_end_hour": 23
+}

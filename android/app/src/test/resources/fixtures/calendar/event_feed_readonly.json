@@ -1,0 +1,23 @@
+{
+  "id": "fe_0123456789abcdef",
+  "source_id": "src_a1b2c3d4e5f6",
+  "uid": "study-group-2026-11-23@example.com",
+  "recurrence_id": null,
+  "title": "Study group check-in",
+  "time": {
+    "type": "timed",
+    "start": "2026-11-23T09:30:00Z",
+    "end": "2026-11-23T10:30:00Z",
+    "tz": "Europe/Lisbon"
+  },
+  "location": "Library 2F",
+  "notes": "Review dynamic programming sheet 4.",
+  "status": "confirmed",
+  "rrule": null,
+  "exdates": [],
+  "repeat": "none",
+  "repeat_until": null,
+  "prepare": false,
+  "writable": false,
+  "updated_at": "2026-11-20T12:55:00Z"
+}

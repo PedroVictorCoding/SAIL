@@ -53,6 +53,7 @@ import dev.sail.app.feature.arena.CourseScreen
 import dev.sail.app.feature.arena.LessonScreen
 import dev.sail.app.feature.arena.ReviewScreen
 import dev.sail.app.feature.dialogue.DialogueScreen
+import dev.sail.app.feature.calendar.CalendarScreen
 import dev.sail.app.feature.dock.DockScreen
 import dev.sail.app.feature.nightshift.NightShiftScreen
 import dev.sail.app.feature.dock.SurfaceKind
@@ -132,10 +133,14 @@ private fun SailNavHost(nav: NavHostController, start: String) {
                 onOpenSettings = { nav.navigate(Routes.SETTINGS) },
                 onOpenDock = { nav.navigate(Routes.DOCK) },
                 onOpenNightShift = { nav.navigate(Routes.NIGHT_SHIFT) },
+                onOpenCalendar = { nav.navigate(Routes.CALENDAR) },
             )
         }
         composable(Routes.DOCK) {
             DockScreen(onExit = { nav.popBackStack() })
+        }
+        composable(Routes.CALENDAR) {
+            CalendarScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.NIGHT_SHIFT) {
             NightShiftScreen(

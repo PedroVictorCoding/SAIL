@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="/initiative.css">
 <link rel="stylesheet" href="/announce.css">
 <link rel="stylesheet" href="/nightshift.css">
+<link rel="stylesheet" href="/calendar.css">
 <link rel="stylesheet" href="/escalation-usage.css">
 <link rel="stylesheet" href="/mesh.css">
 </head>
@@ -33,12 +34,14 @@
     <span class="connection-pill" id="connection" role="status"><i></i><span>Connecting</span></span>
     <button class="icon-button" id="terminalHeaderBtn" type="button" aria-label="Open Terminal" title="Terminal (Ctrl+`)" hidden><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#terminal"></use></svg></button>
     <button class="icon-button nightshift-nav-btn" id="nightshiftNavBtn" type="button" aria-label="Open Night Shift" title="Night Shift"><span aria-hidden="true">☾</span></button>
+    <button class="icon-button calendar-nav-btn" id="calendarNavBtn" type="button" aria-label="Open Calendar" title="Calendar"><span aria-hidden="true">📅</span></button>
     <button class="icon-button" id="spacesTop" type="button" aria-label="Open Spaces" hidden><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#spaces"></use></svg></button>
     <button class="icon-button" id="settingsOpen" type="button" aria-label="Open settings" title="Settings" hidden><svg class="button-svg" aria-hidden="true"><use href="/icons.svg#settings"></use></svg></button>
   </div>
 
   <div id="homePage" hidden></div>
   <section id="nightshiftPage" class="nightshift-page" aria-label="Night Shift" hidden></section>
+  <section id="calendarPage" class="calendar-page" aria-label="Calendar" hidden></section>
   <div id="workspace" hidden></div>
   <span id="welcomeGreeting" hidden></span>
   <span id="localDateTime" hidden></span>
@@ -1929,6 +1932,7 @@
 <script src="/presence.js" defer></script>
 <script src="/announce.js" defer></script>
 <script src="/nightshift.js" defer></script>
+<script src="/calendar.js" defer></script>
 <script src="/voice.js" defer></script>
 <script src="/forge.js" defer></script>
 <script src="/approvals.js" defer></script>
