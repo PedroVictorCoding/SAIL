@@ -3327,6 +3327,8 @@ dependencies = [
  "bytes",
  "chrono",
  "futures-util",
+ "hyper",
+ "hyper-util",
  "nvml-wrapper",
  "rcgen",
  "reqwest",
