@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "mode": "offload",
+  "offloaded": 12,
+  "fell_back": 0,
+  "heavy": {
+    "model": "gpt-oss-120b-MXFP4",
+    "state": { "state": "running" },
+    "worker": "windows",
+    "host_ram_bytes": 6442450944,
+    "host_vram_bytes": 2684354560,
+    "remote_bytes": 55834574848,
+    "tokens_per_second": 7.4,
+    "job": { "title": "Night Shift: Arena course outline", "since": "2026-11-22T01:14:00Z" }
+  },
+  "workers": [
+    {
+      "name": "windows",
+      "address": "192.168.1.64:7710",
+      "state": "ready",
+      "os": "windows x86_64",
+      "max_parallel": 1,
+      "active": 0,
+      "completed": 12,
+      "failed": 0,
+      "last_rtt_ms": 2,
+      "last_seen": "2026-11-22T01:15:00Z",
+      "compute": {
+        "mode": { "mode": "auto" },
+        "state": { "state": "lending" },
+        "window": { "start": "01:00", "end": "08:00" },
+        "devices": [
+          { "name": "Vulkan0", "description": "AMD Radeon RX 7800 XT", "lend_bytes": 16106127360 },
+          { "name": "CPU", "description": "AMD Ryzen 7 7800X3D", "lend_bytes": 41231686041 }
+        ],
+        "build": "b12014",
+        "hibernated": [
+          { "name": "chrome.exe", "processes": 6, "released_bytes": 3221225472, "since": "2026-11-22T01:00:05Z" }
+        ],
+        "tunnels": 1
+      }
+    }
+  ]
+}

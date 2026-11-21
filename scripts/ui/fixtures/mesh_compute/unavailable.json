@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "mode": "offload",
+  "offloaded": 8,
+  "fell_back": 0,
+  "heavy": null,
+  "workers": [
+    {
+      "name": "windows",
+      "address": "192.168.1.64:7710",
+      "state": "ready",
+      "os": "windows x86_64",
+      "max_parallel": 1,
+      "active": 0,
+      "completed": 8,
+      "failed": 0,
+      "last_rtt_ms": 2,
+      "last_seen": "2026-11-22T01:25:00Z",
+      "compute": {
+        "mode": { "mode": "auto" },
+        "state": { "state": "unavailable", "reason": "ggml-rpc-server exited (code 1)" },
+        "window": { "start": "01:00", "end": "08:00" },
+        "devices": [],
+        "build": null,
+        "hibernated": [],
+        "tunnels": 0
+      }
+    }
+  ]
+}

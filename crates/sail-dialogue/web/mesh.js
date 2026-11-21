@@ -401,12 +401,143 @@
 
     const actions = el('div', { class: 'mesh-worker-actions' }, toggleBtn, forgetControl);
 
+    const children = [top, details];
+    if (w.compute) {
+      children.push(renderComputeCard(w, isBusy));
+    }
+    children.push(actions);
+
     return el(
       'li',
       { class: 'mesh-worker-row', 'data-worker-name': w.name },
-      top,
-      details,
-      actions
+      children
+    );
+  }
+
+  function formatGiB(bytes) {
+    if (bytes === null || bytes === undefined) return '—';
+    const gib = Number(bytes) / (1024 * 1024 * 1024);
+    return `${gib >= 10 ? gib.toFixed(0) : gib.toFixed(1)} GB`;
+  }
+
+  function hoursFromNowIso(hours) {
+    return new Date(Date.now() + hours * 3600 * 1000).toISOString();
+  }
+
+  function nextWindowEndIso(win) {
+    const [eh, em] = String(win?.end || '08:00').split(':').map(Number);
+    const now = new Date();
+    const target = new Date(now);
+    target.setHours(eh || 8, em || 0, 0, 0);
+    if (target <= now) target.setDate(target.getDate() + 1);
+    return target.toISOString();
+  }
+
+  function computeStateSummary(w) {
+    const c = w.compute;
+    const st = c.state || {};
+    const totalLent = (c.devices || []).reduce((acc, d) => acc + (Number(d.lend_bytes) || 0), 0);
+    switch (st.state) {
+      case 'lending': {
+        const heavyMatch = lastStatus?.heavy && lastStatus.heavy.worker === w.name ? lastStatus.heavy : null;
+        const tps = heavyMatch && heavyMatch.tokens_per_second !== null && heavyMatch.tokens_per_second !== undefined
+          ? ` · ${heavyMatch.model} · ${heavyMatch.tokens_per_second} tok/s`
+          : '';
+        return `Lending ${formatGiB(totalLent)}${tps}`;
+      }
+      case 'loading':
+        return 'Loading RPC server…';
+      case 'paused':
+        return 'Paused by you';
+      case 'outside_window':
+        return `Outside lending hours (${c.window?.start || '01:00'}–${c.window?.end || '08:00'})`;
+      case 'resting':
+        return `Resting — ${st.reason || 'busy'}`;
+      case 'unavailable':
+        return `Unavailable — ${st.reason || 'error'}`;
+      default:
+        return String(st.state || '—');
+    }
+  }
+
+  function renderComputeCard(w, isBusy) {
+    const c = w.compute;
+    const modeObj = c.mode || { mode: 'auto' };
+    const header = el(
+      'div',
+      { class: 'mesh-compute-head' },
+      el('strong', { class: 'mesh-compute-title', text: 'Compute' }),
+      el('span', { class: 'mesh-pill', text: computeStateSummary(w) }),
+      c.build ? el('span', { class: 'mesh-compute-meta', text: `build ${c.build}` }) : null
+    );
+
+    const devicesLine = (c.devices || []).length
+      ? el('p', {
+          class: 'mesh-compute-meta',
+          text: `Devices: ${c.devices.map((d) => `${d.description} (${formatGiB(d.lend_bytes)})`).join(', ')} · ${c.tunnels || 0} tunnel(s)`,
+        })
+      : null;
+
+    const hibList = (c.hibernated || []).length
+      ? el(
+          'p',
+          { class: 'mesh-compute-hibernated' },
+          `Hibernated apps: ${c.hibernated
+            .map((a) => `${a.name} (${a.processes} procs, ${formatGiB(a.released_bytes)})`)
+            .join(', ')}`
+        )
+      : null;
+
+    const btn = (label, mode, active) =>
+      el('button', {
+        type: 'button',
+        class: `quiet-button${active ? ' active' : ''}`,
+        text: label,
+        disabled: isBusy,
+        onclick: () => setLendMode(w.name, mode),
+      });
+
+    const actions = el(
+      'div',
+      { class: 'mesh-compute-actions' },
+      btn('Pause', { mode: 'pause' }, modeObj.mode === 'pause'),
+      btn('Lend 1 h', { mode: 'play', until: hoursFromNowIso(1) }, false),
+      btn('Lend 3 h', { mode: 'play', until: hoursFromNowIso(3) }, false),
+      btn(`Until ${c.window?.end || '08:00'}`, { mode: 'play', until: nextWindowEndIso(c.window) }, modeObj.mode === 'play'),
+      btn('Automatic', { mode: 'auto' }, modeObj.mode === 'auto')
+    );
+
+    return el('div', { class: 'mesh-compute-card' }, header, devicesLine, hibList, actions);
+  }
+
+  function renderHeavyCard(heavy) {
+    const st = heavy.state || {};
+    let stateLabel = '—';
+    if (st.state === 'running') stateLabel = 'Running';
+    else if (st.state === 'starting') stateLabel = 'Starting…';
+    else if (st.state === 'stopped') stateLabel = `Stopped — ${st.reason || 'idle'}`;
+    else if (st.state === 'failed') stateLabel = `Failed — ${st.reason || 'error'}`;
+
+    const speed = heavy.tokens_per_second !== null && heavy.tokens_per_second !== undefined
+      ? `${heavy.tokens_per_second} tok/s`
+      : '—';
+
+    return el(
+      'div',
+      { class: 'mesh-heavy-card', id: 'meshHeavyCard' },
+      el(
+        'div',
+        { class: 'mesh-compute-head' },
+        el('strong', { text: `Heavy model: ${heavy.model}` }),
+        el('span', { class: 'mesh-pill', text: stateLabel })
+      ),
+      el('p', {
+        class: 'mesh-compute-meta',
+        text: `Worker: ${heavy.worker} · Speed: ${speed} · Host RAM ${formatGiB(heavy.host_ram_bytes)} · Host VRAM ${formatGiB(heavy.host_vram_bytes)} · PC ${formatGiB(heavy.remote_bytes)}`,
+      }),
+      heavy.job
+        ? el('p', { class: 'mesh-compute-meta', text: `Job: ${heavy.job.title}` })
+        : null
     );
   }
 
@@ -458,6 +589,9 @@
           text: `${offloaded} requests ran on workers · ${fellBack} fell back to this machine`,
         })
       );
+      if (lastStatus.heavy) {
+        children.push(renderHeavyCard(lastStatus.heavy));
+      }
 
       const workers = Array.isArray(lastStatus.workers) ? lastStatus.workers : [];
       if (workers.length === 0) {
@@ -631,6 +765,29 @@
     }
   }
 
+  async function setLendMode(name, mode) {
+    if (pendingWorkerAction) return;
+    pendingWorkerAction = name;
+    renderStatus();
+    try {
+      const res = await apiFetch(`/workers/${encodeURIComponent(name)}/lend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      if (lastStatus && res && res.worker) {
+        const list = (lastStatus.workers || []).map((w) => (w.name === name ? res.worker : w));
+        lastStatus = { ...lastStatus, workers: list };
+      }
+      bannerMessage = null;
+      pendingWorkerAction = null;
+      renderStatus();
+    } catch (err) {
+      pendingWorkerAction = null;
+      applyError(err);
+    }
+  }
+
   async function forgetWorker(name) {
     if (pendingWorkerAction) return;
     pendingWorkerAction = name;
@@ -645,6 +802,29 @@
           ...lastStatus,
           workers: lastStatus.workers.filter((w) => w.name !== name),
         };
+      }
+      bannerMessage = null;
+      pendingWorkerAction = null;
+      renderStatus();
+    } catch (err) {
+      pendingWorkerAction = null;
+      applyError(err);
+    }
+  }
+
+  async function setLendMode(name, mode) {
+    if (pendingWorkerAction) return;
+    pendingWorkerAction = name;
+    renderStatus();
+    try {
+      const res = await apiFetch(`/workers/${encodeURIComponent(name)}/lend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      if (lastStatus && res && res.worker) {
+        const list = (lastStatus.workers || []).map((w) => (w.name === name ? res.worker : w));
+        lastStatus = { ...lastStatus, workers: list };
       }
       bannerMessage = null;
       pendingWorkerAction = null;

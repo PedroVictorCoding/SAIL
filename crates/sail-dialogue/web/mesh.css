@@ -370,3 +370,47 @@
     border: 1px solid ButtonText;
   }
 }
+
+.mesh-heavy-card,
+.mesh-compute-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / .03);
+  border: 1px solid var(--sail-glass-border, rgb(222 238 255 / .12));
+  min-width: 0;
+}
+
+.mesh-compute-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mesh-compute-title {
+  font-size: 12.5px;
+  color: var(--sail-text, #f2f5fa);
+}
+
+.mesh-compute-meta,
+.mesh-compute-hibernated {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--sail-text-muted, #aeb8c8);
+  overflow-wrap: anywhere;
+}
+
+.mesh-compute-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mesh-compute-actions .quiet-button.active {
+  border-color: rgb(140 185 240 / .5);
+  background: rgb(73 111 157 / .35);
+}
