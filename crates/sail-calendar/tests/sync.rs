@@ -22,10 +22,15 @@ fn new_changed_and_removed_events_are_reported() {
     let delta = diff(&old, &new, now(), chrono_tz::Europe::Lisbon);
     assert_eq!(delta.upserts.len(), 2);
     assert_eq!(delta.removed, vec!["fe_b"]);
-    assert_eq!(delta.changes.len(), 1);
+    // A moved, and B vanished from the feed inside the window: Google and Outlook drop
+    // deleted events instead of marking them CANCELLED, so that is a cancellation.
+    assert_eq!(delta.changes.len(), 2);
     assert_eq!(delta.changes[0].kind, FeedChangeKind::Moved);
     assert_eq!(delta.changes[0].old_start, Some(at(25, 9, 0)));
     assert_eq!(delta.changes[0].new_start, Some(at(27, 9, 0)));
+    assert_eq!(delta.changes[1].event_id, "fe_b");
+    assert_eq!(delta.changes[1].kind, FeedChangeKind::Cancelled);
+    assert_eq!(delta.changes[1].old_start, Some(at(26, 9, 0)));
 }
 
 #[test]

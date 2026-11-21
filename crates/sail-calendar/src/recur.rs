@@ -39,7 +39,10 @@ pub fn expand(
 
     let mut occurrences = Vec::new();
     let mut truncated = false;
-    for base in bases {
+    let mut consumed: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    for base in &bases {
+        let base = *base;
         if base.status == EventStatus::Cancelled && !include_cancelled {
             continue;
         }
@@ -73,6 +76,9 @@ pub fn expand(
             let override_event = overrides
                 .get(&(base.uid.clone(), key_part.clone()))
                 .cloned();
+            if override_event.is_some() {
+                consumed.insert((base.uid.clone(), key_part.clone()));
+            }
             let (template, instance_time, status) = match override_event {
                 Some(override_event) => {
                     if override_event.status == EventStatus::Cancelled && !include_cancelled {
@@ -116,6 +122,44 @@ pub fn expand(
         if occurrences.len() > MAX_OCCURRENCES {
             break;
         }
+    }
+    // An override whose original start lies outside the window was never reached by
+    // the rule walk above, but its new time may fall inside the window (a Monday
+    // lecture moved to Tuesday, viewed on Tuesday). Emit those directly.
+    let mut leftovers: Vec<(&(String, String), &Event)> = overrides
+        .iter()
+        .filter(|(key, _)| !consumed.contains(*key))
+        .collect();
+    leftovers.sort_by(|a, b| a.0.cmp(b.0));
+    for ((uid, key_part), override_event) in leftovers {
+        if occurrences.len() > MAX_OCCURRENCES {
+            truncated = true;
+            break;
+        }
+        let Some(base) = bases.iter().find(|base| &base.uid == uid) else {
+            continue;
+        };
+        if base.status == EventStatus::Cancelled && !include_cancelled {
+            continue;
+        }
+        if override_event.status == EventStatus::Cancelled && !include_cancelled {
+            continue;
+        }
+        if !overlaps(&override_event.time, start, end, owner_tz) {
+            continue;
+        }
+        occurrences.push(Occurrence {
+            key: format!("{}@{}", base.id, key_part),
+            event_id: base.id.clone(),
+            source_id: base.source_id.clone(),
+            title: override_event.title.clone(),
+            time: override_event.time.clone(),
+            location: override_event.location.clone(),
+            status: override_event.status,
+            recurring: base.rrule.is_some(),
+            prepare: base.prepare || override_event.prepare,
+            writable: base.writable,
+        });
     }
     occurrences.sort_by(|a, b| {
         occurrence_start(&a.time, owner_tz)
@@ -325,8 +369,15 @@ fn start_key(start: &DateTime<Utc>, owner_tz: Tz) -> String {
     start.to_rfc3339()
 }
 
-fn recurrence_key(event: &Event, original: &str, owner_tz: Tz) -> Option<String> {
-    let _ = (event, owner_tz);
+/// The occurrence key an override replaces. A RECURRENCE-ID written with a TZID is
+/// stored without its parameter, so a floating value is read in the override's own
+/// zone (its DTSTART's TZID, which RFC 5545 requires to match), and only then the
+/// owner's zone.
+pub(crate) fn recurrence_key(event: &Event, original: &str, owner_tz: Tz) -> Option<String> {
+    let owner_tz = match &event.time {
+        EventTime::Timed { tz, .. } => tz.parse::<Tz>().unwrap_or(owner_tz),
+        EventTime::AllDay { .. } => owner_tz,
+    };
     if let Ok(datetime) = DateTime::parse_from_rfc3339(original) {
         return Some(datetime.with_timezone(&Utc).to_rfc3339());
     }

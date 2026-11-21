@@ -82,6 +82,9 @@ impl CalendarService {
         if feeds >= MAX_SOURCES {
             return Err(CalendarError::TooManySources);
         }
+        if let Some(color) = &feed.color {
+            validate_color(color)?;
+        }
         let url = normalize_feed_url(&feed.url)?;
         let text = match self.fetcher.fetch(&url, None, None).await? {
             FetchOutcome::NotModified => {
@@ -180,9 +183,10 @@ impl CalendarService {
             .await
         {
             Ok(FetchOutcome::NotModified) => {
+                let recovered = source.last_error.is_some();
                 source.last_sync_at = Some(now);
                 source.last_error = None;
-                self.store.save_source(&source, None)?;
+                self.save_after_sync(&source, recovered)?;
                 Ok(source)
             }
             Ok(FetchOutcome::Body {
@@ -199,18 +203,33 @@ impl CalendarService {
                     .apply_feed(id, &delta.upserts, &delta.removed, &delta.changes)?;
                 self.store
                     .set_feed_http(id, etag.as_deref(), last_modified.as_deref())?;
+                let visible_change = source.last_error.is_some()
+                    || source.event_count != parsed.events.len() as u32
+                    || source.truncated != parsed.truncated;
                 source.event_count = parsed.events.len() as u32;
                 source.last_sync_at = Some(now);
                 source.last_error = None;
                 source.truncated = parsed.truncated;
-                self.store.save_source(&source, None)?;
+                self.save_after_sync(&source, visible_change)?;
                 Ok(source)
             }
             Err(error) => {
-                source.last_error = Some(plain_fetch_error(&error));
-                self.store.save_source(&source, None)?;
+                let message = plain_fetch_error(&error);
+                let changed = source.last_error.as_deref() != Some(message.as_str());
+                source.last_error = Some(message);
+                self.save_after_sync(&source, changed)?;
                 Err(error)
             }
+        }
+    }
+
+    /// Persist a source after a sync; bump the revision only when what the owner sees
+    /// (an error appearing or clearing, the event count) changed.
+    fn save_after_sync(&self, source: &Source, visible: bool) -> Result<(), CalendarError> {
+        if visible {
+            self.store.save_source(source, None)
+        } else {
+            self.store.record_sync(source)
         }
     }
 

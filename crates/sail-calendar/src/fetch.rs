@@ -44,11 +44,39 @@ pub struct ReqwestFetcher {
     client: reqwest::Client,
 }
 
+/// Resolver used for the actual connection. `check_url` runs first for a clear
+/// `BlockedAddress` error, but the connection resolves the name again; filtering here
+/// too closes the DNS-rebinding gap (a host that answers public first, then 127.0.0.1).
+struct GuardedResolver;
+
+impl reqwest::dns::Resolve for GuardedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let found: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .filter(|address| check_addr(address.ip()).is_ok())
+                .collect();
+            if found.is_empty() {
+                let refused = std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "no public address for the calendar host",
+                );
+                return Err(Box::new(refused) as Box<dyn std::error::Error + Send + Sync>);
+            }
+            Ok(Box::new(found.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 impl ReqwestFetcher {
     pub fn new() -> Result<Self, CalendarError> {
         let client = reqwest::Client::builder()
             .timeout(FETCH_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
+            // A proxy would resolve the feed host itself, outside the guard.
+            .no_proxy()
+            .dns_resolver(std::sync::Arc::new(GuardedResolver))
             .build()
             .map_err(|error| CalendarError::FetchFailed(error.to_string()))?;
         Ok(Self { client })

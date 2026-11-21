@@ -63,8 +63,11 @@ fn every_calendar_client_fixture_matches_the_rust_contracts() {
                     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
                 assert!(!body.sources.is_empty(), "{name}: no sources");
                 for source in &body.sources {
+                    // The local source's id is the fixed literal from the contract;
+                    // every other source is "src_" + 12 hex.
                     assert!(
-                        source.id.starts_with("src_") && source.id.len() == 16,
+                        source.id == "src_local000000"
+                            || (source.id.starts_with("src_") && source.id.len() == 16),
                         "{name}: bad source id"
                     );
                     assert!(source.refresh_minutes >= 15 && source.refresh_minutes <= 1_440);

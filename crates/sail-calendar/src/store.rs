@@ -116,6 +116,20 @@ impl Store {
         Ok(Some(source))
     }
 
+    /// Save a source's sync bookkeeping (last sync time, HTTP validators) without a
+    /// revision bump, so a refresh that changed nothing does not make clients refetch.
+    pub(crate) fn record_sync(&self, source: &Source) -> Result<(), CalendarError> {
+        let conn = self.lock()?;
+        let data = serde_json::to_string(source).map_err(storage)?;
+        conn.execute(
+            "INSERT INTO sources (id, data) VALUES (?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+            params![source.id, data],
+        )
+        .map_err(storage)?;
+        Ok(())
+    }
+
     pub(crate) fn save_source(
         &self,
         source: &Source,
@@ -303,8 +317,14 @@ impl Store {
         removed: &[String],
         changes: &[FeedChange],
     ) -> Result<(), CalendarError> {
+        if upserts.is_empty() && removed.is_empty() && changes.is_empty() {
+            // Nothing the clients can see changed: no write, no revision bump.
+            return Ok(());
+        }
         {
-            let conn = self.lock()?;
+            let mut guard = self.lock()?;
+            // One transaction per sync: autocommit would fsync once per event.
+            let conn = guard.transaction().map_err(storage)?;
             for event in upserts {
                 let data = serde_json::to_string(event).map_err(storage)?;
                 conn.execute(
@@ -329,6 +349,7 @@ impl Store {
             let cutoff = (Utc::now() - CHANGE_RETENTION).to_rfc3339();
             conn.execute("DELETE FROM changes WHERE observed_at < ?1", [cutoff])
                 .map_err(storage)?;
+            conn.commit().map_err(storage)?;
         }
         self.bump(Some(source_id))
     }
