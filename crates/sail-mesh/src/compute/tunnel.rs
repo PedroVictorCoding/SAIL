@@ -387,6 +387,10 @@ struct TlsStream {
     socket: TcpStream,
     out: Vec<u8>,
     out_offset: usize,
+    /// TLS bytes read from the socket but not yet fed to rustls. Keeping them here lets the
+    /// plaintext buffer drain before another record is decrypted (rustls caps it at 16 KiB).
+    pending: Vec<u8>,
+    pending_offset: usize,
 }
 
 impl TlsStream {
@@ -396,6 +400,8 @@ impl TlsStream {
             socket,
             out: Vec::new(),
             out_offset: 0,
+            pending: Vec::new(),
+            pending_offset: 0,
         }
     }
 
@@ -443,6 +449,30 @@ impl TlsStream {
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Ready(Ok(())) => {}
             }
+            if self.pending_offset < self.pending.len() {
+                let read = {
+                    let mut slice = &self.pending[self.pending_offset..];
+                    self.connection.read_tls(&mut slice)
+                };
+                match read {
+                    Ok(0) => {
+                        self.pending.clear();
+                        self.pending_offset = 0;
+                        continue;
+                    }
+                    Ok(read) => self.pending_offset += read,
+                    Err(e) => return Poll::Ready(Err(e)),
+                }
+                if self.pending_offset == self.pending.len() {
+                    self.pending.clear();
+                    self.pending_offset = 0;
+                }
+                if let Err(e) = self.connection.process_new_packets() {
+                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, e)));
+                }
+                // Back to the top: deliver any plaintext before decrypting another record.
+                continue;
+            }
             let mut chunk = [0u8; TLS_READ_CHUNK];
             let mut filled = ReadBuf::new(&mut chunk);
             match Pin::new(&mut self.socket).poll_read(cx, &mut filled) {
@@ -454,20 +484,8 @@ impl TlsStream {
             if data.is_empty() {
                 return Poll::Ready(Ok(0));
             }
-            let mut offset = 0;
-            while offset < data.len() {
-                let read = match self.connection.read_tls(&mut &data[offset..]) {
-                    Ok(0) => break,
-                    Ok(read) => read,
-                    Err(e) => return Poll::Ready(Err(e)),
-                };
-                offset += read;
-                // Drop the plaintext buffer's used bytes before feeding more: rustls caps
-                // its receive deframer at one maximum-size record.
-                if let Err(e) = self.connection.process_new_packets() {
-                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, e)));
-                }
-            }
+            self.pending.extend_from_slice(data);
+            self.pending_offset = 0;
         }
     }
 }
