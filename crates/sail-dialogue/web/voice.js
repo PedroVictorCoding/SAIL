@@ -124,7 +124,7 @@ function handleVoiceMessage(data) {
         learningSession = data.session_id; learningEnabled = data.learning !== false; renderLearning();
         ambient({ type:'snapshot', session:data.session_id, epoch:0, listenOnly:false });
         cancelVisualCapture();
-        document.getElementById('conversation').replaceChildren(); responseNode = null; chatFollow.resume();
+        document.getElementById('conversation').replaceChildren(); window.SailAnnounce?.clear?.(); responseNode = null; chatFollow.resume();
         applyControl(data.control); announceClientSpeech(); break;
       case 'live_context_state':
         discardListeningCapture(); liveContextReplyPending = false;
@@ -315,11 +315,13 @@ function setTurnDetection() {
   if (!input.checkValidity()) { input.reportValidity(); return; }
   sendAction('set_turn_detection', { settings:{ mode:document.getElementById('turnModeSelect').value, pause_ms:Math.round(Number(input.value)*1000) } });
 }
-function appendConversation(role, text) {
+function appendConversation(role, textOrContent) {
   const node = document.createElement('article'); node.className = `message message-${role.toLowerCase()}`;
   const label = document.createElement('span'); label.className = 'message-label'; label.textContent = role;
   const content = document.createElement('div'); content.className = 'message-body';
-  node.append(label, content); setMessageText(node, text);
+  node.append(label, content);
+  if (typeof textOrContent === 'string') setMessageText(node, textOrContent);
+  else content.append(textOrContent);
   if (role === 'You') chatFollow.resume();
   document.getElementById('conversation').append(node); return node;
 }
