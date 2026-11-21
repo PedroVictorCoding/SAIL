@@ -258,9 +258,8 @@ impl ComputeSupervisor {
     async fn stop_lending(&mut self) {
         self.gate.set(false);
         self.stop_rpc().await;
-        if let Some(hibernator) = self.hibernator.as_mut()
-            && !hibernator.hibernated().is_empty()
-        {
+        if let Some(hibernator) = self.hibernator.as_mut() {
+            // Idempotent: an empty journal resumes nothing.
             let _ = hibernator.resume_all();
         }
         self.watchdog_deadline = None;
