@@ -404,6 +404,7 @@ async fn hello(shared: &Shared) -> MeshHello {
         model,
         upstream_error,
         busy: shared.gate.busy(),
+        compute: None,
     }
 }
 

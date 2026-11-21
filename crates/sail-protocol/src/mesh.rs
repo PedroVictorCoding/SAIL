@@ -33,6 +33,10 @@ pub struct MeshHello {
     /// never send it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub busy: Option<MeshBusy>,
+    /// Present only when the worker was started with `--compute`: how it lends its compute
+    /// to the host. Older workers never send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute: Option<MeshCompute>,
 }
 
 /// Why a worker refuses new work for now (`MeshHello::busy`).
@@ -129,3 +133,96 @@ pub struct MeshStatus {
     /// Requests that were tried on a worker, failed before any output, and ran on the host.
     pub fell_back: u64,
 }
+
+/// How the owner set lending. serde, internally tagged:
+/// `{"mode":"auto"}` | `{"mode":"play","until":"<RFC3339 UTC>"}` |
+/// `{"mode":"play","until":null}` | `{"mode":"pause"}`.
+/// `play` with `until: null` lends until the owner says otherwise.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum LendMode {
+    Auto,
+    Play { until: Option<String> },
+    Pause,
+}
+
+/// What the worker is doing with its compute now. serde, internally tagged:
+/// `{"state":"lending"}` | `{"state":"loading"}` | `{"state":"paused"}` |
+/// `{"state":"outside_window","next_start":"<RFC3339 UTC>"}` |
+/// `{"state":"resting","reason":"REAPER is open","full":true}` |
+/// `{"state":"unavailable","reason":"ggml-rpc-server exited (code 1)"}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum LendState {
+    /// RPC server up and the tunnel accepting.
+    Lending,
+    /// Decided to lend; RPC server starting or hibernation in progress.
+    Loading,
+    /// Owner said pause.
+    Paused,
+    /// Auto mode, outside the lending window.
+    OutsideWindow { next_start: String },
+    /// Rest rules say step aside (game, music app, busy PC). `full` as in `MeshBusy`.
+    Resting { reason: String, full: bool },
+    /// Compute is configured but cannot run (binary missing, crashed, wrong build).
+    Unavailable { reason: String },
+}
+
+/// Local daily window in the worker's own time zone, "HH:MM". `start > end` wraps midnight
+/// (01:00–08:00 does not wrap; 22:00–07:00 does). `start == end` means always.
+/// Owner decision: 01:00–08:00.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LendWindow {
+    pub start: String,
+    pub end: String,
+}
+
+/// One ggml device the RPC server exposes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComputeDevice {
+    /// "Vulkan0" | "CPU" …
+    pub name: String,
+    /// Human description, e.g. "AMD Radeon RX 7800 XT".
+    pub description: String,
+    /// Bytes the owner allows the host to use on this device (`--lend-vram-gib`/`--lend-ram-gib`).
+    pub lend_bytes: u64,
+}
+
+/// One hibernated program, for display. Never includes command lines or window titles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HibernatedApp {
+    /// Executable file name, e.g. "chrome.exe".
+    pub name: String,
+    pub processes: u32,
+    /// Working-set bytes released when trimmed (0 on Unix).
+    pub released_bytes: u64,
+    /// RFC3339 UTC.
+    pub since: String,
+}
+
+/// `MeshHello.compute`: present only when the worker was started with `--compute`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeshCompute {
+    pub mode: LendMode,
+    pub state: LendState,
+    pub window: LendWindow,
+    pub devices: Vec<ComputeDevice>,
+    /// llama.cpp build of the RPC server, e.g. "b12014". The host refuses a mismatch.
+    pub build: Option<String>,
+    pub hibernated: Vec<HibernatedApp>,
+    /// Connections open through the tunnel now.
+    pub tunnels: u32,
+}
+
+/// Body of `POST /mesh/v1/lend` (host → worker).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LendRequest {
+    pub mode: LendMode,
+}
+
+/// Route of the compute tunnel (HTTP Upgrade `sail-rpc/1`).
+pub const COMPUTE_ROUTE: &str = "/mesh/v1/compute";
+/// Route the host uses to set the lend mode.
+pub const LEND_ROUTE: &str = "/mesh/v1/lend";
+/// Upgrade protocol token.
+pub const COMPUTE_UPGRADE: &str = "sail-rpc/1";
