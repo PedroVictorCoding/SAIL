@@ -132,11 +132,11 @@ impl ComputeHandle {
 }
 
 /// File the `status` command reads; written by the supervisor each tick.
-pub(crate) const STATUS_FILE: &str = "status.json";
+pub const STATUS_FILE: &str = "status.json";
 
 /// Shape of `status.json`: the snapshot plus when it was written.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct StatusFile {
+pub struct StatusFile {
     /// RFC3339 UTC.
     pub at: String,
     pub compute: MeshCompute,

@@ -14,7 +14,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
-use sail_protocol::mesh::{COMPUTE_ROUTE, MESH_VERSION, MeshHello, MeshModel};
+use sail_protocol::mesh::{
+    COMPUTE_ROUTE, LEND_ROUTE, LendRequest, MESH_VERSION, MeshHello, MeshModel,
+};
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
@@ -293,6 +295,23 @@ async fn handle(State(shared): State<Arc<Shared>>, request: Request) -> Response
                 StatusCode::NOT_FOUND,
                 "compute is not configured on this worker",
             ),
+        };
+    }
+    if path == LEND_ROUTE && request.method() == Method::POST {
+        let Some(compute) = shared.compute.clone() else {
+            return error(StatusCode::CONFLICT, "no_compute");
+        };
+        let body = match axum::body::to_bytes(request.into_body(), MAX_BODY_BYTES).await {
+            Ok(body) => body,
+            Err(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, "request body too large"),
+        };
+        let request = match serde_json::from_slice::<LendRequest>(&body) {
+            Ok(request) => request,
+            Err(_) => return error(StatusCode::BAD_REQUEST, "expected {\"mode\": ...}"),
+        };
+        return match compute.set_mode(request.mode) {
+            Ok(snapshot) => axum::Json(snapshot).into_response(),
+            Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         };
     }
     if path == HELLO_ROUTE && request.method() == Method::GET {

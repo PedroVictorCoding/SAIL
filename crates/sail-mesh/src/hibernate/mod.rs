@@ -55,6 +55,9 @@ pub fn recovery_plan(
 }
 
 /// Owns the OS control, the owner's app list and the journal.
+// K0 compile shim: the fields are read by the G1 platform implementation that replaces
+// this module; keep this attribute until then.
+#[allow(dead_code)]
 pub struct Hibernator {
     control: Box<dyn ProcessControl>,
     data_dir: PathBuf,

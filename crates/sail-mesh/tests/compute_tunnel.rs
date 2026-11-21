@@ -9,7 +9,8 @@ use sail_mesh::{
     worker::{WorkerConfig, serve_with_compute},
 };
 use sail_protocol::mesh::{
-    COMPUTE_ROUTE, COMPUTE_UPGRADE, ComputeDevice, LendWindow, MESH_VERSION,
+    COMPUTE_ROUTE, COMPUTE_UPGRADE, ComputeDevice, LEND_ROUTE, LendMode, LendWindow, MESH_VERSION,
+    MeshCompute,
 };
 use std::{
     net::SocketAddr,
@@ -55,7 +56,7 @@ struct TestWorker {
     fingerprint: String,
     secret: String,
     gate: LendGate,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     stop: Option<oneshot::Sender<()>>,
     _task: tokio::task::JoinHandle<()>,
 }
@@ -137,7 +138,7 @@ async fn start_worker(rpc_port: u16, lending: bool) -> TestWorker {
         fingerprint,
         secret,
         gate: worker_gate,
-        _dir: dir,
+        dir,
         stop: Some(stop),
         _task: task,
     }
@@ -464,4 +465,48 @@ async fn a_zero_byte_upgrade_does_not_hurt_the_worker() {
         .expect("hello JSON");
     assert_eq!(hello.version, MESH_VERSION);
     assert!(hello.compute.is_some(), "the compute snapshot is reported");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn post_lend_writes_lend_json_and_returns_the_snapshot() {
+    let (rpc, _connections) = start_echo().await;
+    let worker = start_worker(rpc.port(), true).await;
+    let client = pinned_client(&worker.fingerprint, &worker.secret, Duration::from_secs(5))
+        .expect("pinned client");
+    let response = client
+        .post(format!("https://{}{LEND_ROUTE}", worker.address))
+        .json(&serde_json::json!({"mode": {"mode": "pause"}}))
+        .send()
+        .await
+        .expect("post lend");
+    assert_eq!(response.status(), 200);
+    let snapshot: MeshCompute = response.json().await.expect("compute snapshot");
+    assert_eq!(snapshot.mode, LendMode::Pause);
+
+    let saved: LendMode = serde_json::from_slice(
+        &std::fs::read(worker.dir.path().join("lend.json")).expect("lend.json"),
+    )
+    .expect("saved mode");
+    assert_eq!(saved, LendMode::Pause);
+
+    let hello = client
+        .get(format!("https://{}/mesh/v1/hello", worker.address))
+        .send()
+        .await
+        .expect("hello")
+        .json::<sail_protocol::mesh::MeshHello>()
+        .await
+        .expect("hello JSON");
+    assert_eq!(
+        hello.compute.expect("compute snapshot").mode,
+        LendMode::Pause
+    );
+
+    let malformed = client
+        .post(format!("https://{}{LEND_ROUTE}", worker.address))
+        .body("[]")
+        .send()
+        .await
+        .expect("malformed lend");
+    assert_eq!(malformed.status(), 400);
 }

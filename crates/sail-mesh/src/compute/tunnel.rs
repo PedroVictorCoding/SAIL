@@ -40,17 +40,35 @@ use tokio::{
 /// supervisor re-evaluates lending every 2 s, and the window edge can be up to a minute away.
 const LENDING_RETRY_AFTER_SECS: u32 = 60;
 
-/// How long a 101 response waits for the peer to finish the HTTP upgrade.
+/// How long a 101 response waits for the peer to finish the HTTP upgrade. Fixed a priori:
+/// a local upgrade completes as soon as the 101 leaves the socket.
 const UPGRADE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long the handler waits for the loopback RPC server before answering 502.
+/// How long the handler waits for the loopback RPC server before answering 502. Fixed a
+/// priori: this is a local TCP connect.
 const RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// How long the host waits for the worker's TLS handshake and upgrade response.
+/// How long the host waits for the worker's TLS handshake and upgrade response. Fixed a
+/// priori: generous for a LAN worker that is starting a hibernation.
 const HOST_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Largest upgrade response head accepted from a worker.
+/// How long the host waits to reach the worker's TCP port. Fixed a priori for the owner's
+/// LAN; an unreachable PC is reported as refused instead of blocking a caller.
+const HOST_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Largest upgrade response head accepted from a worker. Fixed a priori: a 101 head is a
+/// few hundred bytes, so this only bounds a hostile or broken peer.
 const MAX_HEAD_BYTES: usize = 8 * 1024;
+
+/// Socket read size while feeding rustls. Fixed a priori: one maximum-size TLS record.
+const TLS_READ_CHUNK: usize = 16 * 1024;
+
+/// How long `HostTunnel::close` waits for its accept loop. Fixed a priori: the loop reacts
+/// to the stop signal immediately.
+const CLOSE_WAIT: Duration = Duration::from_secs(2);
+
+/// Poll interval while waiting for open connections to drain on close. Fixed a priori.
+const CLOSE_POLL: Duration = Duration::from_millis(50);
 
 /// Lending flag shared by the supervisor and the tunnel handlers.
 #[derive(Clone)]
@@ -171,13 +189,13 @@ impl HostTunnel {
             let _ = stop.send(true);
         }
         if let Some(task) = self.task.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+            let _ = tokio::time::timeout(CLOSE_WAIT, task).await;
         }
         for _ in 0..20 {
             if self.counters.open.load(Ordering::SeqCst) == 0 {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::time::sleep(CLOSE_POLL).await;
         }
     }
 }
@@ -219,7 +237,7 @@ async fn forward(
     mut stopped: watch::Receiver<bool>,
 ) {
     let Ok(connected) = tokio::time::timeout(
-        Duration::from_secs(5),
+        HOST_CONNECT_TIMEOUT,
         tokio::net::TcpStream::connect(&target),
     )
     .await
@@ -425,7 +443,7 @@ impl TlsStream {
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Ready(Ok(())) => {}
             }
-            let mut chunk = [0u8; 16 * 1024];
+            let mut chunk = [0u8; TLS_READ_CHUNK];
             let mut filled = ReadBuf::new(&mut chunk);
             match Pin::new(&mut self.socket).poll_read(cx, &mut filled) {
                 Poll::Pending => return Poll::Pending,

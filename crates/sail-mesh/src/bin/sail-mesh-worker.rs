@@ -12,13 +12,28 @@
 //! backoff while other programs keep the PC busy.
 use sail_mesh::{
     DEFAULT_PORT, MESH_VERSION, MeshError, Result,
+    compute::{
+        STATUS_FILE, StatusFile,
+        lend::{self},
+        supervisor::{ComputeConfig, ComputeSupervisor, TICK_INTERVAL},
+        tunnel::LendGate,
+    },
     discovery::{Announcement, DISCOVERY_PORT, announce},
+    hibernate::{Hibernator, system_control},
     identity::{WorkerIdentity, default_dir},
     probe::{PauseList, SystemProbe},
     rest::{Rest, RestGate, RestLimits, RestPolicy},
-    worker::{WorkerConfig, parse_upstream, serve},
+    worker::{WorkerConfig, parse_upstream, serve_with_compute},
 };
+use sail_protocol::mesh::LendMode;
 use std::{net::SocketAddr, path::PathBuf, process::ExitCode, time::Duration};
+
+/// Loopback port for `ggml-rpc-server`. Fixed a priori: llama.cpp's default 50052.
+const RPC_PORT: u16 = 50052;
+
+/// `status` treats a file older than this as a stopped worker. Fixed a priori: the
+/// supervisor writes every 2 s, so 10 s tolerates a stalled tick or two.
+const STATUS_FRESH_SECONDS: i64 = 10;
 
 const USAGE: &str = "\
 sail-mesh-worker — lend this machine's model to a SAIL host
@@ -28,6 +43,10 @@ USAGE:
   sail-mesh-worker serve [OPTIONS]
   sail-mesh-worker pairing-code [--advertise HOST[:PORT]] [--dir DIR]
   sail-mesh-worker rotate-secret [--dir DIR]
+  sail-mesh-worker pause | auto [--dir DIR]
+  sail-mesh-worker play [--for D] [--dir DIR]
+  sail-mesh-worker status [--dir DIR]
+  sail-mesh-worker hibernate add <exe>... | remove <exe>... | list | resume-all [--dir DIR]
 
 SERVE OPTIONS:
   --bind ADDR           Listen address (default 0.0.0.0:7710)
@@ -62,6 +81,15 @@ STEPPING ASIDE (the worker watches how you use this PC):
   --min-free-ram MB     Less free memory than this counts as busy (default 2048)
   --max-backoff MIN     Longest pause, in minutes (default 30)
   --no-rest             Never step aside (the worker serves whenever it is asked)
+
+POOLED COMPUTE (lend ggml devices to a SAIL host through this worker's TLS):
+  --compute PATH        Start this ggml-rpc-server as well (compute-only workers work too)
+  --cache-dir DIR       RPC weight cache (default <dir>/rpc-cache; exported as LLAMA_CACHE)
+  --compute-devices L   Devices for -d, for example Vulkan0,CPU (default: all the server finds)
+  --compute-threads N   CPU threads for the CPU device (default: half of this PC's)
+  --window HH:MM-HH:MM  Lending window in this PC's own time zone (default 01:00-08:00)
+  --lend-vram-gib N     VRAM the host may use on each GPU (default 0 = no declared cap)
+  --lend-ram-gib N      RAM the host may use on the CPU device (default 0 = no declared cap)
 ";
 
 struct Args(Vec<String>);
@@ -147,6 +175,167 @@ fn print_code(identity: &WorkerIdentity, address: &str) {
     println!("Certificate fingerprint: {}\n", identity.fingerprint());
 }
 
+/// Write the owner's lending mode; a running worker applies it within 2 s.
+fn lend_command(command: &str, mut args: Args) -> Result<()> {
+    let dir = dir(&mut args)?;
+    let mode = match command {
+        "pause" => LendMode::Pause,
+        "auto" => LendMode::Auto,
+        _ => {
+            let until = match args
+                .take("--for")?
+                .map(|text| lend::parse_duration(&text))
+                .transpose()?
+            {
+                Some(duration) => {
+                    let duration = chrono::Duration::from_std(duration)
+                        .map_err(|_| MeshError::new("That lending time is too long"))?;
+                    let until = chrono::Utc::now()
+                        .checked_add_signed(duration)
+                        .ok_or_else(|| MeshError::new("That lending time is too far away"))?;
+                    Some(until.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                }
+                None => None,
+            };
+            LendMode::Play { until }
+        }
+    };
+    args.finish()?;
+    lend::save_mode(&dir.join(lend::LEND_FILE), &mode)?;
+    println!(
+        "{}",
+        match &mode {
+            LendMode::Pause =>
+                "Paused lending. The worker applies this within 2 seconds.".to_owned(),
+            LendMode::Auto =>
+                "Automatic lending. The worker follows its window (01:00-08:00 by default)."
+                    .to_owned(),
+            LendMode::Play { until: Some(until) } => format!("Lending now until {until}."),
+            LendMode::Play { until: None } => "Lending now until you change it.".to_owned(),
+        }
+    );
+    Ok(())
+}
+
+/// One plain-words line from the file the supervisor writes each tick.
+fn status_command(mut args: Args) -> Result<()> {
+    let dir = dir(&mut args)?;
+    args.finish()?;
+    let stale = || {
+        println!("The worker is not running");
+    };
+    let Ok(data) = std::fs::read(dir.join(STATUS_FILE)) else {
+        stale();
+        return Ok(());
+    };
+    let Ok(status) = serde_json::from_slice::<StatusFile>(&data) else {
+        stale();
+        return Ok(());
+    };
+    let fresh = chrono::DateTime::parse_from_rfc3339(&status.at)
+        .map(|at| {
+            (chrono::Utc::now() - at.with_timezone(&chrono::Utc)).num_seconds()
+                <= STATUS_FRESH_SECONDS
+        })
+        .unwrap_or(false);
+    if !fresh {
+        stale();
+        return Ok(());
+    }
+    println!("{}", status_line(&status.compute));
+    Ok(())
+}
+
+fn status_line(compute: &sail_protocol::mesh::MeshCompute) -> String {
+    use sail_protocol::mesh::LendState;
+    match &compute.state {
+        LendState::Lending => {
+            let tunnels = compute.tunnels;
+            format!(
+                "Lending: this PC is lending compute to SAIL ({tunnels} connection{}).",
+                if tunnels == 1 { "" } else { "s" }
+            )
+        }
+        LendState::Loading => "Loading: the RPC server is starting.".to_owned(),
+        LendState::Paused => "Paused by you.".to_owned(),
+        LendState::OutsideWindow { next_start } => {
+            format!("Outside lending hours (next start {next_start}).")
+        }
+        LendState::Resting { reason, .. } => format!("Resting: {reason}."),
+        LendState::Unavailable { reason } => format!("Unavailable: {reason}."),
+    }
+}
+
+/// The owner's hibernation list and the programs suspended right now.
+fn hibernate_command(mut args: Args) -> Result<()> {
+    let dir = dir(&mut args)?;
+    let Some(action) = args.0.first().cloned() else {
+        return Err(MeshError::new(
+            "Use: sail-mesh-worker hibernate add <exe>... | remove <exe>... | list | resume-all",
+        ));
+    };
+    args.0.remove(0);
+    let names = std::mem::take(&mut args.0);
+    let mut hibernator = Hibernator::new(system_control(), &dir);
+    match action.as_str() {
+        "add" => {
+            hibernator.add(&names)?;
+            println!(
+                "Hibernating {} program name(s) while lending compute.",
+                names.len()
+            );
+        }
+        "remove" => {
+            hibernator.remove(&names)?;
+            println!("Removed {} program name(s) from hibernation.", names.len());
+        }
+        "list" => {
+            let listed = hibernator.listed();
+            if listed.is_empty() {
+                println!("No programs are listed for hibernation.");
+            } else {
+                println!("Listed for hibernation: {}", listed.join(", "));
+            }
+            let hibernated = hibernator.hibernated();
+            if hibernated.is_empty() {
+                println!("Nothing is hibernated right now.");
+            } else {
+                for app in hibernated {
+                    println!(
+                        "{} ({} process{}): {} released since {}",
+                        app.name,
+                        app.processes,
+                        if app.processes == 1 { "" } else { "es" },
+                        app.released_bytes,
+                        app.since
+                    );
+                }
+            }
+        }
+        "resume-all" => {
+            let resumed = hibernator.resume_all()?;
+            println!("Resumed {resumed} process(es).");
+        }
+        other => {
+            return Err(MeshError::new(format!(
+                "Unknown hibernate action {other:?}\n\n{USAGE}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// GiB written as a decimal number, converted to bytes.
+fn gib_to_bytes(text: &str) -> Result<u64> {
+    let gib: f64 = text
+        .parse()
+        .map_err(|_| MeshError::new(format!("--lend-*-gib needs a number, got {text:?}")))?;
+    if !gib.is_finite() || gib < 0.0 {
+        return Err(MeshError::new(format!("--lend-*-gib cannot be {text:?}")));
+    }
+    Ok((gib * 1024.0 * 1024.0 * 1024.0) as u64)
+}
+
 async fn run() -> Result<()> {
     let mut args = Args(std::env::args().skip(1).collect());
     let command = if args.0.is_empty() {
@@ -188,6 +377,9 @@ async fn run() -> Result<()> {
             println!("New secret saved. The host must pair again (restart `serve` to use it).");
             Ok(())
         }
+        "pause" | "auto" | "play" => lend_command(&command, args),
+        "status" => status_command(args),
+        "hibernate" => hibernate_command(args),
         "serve" => serve_command(args).await,
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -468,8 +660,60 @@ async fn serve_command(mut args: Args) -> Result<()> {
         limits.max_backoff = Duration::from_secs(max.clamp(1, 24 * 60) * 60);
     }
     let no_rest = args.flag("--no-rest");
+    let compute_binary = args.take("--compute")?;
+    let cache_dir = args.take("--cache-dir")?;
+    let compute_devices: Vec<String> = args
+        .take("--compute-devices")?
+        .map(|list| {
+            list.split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let compute_threads: Option<usize> = args.parse("--compute-threads")?;
+    let window_text = args.take("--window")?;
+    let lend_vram_gib = args.take("--lend-vram-gib")?;
+    let lend_ram_gib = args.take("--lend-ram-gib")?;
     let dir = dir(&mut args)?;
     args.finish()?;
+
+    if compute_binary.is_none() {
+        for (flag, set) in [
+            ("--cache-dir", cache_dir.is_some()),
+            ("--compute-devices", !compute_devices.is_empty()),
+            ("--compute-threads", compute_threads.is_some()),
+            ("--window", window_text.is_some()),
+            ("--lend-vram-gib", lend_vram_gib.is_some()),
+            ("--lend-ram-gib", lend_ram_gib.is_some()),
+        ] {
+            if set {
+                return Err(MeshError::new(format!(
+                    "{flag} is only used with --compute"
+                )));
+            }
+        }
+    }
+    let compute_window = match window_text {
+        Some(text) => lend::parse_window(&text)?,
+        None => lend::parse_window("01:00-08:00")?,
+    };
+    let compute_config = match compute_binary {
+        Some(binary) => Some(ComputeConfig {
+            rpc_server: PathBuf::from(binary),
+            cache_dir: cache_dir
+                .map(PathBuf::from)
+                .unwrap_or_else(|| dir.join("rpc-cache")),
+            devices: compute_devices,
+            threads: compute_threads.unwrap_or(cores / 2).clamp(1, cores.max(1)),
+            window: compute_window,
+            lend_vram_bytes: gib_to_bytes(lend_vram_gib.as_deref().unwrap_or("0"))?,
+            lend_ram_bytes: gib_to_bytes(lend_ram_gib.as_deref().unwrap_or("0"))?,
+            rpc_port: RPC_PORT,
+        }),
+        None => None,
+    };
 
     let identity = WorkerIdentity::load(&dir)?;
     let mut llama = None;
@@ -540,6 +784,41 @@ async fn serve_command(mut args: Args) -> Result<()> {
         max_parallel,
         gate: gate.clone(),
     };
+    let mut hibernator = Hibernator::new(system_control(), &dir);
+    match hibernator.recover() {
+        Ok(0) => {}
+        Ok(resumed) => println!("Resumed {resumed} program(s) from the hibernation journal."),
+        Err(error) => eprintln!("warning: cannot recover hibernated programs: {error}"),
+    }
+    let (compute_handle, mut compute_loop) = match compute_config {
+        Some(compute_config) => {
+            println!(
+                "Pooled compute: ggml-rpc-server on 127.0.0.1:{}; window {}-{} (this PC's time).",
+                compute_config.rpc_port, compute_config.window.start, compute_config.window.end
+            );
+            let supervisor =
+                ComputeSupervisor::new(compute_config, &dir, LendGate::new(), Some(hibernator));
+            let handle = supervisor.handle();
+            let rest = gate.clone();
+            let (stop, mut wait) = tokio::sync::oneshot::channel::<()>();
+            let task = tokio::spawn(async move {
+                let mut supervisor = supervisor;
+                loop {
+                    let busy = rest.busy();
+                    supervisor.tick(busy.as_ref()).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(TICK_INTERVAL) => {}
+                        _ = &mut wait => {
+                            supervisor.release().await;
+                            break;
+                        }
+                    }
+                }
+            });
+            (Some(handle), Some((stop, task)))
+        }
+        None => (None, None),
+    };
     if let Some(Llama {
         child: Some(child), ..
     }) = llama.as_mut()
@@ -593,10 +872,33 @@ async fn serve_command(mut args: Args) -> Result<()> {
     };
     print_code(&identity, &advertised(advertise, config.bind.port()));
     let shutdown = async {
-        let _ = tokio::signal::ctrl_c().await;
+        #[cfg(unix)]
+        {
+            let mut terminate =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = async {
+                    match terminate.as_mut() {
+                        Some(signal) => {
+                            signal.recv().await;
+                        }
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {}
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
     };
-    let result = serve(&identity, &config, shutdown).await;
+    let result = serve_with_compute(&identity, &config, compute_handle, shutdown).await;
     drop(stop_announcing);
+    if let Some((stop, task)) = compute_loop.take() {
+        let _ = stop.send(());
+        let _ = task.await;
+    }
     let _ = stop_monitor.send(());
     let _ = monitor.await;
     result
