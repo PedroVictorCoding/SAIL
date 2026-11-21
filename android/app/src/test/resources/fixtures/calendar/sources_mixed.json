@@ -1,0 +1,64 @@
+{
+  "sources": [
+    {
+      "id": "src_local000000",
+      "kind": "local",
+      "name": "SAIL calendar",
+      "color": "#496f9d",
+      "visible": true,
+      "writable": true,
+      "url_hint": null,
+      "refresh_minutes": 30,
+      "event_count": 4,
+      "last_sync_at": null,
+      "last_error": null,
+      "freshness": "fresh",
+      "truncated": false
+    },
+    {
+      "id": "src_a1b2c3d4e5f6",
+      "kind": "ics_feed",
+      "name": "Personal",
+      "color": "#00b894",
+      "visible": true,
+      "writable": false,
+      "url_hint": "https://calendar.google.com/…",
+      "refresh_minutes": 30,
+      "event_count": 12,
+      "last_sync_at": "2026-11-20T12:55:00Z",
+      "last_error": null,
+      "freshness": "fresh",
+      "truncated": false
+    },
+    {
+      "id": "src_b2c3d4e5f601",
+      "kind": "ics_feed",
+      "name": "ISCTE Timetable",
+      "color": "#19b5bc",
+      "visible": true,
+      "writable": false,
+      "url_hint": "https://fenix.iscte-iul.pt/…",
+      "refresh_minutes": 60,
+      "event_count": 8,
+      "last_sync_at": "2026-11-20T09:10:00Z",
+      "last_error": null,
+      "freshness": "stale",
+      "truncated": false
+    },
+    {
+      "id": "src_c3d4e5f60112",
+      "kind": "ics_feed",
+      "name": "Moodle Deadlines",
+      "color": "#e5be79",
+      "visible": false,
+      "writable": false,
+      "url_hint": "https://moodle.example.edu/…",
+      "refresh_minutes": 30,
+      "event_count": 3,
+      "last_sync_at": "2026-11-20T08:00:00Z",
+      "last_error": "timed out after 20 s",
+      "freshness": "failed",
+      "truncated": false
+    }
+  ]
+}

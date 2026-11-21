@@ -1,0 +1,30 @@
+{
+  "occurrences": [
+    {
+      "key": "loc_112233445566@2026-11-23T09:00:00Z",
+      "event_id": "loc_112233445566",
+      "source_id": "src_local000000",
+      "title": "Algorithms lecture",
+      "time": {
+        "type": "timed",
+        "start": "2026-11-23T09:00:00Z",
+        "end": "2026-11-23T10:30:00Z",
+        "tz": "Europe/Lisbon"
+      },
+      "location": "Room B203",
+      "status": "confirmed",
+      "recurring": true,
+      "prepare": false,
+      "writable": true
+    }
+  ],
+  "truncated": true,
+  "sources": [
+    {
+      "id": "src_local000000",
+      "freshness": "fresh",
+      "last_sync_at": null
+    }
+  ],
+  "revision": 20
+}

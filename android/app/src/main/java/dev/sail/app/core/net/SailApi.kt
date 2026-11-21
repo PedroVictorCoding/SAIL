@@ -78,6 +78,42 @@ class SailApi(
     suspend inline fun <reified B, reified T> putJson(path: String, body: B): ApiResult<T> =
         put(path, body, serializer<B>(), serializer<T>())
 
+    suspend fun <B, T> patch(
+        path: String,
+        body: B,
+        bodySerializer: SerializationStrategy<B>,
+        deserializer: DeserializationStrategy<T>,
+    ): ApiResult<T> = call("PATCH", path, encode(body, bodySerializer), deserializer)
+
+    suspend inline fun <reified B, reified T> patchJson(path: String, body: B): ApiResult<T> =
+        patch(path, body, serializer<B>(), serializer<T>())
+
+    suspend fun deleteUnit(path: String): ApiResult<Unit> {
+        val target = url(path) ?: return ApiResult.Err(0, "SAIL isn't set up yet")
+        val request = Request.Builder()
+            .url(target)
+            .header("Accept", "application/json")
+            .header("Cache-Control", "no-store")
+            .delete()
+            .build()
+        val response = try {
+            client.newCall(request).await()
+        } catch (error: SSLException) {
+            return ApiResult.Err(0, "This phone doesn't trust SAIL's certificate")
+        } catch (error: IOException) {
+            return ApiResult.Err(0, "SAIL is unreachable")
+        }
+        return response.use {
+            accessRefusal(it)?.let { refusal -> return@use refusal }
+            if (!it.isSuccessful) {
+                val text = runCatching { it.body?.string().orEmpty() }.getOrDefault("")
+                ApiResult.Err(it.code, errorMessage(it.code, text))
+            } else {
+                ApiResult.Ok(Unit)
+            }
+        }
+    }
+
     /**
      * POST a JSON body and receive raw bytes, e.g. PCM from "/api/reader/speech". Errors are
      * read like [call]'s: the server's `error` message when it sends one.
@@ -187,6 +223,45 @@ class SailApi(
         settings: dev.sail.app.feature.nightshift.NightShiftSettings,
     ): ApiResult<dev.sail.app.feature.nightshift.NightShiftSettings> =
         putJson("/api/nightshift/settings", settings)
+
+    suspend fun calendarSources(): ApiResult<dev.sail.app.feature.calendar.SourcesListResponse> =
+        get("/api/calendar/sources")
+
+    suspend fun addCalendarFeed(feed: dev.sail.app.feature.calendar.NewFeed): ApiResult<dev.sail.app.feature.calendar.Source> =
+        postJson("/api/calendar/sources", feed)
+
+    suspend fun updateCalendarSource(
+        id: String,
+        patch: dev.sail.app.feature.calendar.SourcePatch,
+    ): ApiResult<dev.sail.app.feature.calendar.Source> =
+        patchJson("/api/calendar/sources/${android.net.Uri.encode(id)}", patch)
+
+    suspend fun deleteCalendarSource(id: String): ApiResult<Unit> =
+        deleteUnit("/api/calendar/sources/${android.net.Uri.encode(id)}")
+
+    suspend fun syncCalendarSource(id: String): ApiResult<dev.sail.app.feature.calendar.Source> =
+        post("/api/calendar/sources/${android.net.Uri.encode(id)}/sync")
+
+    suspend fun calendarEvents(startIso: String, endIso: String): ApiResult<dev.sail.app.feature.calendar.EventsWindow> =
+        get("/api/calendar/events?start=${android.net.Uri.encode(startIso)}&end=${android.net.Uri.encode(endIso)}")
+
+    suspend fun calendarEvent(id: String): ApiResult<dev.sail.app.feature.calendar.Event> =
+        get("/api/calendar/events/${android.net.Uri.encode(id)}")
+
+    suspend fun createCalendarEvent(draft: dev.sail.app.feature.calendar.EventDraft): ApiResult<dev.sail.app.feature.calendar.Event> =
+        postJson("/api/calendar/events", draft)
+
+    suspend fun patchCalendarEvent(
+        id: String,
+        patch: dev.sail.app.feature.calendar.EventPatch,
+    ): ApiResult<dev.sail.app.feature.calendar.Event> =
+        patchJson("/api/calendar/events/${android.net.Uri.encode(id)}", patch)
+
+    suspend fun deleteCalendarEvent(id: String): ApiResult<Unit> =
+        deleteUnit("/api/calendar/events/${android.net.Uri.encode(id)}?scope=all")
+
+    suspend fun calendarPreferences(): ApiResult<dev.sail.app.feature.calendar.Preferences> =
+        get("/api/calendar/preferences")
 
     private suspend fun getText(path: String): ApiResult<String> {
         val target = url(path) ?: return ApiResult.Err(0, "SAIL isn't set up yet")

@@ -20,6 +20,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val DOCK = "dock"
     const val NIGHT_SHIFT = "nightshift"
+    const val CALENDAR = "calendar"
 
     fun course(id: String) = "arena/course/${Uri.encode(id)}"
     fun lesson(id: String) = "arena/lesson/${Uri.encode(id)}"
