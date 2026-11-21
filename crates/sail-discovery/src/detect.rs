@@ -265,7 +265,6 @@ pub fn detect_in_tz(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 /// A prepared calendar event within 48 h becomes a Commitment. All other calendar
 /// events are handled by the greeting/briefing.
 fn calendar_event(

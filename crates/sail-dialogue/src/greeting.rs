@@ -153,9 +153,13 @@ fn event_clause(
         .min_by(|a, b| a.due_at.cmp(&b.due_at).then(a.id.cmp(&b.id)))?;
     let title = clause_text(&event.title)?;
     let relative = relative(due_seconds(event.due_at, now), lang);
-    let clause = match lang {
-        Lang::En => format!("{title} is due {relative}"),
-        Lang::PtPt => format!("{title} é {relative}"),
+    // Calendar events start; reminders and deadlines are due.
+    let starts = event.source == "Calendar";
+    let clause = match (lang, starts) {
+        (Lang::En, true) => format!("{title} starts {relative}"),
+        (Lang::En, false) => format!("{title} is due {relative}"),
+        (Lang::PtPt, true) => format!("{title} começa {relative}"),
+        (Lang::PtPt, false) => format!("{title} é {relative}"),
     };
     Some((title, clause))
 }

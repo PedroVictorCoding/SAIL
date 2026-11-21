@@ -154,6 +154,34 @@
   color: #ffd69f;
 }
 
+.cal-gutter {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--sail-text-subtle, #8592a6);
+  text-align: right;
+}
+
+.cal-allday-cell.cal-gutter {
+  justify-content: center;
+  padding: 4px 6px 4px 0;
+}
+
+.cal-event-pill.compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.cal-event-pill.compact .cal-event-title {
+  flex: 0 1 auto;
+}
+
+.cal-event-pill.compact .cal-event-sub {
+  flex: 1 1 0;
+}
+
 .cal-allday-cell {
   background: rgb(14 18 26 / .85);
   padding: 4px;
@@ -403,5 +431,9 @@
   .cal-month-cell {
     min-height: 62px;
     padding: 4px;
+  }
+  /* The period title takes its own line so ‹ Today › stay together below it. */
+  .cal-period-title {
+    flex-basis: 100%;
   }
 }

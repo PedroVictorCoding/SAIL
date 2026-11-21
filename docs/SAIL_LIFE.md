@@ -5,6 +5,12 @@
 ## 1. Mission
 Manage personal plans, scheduling and commitments with explicit, user-controlled context.
 
+## Implemented
+
+- **SAIL Calendar** (round 28): local calendar, read-only ICS feeds (Google, Outlook, Moodle),
+  .ics import/export, web and Android views, greeting and agenda integration. See
+  [SAIL_CALENDAR.md](SAIL_CALENDAR.md).
+
 ## 2. Functional scope
 - Calendar/context aggregation.
 - feasible schedule computation #103.

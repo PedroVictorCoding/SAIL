@@ -11,7 +11,7 @@ Status: design and implementation reference. These docs describe intended behavi
 | Intelligence & Knowledge | [MIND](SAIL_MIND.md) · [ARENA](SAIL_ARENA.md) ([LEARN](SAIL_ARENA_LEARN.md) — main product) ([cognitive memory](SAIL_COGNITIVE_MEMORY.md)) · [DISCOVERY](SAIL_DISCOVERY.md) · [LAB](SAIL_LAB.md) |
 | Interaction & Presence | [DIALOGUE](SAIL_DIALOGUE.md) · [VISION](SAIL_VISION.md) · [SENSE](SAIL_SENSE.md) ([PRESENCE](SAIL_PRESENCE.md)) · [RELAY](SAIL_RELAY.md) |
 | Agency & Creation | [AGENTS](SAIL_AGENTS.md) ([task planning](SAIL_AGENT_PLANNING.md)) · [FLOW](SAIL_FLOW.md) · [CANVAS](SAIL_CANVAS.md) · [FORGE](SAIL_FORGE.md) |
-| Personal & Social | [LIFE](SAIL_LIFE.md) · [PULSE](SAIL_PULSE.md) · [FRIENDS](SAIL_FRIENDS.md) · [ENTERTAINMENT](SAIL_ENTERTAINMENT.md) |
+| Personal & Social | [LIFE](SAIL_LIFE.md) · [CALENDAR](SAIL_CALENDAR.md) · [PULSE](SAIL_PULSE.md) · [FRIENDS](SAIL_FRIENDS.md) · [ENTERTAINMENT](SAIL_ENTERTAINMENT.md) |
 | Systems & Security | [GUARDIAN](SAIL_GUARDIAN.md) · [BRIDGE](SAIL_BRIDGE.md) · [SENTINEL](SAIL_SENTINEL.md) |
 | Infrastructure & Compute | [MESH](SAIL_MESH.md) |
 | Health & Physiology | [HEALTH](SAIL_HEALTH.md) |

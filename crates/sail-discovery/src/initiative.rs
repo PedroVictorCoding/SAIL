@@ -183,14 +183,66 @@ impl Initiative {
                 .map_err(|e| e.to_string())?;
             report.agenda_updates += 1;
         }
+        // #452: an event the owner marked "needs preparation", in the next 48 h, is a
+        // commitment. Its title words are match terms, so related Moodle evidence (a new
+        // file, an announcement for the same course) revisits it.
+        if let Observation::CalendarEvent {
+            id,
+            title,
+            start,
+            prepare: true,
+            ..
+        } = observation
+            && *start > now
+            && *start - now <= Duration::hours(CALENDAR_PREPARE_HOURS)
+        {
+            self.agenda
+                .upsert(
+                    NewAgendaItem {
+                        key: format!("cal-prep:{id}"),
+                        kind: AgendaKind::Commitment,
+                        title: format!("Prepare: {title}"),
+                        detail: String::new(),
+                        provenance: Provenance::UserCommitment,
+                        match_terms: calendar_match_terms(title),
+                        due: Some(*start),
+                    },
+                    now,
+                )
+                .map_err(|e| e.to_string())?;
+            report.agenda_updates += 1;
+        }
         Ok(())
     }
+}
+
+/// #452: prepared events are carried on the agenda for the next 48 h.
+const CALENDAR_PREPARE_HOURS: i64 = 48;
+
+/// Lowercase title words of at least four letters, at most `agenda::MAX_TERMS`.
+/// Fixed a priori: short words ("the", "lab") match too much unrelated evidence.
+fn calendar_match_terms(title: &str) -> Vec<String> {
+    let mut terms: Vec<String> = Vec::new();
+    for word in title
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.chars().count() >= 4)
+    {
+        if !terms.iter().any(|term| term == word) {
+            terms.push(word.to_string());
+        }
+        if terms.len() == crate::agenda::MAX_TERMS {
+            break;
+        }
+    }
+    terms
 }
 
 fn evidence_text(observation: &Observation) -> Option<String> {
     match observation {
         Observation::SchoolChange { course, title, .. } => Some(format!("{course} {title}")),
         Observation::EscalationAnswered { question, .. } => Some(question.clone()),
+        Observation::CalendarChange { title, .. } => Some(title.clone()),
         _ => None,
     }
 }

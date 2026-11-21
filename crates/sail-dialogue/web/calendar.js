@@ -204,6 +204,16 @@
     return items;
   }
 
+  function syncedAgo(iso) {
+    const then = Date.parse(iso || "");
+    if (!Number.isFinite(then)) return "a while ago";
+    const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+    if (mins < 60) return `${mins} min ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 48) return `${hours} h ago`;
+    return `${Math.round(hours / 24)} days ago`;
+  }
+
   function makeEventPill(occ, extraClass = "") {
     const src = sourceById(occ.source_id);
     const pill = el("button", `cal-event-pill ${occ.status || "confirmed"} ${extraClass}`.trim());
@@ -226,15 +236,18 @@
     const wrap = el("div", "cal-grid-wrap");
     const cols = range.days.length;
     const grid = el("div", "cal-week-grid");
-    grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+    // One time gutter on the left instead of hour labels repeated in every column.
+    grid.style.gridTemplateColumns = `44px repeat(${cols}, minmax(0, 1fr))`;
 
     const todayStr = tzDateStr(new Date());
+    grid.appendChild(el("div", "cal-day-hdr cal-gutter", ""));
     for (const day of range.days) {
       const hdr = el("div", `cal-day-hdr${day === todayStr ? " today" : ""}`, formatDayHeader(day));
       grid.appendChild(hdr);
     }
 
     // All-day strip
+    grid.appendChild(el("div", "cal-allday-cell cal-gutter", "All day"));
     for (const day of range.days) {
       const cell = el("div", "cal-allday-cell");
       const allDay = windowData.occurrences.filter((o) => o.time.type === "all_day" && occursOnDay(o, day));
@@ -248,11 +261,18 @@
     const hourCount = Math.max(1, endHr - startHr);
     const pxPerHour = 40;
 
+    const gutter = el("div", "cal-day-col cal-gutter");
+    gutter.style.height = `${hourCount * pxPerHour}px`;
+    for (let h = startHr; h < endHr; h++) {
+      gutter.appendChild(el("div", "cal-hour-slot", `${String(h).padStart(2, "0")}:00`));
+    }
+    grid.appendChild(gutter);
+
     for (const day of range.days) {
       const col = el("div", "cal-day-col");
       col.style.height = `${hourCount * pxPerHour}px`;
       for (let h = startHr; h < endHr; h++) {
-        col.appendChild(el("div", "cal-hour-slot", `${String(h).padStart(2, "0")}:00`));
+        col.appendChild(el("div", "cal-hour-slot", ""));
       }
       const timed = windowData.occurrences.filter((o) => o.time.type === "timed" && occursOnDay(o, day));
       const laidOut = layoutDayTimedEvents(timed);
@@ -261,7 +281,8 @@
         const heightPx = Math.max(24, ((item.endMin - item.startMin) / 60) * pxPerHour);
         const widthPct = 100 / item.cols;
         const leftPct = item.col * widthPct;
-        const pill = makeEventPill(item.occ, "timed");
+        // Under ~50 min there is room for one line: title and time side by side.
+        const pill = makeEventPill(item.occ, heightPx < 34 ? "timed compact" : "timed");
         pill.style.top = `${topPx}px`;
         pill.style.height = `${heightPx}px`;
         pill.style.left = `calc(${leftPct}% + 2px)`;
@@ -768,7 +789,7 @@
 
     for (const s of sources) {
       if (s.freshness === "stale") {
-        shell.appendChild(el("div", "cal-banner warn", `${s.name}: Last synced earlier — retrying in background.`));
+        shell.appendChild(el("div", "cal-banner warn", `${s.name}: Last synced ${syncedAgo(s.last_sync_at)} — retrying.`));
       } else if (s.freshness === "failed") {
         shell.appendChild(el("div", "cal-banner err", `${s.name}: Sync failed (${s.last_error || "unavailable"}).`));
       }
