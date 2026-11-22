@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll SAIL main for merged pull requests
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+Persistent=true
+Unit=sail-live-update.service
+
+[Install]
+WantedBy=timers.target
