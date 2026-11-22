@@ -197,6 +197,7 @@ impl Default for TrackerConfig {
                 feed("NPR", "https://feeds.npr.org/1001/rss.xml"),
                 feed("The Guardian", "https://www.theguardian.com/world/rss"),
                 feed("Hacker News", "https://hnrss.org/frontpage"),
+                feed("UNSONG", "https://unsongbook.com/feed/"),
                 feed(
                     "arXiv: LLM Training",
                     "https://export.arxiv.org/api/query?search_query=(cat:cs.CL+OR+cat:cs.LG+OR+cat:cs.AI)+AND+(ti:%22language+model%22+OR+ti:LLM+OR+ti:pretraining+OR+ti:post-training+OR+ti:RLHF+OR+ti:GRPO+OR+ti:scaling)&sortBy=submittedDate&sortOrder=descending&max_results=20",
@@ -435,6 +436,14 @@ mod tests {
     #[test]
     fn default_config_is_valid() {
         TrackerConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn unsong_rss_is_in_default_feeds() {
+        let config = TrackerConfig::default();
+        assert!(config.feeds.iter().any(|feed| {
+            feed.name == "UNSONG" && feed.url == "https://unsongbook.com/feed/"
+        }));
     }
 
     #[test]
