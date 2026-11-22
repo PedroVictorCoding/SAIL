@@ -194,6 +194,8 @@ Each phase is one vertical slice with its own PR and tests.
 | P4 | Skills: loader and validator, index and `skill:view`, `/<skill>`, staged self-created skills, import with quarantine | A Hermes skill imports and runs. A self-proposed skill appears only after approval. `allowed-tools` cannot widen a grant. **Done:** loader, validator, index, `skill:view`, Hermes skills and plugins with hash-bound approval and a bubblewrap sandbox, the Market (install from Hermes' public skill and plugin catalogs with quarantine, scan and owner install) and staged self-proposed skills ([details](SAIL_HERMES_PLUGINS.md)). `/<skill>` from Telegram landed in round 22. |
 | P5 | Memory: core profile block, review queue, injection scan | The profile block stays under budget and is frozen per session. A queued change commits only after approval. An injected instruction in a candidate is rejected. **Done (round 22):** a ≤1,400-character profile block from the owner's active normal-sensitivity claims (pins first), frozen per conversation; an injection/exfiltration/hidden-Unicode/secret scan on every proposed change set; an optional review queue (Memory › Review) whose saves still pass Arena's validator. |
 
+**Next:** [Token economy](SAIL_TOKEN_ECONOMY.md) (proposed) narrows the providers to Claude and Gemini, reserves subscription capacity for the owner, sends compact briefs instead of whole tasks, moves Forge review off Codex, and turns escalations into cached answers, skills and distillation data.
+
 Open risks: CLI output formats and permission flags change between versions (pin and
 verify per adapter); vendor quotas are not exposed uniformly (rely on reported limits and
 owner caps); redaction cannot be perfect (scope and sensitivity rules are the primary
