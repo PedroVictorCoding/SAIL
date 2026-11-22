@@ -45,7 +45,7 @@ TARGET="${CARGO_TARGET_DIR:-${SAIL_RUNTIME:-/srv/sail}/cargo-target}"
 export CARGO_TARGET_DIR="$TARGET"
 (
   cd "$CANDIDATE"
-  cargo test -p sail-core --lib --locked
+  cargo test -p sail-core --locked
   cargo build --release -p sail-core --locked
 )
 
