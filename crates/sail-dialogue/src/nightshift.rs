@@ -434,7 +434,47 @@ impl ExternalSolver for SettingsExternalSolver {
 /// `EndpointPicker` over the Mesh pool: a Ready, non-resting worker when allowed, else the
 /// host (Forge's own endpoint probing, signalled by an empty URL and no client).
 pub fn endpoint_picker(mind: sail_mind::MindService) -> Arc<dyn EndpointPicker> {
+    if let Some(service) = global() {
+        watch_pooled_errands(service.store(), mind.clone());
+    }
     Arc::new(MeshPicker { mind })
+}
+
+fn watch_pooled_errands(store: &Arc<ErrandStore>, mind: sail_mind::MindService) {
+    use tokio::sync::broadcast::error::RecvError;
+
+    let mut updates = store.subscribe();
+    let store = Arc::downgrade(store);
+    tokio::spawn(async move {
+        loop {
+            if let Some(lane) = mind.heavy() {
+                let Some(store) = store.upgrade() else { return };
+                let job = store
+                    .list()
+                    .into_iter()
+                    .filter_map(|errand| match errand.state {
+                        ErrandState::Working {
+                            order,
+                            started_at,
+                            ran_on,
+                            ..
+                        } if ran_on.kind == RanOnKind::Pooled => Some((started_at, order.title)),
+                        _ => None,
+                    })
+                    .max_by_key(|(started_at, _)| *started_at);
+                lane.set_job(
+                    job.map(|(started_at, title)| sail_protocol::mesh::HeavyJob {
+                        title,
+                        since: started_at.to_rfc3339(),
+                    }),
+                );
+            }
+            match updates.recv().await {
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return,
+            }
+        }
+    });
 }
 
 struct MeshPicker {
@@ -464,15 +504,6 @@ impl EndpointPicker for MeshPicker {
             },
             client: Some(client),
         })
-    }
-
-    fn set_heavy_job(&self, title: Option<&str>) {
-        if let Some(lane) = self.mind.heavy() {
-            lane.set_job(title.map(|title| sail_protocol::mesh::HeavyJob {
-                title: title.to_owned(),
-                since: chrono::Utc::now().to_rfc3339(),
-            }));
-        }
     }
 
     fn pick(&self, use_mesh: bool) -> Endpoint {

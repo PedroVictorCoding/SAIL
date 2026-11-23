@@ -431,9 +431,6 @@ pub trait EndpointPicker: Send + Sync {
         None
     }
 
-    /// Publish or clear the active pooled errand title.
-    fn set_heavy_job(&self, _title: Option<&str>) {}
-
     /// The host endpoint, used to retry an attempt whose Mesh endpoint failed in
     /// transport.
     fn host(&self) -> Endpoint;

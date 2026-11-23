@@ -313,14 +313,6 @@ const HEAVY_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 const HEAVY_ATTEMPT_POLL: Duration = Duration::from_secs(1);
 const HEAVY_UNAVAILABLE: &str = "heavy_unavailable";
 
-struct HeavyJobLine<'a>(&'a dyn EndpointPicker);
-
-impl Drop for HeavyJobLine<'_> {
-    fn drop(&mut self) {
-        self.0.set_heavy_job(None);
-    }
-}
-
 fn feedback_body(issue: &IssueCandidate, record: &IssueRecord) -> String {
     match (&record.last_reason, record.attempts) {
         (Some(reason), n) if n > 0 && record.last_outcome != "aborted" => format!(
@@ -843,15 +835,12 @@ impl ForgeNightlyRunner {
         &self,
         job_id: &str,
         endpoint: &Endpoint,
-        title: &str,
     ) -> Result<ForgeJobReport, String> {
         let execution = self.executor.execute(&self.orchestrator, job_id);
         if endpoint.ran_on.kind != RanOnKind::Pooled {
             return execution.await;
         }
         let picker = self.endpoint_picker.as_deref().ok_or(HEAVY_UNAVAILABLE)?;
-        picker.set_heavy_job(Some(title));
-        let _job = HeavyJobLine(picker);
         let available = || picker.heavy().as_ref() == Some(endpoint);
         tokio::pin!(execution);
         loop {
@@ -1132,7 +1121,7 @@ impl ForgeNightlyRunner {
                     return false;
                 }
             };
-            let mut executed = self.execute_errand(&job_id, &endpoint, &order.title).await;
+            let mut executed = self.execute_errand(&job_id, &endpoint).await;
             if let Err(reason) = &executed {
                 if endpoint.ran_on.kind == RanOnKind::Mesh && is_infrastructure_failure(reason) {
                     endpoint = self
