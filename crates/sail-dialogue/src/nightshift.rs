@@ -434,7 +434,47 @@ impl ExternalSolver for SettingsExternalSolver {
 /// `EndpointPicker` over the Mesh pool: a Ready, non-resting worker when allowed, else the
 /// host (Forge's own endpoint probing, signalled by an empty URL and no client).
 pub fn endpoint_picker(mind: sail_mind::MindService) -> Arc<dyn EndpointPicker> {
+    if let Some(service) = global() {
+        watch_pooled_errands(service.store(), mind.clone());
+    }
     Arc::new(MeshPicker { mind })
+}
+
+fn watch_pooled_errands(store: &Arc<ErrandStore>, mind: sail_mind::MindService) {
+    use tokio::sync::broadcast::error::RecvError;
+
+    let mut updates = store.subscribe();
+    let store = Arc::downgrade(store);
+    tokio::spawn(async move {
+        loop {
+            if let Some(lane) = mind.heavy() {
+                let Some(store) = store.upgrade() else { return };
+                let job = store
+                    .list()
+                    .into_iter()
+                    .filter_map(|errand| match errand.state {
+                        ErrandState::Working {
+                            order,
+                            started_at,
+                            ran_on,
+                            ..
+                        } if ran_on.kind == RanOnKind::Pooled => Some((started_at, order.title)),
+                        _ => None,
+                    })
+                    .max_by_key(|(started_at, _)| *started_at);
+                lane.set_job(
+                    job.map(|(started_at, title)| sail_protocol::mesh::HeavyJob {
+                        title,
+                        since: started_at.to_rfc3339(),
+                    }),
+                );
+            }
+            match updates.recv().await {
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return,
+            }
+        }
+    });
 }
 
 struct MeshPicker {
@@ -442,6 +482,34 @@ struct MeshPicker {
 }
 
 impl EndpointPicker for MeshPicker {
+    fn heavy(&self) -> Option<Endpoint> {
+        let endpoint = self.mind.heavy()?.endpoint()?;
+        static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+        let client = CLIENT
+            .get_or_init(|| {
+                reqwest::Client::builder()
+                    .no_proxy()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .ok()
+            })
+            .as_ref()?
+            .clone();
+        Some(Endpoint {
+            url: endpoint.url,
+            ran_on: RanOn {
+                kind: RanOnKind::Pooled,
+                name: endpoint.worker,
+                model: endpoint.model,
+            },
+            client: Some(client),
+        })
+    }
+
+    fn pooled_timing(&self) -> Option<sail_forge::nightshift::CompletionTiming> {
+        self.mind.heavy()?.completion_timing_observer()
+    }
+
     fn pick(&self, use_mesh: bool) -> Endpoint {
         if use_mesh && let Some(worker) = self.mind.mesh().and_then(|pool| pool.night_worker()) {
             return Endpoint {

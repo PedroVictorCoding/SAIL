@@ -340,6 +340,11 @@
   color: #ffb3a1;
 }
 
+.ns-waiting-heavy {
+  color: #f6d58e;
+  overflow-wrap: anywhere;
+}
+
 .ns-model-note {
   padding: 10px 12px;
   border-radius: 12px;

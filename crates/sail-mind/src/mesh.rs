@@ -12,7 +12,10 @@ use crate::{config::LocalModelConfig, local::LocalGemmaBackend};
 use sail_mesh::{HELLO_ROUTE, Registry, WorkerRecord, tls::pinned_client};
 use sail_protocol::{
     Content, ContentPart, ErrorCode, InferenceError, InferenceRequest, ToolChoice,
-    mesh::{MESH_VERSION, MeshHello, MeshMode, MeshStatus, MeshWorkerState, MeshWorkerStatus},
+    mesh::{
+        LEND_ROUTE, LendMode, LendRequest, LendState, MESH_VERSION, MeshCompute, MeshHello,
+        MeshMode, MeshStatus, MeshWorkerState, MeshWorkerStatus,
+    },
     resources::WorkPriority,
 };
 use std::{
@@ -94,6 +97,8 @@ impl MeshSettings {
 struct WorkerState {
     status: MeshWorkerState,
     hello: Option<MeshHello>,
+    /// The compute snapshot from the last hello or lend request.
+    compute: Option<MeshCompute>,
     backend: Option<Arc<LocalGemmaBackend>>,
     /// Model file the backend was built for.
     backend_model: Option<String>,
@@ -127,6 +132,7 @@ impl RemoteWorker {
             state: Mutex::new(WorkerState {
                 status,
                 hello: None,
+                compute: None,
                 backend: None,
                 backend_model: None,
                 active: 0,
@@ -159,6 +165,7 @@ impl RemoteWorker {
             Ok(hello) => {
                 state.last_rtt_ms = Some(rtt);
                 state.last_seen = Some(chrono::Utc::now().to_rfc3339());
+                state.compute = hello.compute.clone();
                 if hello.busy.is_some() {
                     // Its owner is using the PC (gaming, music, or just busy): leave it
                     // alone. The model may even be stopped; keep the backend for later.
@@ -246,6 +253,10 @@ impl RemoteWorker {
             busy: (state.status == MeshWorkerState::Busy)
                 .then(|| hello.and_then(|h| h.busy.clone()))
                 .flatten(),
+            compute: state
+                .compute
+                .clone()
+                .or_else(|| hello.and_then(|h| h.compute.clone())),
         }
     }
 }
@@ -563,6 +574,79 @@ impl MeshPool {
         })
     }
 
+    /// POST a `LendRequest` to the worker and return its status with the new compute snapshot.
+    ///
+    /// An unknown name is `NotFound`; a worker without `--compute` is `NoCompute`; a
+    /// transport failure, a 401 or a malformed reply is `Unverified`.
+    pub async fn set_lend(
+        &self,
+        name: &str,
+        mode: LendMode,
+    ) -> Result<MeshWorkerStatus, MeshOpError> {
+        let worker = self
+            .workers()
+            .into_iter()
+            .find(|worker| worker.record.name == name)
+            .ok_or_else(|| MeshOpError::NotFound(format!("no worker named {name}")))?;
+        if !worker.record.enabled {
+            return Err(MeshOpError::NoCompute(format!(
+                "worker {name} is switched off"
+            )));
+        }
+        let client = worker
+            .client
+            .as_ref()
+            .map_err(|error| MeshOpError::Unverified(error.clone()))?;
+        let response = client
+            .post(format!("{}{LEND_ROUTE}", worker.record.base_url()))
+            .timeout(HELLO_TIMEOUT)
+            .json(&LendRequest { mode })
+            .send()
+            .await
+            .map_err(|error| MeshOpError::Unverified(describe_transport(&error)))?;
+        match response.status().as_u16() {
+            200 => {
+                let compute: MeshCompute = response.json().await.map_err(|error| {
+                    MeshOpError::Unverified(format!("malformed compute status: {error}"))
+                })?;
+                let mut state = worker.lock();
+                state.compute = Some(compute);
+                drop(state);
+                Ok(worker.status())
+            }
+            404 | 409 => Err(MeshOpError::NoCompute(format!(
+                "worker {name} does not lend compute"
+            ))),
+            401 => Err(MeshOpError::Unverified(
+                "the worker rejected the pairing secret (it was re-initialised or rotated; pair again)"
+                    .into(),
+            )),
+            status => Err(MeshOpError::Unverified(format!(
+                "worker answered HTTP {status}"
+            ))),
+        }
+    }
+
+    /// The first enabled, reachable worker whose last hello says `LendState::Lending`, with
+    /// the pairing record [`sail_mesh::compute::HostTunnel::bind`] needs.
+    pub fn lending_worker(&self) -> Option<(String, WorkerRecord)> {
+        self.workers().into_iter().find_map(|worker| {
+            if !worker.record.enabled {
+                return None;
+            }
+            let state = worker.lock();
+            if state.status == MeshWorkerState::Unreachable {
+                return None;
+            }
+            let lending = state
+                .hello
+                .as_ref()
+                .and_then(|hello| hello.compute.as_ref())
+                .is_some_and(|compute| compute.state == LendState::Lending);
+            lending.then(|| (worker.record.name.clone(), worker.record.clone()))
+        })
+    }
+
     pub fn record_offloaded(&self) {
         self.offloaded.fetch_add(1, Ordering::Relaxed);
     }
@@ -577,6 +661,7 @@ impl MeshPool {
             workers: self.workers().iter().map(|w| w.status()).collect(),
             offloaded: self.offloaded.load(Ordering::Relaxed),
             fell_back: self.fell_back.load(Ordering::Relaxed),
+            heavy: None,
         }
     }
 
@@ -666,15 +751,19 @@ pub enum MeshOpError {
     NotFound(String),
     /// The code is well formed but no running worker proved it (HTTP 502).
     Unverified(String),
+    /// The worker was started without `--compute` (HTTP 409 `no_compute`).
+    NoCompute(String),
     /// The pairing file could not be read or written (HTTP 500).
     Storage(String),
 }
 impl std::fmt::Display for MeshOpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::BadInput(m) | Self::NotFound(m) | Self::Unverified(m) | Self::Storage(m) => {
-                f.write_str(m)
-            }
+            Self::BadInput(m)
+            | Self::NotFound(m)
+            | Self::Unverified(m)
+            | Self::NoCompute(m)
+            | Self::Storage(m) => f.write_str(m),
         }
     }
 }

@@ -108,6 +108,7 @@
     if (!ranOn) return "";
     if (ranOn.kind === "external") return `Sent to ${ranOn.name} · ${ranOn.model}`;
     if (ranOn.kind === "mesh") return `PC (${ranOn.name}) · ${ranOn.model}`;
+    if (ranOn.kind === "pooled") return `Ran on the big model (host + ${ranOn.name})`;
     return `Host · ${ranOn.model}`;
   }
 
@@ -522,6 +523,26 @@
       card.appendChild(row);
     } else if (s.state === "queued") {
       card.appendChild(el("div", "ns-meta", `Work order: ${s.order?.title || ""} (Size ${String(s.order?.size || "").toUpperCase()})`));
+      const heldForHeavy =
+        s.waiting_for_heavy === true ||
+        errand.waiting_for_heavy === true ||
+        s.reason === "heavy_unavailable" ||
+        errand.requeue_reason === "heavy_unavailable" ||
+        (state.settings?.use_heavy === true &&
+          !state.settings?.fallback_to_host &&
+          state.heavy &&
+          state.heavy.state?.state !== "running");
+      const heldAllNight =
+        s.held_all_night === true ||
+        errand.held_all_night === true ||
+        (heldForHeavy &&
+          state.morning &&
+          (state.morning.halted === "heavy_unavailable" || (state.morning.not_reached ?? 0) > 0));
+      if (heldAllNight) {
+        card.appendChild(el("div", "ns-callout ns-waiting-heavy", "Waited — the PC wasn't lending"));
+      } else if (heldForHeavy) {
+        card.appendChild(el("div", "ns-callout ns-waiting-heavy", "Waiting for the PC to lend"));
+      }
       const dBtn = el("button", "ns-btn danger", "Drop");
       dBtn.type = "button";
       dBtn.addEventListener("click", () => doDrop(errand.id));
@@ -696,7 +717,11 @@
       mTop.appendChild(mCounts);
       mCard.appendChild(mTop);
       if (m.spoken) mCard.appendChild(el("p", "ns-morning-spoken", m.spoken));
-      if (m.halted) mCard.appendChild(el("div", "ns-callout error ns-morning-halted", m.halted));
+      if (m.halted) {
+        const haltedText =
+          m.halted === "heavy_unavailable" ? "Waited — the PC wasn't lending." : m.halted;
+        mCard.appendChild(el("div", "ns-callout error ns-morning-halted", haltedText));
+      }
       if (Array.isArray(m.items) && m.items.length > 0) {
         const list = el("div", "ns-morning-items");
         for (const item of m.items) {
@@ -770,6 +795,8 @@
     setVal("nsSetMaxItems", "value", s.max_items ?? 5);
     setVal("nsSetIncludeIssues", "checked", !!s.include_forge_ready_issues);
     setVal("nsSetUseMesh", "checked", !!s.use_mesh);
+    setVal("nsSetUseHeavy", "checked", s.use_heavy ?? true);
+    setVal("nsSetFallbackToHost", "checked", !!s.fallback_to_host);
     setVal("nsSetExternalMax", "value", s.external_solves_per_night ?? 0);
     setVal("nsSetExternalProvider", "value", s.external_provider || "");
     setVal("nsSetMorningGreeting", "checked", !!s.morning_greeting);
@@ -790,6 +817,8 @@
         max_items: Number(document.getElementById("nsSetMaxItems")?.value ?? 5),
         include_forge_ready_issues: !!document.getElementById("nsSetIncludeIssues")?.checked,
         use_mesh: !!document.getElementById("nsSetUseMesh")?.checked,
+        use_heavy: document.getElementById("nsSetUseHeavy")?.checked ?? true,
+        fallback_to_host: !!document.getElementById("nsSetFallbackToHost")?.checked,
         external_solves_per_night: Number(document.getElementById("nsSetExternalMax")?.value ?? 0),
         external_provider: document.getElementById("nsSetExternalProvider")?.value || null,
         morning_greeting: !!document.getElementById("nsSetMorningGreeting")?.checked,

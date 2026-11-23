@@ -7,7 +7,10 @@ use std::collections::BTreeMap;
 
 use super::{
     Errand, ErrandState, MorningItem, MorningOutcome, MorningReport, NightItem, NightPlan,
+    RanOnKind,
 };
+
+const HEAVY_UNAVAILABLE: &str = "heavy_unavailable";
 
 /// Shorten a title to at most six words and remove anything that looks like a file path.
 fn short_title(title: &str) -> String {
@@ -51,24 +54,42 @@ fn outcome_of(state: &ErrandState) -> MorningOutcome {
     }
 }
 
-fn line_of(state: &ErrandState, halted: bool) -> String {
+fn pooled_line(ran_on: &super::RanOn, rest: &str) -> String {
+    if ran_on.kind == RanOnKind::Pooled {
+        let prefix = format!("Ran on the big model (host + {}).", ran_on.name);
+        if rest.is_empty() {
+            prefix
+        } else {
+            format!("{prefix} {rest}")
+        }
+    } else {
+        rest.to_string()
+    }
+}
+
+fn line_of(state: &ErrandState, halted: Option<&str>) -> String {
     match state {
         ErrandState::Ready { result, .. }
         | ErrandState::Shipping { result, .. }
-        | ErrandState::Shipped { result, .. } => result.summary.clone(),
+        | ErrandState::Shipped { result, .. } => pooled_line(&result.ran_on, &result.summary),
         ErrandState::NeedsYou {
             result, question, ..
         } => {
-            format!("{} Needs you: {question}", result.summary)
+            let body = format!("{} Needs you: {question}", result.summary);
+            pooled_line(&result.ran_on, body.trim())
         }
         ErrandState::Failed { reason, result, .. } => match result {
             Some(result) if !result.summary.is_empty() => {
-                format!("{} {reason}", result.summary)
+                let body = format!("{} {reason}", result.summary);
+                pooled_line(&result.ran_on, &body)
             }
-            _ => reason.clone(),
+            Some(result) => pooled_line(&result.ran_on, reason),
+            None => reason.clone(),
         },
         ErrandState::Queued { .. } | ErrandState::Working { .. } => {
-            if halted {
+            if halted == Some(HEAVY_UNAVAILABLE) {
+                "Waited — the PC wasn't lending.".into()
+            } else if halted.is_some() {
                 "Not reached: the night stopped early.".into()
             } else {
                 "Not reached before the morning.".into()
@@ -108,7 +129,7 @@ pub fn compose_morning(
                     (
                         title,
                         outcome_of(&errand.state),
-                        line_of(&errand.state, halted.is_some()),
+                        line_of(&errand.state, halted.as_deref()),
                     )
                 }
                 None => (
@@ -146,12 +167,40 @@ pub fn compose_morning(
         });
     }
 
+    let pooled_worker = plan.items.iter().find_map(|item| {
+        let NightItem::Errand { id } = item else {
+            return None;
+        };
+        let errand = by_id.get(id.as_str())?;
+        let result = match &errand.state {
+            ErrandState::Ready { result, .. }
+            | ErrandState::Shipping { result, .. }
+            | ErrandState::Shipped { result, .. }
+            | ErrandState::NeedsYou { result, .. } => Some(result),
+            ErrandState::Failed { result, .. } => result.as_ref(),
+            _ => None,
+        }?;
+        (result.ran_on.kind == RanOnKind::Pooled).then_some(result.ran_on.name.as_str())
+    });
+
     let total = items.len() as u32;
     let ran = ready + needs_you + failed;
     let spoken = if ran == 0 {
-        String::new()
+        if halted.as_deref() == Some(HEAVY_UNAVAILABLE) && !items.is_empty() {
+            "Waited — the PC wasn't lending.".into()
+        } else {
+            String::new()
+        }
     } else {
-        compose_spoken(total, ready, needs_you, failed, &items, halted.as_deref())
+        compose_spoken(
+            total,
+            ready,
+            needs_you,
+            failed,
+            &items,
+            halted.as_deref(),
+            pooled_worker,
+        )
     };
 
     MorningReport {
@@ -182,6 +231,7 @@ fn compose_spoken(
     failed: u32,
     items: &[MorningItem],
     halted: Option<&str>,
+    pooled_worker: Option<&str>,
 ) -> String {
     let mut sentences: Vec<String> = Vec::new();
     let review_phrase = match ready {
@@ -198,7 +248,11 @@ fn compose_spoken(
     });
 
     if let Some(halted) = halted {
-        sentences.push(format!("The night stopped early: {}.", one_line(halted)));
+        if halted == HEAVY_UNAVAILABLE {
+            sentences.push("Waited — the PC wasn't lending.".into());
+        } else {
+            sentences.push(format!("The night stopped early: {}.", one_line(halted)));
+        }
     } else if needs_you > 0 {
         let title = items
             .iter()
@@ -216,6 +270,8 @@ fn compose_spoken(
         } else {
             format!("{failed} jobs failed; the details are in the review.")
         });
+    } else if let Some(worker) = pooled_worker {
+        sentences.push(format!("Ran on the big model (host + {worker})."));
     }
     sentences.truncate(2);
     sentences.join(" ")

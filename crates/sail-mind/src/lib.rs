@@ -5,6 +5,7 @@ pub mod embedding;
 pub mod escalation;
 pub mod gemma;
 pub mod hardware;
+pub mod heavy;
 pub mod local;
 pub mod mesh;
 pub mod persist;

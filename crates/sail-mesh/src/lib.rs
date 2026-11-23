@@ -15,7 +15,9 @@
 //! The worker's PC belongs to someone who also uses it: [`rest`] decides when the worker
 //! steps aside (fully while gaming or making music, with exponential backoff while the PC
 //! is otherwise busy), measured by [`probe`].
+pub mod compute;
 pub mod discovery;
+pub mod hibernate;
 pub mod identity;
 pub mod pairing;
 pub mod probe;

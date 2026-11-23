@@ -1,0 +1,101 @@
+{
+  "settings": {
+    "enabled": true,
+    "window_start_hour": 1,
+    "window_end_hour": 7,
+    "max_items": 5,
+    "include_forge_ready_issues": true,
+    "use_mesh": true,
+    "use_heavy": true,
+    "fallback_to_host": false,
+    "external_solves_per_night": 0,
+    "external_provider": null,
+    "morning_greeting": true
+  },
+  "tonight": {
+    "window": "01:00–07:00",
+    "plan": {
+      "items": [
+        { "kind": "errand", "id": "e-112233445566" }
+      ],
+      "deferred": []
+    }
+  },
+  "errands": [
+    {
+      "id": "e-112233445566",
+      "ask": "Author the distributed consensus Arena course outline.",
+      "source": "web",
+      "created_at": "2026-11-22T14:05:00Z",
+      "updated_at": "2026-11-23T02:14:00Z",
+      "attempts": 1,
+      "external_used": false,
+      "notes": [],
+      "state": {
+        "state": "ready",
+        "order": {
+          "title": "Author distributed consensus Arena course",
+          "why": "Needs the 120B heavy lane while the PC is lending overnight.",
+          "acceptance": ["Outline covers safety, liveness, and Paxos/Raft trade-offs"],
+          "target_files": ["docs/arena/consensus.md"],
+          "size": "m",
+          "notes_for_solver": ""
+        },
+        "result": {
+          "job_id": "job-20261123-0210",
+          "base_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "ran_on": {
+            "kind": "pooled",
+            "name": "windows",
+            "model": "gpt-oss-120b-MXFP4"
+          },
+          "files": [
+            { "path": "docs/arena/consensus.md", "added": 140, "removed": 0 }
+          ],
+          "tests": {
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0,
+            "duration_secs": 2,
+            "exit_ok": true
+          },
+          "gates": [
+            { "name": "deterministic", "passed": true, "blocking": true, "detail": "ok" }
+          ],
+          "review": { "passed": true, "concerns": [] },
+          "summary": "Changed 1 file (+140 −0). 3 tests passed. All checks passed. Self-review: no concerns.",
+          "model_note": null,
+          "patch_bytes": 4200,
+          "finished_at": "2026-11-23T02:14:00Z"
+        }
+      }
+    }
+  ],
+  "morning": {
+    "date": "2026-11-23",
+    "ready": 1,
+    "needs_you": 0,
+    "failed": 0,
+    "not_reached": 0,
+    "items": [
+      {
+        "item": { "kind": "errand", "id": "e-112233445566" },
+        "title": "Author distributed consensus Arena course",
+        "outcome": "ready",
+        "line": "Ran on the big model (host + windows). Changed 1 file (+140 −0). 3 tests passed. All checks passed. Self-review: no concerns."
+      }
+    ],
+    "spoken": "Overnight I finished 1 of 1 jobs; one is ready to review. Ran on the big model (host + windows).",
+    "halted": null
+  },
+  "mesh": {
+    "available": true,
+    "name": "windows",
+    "resting": false
+  },
+  "external": {
+    "provider": null,
+    "used_tonight": 0,
+    "allowed": 0
+  }
+}

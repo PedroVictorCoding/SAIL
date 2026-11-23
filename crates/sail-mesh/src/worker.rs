@@ -14,7 +14,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
-use sail_protocol::mesh::{MESH_VERSION, MeshHello, MeshModel};
+use sail_protocol::mesh::{
+    COMPUTE_ROUTE, LEND_ROUTE, LendRequest, MESH_VERSION, MeshHello, MeshModel,
+};
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
@@ -59,6 +61,7 @@ struct Shared {
     slots: Arc<Semaphore>,
     max_parallel: usize,
     gate: RestGate,
+    compute: Option<crate::compute::ComputeHandle>,
     auth: Mutex<AuthThrottle>,
 }
 
@@ -151,10 +154,28 @@ pub fn router(identity: &WorkerIdentity, config: &WorkerConfig) -> Result<Router
     router_with_clock(identity, config, Arc::new(Instant::now))
 }
 
+/// [`router`] with pooled compute: `GET /mesh/v1/compute` is routed and `hello` reports it.
+pub fn router_with_compute(
+    identity: &WorkerIdentity,
+    config: &WorkerConfig,
+    compute: Option<crate::compute::ComputeHandle>,
+) -> Result<Router> {
+    build_router(identity, config, compute, Arc::new(Instant::now))
+}
+
 /// [`router`] with an injectable clock, so the auth throttle can be tested without waiting.
 pub(crate) fn router_with_clock(
     identity: &WorkerIdentity,
     config: &WorkerConfig,
+    now: NowFn,
+) -> Result<Router> {
+    build_router(identity, config, None, now)
+}
+
+fn build_router(
+    identity: &WorkerIdentity,
+    config: &WorkerConfig,
+    compute: Option<crate::compute::ComputeHandle>,
     now: NowFn,
 ) -> Result<Router> {
     let client = reqwest::Client::builder()
@@ -173,6 +194,7 @@ pub(crate) fn router_with_clock(
         slots: Arc::new(Semaphore::new(max_parallel)),
         max_parallel,
         gate: config.gate.clone(),
+        compute,
         auth: Mutex::new(AuthThrottle::new(now)),
     });
     Ok(Router::new()
@@ -187,7 +209,17 @@ pub async fn serve(
     config: &WorkerConfig,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
-    let app = router(identity, config)?;
+    serve_with_compute(identity, config, None, shutdown).await
+}
+
+/// [`serve`] with pooled compute routed through the worker's TLS and bearer auth.
+pub async fn serve_with_compute(
+    identity: &WorkerIdentity,
+    config: &WorkerConfig,
+    compute: Option<crate::compute::ComputeHandle>,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<()> {
+    let app = router_with_compute(identity, config, compute)?;
     let tls = crate::tls::server_config(&identity.cert_der, &identity.key_der)?;
     let tls = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls));
     let handle = axum_server::Handle::new();
@@ -255,6 +287,32 @@ async fn handle(State(shared): State<Arc<Shared>>, request: Request) -> Response
     let path = request.uri().path();
     if request.uri().query().is_some() {
         return error(StatusCode::BAD_REQUEST, "query strings are not forwarded");
+    }
+    if path == COMPUTE_ROUTE && request.method() == Method::GET {
+        return match shared.compute.clone() {
+            Some(compute) => crate::compute::tunnel::accept(&compute, request).await,
+            None => error(
+                StatusCode::NOT_FOUND,
+                "compute is not configured on this worker",
+            ),
+        };
+    }
+    if path == LEND_ROUTE && request.method() == Method::POST {
+        let Some(compute) = shared.compute.clone() else {
+            return error(StatusCode::CONFLICT, "no_compute");
+        };
+        let body = match axum::body::to_bytes(request.into_body(), MAX_BODY_BYTES).await {
+            Ok(body) => body,
+            Err(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, "request body too large"),
+        };
+        let request = match serde_json::from_slice::<LendRequest>(&body) {
+            Ok(request) => request,
+            Err(_) => return error(StatusCode::BAD_REQUEST, "expected {\"mode\": ...}"),
+        };
+        return match compute.set_mode(request.mode) {
+            Ok(snapshot) => axum::Json(snapshot).into_response(),
+            Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        };
     }
     if path == HELLO_ROUTE && request.method() == Method::GET {
         return axum::Json(hello(&shared).await).into_response();
@@ -404,6 +462,10 @@ async fn hello(shared: &Shared) -> MeshHello {
         model,
         upstream_error,
         busy: shared.gate.busy(),
+        compute: shared
+            .compute
+            .as_ref()
+            .map(crate::compute::ComputeHandle::snapshot),
     }
 }
 
