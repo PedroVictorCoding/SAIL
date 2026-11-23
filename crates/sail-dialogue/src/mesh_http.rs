@@ -94,6 +94,7 @@ fn status(s: &HttpState) -> MeshStatus {
             workers: vec![],
             offloaded: 0,
             fell_back: 0,
+            heavy: None,
         },
         |pool| pool.status(),
     )

@@ -246,6 +246,7 @@ impl RemoteWorker {
             busy: (state.status == MeshWorkerState::Busy)
                 .then(|| hello.and_then(|h| h.busy.clone()))
                 .flatten(),
+            compute: None,
         }
     }
 }
@@ -577,6 +578,7 @@ impl MeshPool {
             workers: self.workers().iter().map(|w| w.status()).collect(),
             offloaded: self.offloaded.load(Ordering::Relaxed),
             fell_back: self.fell_back.load(Ordering::Relaxed),
+            heavy: None,
         }
     }
 

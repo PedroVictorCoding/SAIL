@@ -120,6 +120,9 @@ pub struct MeshWorkerStatus {
     /// Why the worker is resting, when its state is `busy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub busy: Option<MeshBusy>,
+    /// How this worker lends its compute, when it was started with `--compute`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute: Option<MeshCompute>,
 }
 
 /// Mesh section of Mind's status.
@@ -132,6 +135,9 @@ pub struct MeshStatus {
     pub offloaded: u64,
     /// Requests that were tried on a worker, failed before any output, and ran on the host.
     pub fell_back: u64,
+    /// The host's heavy model, when one is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy: Option<HeavyStatus>,
 }
 
 /// How the owner set lending. serde, internally tagged:
@@ -226,3 +232,38 @@ pub const COMPUTE_ROUTE: &str = "/mesh/v1/compute";
 pub const LEND_ROUTE: &str = "/mesh/v1/lend";
 /// Upgrade protocol token.
 pub const COMPUTE_UPGRADE: &str = "sail-rpc/1";
+
+/// State of the host's heavy model (round 29b). serde, internally tagged:
+/// `{"state":"running"}` | `{"state":"starting"}` |
+/// `{"state":"stopped","reason":"PC not lending"}` | `{"state":"failed","reason":"…"}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum HeavyState {
+    Running,
+    Starting,
+    Stopped { reason: String },
+    Failed { reason: String },
+}
+
+/// The Night Shift job that is using the heavy model, for display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeavyJob {
+    pub title: String,
+    /// RFC3339 UTC.
+    pub since: String,
+}
+
+/// The host's heavy model as Settings → Models shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeavyStatus {
+    /// GGUF file stem, e.g. "gpt-oss-120b-MXFP4".
+    pub model: String,
+    pub state: HeavyState,
+    /// The lending worker, if any.
+    pub worker: Option<String>,
+    pub host_ram_bytes: u64,
+    pub host_vram_bytes: u64,
+    pub remote_bytes: u64,
+    pub tokens_per_second: Option<f64>,
+    pub job: Option<HeavyJob>,
+}
