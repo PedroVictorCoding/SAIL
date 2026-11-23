@@ -87,6 +87,8 @@ pub struct LocalModelConfig {
     pub mlock: bool,
     pub startup_timeout: Duration,
     pub probe_timeout: Duration,
+    /// Additional llama-server arguments applied after the standard options.
+    pub extra_args: Vec<String>,
 }
 impl Default for LocalModelConfig {
     fn default() -> Self {
@@ -183,6 +185,7 @@ impl Default for LocalModelConfig {
                 .unwrap_or(false),
             startup_timeout: Duration::from_secs(120),
             probe_timeout: Duration::from_secs(3),
+            extra_args: Vec::new(),
         }
     }
 }
@@ -351,6 +354,7 @@ impl LocalModelConfig {
             mlock: profile.mlock,
             startup_timeout: Duration::from_secs(120),
             probe_timeout: Duration::from_secs(3),
+            extra_args: Vec::new(),
         }
     }
     pub fn to_profile(&self) -> InferenceProfile {
@@ -478,6 +482,7 @@ impl LocalModelConfig {
         if self.mlock {
             args.push("--mlock".into());
         }
+        args.extend(self.extra_args.iter().cloned());
         Ok(args)
     }
 }
@@ -504,4 +509,43 @@ pub fn local_endpoint(endpoint: &str) -> Result<reqwest::Url> {
         ));
     }
     Ok(url)
+}
+
+/// Configuration for the managed, pooled Night Shift model.
+pub struct HeavyConfig {
+    /// The GGUF path configured by SAIL_HEAVY_MODEL_PATH.
+    pub model_path: PathBuf,
+    /// The RPC-enabled llama-server, set by SAIL_HEAVY_SERVER_BINARY.
+    pub server_binary: PathBuf,
+    /// Loopback port. The handoff fixes the default at 8083.
+    pub port: u16,
+    /// Per-request context. The handoff fixes the default at 16,384 tokens.
+    pub context_tokens: usize,
+    /// Limits on this model's share of the host.
+    pub caps: crate::heavy::admission::HostCaps,
+}
+
+impl HeavyConfig {
+    /// Returns None when the owner hasn't configured a heavy GGUF path.
+    pub fn from_env() -> Option<Self> {
+        let model_path =
+            std::env::var_os("SAIL_HEAVY_MODEL_PATH").filter(|path| !path.is_empty())?;
+        Some(Self {
+            model_path: model_path.into(),
+            server_binary: std::env::var_os("SAIL_HEAVY_SERVER_BINARY")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| "/srv/sail-data/llama-build-rpc/bin/llama-server".into()),
+            port: std::env::var("SAIL_HEAVY_PORT")
+                .ok()
+                .and_then(|port| port.parse().ok())
+                .filter(|port| *port > 0)
+                .unwrap_or(8083),
+            context_tokens: std::env::var("SAIL_HEAVY_CTX")
+                .ok()
+                .and_then(|tokens| tokens.parse().ok())
+                .filter(|tokens| *tokens > 0)
+                .unwrap_or(16_384),
+            caps: crate::heavy::admission::HostCaps::from_env(),
+        })
+    }
 }

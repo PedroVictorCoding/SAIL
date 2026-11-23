@@ -1,6 +1,7 @@
 use crate::{
     backend::InferenceBackend,
-    config::LocalModelConfig,
+    config::{HeavyConfig, LocalModelConfig},
+    heavy::lane::HeavyLane,
     local::{LocalGemmaBackend, emit},
     mesh::{MeshLease, MeshPool, falls_back},
     validation::{validate_limits, validate_request},
@@ -29,6 +30,7 @@ struct Inner {
     lifecycle: CancellationToken,
     /// Paired SAIL Mesh workers, when attached ([`MindService::attach_mesh`]).
     mesh: std::sync::OnceLock<Arc<MeshPool>>,
+    heavy: std::sync::OnceLock<Arc<HeavyLane>>,
 }
 struct State {
     accepting: bool,
@@ -120,6 +122,7 @@ impl MindService {
                 backends,
                 lifecycle: CancellationToken::new(),
                 mesh: std::sync::OnceLock::new(),
+                heavy: std::sync::OnceLock::new(),
                 semaphore: Arc::new(Semaphore::new(limits.max_parallel)),
                 limits,
                 state: Mutex::new(State {
@@ -140,12 +143,25 @@ impl MindService {
     pub fn mesh(&self) -> Option<&Arc<MeshPool>> {
         self.inner.mesh.get()
     }
+    /// The optional pooled model lane configured for this service.
+    pub fn heavy(&self) -> Option<Arc<HeavyLane>> {
+        self.inner.heavy.get().cloned()
+    }
+
     pub async fn start(&self) -> Result<()> {
         if let Some(mesh) = self.inner.mesh.get() {
             mesh.spawn_monitor(self.inner.lifecycle.clone());
         }
         for backend in &self.inner.backends {
             tokio::select! {biased;_ = self.inner.lifecycle.cancelled()=>return Err(InferenceError::new(ErrorCode::ShuttingDown,"Mind startup cancelled by shutdown")),result=backend.start()=>{result?;}}
+        }
+        if let Some(mesh) = self.mesh()
+            && let Some(config) = HeavyConfig::from_env()
+        {
+            self.inner
+                .heavy
+                .get_or_init(|| HeavyLane::new(config, mesh.clone()))
+                .spawn(self.inner.lifecycle.clone());
         }
         Ok(())
     }

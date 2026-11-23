@@ -137,6 +137,7 @@ pub struct OwnerNote {
 pub enum RanOnKind {
     Host,
     Mesh,
+    Pooled,
     External,
 }
 
@@ -287,6 +288,10 @@ pub struct NightShiftSettings {
     pub max_items: u8,
     pub include_forge_ready_issues: bool,
     pub use_mesh: bool,
+    /// Prefer the pooled heavy model for Night Shift errands.
+    pub use_heavy: bool,
+    /// Allow the host model when the heavy lane is unavailable.
+    pub fallback_to_host: bool,
     pub external_solves_per_night: u8,
     pub external_provider: Option<String>,
     pub morning_greeting: bool,
@@ -301,6 +306,8 @@ impl Default for NightShiftSettings {
             max_items: 5,
             include_forge_ready_issues: true,
             use_mesh: true,
+            use_heavy: true,
+            fallback_to_host: false,
             external_solves_per_night: 0,
             external_provider: None,
             morning_greeting: true,
@@ -414,10 +421,15 @@ impl std::fmt::Debug for Endpoint {
     }
 }
 
-/// Chooses an endpoint once per job attempt. The host is always the fallback.
+/// Chooses an endpoint once per job attempt.
 pub trait EndpointPicker: Send + Sync {
     /// Pick the endpoint for one attempt. Must always return something.
     fn pick(&self, use_mesh: bool) -> Endpoint;
+
+    /// The pooled endpoint, while the heavy model is running.
+    fn heavy(&self) -> Option<Endpoint> {
+        None
+    }
 
     /// The host endpoint, used to retry an attempt whose Mesh endpoint failed in
     /// transport.

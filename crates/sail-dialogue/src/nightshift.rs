@@ -442,6 +442,19 @@ struct MeshPicker {
 }
 
 impl EndpointPicker for MeshPicker {
+    fn heavy(&self) -> Option<Endpoint> {
+        let endpoint = self.mind.heavy()?.endpoint()?;
+        Some(Endpoint {
+            url: endpoint.url,
+            ran_on: RanOn {
+                kind: RanOnKind::Pooled,
+                name: endpoint.worker,
+                model: endpoint.model,
+            },
+            client: None,
+        })
+    }
+
     fn pick(&self, use_mesh: bool) -> Endpoint {
         if use_mesh && let Some(worker) = self.mind.mesh().and_then(|pool| pool.night_worker()) {
             return Endpoint {
