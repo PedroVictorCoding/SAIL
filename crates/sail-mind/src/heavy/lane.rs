@@ -5,6 +5,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use sail_common::resources::{self, ResourceScheduler};
 use sail_mesh::{
     HELLO_ROUTE, compute::tunnel::HostTunnel, registry::WorkerRecord, tls::pinned_client,
 };
@@ -50,6 +51,7 @@ pub struct HeavyEndpoint {
 pub struct HeavyLane {
     config: HeavyConfig,
     mesh: Arc<MeshPool>,
+    scheduler: Arc<ResourceScheduler>,
     status: Mutex<HeavyStatus>,
     summary: Mutex<Option<(PathBuf, SystemTime, Arc<GgufSummary>)>>,
     started: OnceLock<()>,
@@ -58,6 +60,15 @@ pub struct HeavyLane {
 impl HeavyLane {
     /// Create a stopped lane with no inference server or tunnel.
     pub fn new(config: HeavyConfig, mesh: Arc<MeshPool>) -> Arc<Self> {
+        Self::with_scheduler(config, mesh, resources::global())
+    }
+
+    /// Create the lane with the same scheduler the owning Mind service uses.
+    pub fn with_scheduler(
+        config: HeavyConfig,
+        mesh: Arc<MeshPool>,
+        scheduler: Arc<ResourceScheduler>,
+    ) -> Arc<Self> {
         let model = config
             .model_path
             .file_stem()
@@ -66,6 +77,7 @@ impl HeavyLane {
         Arc::new(Self {
             config,
             mesh,
+            scheduler,
             status: Mutex::new(HeavyStatus {
                 model,
                 state: HeavyState::Stopped {
@@ -312,6 +324,7 @@ impl HeavyLane {
             managed: true,
             persist: false,
             mlock: false,
+            no_mmap: false,
             compute: sail_protocol::ComputeBackend::Cpu,
             context_tokens: self.config.context_tokens,
             cpu_moe: crate::config::CpuMoe::Off,
@@ -323,7 +336,8 @@ impl HeavyLane {
                 .collect(),
             ..LocalModelConfig::default()
         };
-        let backend = LocalGemmaBackend::new(config, 1).map_err(|error| error.message)?;
+        let backend = LocalGemmaBackend::with_scheduler(config, 1, self.scheduler.clone())
+            .map_err(|error| error.message)?;
         let ready = backend.start().await.map_err(|error| error.message)?;
         if !ready.owned_process {
             return Err("Pooled port is already in use".into());

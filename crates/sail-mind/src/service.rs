@@ -160,7 +160,9 @@ impl MindService {
         {
             self.inner
                 .heavy
-                .get_or_init(|| HeavyLane::new(config, mesh.clone()))
+                .get_or_init(|| {
+                    HeavyLane::with_scheduler(config, mesh.clone(), self.inner.scheduler.clone())
+                })
                 .spawn(self.inner.lifecycle.clone());
         }
         Ok(())

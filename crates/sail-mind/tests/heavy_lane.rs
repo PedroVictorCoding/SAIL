@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use sail_common::resources::{AdmissionPolicy, HostProbe, ResourceScheduler};
 use sail_mesh::{
     Registry, WorkerRecord,
     compute::{
@@ -28,11 +29,29 @@ use sail_mind::{
     },
     mesh::{MeshPool, MeshSettings},
 };
-use sail_protocol::mesh::{HeavyState, LendMode, LendState, LendWindow, MeshMode};
+use sail_protocol::{
+    mesh::{HeavyState, LendMode, LendState, LendWindow, MeshMode},
+    resources::HostSample,
+};
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
 const GIB: u64 = 1 << 30;
+
+struct FixtureHost;
+
+impl HostProbe for FixtureHost {
+    fn sample(&self) -> std::io::Result<HostSample> {
+        Ok(HostSample {
+            available_ram_bytes: 16 * GIB,
+            total_ram_bytes: 32 * GIB,
+            swap_used_bytes: 0,
+            swap_total_bytes: 0,
+            logical_cpus: 4,
+            memory_pressure_avg10: Some(0.0),
+        })
+    }
+}
 
 fn free_port() -> u16 {
     TcpListener::bind(("127.0.0.1", 0))
@@ -158,7 +177,7 @@ impl Fixture {
         let model_path = dir.path().join(format!("{stem}.gguf"));
         model_file(&model_path, host_bytes);
         let port = free_port();
-        let lane = HeavyLane::new(
+        let lane = HeavyLane::with_scheduler(
             HeavyConfig {
                 model_path: model_path.clone(),
                 server_binary: manifest.join("tests/fixtures/fake-pooled-llama-server.py"),
@@ -170,6 +189,10 @@ impl Fixture {
                 },
             },
             pool,
+            Arc::new(ResourceScheduler::new(
+                Arc::new(FixtureHost),
+                AdmissionPolicy::default(),
+            )),
         );
         lane.spawn(lifecycle.clone());
         Self {
