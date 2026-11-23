@@ -871,7 +871,13 @@ impl ForgeNightlyRunner {
         if endpoint.url.trim().is_empty() {
             return;
         }
-        self.orchestrator.set_job_endpoint(job_id, endpoint.clone());
+        let timing = self.endpoint_picker.as_ref().and_then(|picker| {
+            (endpoint.ran_on.kind == RanOnKind::Pooled)
+                .then(|| picker.pooled_timing())
+                .flatten()
+        });
+        self.orchestrator
+            .set_job_endpoint_with_timing(job_id, endpoint.clone(), timing);
         let store = self.orchestrator.checkpoint_store();
         match store.load(job_id) {
             Ok(Some(mut checkpoint)) => {

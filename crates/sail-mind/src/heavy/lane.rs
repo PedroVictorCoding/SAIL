@@ -1,7 +1,10 @@
 //! Lifecycle of the managed pooled model. This adapter owns only its own server and tunnel.
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    sync::{
+        Arc, Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
@@ -58,6 +61,8 @@ pub struct HeavyLane {
     status: Mutex<HeavyStatus>,
     summary: Mutex<Option<(PathBuf, SystemTime, Arc<GgufSummary>)>>,
     started: OnceLock<()>,
+    session: AtomicU64,
+    completion_timing: AtomicBool,
 }
 
 impl HeavyLane {
@@ -95,6 +100,8 @@ impl HeavyLane {
             }),
             summary: Mutex::new(None),
             started: OnceLock::new(),
+            session: AtomicU64::new(0),
+            completion_timing: AtomicBool::new(false),
         })
     }
 
@@ -131,6 +138,30 @@ impl HeavyLane {
         status.job = job.filter(|_| status.state == HeavyState::Running);
     }
 
+    /// Capture the running session so a late reply cannot update a replacement server.
+    pub fn completion_timing_observer(self: &Arc<Self>) -> Option<Arc<dyn Fn(f64) + Send + Sync>> {
+        let status = self.snapshot();
+        if status.state != HeavyState::Running {
+            return None;
+        }
+        let session = self.session.load(Ordering::Relaxed);
+        let lane = Arc::downgrade(self);
+        Some(Arc::new(move |rate| {
+            if !rate.is_finite() || rate <= 0.0 {
+                return;
+            }
+            if let Some(lane) = lane.upgrade() {
+                let mut status = lane.snapshot();
+                if status.state == HeavyState::Running
+                    && lane.session.load(Ordering::Relaxed) == session
+                {
+                    status.tokens_per_second = Some(rate);
+                    lane.completion_timing.store(true, Ordering::Relaxed);
+                }
+            }
+        }))
+    }
+
     fn snapshot(&self) -> MutexGuard<'_, HeavyStatus> {
         self.status
             .lock()
@@ -149,6 +180,8 @@ impl HeavyLane {
         status.host_vram_bytes = placement.map_or(0, |p| p.host_vram_bytes);
         status.remote_bytes = placement.map_or(0, |p| p.remote_bytes);
         if status.state != HeavyState::Running {
+            self.session.fetch_add(1, Ordering::Relaxed);
+            self.completion_timing.store(false, Ordering::Relaxed);
             status.tokens_per_second = None;
             status.job = None;
         }
@@ -383,7 +416,10 @@ impl HeavyLane {
                 }
                 _ = metrics.tick() => {
                     let speed = read_throughput(&metrics_client, &metrics_url).await;
-                    self.snapshot().tokens_per_second = speed;
+                    let mut status = self.snapshot();
+                    if !self.completion_timing.load(Ordering::Relaxed) {
+                        status.tokens_per_second = speed;
+                    }
                 }
             }
         }

@@ -421,6 +421,9 @@ impl std::fmt::Debug for Endpoint {
     }
 }
 
+/// Receives observed generation throughput from a completed model reply.
+pub type CompletionTiming = std::sync::Arc<dyn Fn(f64) + Send + Sync>;
+
 /// Chooses an endpoint once per job attempt.
 pub trait EndpointPicker: Send + Sync {
     /// Pick the endpoint for one attempt. Must always return something.
@@ -428,6 +431,11 @@ pub trait EndpointPicker: Send + Sync {
 
     /// The pooled endpoint, while the heavy model is running.
     fn heavy(&self) -> Option<Endpoint> {
+        None
+    }
+
+    /// Observe completion timing for the current pooled server session.
+    fn pooled_timing(&self) -> Option<CompletionTiming> {
         None
     }
 

@@ -265,6 +265,11 @@ async fn starts_on_lending_and_stops_within_five_seconds_of_pause() {
     .await
     .unwrap();
 
+    let observe = fixture.lane.completion_timing_observer().unwrap();
+    observe(12.375);
+    observe(f64::NAN);
+    assert_eq!(fixture.lane.status().tokens_per_second, Some(12.375));
+
     fixture.supervisor.set_mode(LendMode::Pause).unwrap();
     assert_eq!(fixture.supervisor.tick(None).await, LendState::Paused);
     timeout(Duration::from_secs(5), async {
@@ -281,6 +286,8 @@ async fn starts_on_lending_and_stops_within_five_seconds_of_pause() {
     })
     .await
     .unwrap();
+    observe(42.0);
+    assert_eq!(fixture.lane.status().tokens_per_second, None);
 }
 
 #[tokio::test]

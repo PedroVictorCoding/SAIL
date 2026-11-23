@@ -506,6 +506,10 @@ impl EndpointPicker for MeshPicker {
         })
     }
 
+    fn pooled_timing(&self) -> Option<sail_forge::nightshift::CompletionTiming> {
+        self.mind.heavy()?.completion_timing_observer()
+    }
+
     fn pick(&self, use_mesh: bool) -> Endpoint {
         if use_mesh && let Some(worker) = self.mind.mesh().and_then(|pool| pool.night_worker()) {
             return Endpoint {
