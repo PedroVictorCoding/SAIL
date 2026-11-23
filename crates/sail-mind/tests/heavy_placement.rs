@@ -116,14 +116,16 @@ fn experts_fill_remote_devices_first_and_emit_exact_overrides() {
             args: vec![
                 "--device".into(),
                 "Vulkan0,RPC0,RPC1".into(),
+                "--tensor-split".into(),
+                "1,0,0".into(),
                 "-ngl".into(),
                 "999".into(),
                 "-ot".into(),
-                r"blk\.(0)\.ffn_(up|gate|down)_exps\.=RPC0".into(),
+                r"blk\.(0)\.ffn_[a-z_]*_exps\.=RPC0".into(),
                 "-ot".into(),
-                r"blk\.(1)\.ffn_(up|gate|down)_exps\.=RPC1".into(),
+                r"blk\.(1)\.ffn_[a-z_]*_exps\.=RPC1".into(),
                 "-ot".into(),
-                r"blk\.(2|3)\.ffn_(up|gate|down)_exps\.=CPU".into(),
+                r"blk\.(2|3)\.ffn_[a-z_]*_exps\.=CPU".into(),
                 "-ot".into(),
                 ".*=Vulkan0".into(),
             ],
@@ -180,26 +182,26 @@ fn a_gpt_oss_sized_model_uses_remote_capacity_before_host_ram() {
             ("CPU".into(), non_expert + 24 * GIB),
         ]
     );
-    assert_eq!(placement.args[0], "--device");
-    assert_eq!(placement.args[1], "RPC0,RPC1");
-    assert_eq!(placement.args[2], "-ngl");
-    assert_eq!(placement.args[3], "999");
     assert_eq!(
-        placement.args[4], "--no-kv-offload",
-        "with no host GPU share, KV must not follow layers onto an RPC device"
+        placement.args,
+        vec![
+            "--device".to_owned(),
+            "RPC0,RPC1".to_owned(),
+            "-ngl".to_owned(),
+            "999".to_owned(),
+            "--no-kv-offload".to_owned(),
+            "-ot".to_owned(),
+            r"blk\.(0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15)\.ffn_[a-z_]*_exps\.=RPC0".to_owned(),
+            "-ot".to_owned(),
+            r"blk\.(16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31)\.ffn_[a-z_]*_exps\.=RPC1"
+                .to_owned(),
+            "-ot".to_owned(),
+            r"blk\.(32|33|34|35)\.ffn_[a-z_]*_exps\.=CPU".to_owned(),
+            "-ot".to_owned(),
+            ".*=CPU".to_owned(),
+        ],
+        "host GPU off: no tensor split, two RPC shares, KV stays on the CPU"
     );
-    assert_eq!(
-        placement.args.get(10).expect("CPU expert override"),
-        r"blk\.(32|33|34|35)\.ffn_(up|gate|down)_exps\.=CPU"
-    );
-    assert_eq!(
-        placement.args.last().expect("host catch-all"),
-        ".*=CPU",
-        "non-experts and KV stay on the host"
-    );
-    assert!(placement.args.contains(
-        &r"blk\.(0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15)\.ffn_(up|gate|down)_exps\.=RPC0".into()
-    ));
     assert_eq!(
         plan(&model, &budgets).expect("plan again"),
         placement,
@@ -220,8 +222,22 @@ fn everything_remote_leaves_cpu_out_of_the_device_list() {
     assert_eq!(placement.host_vram_bytes, 600);
     assert_eq!(placement.host_ram_bytes, 0);
     assert_eq!(placement.remote_bytes, 12_000);
-    assert_eq!(placement.args[1], "Vulkan0,RPC0");
-    assert_eq!(placement.args.last().expect("last"), ".*=Vulkan0");
+    assert_eq!(
+        placement.args,
+        vec![
+            "--device".to_owned(),
+            "Vulkan0,RPC0".to_owned(),
+            "--tensor-split".to_owned(),
+            "1,0".to_owned(),
+            "-ngl".to_owned(),
+            "999".to_owned(),
+            "-ot".to_owned(),
+            r"blk\.(0|1|2|3)\.ffn_[a-z_]*_exps\.=RPC0".to_owned(),
+            "-ot".to_owned(),
+            ".*=Vulkan0".to_owned(),
+        ],
+        "one RPC device gets a zero share"
+    );
     assert!(
         !placement.args.iter().any(|arg| arg.contains("=CPU")),
         "{:?}",
@@ -250,7 +266,7 @@ fn a_cpu_only_plan_omits_device_and_still_overrides_every_expert() {
             "999".to_owned(),
             "--no-kv-offload".to_owned(),
             "-ot".to_owned(),
-            r"blk\.(0|1|2|3)\.ffn_(up|gate|down)_exps\.=CPU".to_owned(),
+            r"blk\.(0|1|2|3)\.ffn_[a-z_]*_exps\.=CPU".to_owned(),
             "-ot".to_owned(),
             ".*=CPU".to_owned(),
         ],
@@ -258,6 +274,100 @@ fn a_cpu_only_plan_omits_device_and_still_overrides_every_expert() {
     );
     assert_eq!(placement.host_ram_bytes, 12_500);
     assert_eq!(placement.per_device, vec![("CPU".into(), 12_500)]);
+}
+
+#[test]
+fn a_cpu_host_share_with_one_rpc_device_has_no_tensor_split() {
+    let model = small_model(4);
+    let budgets = Budgets {
+        host_gpu: Some(("Vulkan0".into(), 0)),
+        host_ram_bytes: 500,
+        remote: vec![("RPC0".into(), 12_000)],
+        kv_bytes: 0,
+    };
+    let placement = plan(&model, &budgets).expect("plan");
+    assert_eq!(placement.host_vram_bytes, 0);
+    assert_eq!(placement.host_ram_bytes, 500);
+    assert_eq!(
+        placement.args,
+        vec![
+            "--device".to_owned(),
+            "RPC0".to_owned(),
+            "-ngl".to_owned(),
+            "999".to_owned(),
+            "--no-kv-offload".to_owned(),
+            "-ot".to_owned(),
+            r"blk\.(0|1|2|3)\.ffn_[a-z_]*_exps\.=RPC0".to_owned(),
+            "-ot".to_owned(),
+            ".*=CPU".to_owned(),
+        ],
+        "the host GPU is off: no tensor split, and KV stays on the CPU"
+    );
+    assert_eq!(
+        placement.per_device,
+        vec![("RPC0".into(), 12_000), ("CPU".into(), 500)]
+    );
+}
+
+#[test]
+fn a_fused_expert_name_is_counted_and_overridden_by_the_same_rule() {
+    let model = GgufSummary {
+        architecture: "gpt-oss".into(),
+        block_count: 3,
+        expert_count: Some(64),
+        tensors: vec![
+            GgufTensor {
+                name: "blk.0.ffn_gate_up_exps.weight".into(),
+                bytes: 2_000,
+            },
+            GgufTensor {
+                name: "blk.0.ffn_down_exps.weight".into(),
+                bytes: 1_000,
+            },
+            GgufTensor {
+                name: "blk.0.attn_q.weight".into(),
+                bytes: 100,
+            },
+            GgufTensor {
+                name: "blk.1.ffn_up_exps.weight".into(),
+                bytes: 1_000,
+            },
+            GgufTensor {
+                name: "blk.2.ffn_gate.weight".into(),
+                bytes: 50,
+            },
+        ],
+    };
+    let budgets = Budgets {
+        host_gpu: Some(("Vulkan0".into(), 1_000)),
+        host_ram_bytes: 0,
+        remote: vec![("RPC0".into(), 4_000)],
+        kv_bytes: 100,
+    };
+    let placement = plan(&model, &budgets).expect("plan");
+    assert_eq!(
+        placement.args,
+        vec![
+            "--device".to_owned(),
+            "Vulkan0,RPC0".to_owned(),
+            "--tensor-split".to_owned(),
+            "1,0".to_owned(),
+            "-ngl".to_owned(),
+            "999".to_owned(),
+            "-ot".to_owned(),
+            r"blk\.(0|1)\.ffn_[a-z_]*_exps\.=RPC0".to_owned(),
+            "-ot".to_owned(),
+            ".*=Vulkan0".to_owned(),
+        ],
+        "the fused expert layer is remote, not left to the host catch-all"
+    );
+    assert_eq!(placement.host_vram_bytes, 250, "non-experts plus KV");
+    assert_eq!(placement.remote_bytes, 4_000, "both expert layers");
+    assert_eq!(
+        placement.per_device,
+        vec![("Vulkan0".into(), 250), ("RPC0".into(), 4_000)],
+        "no host RAM share and no CPU expert override"
+    );
 }
 
 #[test]

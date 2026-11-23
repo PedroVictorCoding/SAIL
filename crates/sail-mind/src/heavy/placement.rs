@@ -70,7 +70,9 @@ pub struct Budgets {
 /// Where the planner put everything, plus the llama-server arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placement {
-    /// Args to append: `--device <list>` (omitted when every device is CPU), `-ngl 999`,
+    /// Args to append: `--device <list>` (omitted when every device is CPU),
+    /// `--tensor-split 1,0[,0...]` when the host GPU holds the attention share (its
+    /// `dev_layer` stays `Vulkan0`, so KV and non-experts sit there too), `-ngl 999`,
     /// `--no-kv-offload` when the host GPU share is off (KV follows `dev_layer`, not `-ot`),
     /// one `-ot <regex>=<device>` per expert group, then a final `-ot .*=<host device>` so
     /// llama.cpp keeps every non-expert weight on the host share. The host catch-all must stay
@@ -95,8 +97,8 @@ pub enum PlanError {
 /// Rules, in order:
 /// 1. All non-expert tensors and `kv_bytes` go on the host GPU if they fit its cap, else in
 ///    host RAM.
-/// 2. Expert tensors (`blk.N.ffn_*_exps.*`) fill the remote devices whole layers at a time,
-///    in their configured preference order.
+/// 2. Expert tensors (`blk.N.ffn_<lowercase>_exps.*`) fill the remote devices whole layers at
+///    a time, in their configured preference order.
 /// 3. Any layers left over go to host RAM, up to `host_ram_bytes`.
 /// 4. Anything still left over is [`PlanError::DoesNotFit`].
 ///
@@ -185,6 +187,16 @@ pub fn plan(model: &GgufSummary, budgets: &Budgets) -> Result<Placement, PlanErr
     if !devices.is_empty() {
         args.push("--device".to_owned());
         args.push(devices.join(","));
+        if host_gpu_name.is_some() && host_vram_bytes > 0 {
+            // The host GPU is first in `devices`; a share of 1 and zeros for the RPC devices
+            // puts every layer's dev_layer on it, so KV follows the attention share.
+            let mut split = String::from("1");
+            for _ in 1..devices.len() {
+                split.push_str(",0");
+            }
+            args.push("--tensor-split".to_owned());
+            args.push(split);
+        }
     }
     args.push("-ngl".to_owned());
     args.push("999".to_owned());
@@ -240,7 +252,21 @@ fn expert_layer(name: &str) -> Option<u32> {
     let rest = name.strip_prefix("blk.")?;
     let (digits, rest) = rest.split_once('.')?;
     let layer = digits.parse::<u32>().ok()?;
-    (rest.contains("ffn_") && rest.contains("_exps")).then_some(layer)
+    is_expert_tensor(rest).then_some(layer)
+}
+
+/// `ffn_[a-z_]*_exps\.` — the same shape the `-ot` pattern uses, so a fused name such as
+/// `ffn_gate_up_exps` is counted and overridden together.
+fn is_expert_tensor(rest: &str) -> bool {
+    let Some(tail) = rest.strip_prefix("ffn_") else {
+        return false;
+    };
+    let Some(end) = tail.find("_exps.") else {
+        return false;
+    };
+    tail[..end]
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c == '_')
 }
 
 /// Group ascending layer numbers into contiguous runs.
@@ -262,12 +288,12 @@ fn contiguous_runs(layers: &[u32]) -> Vec<Vec<u32>> {
     runs
 }
 
-/// `blk\.(0|1|2)\.ffn_(up|gate|down)_exps\.=RPC0`
+/// `blk\.(0|1|2)\.ffn_[a-z_]*_exps\.=RPC0`
 fn override_pattern(layers: &[u32], device: &str) -> String {
     let alternatives = layers
         .iter()
         .map(u32::to_string)
         .collect::<Vec<_>>()
         .join("|");
-    format!(r"blk\.({alternatives})\.ffn_(up|gate|down)_exps\.={device}")
+    format!(r"blk\.({alternatives})\.ffn_[a-z_]*_exps\.={device}")
 }
