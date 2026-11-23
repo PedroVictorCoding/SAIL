@@ -115,7 +115,7 @@ fn experts_fill_remote_devices_first_and_emit_exact_overrides() {
         Placement {
             args: vec![
                 "--device".into(),
-                "Vulkan0,RPC0,RPC1,CPU".into(),
+                "Vulkan0,RPC0,RPC1".into(),
                 "-ngl".into(),
                 "999".into(),
                 "-ot".into(),
@@ -124,6 +124,8 @@ fn experts_fill_remote_devices_first_and_emit_exact_overrides() {
                 r"blk\.(1)\.ffn_(up|gate|down)_exps\.=RPC1".into(),
                 "-ot".into(),
                 r"blk\.(2|3)\.ffn_(up|gate|down)_exps\.=CPU".into(),
+                "-ot".into(),
+                ".*=Vulkan0".into(),
             ],
             host_ram_bytes: 6_000,
             host_vram_bytes: 600,
@@ -179,12 +181,17 @@ fn a_gpt_oss_sized_model_uses_remote_capacity_before_host_ram() {
         ]
     );
     assert_eq!(placement.args[0], "--device");
-    assert_eq!(placement.args[1], "RPC0,RPC1,CPU");
+    assert_eq!(placement.args[1], "RPC0,RPC1");
     assert_eq!(placement.args[2], "-ngl");
     assert_eq!(placement.args[3], "999");
     assert_eq!(
-        placement.args.last().expect("last arg"),
+        placement.args.get(9).expect("CPU expert override"),
         r"blk\.(32|33|34|35)\.ffn_(up|gate|down)_exps\.=CPU"
+    );
+    assert_eq!(
+        placement.args.last().expect("host catch-all"),
+        ".*=CPU",
+        "non-experts and KV stay on the host"
     );
     assert!(placement.args.contains(
         &r"blk\.(0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15)\.ffn_(up|gate|down)_exps\.=RPC0".into()
@@ -210,6 +217,7 @@ fn everything_remote_leaves_cpu_out_of_the_device_list() {
     assert_eq!(placement.host_ram_bytes, 0);
     assert_eq!(placement.remote_bytes, 12_000);
     assert_eq!(placement.args[1], "Vulkan0,RPC0");
+    assert_eq!(placement.args.last().expect("last"), ".*=Vulkan0");
     assert!(
         !placement.args.iter().any(|arg| arg.contains("=CPU")),
         "{:?}",
@@ -219,6 +227,32 @@ fn everything_remote_leaves_cpu_out_of_the_device_list() {
         placement.per_device,
         vec![("Vulkan0".into(), 600), ("RPC0".into(), 12_000)]
     );
+}
+
+#[test]
+fn a_cpu_only_plan_omits_device_and_still_overrides_every_expert() {
+    let model = small_model(4);
+    let budgets = Budgets {
+        host_gpu: None,
+        host_ram_bytes: 20_000,
+        remote: Vec::new(),
+        kv_bytes: 0,
+    };
+    let placement = plan(&model, &budgets).expect("plan");
+    assert_eq!(
+        placement.args,
+        vec![
+            "-ngl".to_owned(),
+            "999".to_owned(),
+            "-ot".to_owned(),
+            r"blk\.(0|1|2|3)\.ffn_(up|gate|down)_exps\.=CPU".to_owned(),
+            "-ot".to_owned(),
+            ".*=CPU".to_owned(),
+        ],
+        "CPU is not a --device entry, and the host catch-all is last"
+    );
+    assert_eq!(placement.host_ram_bytes, 12_500);
+    assert_eq!(placement.per_device, vec![("CPU".into(), 12_500)]);
 }
 
 #[test]

@@ -70,7 +70,10 @@ pub struct Budgets {
 /// Where the planner put everything, plus the llama-server arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placement {
-    /// Args to append: `--device <list> -ngl 999`, then one `-ot <regex>=<device>` per group.
+    /// Args to append: `--device <list>` (omitted when every device is CPU), `-ngl 999`, one
+    /// `-ot <regex>=<device>` per expert group, then a final `-ot .*=<host device>` so
+    /// llama.cpp keeps every non-expert tensor (and KV attention) on the host share. The host
+    /// catch-all must stay last: llama.cpp applies the first matching override.
     pub args: Vec<String>,
     pub host_ram_bytes: u64,
     pub host_vram_bytes: u64,
@@ -175,18 +178,15 @@ pub fn plan(model: &GgufSummary, budgets: &Budgets) -> Result<Placement, PlanErr
             devices.push(budgets.remote[index].0.clone());
         }
     }
-    if (host_ram_bytes > 0 || !host_layer_numbers.is_empty())
-        && !devices.iter().any(|device| device == "CPU")
-    {
-        devices.push("CPU".into());
+    let mut args = Vec::new();
+    // llama.cpp rejects CPU in --device (`common/arg.cpp`, parse_device_list). CPU is always
+    // available for `-ot =CPU`, so it never needs to be listed.
+    if !devices.is_empty() {
+        args.push("--device".to_owned());
+        args.push(devices.join(","));
     }
-
-    let mut args = vec![
-        "--device".to_owned(),
-        devices.join(","),
-        "-ngl".to_owned(),
-        "999".to_owned(),
-    ];
+    args.push("-ngl".to_owned());
+    args.push("999".to_owned());
     for (index, layers) in remote_layers.iter().enumerate() {
         for run in contiguous_runs(layers) {
             args.push("-ot".to_owned());
@@ -197,6 +197,11 @@ pub fn plan(model: &GgufSummary, budgets: &Budgets) -> Result<Placement, PlanErr
         args.push("-ot".to_owned());
         args.push(override_pattern(&run, "CPU"));
     }
+    // Everything not overridden above stays on the host share. First match wins in
+    // llama.cpp, so this catch-all must come after the expert groups.
+    let host_device = host_gpu_name.as_deref().unwrap_or("CPU");
+    args.push("-ot".to_owned());
+    args.push(format!(".*={host_device}"));
 
     let mut per_device = Vec::new();
     if let Some(name) = &host_gpu_name
