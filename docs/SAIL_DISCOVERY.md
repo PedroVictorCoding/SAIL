@@ -62,3 +62,8 @@ Detect one opted-in useful change, propose with source and reason, honor snooze 
 ## Initiative (implemented slice)
 
 Deterministic detectors and the agenda live in `crates/sail-discovery`. See [Proactive intelligence](SAIL_PROACTIVE.md#4-initiative-and-the-agenda-discovery).
+
+## Outreach (proposed)
+
+Watching communities for threads a blog post can help with, drafting replies in the owner's voice,
+and repurposing posts into podcast and video-essay scripts. Draft-only. See [Outreach](SAIL_OUTREACH.md).

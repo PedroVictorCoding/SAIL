@@ -1,0 +1,10 @@
+[Unit]
+Description=Check merged SAIL main and rebuild locally
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/sail-live/environment
+ExecStart=%h/.local/bin/sail-live-update check
+TimeoutStartSec=0

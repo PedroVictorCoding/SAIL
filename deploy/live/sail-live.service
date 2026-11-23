@@ -1,0 +1,14 @@
+[Unit]
+Description=SAIL managed local runtime
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/sail-live/environment
+ExecStart=/usr/bin/bash -c 'exec "$SAIL_LIVE_ROOT/current/run.sh" --release'
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

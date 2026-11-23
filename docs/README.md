@@ -8,7 +8,7 @@ Status: design and implementation reference. These docs describe intended behavi
 
 | Domain | Specifications |
 |---|---|
-| Intelligence & Knowledge | [MIND](SAIL_MIND.md) · [ARENA](SAIL_ARENA.md) ([LEARN](SAIL_ARENA_LEARN.md) — main product) ([cognitive memory](SAIL_COGNITIVE_MEMORY.md)) · [DISCOVERY](SAIL_DISCOVERY.md) · [LAB](SAIL_LAB.md) |
+| Intelligence & Knowledge | [MIND](SAIL_MIND.md) · [ARENA](SAIL_ARENA.md) ([LEARN](SAIL_ARENA_LEARN.md) — main product) ([cognitive memory](SAIL_COGNITIVE_MEMORY.md)) · [DISCOVERY](SAIL_DISCOVERY.md) ([OUTREACH](SAIL_OUTREACH.md)) · [LAB](SAIL_LAB.md) |
 | Interaction & Presence | [DIALOGUE](SAIL_DIALOGUE.md) · [VISION](SAIL_VISION.md) · [SENSE](SAIL_SENSE.md) ([PRESENCE](SAIL_PRESENCE.md)) · [RELAY](SAIL_RELAY.md) |
 | Agency & Creation | [AGENTS](SAIL_AGENTS.md) ([task planning](SAIL_AGENT_PLANNING.md)) · [FLOW](SAIL_FLOW.md) · [CANVAS](SAIL_CANVAS.md) · [FORGE](SAIL_FORGE.md) |
 | Personal & Social | [LIFE](SAIL_LIFE.md) · [CALENDAR](SAIL_CALENDAR.md) · [PULSE](SAIL_PULSE.md) · [FRIENDS](SAIL_FRIENDS.md) · [ENTERTAINMENT](SAIL_ENTERTAINMENT.md) |
@@ -17,7 +17,7 @@ Status: design and implementation reference. These docs describe intended behavi
 | Health & Physiology | [HEALTH](SAIL_HEALTH.md) |
 | Shared foundation | [CORE](SAIL_CORE.md) ([continuity](SAIL_CONTINUITY.md)) |
 | Cross-cutting experience | [STUDIO](SAIL_STUDIO.md) · [FORGE / CRAFT ANYTHING](SAIL_FORGE_CRAFT_ANYTHING.md) |
-| Cross-cutting capabilities | [EXTERNAL MODELS, GATEWAY, SKILLS & SCHEDULING](SAIL_EXTERNAL_MODELS_GATEWAY_SKILLS.md) |
+| Cross-cutting capabilities | [EXTERNAL MODELS, GATEWAY, SKILLS & SCHEDULING](SAIL_EXTERNAL_MODELS_GATEWAY_SKILLS.md) ([token economy](SAIL_TOKEN_ECONOMY.md)) |
 
 ## Design rules
 - Specs are per-capability **ownership and acceptance contracts**, not permission to add navigation tabs, new processes or microservices.
