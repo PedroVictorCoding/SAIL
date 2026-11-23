@@ -306,6 +306,8 @@ fn describe_transport(error: &reqwest::Error) -> String {
     }
     if text.contains("does not match the paired fingerprint") {
         "the worker's certificate does not match the one paired (a different machine, or it was re-initialised)".into()
+    } else if error.is_timeout() && !error.is_connect() {
+        "connected, but timed out waiting for the worker's answer (is it overloaded, or an older worker build?)".into()
     } else if error.is_connect() || error.is_timeout() {
         "not reachable (is the worker running, on the same network, and allowed through its firewall?)".into()
     } else {
