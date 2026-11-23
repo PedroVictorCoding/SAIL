@@ -230,6 +230,23 @@ The resident model (Qwen3.6-35B-A3B) stays loaded for voice and chat. The heavy 
 
 —
 
+### Setting up the PC
+
+On the Windows worker PC (no admin rights and no new firewall port needed):
+
+1. Install the pinned `ggml-rpc-server` (`b12014`, Windows Vulkan x64) into `%LOCALAPPDATA%\SAIL\mesh\rpc\`:
+
+   ```powershell
+   pwsh -File scripts\mesh\install-rpc-server.ps1
+   ```
+
+   The script verifies the zip's SHA-256 (`e3712df80ab21c81051f43ac6edd9f4c8faefb8f7f760d971a578a78d6bbbdac`) and extracts only `ggml-rpc-server.exe` and its `ggml*.dll` / `libomp.dll` runtime files.
+2. Start the worker with `--compute` and an HDD `--cache-dir` (using the command printed by the script, e.g. `D:\sail-cache`):
+
+   ```powershell
+   sail-mesh-worker serve --compute "%LOCALAPPDATA%\SAIL\mesh\rpc\ggml-rpc-server.exe" --cache-dir D:\sail-cache
+   ```
+
 ## 8. Next steps
 1. First Windows build and run on the owner's PC (not verifiable on the host: `ring` needs MSVC tools).
 2. Measure real offload latency and throughput with the owner's PC; tune `max_parallel`.

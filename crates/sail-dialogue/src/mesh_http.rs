@@ -42,7 +42,7 @@ impl MeshComputeBackend for MindComputeBackend {
     async fn overview(&self) -> Value {
         let mut value =
             serde_json::to_value(status_from(&self.inference)).unwrap_or_else(|_| json!({}));
-        // When C3 (MindService::heavy) merges, populate from self.inference.heavy().map(|l| l.status()).
+        // Claude wires MindService::heavy() at integration.
         if let Some(obj) = value.as_object_mut() {
             obj.entry("heavy").or_insert(Value::Null);
         }
@@ -54,13 +54,36 @@ impl MeshComputeBackend for MindComputeBackend {
         Ok(self.overview().await)
     }
 
-    async fn set_lend(&self, _name: &str, _mode: LendMode) -> Result<Value, Failure> {
-        let _pool = pool_from(&self.inference)?;
-        // Wired to pool.set_lend(name, mode).await.map_err(op_error) when K9 merges.
-        Err(error(
-            StatusCode::NOT_IMPLEMENTED,
-            "compute lending backend is awaiting K9 MeshPool::set_lend",
-        ))
+    async fn set_lend(&self, name: &str, mode: LendMode) -> Result<Value, Failure> {
+        let pool = pool_from(&self.inference)?;
+        let worker = pool.set_lend(name, mode).await.map_err(op_error)?;
+        Ok(serde_json::to_value(worker).unwrap_or_else(|_| json!({})))
+    }
+}
+
+struct PoolComputeBackend {
+    pool: Arc<sail_mind::mesh::MeshPool>,
+}
+
+#[async_trait::async_trait]
+impl MeshComputeBackend for PoolComputeBackend {
+    async fn overview(&self) -> Value {
+        let mut value = serde_json::to_value(self.pool.status()).unwrap_or_else(|_| json!({}));
+        // Claude wires MindService::heavy() at integration.
+        if let Some(obj) = value.as_object_mut() {
+            obj.entry("heavy").or_insert(Value::Null);
+        }
+        value
+    }
+
+    async fn refresh(&self) -> Result<Value, Failure> {
+        self.pool.refresh().await;
+        Ok(self.overview().await)
+    }
+
+    async fn set_lend(&self, name: &str, mode: LendMode) -> Result<Value, Failure> {
+        let worker = self.pool.set_lend(name, mode).await.map_err(op_error)?;
+        Ok(serde_json::to_value(worker).unwrap_or_else(|_| json!({})))
     }
 }
 
@@ -97,7 +120,7 @@ fn op_error(e: MeshOpError) -> Failure {
         MeshOpError::BadInput(_) => StatusCode::BAD_REQUEST,
         MeshOpError::NotFound(_) => StatusCode::NOT_FOUND,
         MeshOpError::Unverified(_) => StatusCode::BAD_GATEWAY,
-        MeshOpError::NoCompute(_) => StatusCode::CONFLICT,
+        MeshOpError::NoCompute(_) => return error(StatusCode::CONFLICT, "no_compute"),
         MeshOpError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error(status, e.to_string())
@@ -136,6 +159,14 @@ pub fn router_with_backend(
     authority: Option<ApprovalAuthority>,
 ) -> Router {
     build_router(None, backend, authority)
+}
+
+/// Builds the `/api/mind/mesh` router backed directly by a [`sail_mind::mesh::MeshPool`] (used by tests).
+pub fn router_with_pool(
+    pool: Arc<sail_mind::mesh::MeshPool>,
+    authority: Option<ApprovalAuthority>,
+) -> Router {
+    build_router(None, Arc::new(PoolComputeBackend { pool }), authority)
 }
 
 fn build_router(

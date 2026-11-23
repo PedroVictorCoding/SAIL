@@ -53,6 +53,7 @@ libc = "0.2"
 
 [dev-dependencies]
 chrono.workspace = true
+sail-mesh.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.24"
 tempfile = "3"
