@@ -124,7 +124,7 @@ impl Fixture {
                     end: "00:00".into(),
                 },
                 lend_vram_bytes: 0,
-                lend_ram_bytes: 4 * GIB,
+                lend_ram_bytes: 0, // Resolve the absent cap from the fake RPC device's free bytes.
                 rpc_port,
             },
             dir.path(),
