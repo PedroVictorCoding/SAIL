@@ -180,7 +180,7 @@ pub fn compose_morning(
             ErrandState::Failed { result, .. } => result.as_ref(),
             _ => None,
         }?;
-        (result.ran_on.kind == RanOnKind::Pooled).then(|| result.ran_on.name.as_str())
+        (result.ran_on.kind == RanOnKind::Pooled).then_some(result.ran_on.name.as_str())
     });
 
     let total = items.len() as u32;
