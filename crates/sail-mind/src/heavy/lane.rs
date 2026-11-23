@@ -29,6 +29,9 @@ pub use crate::config::HeavyConfig;
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(10);
 /// Fixed a priori: a one-second probe and one-second deadline leave time for teardown.
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
+/// Fixed by the handoff: update measured throughput every ten seconds while running.
+const METRICS_INTERVAL: Duration = Duration::from_secs(10);
+/// Fixed a priori: bound each loopback or pinned-worker probe to one second.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Fixed a priori: allow five seconds for RPC device enumeration to finish.
 const DEVICE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -314,7 +317,7 @@ impl HeavyLane {
             .map_err(|error| error.to_string())?;
         self.publish(HeavyState::Starting, Some(worker), Some(&placement));
 
-        let mut extra_args = vec!["--rpc".into(), address];
+        let mut extra_args = vec!["--rpc".into(), address, "--metrics".into()];
         extra_args.extend(placement.args.iter().cloned());
         if placement.host_vram_bytes != 0 {
             // KV follows the layer device, not weight overrides. The planner lists
@@ -358,12 +361,30 @@ impl HeavyLane {
         if !ready.owned_process {
             return Err("Pooled port is already in use".into());
         }
+        let metrics_client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(PROBE_TIMEOUT)
+            .build()
+            .map_err(|error| error.to_string())?;
+        let metrics_url = format!("http://127.0.0.1:{}/metrics", self.config.port);
         self.publish(HeavyState::Running, Some(worker), Some(&placement));
+        let mut probe = time::interval_at(time::Instant::now() + PROBE_INTERVAL, PROBE_INTERVAL);
+        let mut metrics =
+            time::interval_at(time::Instant::now() + METRICS_INTERVAL, METRICS_INTERVAL);
+        probe.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        metrics.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         loop {
-            time::sleep(PROBE_INTERVAL).await;
-            let status = backend.status().await;
-            if status.state != sail_protocol::ModelState::Ready {
-                return Err("Pooled llama-server stopped responding".into());
+            tokio::select! {
+                _ = probe.tick() => {
+                    if backend.status().await.state != sail_protocol::ModelState::Ready {
+                        return Err("Pooled llama-server stopped responding".into());
+                    }
+                }
+                _ = metrics.tick() => {
+                    let speed = read_throughput(&metrics_client, &metrics_url).await;
+                    self.snapshot().tokens_per_second = speed;
+                }
             }
         }
     }
@@ -428,4 +449,28 @@ impl LendingWatch {
             .compute
             .filter(|compute| compute.state == LendState::Lending)
     }
+}
+
+async fn read_throughput(client: &reqwest::Client, url: &str) -> Option<f64> {
+    let body = client
+        .get(url)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+    body.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        if fields.next()? != "llamacpp:predicted_tokens_seconds" {
+            return None;
+        }
+        fields
+            .next()?
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite() && *value > 0.0)
+    })
 }

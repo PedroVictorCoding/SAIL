@@ -31,6 +31,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply({"status": "ok"})
         elif self.path == "/props":
             self.reply({"model_path": str(model)})
+        elif self.path == "/metrics" and "--metrics" in args:
+            self.send_body(b"llamacpp:predicted_tokens_seconds 7.4\n", "text/plain")
         else:
             self.send_error(404)
 
@@ -45,9 +47,11 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def reply(self, value):
-        body = json.dumps(value).encode()
+        self.send_body(json.dumps(value).encode(), "application/json")
+
+    def send_body(self, body, content_type):
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

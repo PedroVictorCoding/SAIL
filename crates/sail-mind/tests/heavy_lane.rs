@@ -240,6 +240,7 @@ async fn starts_on_lending_and_stops_within_five_seconds_of_pause() {
         .wait_for(|state| *state == HeavyState::Running)
         .await;
     let endpoint = fixture.lane.endpoint().unwrap();
+    assert_eq!(fixture.lane.status().tokens_per_second, None);
     assert_eq!(endpoint.worker, "pooled-test");
     assert_eq!(endpoint.model, "pooled");
     let result: serde_json::Value = reqwest::Client::builder()
@@ -255,6 +256,14 @@ async fn starts_on_lending_and_stops_within_five_seconds_of_pause() {
         .await
         .unwrap();
     assert_eq!(result["choices"][0]["message"]["content"], "fixture answer");
+
+    timeout(Duration::from_secs(15), async {
+        while fixture.lane.status().tokens_per_second != Some(7.4) {
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
 
     fixture.supervisor.set_mode(LendMode::Pause).unwrap();
     assert_eq!(fixture.supervisor.tick(None).await, LendState::Paused);
