@@ -29,6 +29,8 @@ use sail_forge::{
 };
 use sail_guardian::sandbox::SandboxPolicy;
 
+const FIXTURE_REPO: &str = "local/c8-fixture";
+
 struct OfflineGithub;
 
 impl GithubClient for OfflineGithub {
@@ -108,6 +110,7 @@ fn forge(root: &Path) -> Arc<ForgeOrchestrator> {
         ForgeOrchestrator::new(
             OrchestratorConfig {
                 workspace_root: workspace,
+                allowed_repos: [FIXTURE_REPO.into()].into(),
                 ..Default::default()
             },
             Arc::new(TaskCheckpointStore::new(root.join("checkpoints"))),
@@ -188,7 +191,7 @@ async fn paused_pooled_night_shift_requeues_without_host_fallback() {
             forge(&root),
             Arc::new(OfflineGithub),
             NightlyConfig {
-                repo_slug: "local/c8-fixture".into(),
+                repo_slug: FIXTURE_REPO.into(),
                 state_dir: state,
                 publish: false,
                 ..Default::default()
@@ -198,18 +201,18 @@ async fn paused_pooled_night_shift_requeues_without_host_fallback() {
         .with_night_shift(store.clone())
         .with_endpoint_picker(picker),
     );
-    let attempt = tokio::spawn({
+    let mut attempt = tokio::spawn({
         let runner = runner.clone();
         async move { runner.run_once(false, false).await }
     });
 
-    assert!(
-        support::wait_for(
+    tokio::select! {
+        result = &mut attempt => panic!("Night Shift finished before the pooled request: {:?}", result.unwrap()),
+        reached = support::wait_for(
             || stack.model.with_extension("inflight").is_file(),
-            Duration::from_secs(5)
-        )
-        .await
-    );
+            Duration::from_secs(5),
+        ) => assert!(reached, "pooled request did not reach the server; lane: {:?}", stack.lane.status()),
+    }
     let working = store.get(&errand.id).unwrap();
     assert!(
         matches!(working.state, ErrandState::Working { ran_on, .. } if ran_on.kind == RanOnKind::Pooled)
