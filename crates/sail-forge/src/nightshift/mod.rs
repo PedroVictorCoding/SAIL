@@ -513,3 +513,25 @@ pub struct ErrandStore {
     events: tokio::sync::broadcast::Sender<Errand>,
     morning_events: tokio::sync::broadcast::Sender<MorningReport>,
 }
+
+#[cfg(test)]
+mod pooled_contract_tests {
+    use super::*;
+
+    #[test]
+    fn existing_settings_opt_into_heavy_without_automatic_host_fallback() {
+        let settings: NightShiftSettings =
+            serde_json::from_str(r#"{"enabled":true,"use_mesh":false}"#).unwrap();
+        assert!(settings.use_heavy);
+        assert!(!settings.fallback_to_host);
+        assert!(!settings.use_mesh);
+    }
+
+    #[test]
+    fn pooled_result_serializes_with_the_wire_label() {
+        assert_eq!(
+            serde_json::to_string(&RanOnKind::Pooled).unwrap(),
+            "\"pooled\""
+        );
+    }
+}
