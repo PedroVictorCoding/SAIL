@@ -8,7 +8,7 @@ use chrono::{DateTime, Local, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -307,6 +307,19 @@ fn is_voice_preemption(reason: &str) -> bool {
 /// Bound on voice pauses for one issue in one run, should a voice-preemption reason ever
 /// recur while no voice turn is active.
 const MAX_VOICE_PAUSES_PER_ISSUE: u32 = 20;
+/// Fixed by the Round 29b handoff: wait at least one minute after pooled compute is unavailable.
+const HEAVY_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+/// Fixed a priori: check for loss of the active lane once per second during an attempt.
+const HEAVY_ATTEMPT_POLL: Duration = Duration::from_secs(1);
+const HEAVY_UNAVAILABLE: &str = "heavy_unavailable";
+
+struct HeavyJobLine<'a>(&'a dyn EndpointPicker);
+
+impl Drop for HeavyJobLine<'_> {
+    fn drop(&mut self) {
+        self.0.set_heavy_job(None);
+    }
+}
 
 fn feedback_body(issue: &IssueCandidate, record: &IssueRecord) -> String {
     match (&record.last_reason, record.attempts) {
@@ -327,6 +340,8 @@ pub struct ForgeNightlyRunner {
     night_shift: Option<NightShiftRuntime>,
     endpoint_picker: Option<Arc<dyn EndpointPicker>>,
     external_solver: Option<Arc<dyn ExternalSolver>>,
+    heavy_retry_after: Mutex<Option<tokio::time::Instant>>,
+    night_shift_run: tokio::sync::Mutex<()>,
 }
 
 struct NightShiftRuntime {
@@ -355,6 +370,8 @@ impl ForgeNightlyRunner {
             night_shift: None,
             endpoint_picker: None,
             external_solver: None,
+            heavy_retry_after: Mutex::new(None),
+            night_shift_run: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -791,6 +808,72 @@ impl ForgeNightlyRunner {
             .unwrap_or_else(Self::host_endpoint)
     }
 
+    fn pick_errand_endpoint(&self, settings: &NightShiftSettings) -> Option<Endpoint> {
+        if !settings.use_heavy {
+            return Some(self.pick_endpoint(settings.use_mesh));
+        }
+        let mut retry = self
+            .heavy_retry_after
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let now = tokio::time::Instant::now();
+        if retry.is_some_and(|deadline| now < deadline) {
+            return None;
+        }
+        if let Some(endpoint) = self
+            .endpoint_picker
+            .as_ref()
+            .and_then(|picker| picker.heavy())
+        {
+            *retry = None;
+            return Some(endpoint);
+        }
+        if settings.fallback_to_host {
+            return Some(
+                self.endpoint_picker
+                    .as_ref()
+                    .map_or_else(Self::host_endpoint, |picker| picker.host()),
+            );
+        }
+        *retry = Some(now + HEAVY_RETRY_INTERVAL);
+        None
+    }
+
+    async fn execute_errand(
+        &self,
+        job_id: &str,
+        endpoint: &Endpoint,
+        title: &str,
+    ) -> Result<ForgeJobReport, String> {
+        let execution = self.executor.execute(&self.orchestrator, job_id);
+        if endpoint.ran_on.kind != RanOnKind::Pooled {
+            return execution.await;
+        }
+        let picker = self.endpoint_picker.as_deref().ok_or(HEAVY_UNAVAILABLE)?;
+        picker.set_heavy_job(Some(title));
+        let _job = HeavyJobLine(picker);
+        let available = || picker.heavy().as_ref() == Some(endpoint);
+        tokio::pin!(execution);
+        loop {
+            if !available() {
+                if let Err(error) = self.orchestrator.cancel_job(job_id, HEAVY_UNAVAILABLE) {
+                    warn!(%job_id, %error, "Could not cancel the pooled attempt");
+                }
+                let _ = execution.await;
+                return Err(HEAVY_UNAVAILABLE.into());
+            }
+            tokio::select! {
+                result = &mut execution => {
+                    if !available() || result.as_ref().is_err_and(|reason| is_infrastructure_failure(reason)) {
+                        return Err(HEAVY_UNAVAILABLE.into());
+                    }
+                    return result;
+                }
+                _ = tokio::time::sleep(HEAVY_ATTEMPT_POLL) => {}
+            }
+        }
+    }
+
     fn set_checkpoint_endpoint(&self, job_id: &str, endpoint: &Endpoint) {
         if endpoint.url.trim().is_empty() {
             return;
@@ -856,6 +939,10 @@ impl ForgeNightlyRunner {
             date: Self::today(),
             dry_run,
             ..Default::default()
+        };
+        let Ok(_run) = self.night_shift_run.try_lock() else {
+            digest.halted = Some("Night Shift is already running".into());
+            return digest;
         };
         let Some(runtime) = self.night_shift.as_ref() else {
             return self.finish(digest);
@@ -975,7 +1062,9 @@ impl ForgeNightlyRunner {
             }
         }
 
-        state.last_run_date = Some(Self::today());
+        if digest.halted.as_deref() != Some(HEAVY_UNAVAILABLE) {
+            state.last_run_date = Some(Self::today());
+        }
         let _ = state.save(&self.config.state_dir);
         let report = compose_morning(
             &Self::today(),
@@ -1003,7 +1092,10 @@ impl ForgeNightlyRunner {
         let ErrandState::Queued { order, .. } = errand.state.clone() else {
             return true;
         };
-        let mut endpoint = self.pick_endpoint(settings.use_mesh);
+        let Some(mut endpoint) = self.pick_errand_endpoint(settings) else {
+            digest.halted = Some(HEAVY_UNAVAILABLE.into());
+            return false;
+        };
         let request = IssueEnqueueRequest {
             repo: self.config.repo_slug.clone(),
             issue_number: Self::errand_issue_number(id),
@@ -1040,7 +1132,7 @@ impl ForgeNightlyRunner {
                     return false;
                 }
             };
-            let mut executed = self.executor.execute(&self.orchestrator, &job_id).await;
+            let mut executed = self.execute_errand(&job_id, &endpoint, &order.title).await;
             if let Err(reason) = &executed {
                 if endpoint.ran_on.kind == RanOnKind::Mesh && is_infrastructure_failure(reason) {
                     endpoint = self
@@ -1079,6 +1171,20 @@ impl ForgeNightlyRunner {
         let report = match executed {
             Ok(report) => report,
             Err(reason) => {
+                if reason == HEAVY_UNAVAILABLE {
+                    *self
+                        .heavy_retry_after
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) =
+                        Some(tokio::time::Instant::now() + HEAVY_RETRY_INTERVAL);
+                    let _ = store.transition(
+                        id,
+                        Utc::now(),
+                        crate::nightshift::Transition::Requeue { reason },
+                    );
+                    digest.halted = Some(HEAVY_UNAVAILABLE.into());
+                    return false;
+                }
                 if is_infrastructure_failure(&reason) || is_voice_preemption(&reason) {
                     let _ = store.transition(
                         id,
@@ -1412,7 +1518,7 @@ impl ForgeNightlyRunner {
         digest
     }
 
-    /// Wake every 10 minutes and run once per night inside the window.
+    /// Check the nightly window every ten minutes, or wait one minute for pooled compute.
     pub fn spawn_scheduler(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             info!(
@@ -1425,10 +1531,16 @@ impl ForgeNightlyRunner {
                     .last_run_date
                     .as_deref()
                     == Some(today.as_str());
-                if !ran_today && !self.is_paused() && self.in_window_now() {
-                    self.run_once(false, true).await;
-                }
-                tokio::time::sleep(Duration::from_secs(600)).await;
+                let delay = if !ran_today
+                    && !self.is_paused()
+                    && self.in_window_now()
+                    && self.run_once(false, true).await.halted.as_deref() == Some(HEAVY_UNAVAILABLE)
+                {
+                    HEAVY_RETRY_INTERVAL
+                } else {
+                    Duration::from_secs(600)
+                };
+                tokio::time::sleep(delay).await;
             }
         })
     }

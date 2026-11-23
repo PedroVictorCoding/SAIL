@@ -112,6 +112,8 @@ fn mesh() -> RanOn {
 struct FakePicker {
     mesh_calls: AtomicUsize,
     host_calls: AtomicUsize,
+    heavy_calls: AtomicUsize,
+    lending: std::sync::atomic::AtomicBool,
 }
 
 impl FakePicker {
@@ -119,11 +121,26 @@ impl FakePicker {
         Self {
             mesh_calls: AtomicUsize::new(0),
             host_calls: AtomicUsize::new(0),
+            heavy_calls: AtomicUsize::new(0),
+            lending: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
 
 impl EndpointPicker for FakePicker {
+    fn heavy(&self) -> Option<Endpoint> {
+        self.heavy_calls.fetch_add(1, Ordering::SeqCst);
+        self.lending.load(Ordering::SeqCst).then(|| Endpoint {
+            url: "http://127.0.0.1:8083/v1/chat/completions".into(),
+            ran_on: RanOn {
+                kind: RanOnKind::Pooled,
+                name: "worker".into(),
+                model: "gpt-oss".into(),
+            },
+            client: None,
+        })
+    }
+
     fn pick(&self, _use_mesh: bool) -> Endpoint {
         self.mesh_calls.fetch_add(1, Ordering::SeqCst);
         Endpoint {
@@ -153,6 +170,7 @@ enum Outcome {
 enum Reply {
     Report(Outcome),
     Error(String),
+    LaneStops(Arc<FakePicker>),
 }
 
 struct FakeExecutor {
@@ -196,6 +214,12 @@ impl JobExecutor for FakeExecutor {
             .unwrap_or(Reply::Report(Outcome::Ready));
         match reply {
             Reply::Error(reason) => Err(reason),
+            Reply::LaneStops(picker) => {
+                picker.lending.store(false, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+                Ok(report(Outcome::Ready, job_id, &checkpoint.repo))
+            }
+
             Reply::Report(outcome) => Ok(report(outcome, job_id, &checkpoint.repo)),
         }
     }
@@ -329,6 +353,7 @@ fn settings(include_issues: bool) -> NightShiftSettings {
     NightShiftSettings {
         enabled: true,
         include_forge_ready_issues: include_issues,
+        use_heavy: false,
         ..NightShiftSettings::default()
     }
 }
@@ -849,4 +874,111 @@ fn ship_patch_rejects_empty_patches_and_bad_branches_before_touching_git() {
             .expect_err("bad branch")
             .contains("invalid Night Shift branch")
     );
+}
+
+#[tokio::test]
+async fn unavailable_heavy_keeps_the_errand_queued_and_does_not_repick() {
+    let tmp = TempDir::new("heavy-wait");
+    let store = Arc::new(ErrandStore::open(&tmp.0.join("state")).unwrap());
+    let original = approve(&store);
+    let picker = Arc::new(FakePicker::new());
+    let exec = FakeExecutor::new(vec![]);
+    let runner = runner(
+        &tmp.0,
+        boot(&tmp.0),
+        Arc::new(FakeGithub::default()),
+        exec.clone(),
+        store.clone(),
+        picker.clone(),
+        NightShiftSettings {
+            use_heavy: true,
+            ..settings(false)
+        },
+    );
+    for _ in 0..2 {
+        let digest = runner.run_once(false, false).await;
+        assert_eq!(digest.halted.as_deref(), Some("heavy_unavailable"));
+    }
+    assert_eq!(store.get(&original.id).unwrap(), original);
+    assert_eq!(picker.heavy_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(picker.host_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(picker.mesh_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(exec.calls.load(Ordering::SeqCst), 0);
+    assert!(
+        NightlyState::load(&tmp.0.join("state"))
+            .last_run_date
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn pooled_transport_failure_or_lane_loss_requeues_without_spending_attempt() {
+    for lane_lost in [false, true] {
+        let tmp = TempDir::new("heavy-lost");
+        let store = Arc::new(ErrandStore::open(&tmp.0.join("state")).unwrap());
+        let original = approve(&store);
+        let picker = Arc::new(FakePicker::new());
+        picker.lending.store(true, Ordering::SeqCst);
+        let reply = if lane_lost {
+            Reply::LaneStops(picker.clone())
+        } else {
+            Reply::Error("Model transport failure at pooled endpoint".into())
+        };
+        let exec = FakeExecutor::new(vec![reply]);
+        let runner = runner(
+            &tmp.0,
+            boot(&tmp.0),
+            Arc::new(FakeGithub::default()),
+            exec.clone(),
+            store.clone(),
+            picker.clone(),
+            NightShiftSettings {
+                use_heavy: true,
+                fallback_to_host: !lane_lost,
+                ..settings(false)
+            },
+        );
+        let digest = runner.run_once(false, false).await;
+        assert_eq!(digest.halted.as_deref(), Some("heavy_unavailable"));
+        let current = store.get(&original.id).unwrap();
+        assert_eq!(current.state, original.state);
+        assert_eq!(current.attempts, original.attempts);
+        assert_eq!(picker.host_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(exec.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            runner.run_once(false, false).await.halted.as_deref(),
+            Some("heavy_unavailable")
+        );
+        assert_eq!(exec.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn heavy_can_use_the_host_only_with_explicit_fallback() {
+    let tmp = TempDir::new("heavy-fallback");
+    let store = Arc::new(ErrandStore::open(&tmp.0.join("state")).unwrap());
+    let original = approve(&store);
+    let picker = Arc::new(FakePicker::new());
+    let exec = FakeExecutor::new(vec![Reply::Report(Outcome::Ready)]);
+    let runner = runner(
+        &tmp.0,
+        boot(&tmp.0),
+        Arc::new(FakeGithub::default()),
+        exec.clone(),
+        store.clone(),
+        picker.clone(),
+        NightShiftSettings {
+            use_heavy: true,
+            fallback_to_host: true,
+            ..settings(false)
+        },
+    );
+    assert_eq!(runner.run_once(false, false).await.halted, None);
+    let ErrandState::Ready { result, .. } = store.get(&original.id).unwrap().state else {
+        panic!("expected a verified result");
+    };
+    assert_eq!(result.ran_on.kind, RanOnKind::Host);
+    assert_eq!(picker.host_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(picker.mesh_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(exec.calls.load(Ordering::SeqCst), 1);
 }

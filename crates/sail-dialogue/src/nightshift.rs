@@ -444,6 +444,17 @@ struct MeshPicker {
 impl EndpointPicker for MeshPicker {
     fn heavy(&self) -> Option<Endpoint> {
         let endpoint = self.mind.heavy()?.endpoint()?;
+        static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+        let client = CLIENT
+            .get_or_init(|| {
+                reqwest::Client::builder()
+                    .no_proxy()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .ok()
+            })
+            .as_ref()?
+            .clone();
         Some(Endpoint {
             url: endpoint.url,
             ran_on: RanOn {
@@ -451,8 +462,17 @@ impl EndpointPicker for MeshPicker {
                 name: endpoint.worker,
                 model: endpoint.model,
             },
-            client: None,
+            client: Some(client),
         })
+    }
+
+    fn set_heavy_job(&self, title: Option<&str>) {
+        if let Some(lane) = self.mind.heavy() {
+            lane.set_job(title.map(|title| sail_protocol::mesh::HeavyJob {
+                title: title.to_owned(),
+                since: chrono::Utc::now().to_rfc3339(),
+            }));
+        }
     }
 
     fn pick(&self, use_mesh: bool) -> Endpoint {
