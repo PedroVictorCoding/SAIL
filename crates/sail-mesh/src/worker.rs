@@ -446,10 +446,17 @@ fn file_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned()
 }
 
+/// Fixed a priori: the host waits 5 s for a hello (`sail-mind` `HELLO_TIMEOUT`). The local
+/// model probe must finish well inside that, or a compute-only worker with no model server
+/// (Windows takes seconds to refuse a closed loopback port) looks unreachable to the host.
+const UPSTREAM_PROBE_BUDGET: Duration = Duration::from_secs(2);
+
 async fn hello(shared: &Shared) -> MeshHello {
-    let (model, upstream_error) = match upstream_model(shared).await {
-        Ok(model) => (Some(model), None),
-        Err(e) => (None, Some(e)),
+    let probe = tokio::time::timeout(UPSTREAM_PROBE_BUDGET, upstream_model(shared)).await;
+    let (model, upstream_error) = match probe {
+        Ok(Ok(model)) => (Some(model), None),
+        Ok(Err(e)) => (None, Some(e)),
+        Err(_) => (None, Some("model server did not answer in time".to_owned())),
     };
     MeshHello {
         version: MESH_VERSION,
