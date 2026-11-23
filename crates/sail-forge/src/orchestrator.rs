@@ -76,7 +76,7 @@ pub struct ActiveJob {
 /// Central autonomous issue solver orchestrator.
 pub struct ForgeOrchestrator {
     config: OrchestratorConfig,
-    job_endpoints: Mutex<std::collections::HashMap<String, crate::nightshift::Endpoint>>,
+    job_endpoints: Mutex<std::collections::HashMap<String, JobEndpoint>>,
     checkpoint_store: Arc<TaskCheckpointStore>,
     review_broker: Arc<ReviewBroker>,
     self_reviewer: Option<Arc<dyn ReviewProvider>>,
@@ -108,6 +108,12 @@ fn forge_owner() -> String {
 
 fn issue_dedupe_key(repo: &str, issue_number: u64) -> String {
     format!("{repo}#{issue_number}")
+}
+
+#[derive(Clone)]
+struct JobEndpoint {
+    endpoint: crate::nightshift::Endpoint,
+    timing: Option<crate::nightshift::CompletionTiming>,
 }
 
 impl ForgeOrchestrator {
@@ -233,8 +239,18 @@ impl ForgeOrchestrator {
     /// Set the endpoint and pinned client used by this job's next solver attempt. The
     /// entry is in-memory only because the client can hold a bearer secret.
     pub fn set_job_endpoint(&self, job_id: &str, endpoint: crate::nightshift::Endpoint) {
+        self.set_job_endpoint_with_timing(job_id, endpoint, None);
+    }
+
+    /// Set the sole endpoint and optional telemetry observer for this job.
+    pub(crate) fn set_job_endpoint_with_timing(
+        &self,
+        job_id: &str,
+        endpoint: crate::nightshift::Endpoint,
+        timing: Option<crate::nightshift::CompletionTiming>,
+    ) {
         if let Ok(mut endpoints) = self.job_endpoints.lock() {
-            endpoints.insert(job_id.to_string(), endpoint);
+            endpoints.insert(job_id.to_string(), JobEndpoint { endpoint, timing });
         }
     }
 
@@ -1514,7 +1530,9 @@ impl ForgeOrchestrator {
                 .ok()
                 .and_then(|endpoints| endpoints.get(job_id).cloned())
             {
-                controller.with_job_endpoint(endpoint.url, endpoint.client)
+                controller
+                    .with_job_endpoint(endpoint.endpoint.url, endpoint.endpoint.client)
+                    .with_completion_timing(endpoint.timing)
             } else {
                 controller
             };

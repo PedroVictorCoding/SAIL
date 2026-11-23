@@ -137,6 +137,7 @@ pub struct OwnerNote {
 pub enum RanOnKind {
     Host,
     Mesh,
+    Pooled,
     External,
 }
 
@@ -287,6 +288,10 @@ pub struct NightShiftSettings {
     pub max_items: u8,
     pub include_forge_ready_issues: bool,
     pub use_mesh: bool,
+    /// Prefer the pooled heavy model for Night Shift errands.
+    pub use_heavy: bool,
+    /// Allow the host model when the heavy lane is unavailable.
+    pub fallback_to_host: bool,
     pub external_solves_per_night: u8,
     pub external_provider: Option<String>,
     pub morning_greeting: bool,
@@ -301,6 +306,8 @@ impl Default for NightShiftSettings {
             max_items: 5,
             include_forge_ready_issues: true,
             use_mesh: true,
+            use_heavy: true,
+            fallback_to_host: false,
             external_solves_per_night: 0,
             external_provider: None,
             morning_greeting: true,
@@ -414,10 +421,23 @@ impl std::fmt::Debug for Endpoint {
     }
 }
 
-/// Chooses an endpoint once per job attempt. The host is always the fallback.
+/// Receives observed generation throughput from a completed model reply.
+pub type CompletionTiming = std::sync::Arc<dyn Fn(f64) + Send + Sync>;
+
+/// Chooses an endpoint once per job attempt.
 pub trait EndpointPicker: Send + Sync {
     /// Pick the endpoint for one attempt. Must always return something.
     fn pick(&self, use_mesh: bool) -> Endpoint;
+
+    /// The pooled endpoint, while the heavy model is running.
+    fn heavy(&self) -> Option<Endpoint> {
+        None
+    }
+
+    /// Observe completion timing for the current pooled server session.
+    fn pooled_timing(&self) -> Option<CompletionTiming> {
+        None
+    }
 
     /// The host endpoint, used to retry an attempt whose Mesh endpoint failed in
     /// transport.
@@ -500,4 +520,26 @@ pub struct ErrandStore {
     inner: std::sync::Mutex<store::Inner>,
     events: tokio::sync::broadcast::Sender<Errand>,
     morning_events: tokio::sync::broadcast::Sender<MorningReport>,
+}
+
+#[cfg(test)]
+mod pooled_contract_tests {
+    use super::*;
+
+    #[test]
+    fn existing_settings_opt_into_heavy_without_automatic_host_fallback() {
+        let settings: NightShiftSettings =
+            serde_json::from_str(r#"{"enabled":true,"use_mesh":false}"#).unwrap();
+        assert!(settings.use_heavy);
+        assert!(!settings.fallback_to_host);
+        assert!(!settings.use_mesh);
+    }
+
+    #[test]
+    fn pooled_result_serializes_with_the_wire_label() {
+        assert_eq!(
+            serde_json::to_string(&RanOnKind::Pooled).unwrap(),
+            "\"pooled\""
+        );
+    }
 }

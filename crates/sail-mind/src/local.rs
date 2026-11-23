@@ -71,6 +71,7 @@ pub struct LocalGemmaBackend {
     /// A SAIL Mesh worker's llama-server reached through its pinned TLS front, not a
     /// process on this host: never started, adopted or hardware-probed here.
     remote: bool,
+    pooled_host_ram: Option<u64>,
 }
 fn unavailable(message: impl Into<String>) -> InferenceError {
     InferenceError::new(ErrorCode::BackendUnavailable, message)
@@ -131,8 +132,22 @@ impl LocalGemmaBackend {
             parallel,
             persisted_checked: AtomicBool::new(false),
             remote: false,
+            pooled_host_ram: None,
         })
     }
+    /// Create a separate owned server using the host RAM share of an admitted placement.
+    pub(crate) fn pooled(
+        mut config: LocalModelConfig,
+        scheduler: Arc<ResourceScheduler>,
+        host_ram_bytes: u64,
+    ) -> Result<Self> {
+        config.managed = true;
+        config.persist = false;
+        let mut backend = Self::with_scheduler(config, 1, scheduler)?;
+        backend.pooled_host_ram = Some(host_ram_bytes);
+        Ok(backend)
+    }
+
     /// The llama-server of a paired SAIL Mesh worker. `base` is the worker's
     /// `https://host:port` base URL and `client` the certificate-pinned, authenticated client
     /// for it ([`sail_mesh::tls::pinned_client`]). `config` names the worker's model:
@@ -180,6 +195,7 @@ impl LocalGemmaBackend {
             parallel: 1,
             persisted_checked: AtomicBool::new(true),
             remote: true,
+            pooled_host_ram: None,
         })
     }
     /// The loaded model's family, from its weights file name: decides thinking and sampling
@@ -269,6 +285,16 @@ impl LocalGemmaBackend {
         serde_json::from_slice(&data).map_err(|e| protocol(e.to_string()))
     }
     async fn probe(&self) -> Result<ModelStatus> {
+        if self.pooled_host_ram.is_some()
+            && !self
+                .process
+                .lock()
+                .await
+                .as_mut()
+                .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+        {
+            return Err(unavailable("Pooled llama-server process is not running"));
+        }
         self.json(self.client.get(self.url("/health"))).await?;
         let props = self.json(self.client.get(self.url("/props"))).await?;
         let context = props["default_generation_settings"]["n_ctx"]
@@ -380,6 +406,9 @@ impl LocalGemmaBackend {
                 .send()
                 .await
                 .is_ok();
+            if listening && self.pooled_host_ram.is_some() {
+                return Err(unavailable("Pooled port is already in use"));
+            }
             if !listening {
                 if !self.config.model_path.is_file() || !self.config.server_binary.is_file() {
                     return Err(unavailable(
@@ -457,7 +486,9 @@ impl LocalGemmaBackend {
                 // If observed host memory is constrained, adapt context window to available headroom
                 // rather than rejecting admission outright.
                 let status = self.scheduler.status();
-                if let Some(sample) = status.observed {
+                if self.pooled_host_ram.is_none()
+                    && let Some(sample) = status.observed
+                {
                     let total_budget = sample
                         .available_ram_bytes
                         .saturating_sub(status.pending_ram_bytes)
@@ -484,7 +515,9 @@ impl LocalGemmaBackend {
                 let kv_bytes = (launch_config.context_tokens as u64)
                     .saturating_mul(parallel_factor)
                     .saturating_mul(kv_bytes_per_token);
-                let ram_bytes = base_ram.saturating_add(kv_bytes);
+                let ram_bytes = self
+                    .pooled_host_ram
+                    .unwrap_or_else(|| base_ram.saturating_add(kv_bytes));
                 let lease = self
                     .scheduler
                     .try_admit(
@@ -493,7 +526,9 @@ impl LocalGemmaBackend {
                             priority: WorkPriority::Interactive,
                             ram_bytes,
                             cpu_slots: 0,
-                            heavy_model: weights >= GIB,
+                            // The pooled lane has its own single-server lifecycle and hard
+                            // caps; the resident-model slot belongs to the primary backend.
+                            heavy_model: self.pooled_host_ram.is_none() && weights >= GIB,
                         },
                         CancellationToken::new(),
                     )

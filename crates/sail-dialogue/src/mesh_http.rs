@@ -49,6 +49,7 @@ fn op_error(e: MeshOpError) -> Failure {
         MeshOpError::BadInput(_) => StatusCode::BAD_REQUEST,
         MeshOpError::NotFound(_) => StatusCode::NOT_FOUND,
         MeshOpError::Unverified(_) => StatusCode::BAD_GATEWAY,
+        MeshOpError::NoCompute(_) => StatusCode::CONFLICT,
         MeshOpError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error(status, e.to_string())
@@ -94,6 +95,7 @@ fn status(s: &HttpState) -> MeshStatus {
             workers: vec![],
             offloaded: 0,
             fell_back: 0,
+            heavy: None,
         },
         |pool| pool.status(),
     )

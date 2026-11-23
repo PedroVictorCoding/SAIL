@@ -168,6 +168,12 @@ async fn wait_for_model<T>(
     }
 }
 
+fn predicted_tokens_per_second(reply: &serde_json::Value) -> Option<f64> {
+    reply["timings"]["predicted_per_second"]
+        .as_f64()
+        .filter(|rate| rate.is_finite() && *rate > 0.0)
+}
+
 #[derive(Default)]
 struct ModelStreamReply {
     pending: Vec<u8>,
@@ -177,6 +183,7 @@ struct ModelStreamReply {
     /// is never a patch and never shown, only counted for progress and diagnostics.
     reasoning_chunks: u32,
     complete: bool,
+    predicted_tokens_per_second: Option<f64>,
 }
 impl ModelStreamReply {
     fn push(&mut self, bytes: &[u8]) {
@@ -194,6 +201,9 @@ impl ModelStreamReply {
             let Ok(value) = serde_json::from_str::<serde_json::Value>(data.trim()) else {
                 continue;
             };
+            if let Some(rate) = predicted_tokens_per_second(&value) {
+                self.predicted_tokens_per_second = Some(rate);
+            }
             let choice = &value["choices"][0];
             // Thinking is counted and dropped. Only `content` may become an answer, edit or
             // tool call; a reasoning-only turn is a model failure, not a patch.
@@ -1413,6 +1423,7 @@ pub struct LocalSolverController {
     pub endpoint_override: Option<Vec<String>>,
     /// Pinned client for `endpoint_override` (a Mesh worker's TLS + bearer).
     pub endpoint_client: Option<reqwest::Client>,
+    completion_timing: Option<crate::nightshift::CompletionTiming>,
     resource_scheduler: std::sync::Arc<sail_common::resources::ResourceScheduler>,
     voice_quiet: Duration,
     /// Build a graphify code graph of the worktree and give the model graph tools
@@ -1446,6 +1457,7 @@ impl LocalSolverController {
             model_timeouts: ModelTimeouts::default(),
             endpoint_override: None,
             endpoint_client: None,
+            completion_timing: None,
             resource_scheduler: sail_common::resources::global(),
             voice_quiet: voice_quiet_from_env(),
             code_graph: false,
@@ -1523,6 +1535,21 @@ impl LocalSolverController {
             self.endpoint_client = client;
         }
         self
+    }
+
+    /// Report measured throughput to the observer attached to this job.
+    pub(crate) fn with_completion_timing(
+        mut self,
+        observer: Option<crate::nightshift::CompletionTiming>,
+    ) -> Self {
+        self.completion_timing = observer;
+        self
+    }
+
+    fn report_completion_timing(&self, rate: Option<f64>) {
+        if let (Some(observer), Some(rate)) = (&self.completion_timing, rate) {
+            observer(rate);
+        }
     }
 
     pub fn candidate_endpoints() -> Vec<String> {
@@ -1912,8 +1939,14 @@ Rules:
                 model_attempts += 1;
                 endpoint_failures.clear();
                 for ep in &probe_list {
-                    let req_body =
+                    let mut req_body =
                         forge_chat_body(&messages, &model_name, &family_model, &generation);
+                    if self.completion_timing.is_some() {
+                        // With usage enabled, llama-server puts timings on a separate
+                        // chunk after the finish event. Forge stops reading at finish.
+                        req_body["stream_options"]["include_usage"] =
+                            serde_json::Value::Bool(false);
+                    }
 
                     let response = match wait_for_model(
                         client.post(ep).json(&req_body).send(),
@@ -2063,6 +2096,11 @@ Rules:
                                     ));
                                 }
                                 if !stream_failed {
+                                    if reply.complete {
+                                        self.report_completion_timing(
+                                            reply.predicted_tokens_per_second,
+                                        );
+                                    }
                                     let empty_detail = reply.empty_reply_detail();
                                     if let Some(text) = reply.into_complete_text() {
                                         turn_response_text = Some(text);
@@ -2090,6 +2128,9 @@ Rules:
                                     continue 'solver;
                                 }
                             } {
+                                self.report_completion_timing(predicted_tokens_per_second(
+                                    &json_val,
+                                ));
                                 // If response JSON itself carries a `model` field and identified_model was unknown, capture it
                                 if identified_model.model_id == "unknown" {
                                     if let Some(m) = json_val.get("model").and_then(|v| v.as_str())
@@ -2790,6 +2831,25 @@ mod model_transport_tests {
         for value in ["0", "3601", "invalid", "-1"] {
             assert_eq!(model_timeout(Some(value)).as_secs(), 600);
         }
+    }
+
+    #[test]
+    fn completion_throughput_reads_the_measured_value_from_json_and_sse() {
+        let json = serde_json::json!({"timings": {"predicted_per_second": 12.375}});
+        assert_eq!(predicted_tokens_per_second(&json), Some(12.375));
+        assert_eq!(predicted_tokens_per_second(&serde_json::json!({})), None);
+        assert_eq!(
+            predicted_tokens_per_second(&serde_json::json!({"timings":{"predicted_per_second":0}})),
+            None
+        );
+
+        let mut stream = ModelStreamReply::default();
+        stream.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"patch\"}}]}\n\n");
+        stream.push(b"data: {\"choices\":[{\"finish_reason\":\"stop\"}],\"timings\":{");
+        assert!(!stream.complete);
+        stream.push(b"\"predicted_per_second\":12.375}}\n\n");
+        assert!(stream.complete);
+        assert_eq!(stream.predicted_tokens_per_second, Some(12.375));
     }
 
     #[test]
