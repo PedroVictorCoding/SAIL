@@ -3,8 +3,13 @@ use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStringExt;
 
-use windows_sys::Wdk::System::Threading::{NtResumeProcess, NtSuspendProcess};
 use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, RECT};
+
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    fn NtSuspendProcess(h: HANDLE) -> i32;
+    fn NtResumeProcess(h: HANDLE) -> i32;
+}
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -148,6 +153,7 @@ impl ProcessControl for WindowsProcessControl {
             return Err(io::Error::last_os_error());
         }
         let _guard = OwnedHandle(h);
+        // SAFETY: `h` is a valid process handle opened with `PROCESS_SUSPEND_RESUME` and closed by `_guard`.
         let status = unsafe { NtSuspendProcess(h) };
         if status >= 0 {
             Ok(())
@@ -162,6 +168,7 @@ impl ProcessControl for WindowsProcessControl {
             return Err(io::Error::last_os_error());
         }
         let _guard = OwnedHandle(h);
+        // SAFETY: `h` is a valid process handle opened with `PROCESS_SUSPEND_RESUME` and closed by `_guard`.
         let status = unsafe { NtResumeProcess(h) };
         if status >= 0 {
             Ok(())

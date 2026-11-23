@@ -178,14 +178,19 @@ def run_viewport(browser, base_url, width, height):
     assert_no_horizontal_overflow(page, f"{width}x{height} empty")
 
     # Test all fixtures sequentially
-    for fname in ["shaping.json", "unshapeable.json", "queued_with_plan.json", "working.json",
-                  "shipped.json", "external_used.json", "mesh_resting.json"]:
+    for fname in ["shaping.json", "unshapeable.json", "queued_with_plan.json", "waiting_for_heavy.json",
+                  "working.json", "shipped.json", "external_used.json", "mesh_resting.json"]:
         current_payload["data"] = load_fixture(fname)
         page.evaluate("() => window.SailNightShift.refresh()")
         page.wait_for_timeout(80)
         assert_no_horizontal_overflow(page, f"{width}x{height} {fname}")
 
-    # Check external_used badge & mesh_resting banner
+    # Check waiting_for_heavy errand card callout, external_used badge & mesh_resting banner
+    current_payload["data"] = load_fixture("waiting_for_heavy.json")
+    page.evaluate("() => window.SailNightShift.refresh()")
+    expect(ns_page).to_contain_text("Waiting for the PC to lend")
+    assert_no_horizontal_overflow(page, f"{width}x{height} waiting_for_heavy_card")
+
     current_payload["data"] = load_fixture("external_used.json")
     page.evaluate("() => window.SailNightShift.refresh()")
     expect(ns_page).to_contain_text("Sent to Claude Code")
@@ -249,10 +254,17 @@ def run_viewport(browser, base_url, width, height):
     page.locator("#nightshiftPage").get_by_role("button", name="Settings").click()
     ns_settings = page.locator("#settingsPanel-nightshift")
     expect(ns_settings).to_be_visible()
+    expect(ns_settings).to_contain_text("Use the big model when the PC is lending")
+    expect(ns_settings).to_contain_text("If the PC isn't lending, use Qwen instead")
     ns_settings.locator("#nsSetEnabled").check()
+    ns_settings.locator("#nsSetUseHeavy").uncheck()
+    ns_settings.locator("#nsSetFallbackToHost").check()
     ns_settings.locator("#nsSetSaveBtn").click()
     page.wait_for_timeout(80)
-    assert len(saved_settings) == 1 and saved_settings[0]["enabled"] is True
+    assert len(saved_settings) == 1
+    assert saved_settings[0]["enabled"] is True
+    assert saved_settings[0]["use_heavy"] is False
+    assert saved_settings[0]["fallback_to_host"] is True
 
     assert not page_errors, f"Page errors at {width}x{height}: {page_errors}"
     assert not console_errors, f"Console errors at {width}x{height}: {console_errors}"
