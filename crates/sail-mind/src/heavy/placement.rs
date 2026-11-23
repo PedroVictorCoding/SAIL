@@ -70,10 +70,11 @@ pub struct Budgets {
 /// Where the planner put everything, plus the llama-server arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placement {
-    /// Args to append: `--device <list>` (omitted when every device is CPU), `-ngl 999`, one
-    /// `-ot <regex>=<device>` per expert group, then a final `-ot .*=<host device>` so
-    /// llama.cpp keeps every non-expert tensor (and KV attention) on the host share. The host
-    /// catch-all must stay last: llama.cpp applies the first matching override.
+    /// Args to append: `--device <list>` (omitted when every device is CPU), `-ngl 999`,
+    /// `--no-kv-offload` when the host GPU share is off (KV follows `dev_layer`, not `-ot`),
+    /// one `-ot <regex>=<device>` per expert group, then a final `-ot .*=<host device>` so
+    /// llama.cpp keeps every non-expert weight on the host share. The host catch-all must stay
+    /// last: llama.cpp applies the first matching override.
     pub args: Vec<String>,
     pub host_ram_bytes: u64,
     pub host_vram_bytes: u64,
@@ -187,6 +188,11 @@ pub fn plan(model: &GgufSummary, budgets: &Budgets) -> Result<Placement, PlanErr
     }
     args.push("-ngl".to_owned());
     args.push("999".to_owned());
+    if host_vram_bytes == 0 {
+        // llama.cpp allocates offloaded KV on the layer's device, not by `-ot`. With no host
+        // GPU share, keep KV in host RAM instead of following layers onto an RPC device.
+        args.push("--no-kv-offload".to_owned());
+    }
     for (index, layers) in remote_layers.iter().enumerate() {
         for run in contiguous_runs(layers) {
             args.push("-ot".to_owned());

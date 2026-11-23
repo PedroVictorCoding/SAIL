@@ -185,7 +185,11 @@ fn a_gpt_oss_sized_model_uses_remote_capacity_before_host_ram() {
     assert_eq!(placement.args[2], "-ngl");
     assert_eq!(placement.args[3], "999");
     assert_eq!(
-        placement.args.get(9).expect("CPU expert override"),
+        placement.args[4], "--no-kv-offload",
+        "with no host GPU share, KV must not follow layers onto an RPC device"
+    );
+    assert_eq!(
+        placement.args.get(10).expect("CPU expert override"),
         r"blk\.(32|33|34|35)\.ffn_(up|gate|down)_exps\.=CPU"
     );
     assert_eq!(
@@ -244,6 +248,7 @@ fn a_cpu_only_plan_omits_device_and_still_overrides_every_expert() {
         vec![
             "-ngl".to_owned(),
             "999".to_owned(),
+            "--no-kv-offload".to_owned(),
             "-ot".to_owned(),
             r"blk\.(0|1|2|3)\.ffn_(up|gate|down)_exps\.=CPU".to_owned(),
             "-ot".to_owned(),
