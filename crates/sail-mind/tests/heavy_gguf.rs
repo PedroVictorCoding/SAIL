@@ -44,6 +44,16 @@ fn meta_array_u32(bytes: &mut Vec<u8>, key: &str, values: &[u32]) {
     }
 }
 
+fn meta_array_bool(bytes: &mut Vec<u8>, key: &str, values: &[bool]) {
+    push_str(bytes, key);
+    bytes.extend_from_slice(&9u32.to_le_bytes());
+    bytes.extend_from_slice(&7u32.to_le_bytes());
+    bytes.extend_from_slice(&(values.len() as u64).to_le_bytes());
+    for value in values {
+        bytes.push(u8::from(*value));
+    }
+}
+
 fn meta_array_str(bytes: &mut Vec<u8>, key: &str, values: &[&str]) {
     push_str(bytes, key);
     bytes.extend_from_slice(&9u32.to_le_bytes());
@@ -119,6 +129,14 @@ fn reads_metadata_and_tensor_sizes_sorted_by_offset() {
     assert_eq!(summary.block_count, 36);
     assert_eq!(summary.expert_count, Some(128));
     assert_eq!(
+        summary.head_count_kv, None,
+        "absent metadata is not guessed"
+    );
+    assert_eq!(summary.key_length, None);
+    assert_eq!(summary.value_length, None);
+    assert_eq!(summary.sliding_window, None);
+    assert_eq!(summary.sliding_window_layers, None);
+    assert_eq!(
         summary.tensors,
         vec![
             GgufTensor {
@@ -150,6 +168,75 @@ fn architecture_may_come_after_its_own_keys() {
     assert_eq!(summary.architecture, "gpt-oss");
     assert_eq!(summary.block_count, 36);
     assert_eq!(summary.expert_count, Some(128));
+}
+
+#[test]
+fn reads_kv_shape_and_a_carried_swa_pattern() {
+    fn header(count: u64, metadata: &dyn Fn(&mut Vec<u8>)) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&count.to_le_bytes());
+        metadata(&mut bytes);
+        tensor_info(&mut bytes, "t", 0);
+        let padded = bytes.len().div_ceil(ALIGNMENT) * ALIGNMENT;
+        bytes.resize(padded + 64, 0xA5);
+        bytes
+    }
+
+    let bytes = header(7, &|bytes| {
+        meta_str(bytes, "general.architecture", "gpt-oss");
+        meta_u32(bytes, "gpt-oss.block_count", 4);
+        meta_u32(bytes, "gpt-oss.attention.head_count_kv", 8);
+        meta_u32(bytes, "gpt-oss.attention.key_length", 64);
+        meta_u32(bytes, "gpt-oss.attention.value_length", 96);
+        meta_u32(bytes, "gpt-oss.attention.sliding_window", 128);
+        meta_array_bool(
+            bytes,
+            "gpt-oss.attention.sliding_window_pattern",
+            &[true, false, true, false],
+        );
+    });
+    let summary = parse_bytes(&bytes).expect("header with KV metadata");
+    assert_eq!(summary.head_count_kv, Some(8));
+    assert_eq!(summary.key_length, Some(64));
+    assert_eq!(summary.value_length, Some(96));
+    assert_eq!(summary.sliding_window, Some(128));
+    assert_eq!(
+        summary.sliding_window_layers,
+        Some(vec![true, false, true, false])
+    );
+
+    let bytes = header(3, &|bytes| {
+        meta_str(bytes, "general.architecture", "gpt-oss");
+        meta_u32(bytes, "gpt-oss.block_count", 4);
+        meta_array_u32(
+            bytes,
+            "gpt-oss.attention.sliding_window_pattern",
+            &[0, 1, 0, 1],
+        );
+    });
+    let summary = parse_bytes(&bytes).expect("u32 pattern");
+    assert_eq!(
+        summary.sliding_window_layers,
+        Some(vec![false, true, false, true])
+    );
+
+    let bytes = header(3, &|bytes| {
+        meta_str(bytes, "general.architecture", "gpt-oss");
+        meta_u32(bytes, "gpt-oss.block_count", 4);
+        meta_array_str(
+            bytes,
+            "gpt-oss.attention.sliding_window_pattern",
+            &["not", "a", "bool"],
+        );
+    });
+    let summary = parse_bytes(&bytes).expect("string pattern is skipped");
+    assert_eq!(
+        summary.sliding_window_layers, None,
+        "an unsupported element type is not guessed"
+    );
 }
 
 #[test]

@@ -40,12 +40,6 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 const DEVICE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Fixed a priori in the handoff: reserve 1 GiB on each lending device.
 const REMOTE_RESERVE: u64 = 1 << 30;
-/// Measured from the configured gpt-oss-120b header: eight KV heads, width 64,
-/// two planes and two bytes per f16 element, per block and token.
-const GPT_OSS_KV_BYTES_PER_BLOCK_TOKEN: u64 = 8 * 64 * 2 * 2;
-/// Fixed a priori: reserve a further 512 MiB for the model's compute buffers.
-const COMPUTE_BUFFER_BYTES: u64 = 512 << 20;
-
 /// A running pooled model reachable on the host's loopback interface.
 pub struct HeavyEndpoint {
     pub url: String,
@@ -332,10 +326,7 @@ impl HeavyLane {
                 summary.architecture
             ));
         }
-        let kv_bytes = (self.config.context_tokens as u64)
-            .saturating_mul(u64::from(summary.block_count))
-            .saturating_mul(GPT_OSS_KV_BYTES_PER_BLOCK_TOKEN)
-            .saturating_add(COMPUTE_BUFFER_BYTES);
+        let kv_bytes = crate::heavy::placement::kv_bytes(&summary, self.config.context_tokens);
         let budgets = Budgets {
             host_gpu: gpu
                 .filter(|_| self.config.caps.vram_bytes > 0)
