@@ -1,0 +1,77 @@
+{
+  "settings": {
+    "enabled": true,
+    "window_start_hour": 1,
+    "window_end_hour": 7,
+    "max_items": 5,
+    "include_forge_ready_issues": true,
+    "use_mesh": true,
+    "use_heavy": true,
+    "fallback_to_host": false,
+    "external_solves_per_night": 0,
+    "external_provider": null,
+    "morning_greeting": true
+  },
+  "tonight": {
+    "window": "01:00–07:00",
+    "plan": {
+      "items": [
+        {
+          "kind": "errand",
+          "id": "e-9f8e7d6c5b4a"
+        }
+      ],
+      "deferred": []
+    }
+  },
+  "errands": [
+    {
+      "id": "e-9f8e7d6c5b4a",
+      "ask": "Author the next Arena course outline on distributed consensus.",
+      "source": "web",
+      "created_at": "2026-11-23T14:05:00Z",
+      "updated_at": "2026-11-23T14:12:00Z",
+      "attempts": 1,
+      "external_used": false,
+      "notes": [],
+      "state": {
+        "state": "queued",
+        "waiting_for_heavy": true,
+        "order": {
+          "title": "Author distributed consensus Arena course",
+          "why": "Needs the 120B heavy lane while the PC is lending overnight.",
+          "acceptance": [
+            "Outline covers safety, liveness, and Paxos/Raft trade-offs"
+          ],
+          "target_files": [
+            "docs/arena/consensus.md"
+          ],
+          "size": "m",
+          "notes_for_solver": ""
+        },
+        "approved_at": "2026-11-23T14:12:00Z"
+      }
+    }
+  ],
+  "morning": null,
+  "mesh": {
+    "available": false,
+    "name": "windows",
+    "resting": false
+  },
+  "heavy": {
+    "model": "gpt-oss-120b-MXFP4",
+    "state": { "state": "stopped", "reason": "Outside lending hours (01:00–08:00)" },
+    "worker": "windows",
+    "host_ram_bytes": 0,
+    "host_vram_bytes": 0,
+    "remote_bytes": 0,
+    "tokens_per_second": null,
+    "job": null
+  },
+  "external": {
+    "provider": null,
+    "used_tonight": 0,
+    "allowed": 0
+  }
+}

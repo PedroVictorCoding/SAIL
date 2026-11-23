@@ -174,6 +174,62 @@ Linux workers use the same steps with the Linux binaries.
 - [x] Show worker status and pairing in Settings → Models.
 - [x] Focused tests and a reviewable PR without automatic merge.
 
+## Compute
+
+Pooled compute lets a paired worker PC lend its GPU and RAM to the **host's** own large model (for example `gpt-oss-120b-MXFP4`) using `llama.cpp` RPC (`ggml-rpc-server`). Unlike whole-request offload, the host owns the model, tokenizer, sampling, and KV cache, while the PC computes the model's expert tensors placed on it via `--rpc` and `-ot`/`--override-tensor`. Weights stay resident on the PC (cached under `--cache-dir` via `LLAMA_CACHE`), never re-sent per token.
+
+### Lending window and `pause` / `play` / `auto`
+
+- **Overnight window:** lending is automatic during the PC's local daily window (`--window`, default `01:00–08:00`; `start > end` wraps midnight, `start == end` means always).
+- **Commands:**
+  - `sail-mesh-worker pause` — stops lending immediately, closes all tunnels, stops `ggml-rpc-server`, and resumes every hibernated app within 5 s.
+  - `sail-mesh-worker play [--for D]` — lends immediately outside the window (e.g. `--for 3h`, or indefinitely until changed). Games, `MUSIC_APPS`, and busy-PC rest rules still apply and move the worker to `Resting`.
+  - `sail-mesh-worker auto` — returns to the scheduled overnight window.
+  - `sail-mesh-worker status` — prints the current compute state in one plain-words line.
+- From SAIL, `POST /api/mind/mesh/workers/:name/lend` forwards `LendMode` (`auto`, `play`, `pause`) to the worker's `POST /mesh/v1/lend` over the existing pinned-TLS channel.
+
+### Hibernation and guarantees
+
+When entering `Lending`, the worker can suspend and trim owner-listed desktop apps to free RAM (`sail-mesh-worker hibernate add <exe>`, `remove`, `list`, `resume-all`). Nothing is hibernated unless explicitly listed.
+
+- **Journal before suspend:** every target PID and its process start time are written and `fsync`ed to `hibernate.json` *before* suspension, and removed only *after* resume succeeds.
+- **Startup recovery:** on start (including after a crash or reboot), the worker resumes everything in `hibernate.json` before lending or anything else.
+- **Guaranteed resume:** `pause`, `stop`, Ctrl-C/SIGTERM, leaving `Lending`, or a hibernated process receiving foreground focus (`owner_returned`) resumes all journaled apps.
+- **Watchdog & PID reuse:** a process suspended past the window end + 15 min is resumed automatically; a journaled PID whose start time no longer matches is skipped rather than resumed blindly.
+- **Windows vs. Unix:** Windows uses `NtSuspendProcess`/`NtResumeProcess` and `EmptyWorkingSet` (refusing unless free commit ≥ working sets to trim + 2 GiB); Unix uses `SIGSTOP`/`SIGCONT`.
+- **Never-list:** the worker never hibernates:
+  - system and session processes (Windows: `System`, `smss`, `csrss`, `wininit`, `winlogon`, `services`, `lsass`, `svchost`, `dwm`, `explorer`, `fontdrvhost`, `sihost`, `ctfmon`, `audiodg`, `MsMpEng`; Linux: PID 1, session leader, kernel threads);
+  - the worker itself or its children;
+  - any `MUSIC_APPS` entry;
+  - anything with a full-screen window;
+  - anything not on the owner's list.
+
+### Tunnel (no new firewall port)
+
+`ggml-rpc-server` has no authentication, so it binds **`127.0.0.1` only** on the PC and is never exposed on the LAN. The host reaches it solely through the worker's existing pinned-TLS + bearer channel:
+
+- `GET /mesh/v1/compute` with `Upgrade: sail-rpc/1` switches to `101` and bridges raw bytes to `127.0.0.1:<rpc_port>` **only while in `Lending`** (otherwise `429` with `Retry-After`).
+- Leaving `Lending` closes all open tunnel connections within 5 s.
+- On the host, `HostTunnel::bind` listens on `127.0.0.1:0` and passes that loopback address to `llama-server --rpc`. No new firewall port is opened.
+
+### Host caps and admission
+
+The resident model (Qwen3.6-35B-A3B) stays loaded for voice and chat. The heavy lane's host share is hard-capped:
+
+- **RAM cap:** `SAIL_HEAVY_HOST_RAM_GIB` (default `6` GiB).
+- **VRAM cap:** `SAIL_HEAVY_HOST_VRAM_GIB` (default `2.5` GiB; `0` disables host GPU offload).
+- **Admission:** `admission::admit` refuses to start the heavy model if the host's free RAM minus the planned host share would drop below **4 GiB** (`HEADROOM_BYTES`, reserved for voice + Qwen3.6). Qwen3.6 is never unloaded or restarted by the heavy lane.
+
+### Night Shift routing
+
+- Night Shift errands default to `use_heavy: true` ("Use the big model when the PC is lending") and `fallback_to_host: false` ("If the PC isn't lending, use Qwen instead").
+- When `use_heavy` is on and the heavy lane is not running, the errand stays `Queued` (the UI shows **"Waiting for the PC to lend"**) and does not silently fall back to Qwen3.6 unless `fallback_to_host` is enabled.
+- If a `Pooled` attempt loses the heavy lane mid-run, it requeues with reason `heavy_unavailable`.
+
+### Measured speed
+
+—
+
 ## 8. Next steps
 1. First Windows build and run on the owner's PC (not verifiable on the host: `ring` needs MSVC tools).
 2. Measure real offload latency and throughput with the owner's PC; tune `max_parallel`.

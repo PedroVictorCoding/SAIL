@@ -10,17 +10,65 @@ use sail_guardian::authority::ApprovalAuthority;
 use sail_mind::{
     MindService,
     mesh::{MeshOpError, pair_at, remove_at, set_enabled_at},
-    protocol::mesh::{MESH_VERSION, MeshMode, MeshStatus},
+    protocol::mesh::{LendMode, LendRequest, MESH_VERSION, MeshMode, MeshStatus},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-struct HttpState {
+/// HTTP error response tuple returned by Mesh routes.
+pub type Failure = (StatusCode, Json<Value>);
+
+/// Backend operations for `/api/mind/mesh` overview, refresh, and compute lending.
+///
+/// Extracted so HTTP tests can run against a stub pool over real TCP without
+/// constructing a full `MindService`.
+#[async_trait::async_trait]
+pub trait MeshComputeBackend: Send + Sync {
+    /// Returns the JSON body for `GET /api/mind/mesh`.
+    async fn overview(&self) -> Value;
+    /// Refreshes worker health and returns the updated overview JSON.
+    async fn refresh(&self) -> Result<Value, Failure>;
+    /// Forwards a [`LendMode`] change to the named worker and returns its updated `MeshWorkerStatus` JSON.
+    async fn set_lend(&self, name: &str, mode: LendMode) -> Result<Value, Failure>;
+}
+
+struct MindComputeBackend {
     inference: MindService,
+}
+
+#[async_trait::async_trait]
+impl MeshComputeBackend for MindComputeBackend {
+    async fn overview(&self) -> Value {
+        let mut value =
+            serde_json::to_value(status_from(&self.inference)).unwrap_or_else(|_| json!({}));
+        // When C3 (MindService::heavy) merges, populate from self.inference.heavy().map(|l| l.status()).
+        if let Some(obj) = value.as_object_mut() {
+            obj.entry("heavy").or_insert(Value::Null);
+        }
+        value
+    }
+
+    async fn refresh(&self) -> Result<Value, Failure> {
+        pool_from(&self.inference)?.refresh().await;
+        Ok(self.overview().await)
+    }
+
+    async fn set_lend(&self, _name: &str, _mode: LendMode) -> Result<Value, Failure> {
+        let _pool = pool_from(&self.inference)?;
+        // Wired to pool.set_lend(name, mode).await.map_err(op_error) when K9 merges.
+        Err(error(
+            StatusCode::NOT_IMPLEMENTED,
+            "compute lending backend is awaiting K9 MeshPool::set_lend",
+        ))
+    }
+}
+
+struct HttpState {
+    inference: Option<MindService>,
+    backend: Arc<dyn MeshComputeBackend>,
     authority: Option<ApprovalAuthority>,
 }
-type Failure = (StatusCode, Json<Value>);
 
 fn error(status: StatusCode, message: impl Into<String>) -> Failure {
     (status, Json(json!({"error": message.into()})))
@@ -55,8 +103,8 @@ fn op_error(e: MeshOpError) -> Failure {
     error(status, e.to_string())
 }
 
-fn pool(s: &HttpState) -> Result<&Arc<sail_mind::mesh::MeshPool>, Failure> {
-    s.inference.mesh().ok_or_else(|| {
+fn pool_from(inference: &MindService) -> Result<&Arc<sail_mind::mesh::MeshPool>, Failure> {
+    inference.mesh().ok_or_else(|| {
         error(
             StatusCode::SERVICE_UNAVAILABLE,
             "SAIL Mesh is not available in this process",
@@ -64,12 +112,43 @@ fn pool(s: &HttpState) -> Result<&Arc<sail_mind::mesh::MeshPool>, Failure> {
     })
 }
 
+fn pool(s: &HttpState) -> Result<&Arc<sail_mind::mesh::MeshPool>, Failure> {
+    let inference = s.inference.as_ref().ok_or_else(|| {
+        error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SAIL Mesh is not available in this process",
+        )
+    })?;
+    pool_from(inference)
+}
+
+/// Builds the `/api/mind/mesh` router backed by `MindService`.
 pub fn router(inference: MindService, authority: Option<ApprovalAuthority>) -> Router {
+    let backend: Arc<dyn MeshComputeBackend> = Arc::new(MindComputeBackend {
+        inference: inference.clone(),
+    });
+    build_router(Some(inference), backend, authority)
+}
+
+/// Builds the `/api/mind/mesh` router with a custom [`MeshComputeBackend`] (used by tests).
+pub fn router_with_backend(
+    backend: Arc<dyn MeshComputeBackend>,
+    authority: Option<ApprovalAuthority>,
+) -> Router {
+    build_router(None, backend, authority)
+}
+
+fn build_router(
+    inference: Option<MindService>,
+    backend: Arc<dyn MeshComputeBackend>,
+    authority: Option<ApprovalAuthority>,
+) -> Router {
     Router::new()
         .route("/", get(overview))
         .route("/refresh", post(refresh))
         .route("/pair", post(pair))
         .route("/workers/:name/enabled", post(enabled))
+        .route("/workers/:name/lend", post(lend))
         .route("/workers/:name", delete(remove))
         .layer(axum::extract::DefaultBodyLimit::max(8_000))
         .layer(axum::middleware::map_response(
@@ -83,12 +162,13 @@ pub fn router(inference: MindService, authority: Option<ApprovalAuthority>) -> R
         ))
         .with_state(Arc::new(HttpState {
             inference,
+            backend,
             authority,
         }))
 }
 
-fn status(s: &HttpState) -> MeshStatus {
-    s.inference.mesh().map_or(
+fn status_from(inference: &MindService) -> MeshStatus {
+    inference.mesh().map_or(
         MeshStatus {
             version: MESH_VERSION,
             mode: MeshMode::Off,
@@ -101,21 +181,24 @@ fn status(s: &HttpState) -> MeshStatus {
     )
 }
 
-async fn overview(
-    State(s): State<Arc<HttpState>>,
-    h: HeaderMap,
-) -> Result<Json<MeshStatus>, Failure> {
+async fn overview(State(s): State<Arc<HttpState>>, h: HeaderMap) -> Result<Json<Value>, Failure> {
     authorize(&s, &h)?;
-    Ok(Json(status(&s)))
+    Ok(Json(s.backend.overview().await))
 }
 
-async fn refresh(
+async fn refresh(State(s): State<Arc<HttpState>>, h: HeaderMap) -> Result<Json<Value>, Failure> {
+    authorize(&s, &h)?;
+    Ok(Json(s.backend.refresh().await?))
+}
+
+async fn lend(
     State(s): State<Arc<HttpState>>,
     h: HeaderMap,
-) -> Result<Json<MeshStatus>, Failure> {
+    Path(name): Path<String>,
+    Json(body): Json<LendRequest>,
+) -> Result<Json<Value>, Failure> {
     authorize(&s, &h)?;
-    pool(&s)?.refresh().await;
-    Ok(Json(status(&s)))
+    Ok(Json(s.backend.set_lend(&name, body.mode).await?))
 }
 
 #[derive(Deserialize)]

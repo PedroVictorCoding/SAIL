@@ -1763,6 +1763,26 @@
             </div>
           </div>
 
+          <div class="vscode-setting-item" data-search-terms="night shift heavy model lending pc">
+            <div class="vscode-setting-info">
+              <label for="nsSetUseHeavy" class="vscode-setting-name">Use the big model when the PC is lending</label>
+              <p class="vscode-setting-desc">Run overnight work orders on the pooled heavy model while your PC is lending compute.</p>
+            </div>
+            <div class="vscode-setting-control">
+              <input type="checkbox" id="nsSetUseHeavy" checked>
+            </div>
+          </div>
+
+          <div class="vscode-setting-item" data-search-terms="night shift fallback host qwen lending">
+            <div class="vscode-setting-info">
+              <label for="nsSetFallbackToHost" class="vscode-setting-name">If the PC isn't lending, use Qwen instead</label>
+              <p class="vscode-setting-desc">Off by default so jobs wait for the next lending window instead of falling back to the smaller host model.</p>
+            </div>
+            <div class="vscode-setting-control">
+              <input type="checkbox" id="nsSetFallbackToHost">
+            </div>
+          </div>
+
           <div class="vscode-setting-item" data-search-terms="night shift external help claude codex budget">
             <div class="vscode-setting-info">
               <label for="nsSetExternalMax" class="vscode-setting-name">External help per night (0–3)</label>

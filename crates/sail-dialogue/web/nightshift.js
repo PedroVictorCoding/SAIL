@@ -522,6 +522,18 @@
       card.appendChild(row);
     } else if (s.state === "queued") {
       card.appendChild(el("div", "ns-meta", `Work order: ${s.order?.title || ""} (Size ${String(s.order?.size || "").toUpperCase()})`));
+      const heldForHeavy =
+        s.waiting_for_heavy === true ||
+        errand.waiting_for_heavy === true ||
+        s.reason === "heavy_unavailable" ||
+        errand.requeue_reason === "heavy_unavailable" ||
+        (state.settings?.use_heavy === true &&
+          !state.settings?.fallback_to_host &&
+          state.heavy &&
+          state.heavy.state?.state !== "running");
+      if (heldForHeavy) {
+        card.appendChild(el("div", "ns-callout ns-waiting-heavy", "Waiting for the PC to lend"));
+      }
       const dBtn = el("button", "ns-btn danger", "Drop");
       dBtn.type = "button";
       dBtn.addEventListener("click", () => doDrop(errand.id));
@@ -770,6 +782,8 @@
     setVal("nsSetMaxItems", "value", s.max_items ?? 5);
     setVal("nsSetIncludeIssues", "checked", !!s.include_forge_ready_issues);
     setVal("nsSetUseMesh", "checked", !!s.use_mesh);
+    setVal("nsSetUseHeavy", "checked", s.use_heavy ?? true);
+    setVal("nsSetFallbackToHost", "checked", !!s.fallback_to_host);
     setVal("nsSetExternalMax", "value", s.external_solves_per_night ?? 0);
     setVal("nsSetExternalProvider", "value", s.external_provider || "");
     setVal("nsSetMorningGreeting", "checked", !!s.morning_greeting);
@@ -790,6 +804,8 @@
         max_items: Number(document.getElementById("nsSetMaxItems")?.value ?? 5),
         include_forge_ready_issues: !!document.getElementById("nsSetIncludeIssues")?.checked,
         use_mesh: !!document.getElementById("nsSetUseMesh")?.checked,
+        use_heavy: document.getElementById("nsSetUseHeavy")?.checked ?? true,
+        fallback_to_host: !!document.getElementById("nsSetFallbackToHost")?.checked,
         external_solves_per_night: Number(document.getElementById("nsSetExternalMax")?.value ?? 0),
         external_provider: document.getElementById("nsSetExternalProvider")?.value || null,
         morning_greeting: !!document.getElementById("nsSetMorningGreeting")?.checked,
