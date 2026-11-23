@@ -2,7 +2,7 @@
 use sail_mind::heavy::{
     admission::{AdmissionError, HEADROOM_BYTES, HostCaps, admit},
     gguf::{GgufSummary, GgufTensor},
-    placement::{Budgets, ListedDevice, Placement, PlanError, parse_list_devices, plan},
+    placement::{Budgets, ListedDevice, Placement, PlanError, kv_bytes, parse_list_devices, plan},
 };
 
 const GIB: u64 = 1 << 30;
@@ -34,6 +34,11 @@ fn gpt_oss_120b() -> GgufSummary {
         architecture: "gpt-oss".into(),
         block_count: 36,
         expert_count: Some(128),
+        head_count_kv: Some(8),
+        key_length: Some(64),
+        value_length: Some(64),
+        sliding_window: Some(128),
+        sliding_window_layers: None,
         tensors,
     }
 }
@@ -62,6 +67,11 @@ fn small_model(blocks: u32) -> GgufSummary {
         architecture: "gpt-oss".into(),
         block_count: blocks,
         expert_count: Some(8),
+        head_count_kv: None,
+        key_length: None,
+        value_length: None,
+        sliding_window: None,
+        sliding_window_layers: None,
         tensors,
     }
 }
@@ -315,6 +325,11 @@ fn a_fused_expert_name_is_counted_and_overridden_by_the_same_rule() {
         architecture: "gpt-oss".into(),
         block_count: 3,
         expert_count: Some(64),
+        head_count_kv: None,
+        key_length: None,
+        value_length: None,
+        sliding_window: None,
+        sliding_window_layers: None,
         tensors: vec![
             GgufTensor {
                 name: "blk.0.ffn_gate_up_exps.weight".into(),
@@ -405,12 +420,66 @@ fn leftovers_that_do_not_fit_are_reported_and_a_dense_model_has_no_experts() {
         architecture: "llama".into(),
         block_count: 32,
         expert_count: None,
+        head_count_kv: None,
+        key_length: None,
+        value_length: None,
+        sliding_window: None,
+        sliding_window_layers: None,
         tensors: vec![GgufTensor {
             name: "token_embd.weight".into(),
             bytes: 1,
         }],
     };
     assert_eq!(plan(&dense, &budgets), Err(PlanError::NoExperts));
+}
+
+#[test]
+fn kv_bytes_counts_gpt_oss_swa_layers_and_falls_back_when_metadata_is_missing() {
+    let model = gpt_oss_120b();
+    assert_eq!(
+        kv_bytes(&model, 16_384),
+        1_164_443_648,
+        "18 full layers x 16384 + 18 SWA layers x 640 cells, at 2048 bytes per cell"
+    );
+    assert_eq!(kv_bytes(&model, 8_192), 862_453_760);
+    assert_eq!(
+        kv_bytes(&model, 128),
+        546_308_096,
+        "below the window the SWA layers hold only ctx cells"
+    );
+
+    let mut missing = model.clone();
+    missing.head_count_kv = None;
+    assert_eq!(
+        kv_bytes(&missing, 16_384),
+        1_744_830_464,
+        "missing metadata falls back to full attention on every layer"
+    );
+    missing.head_count_kv = Some(8);
+    missing.sliding_window = None;
+    assert_eq!(kv_bytes(&missing, 16_384), 1_744_830_464);
+}
+
+#[test]
+fn a_carried_sliding_window_pattern_overrides_the_gpt_oss_default() {
+    let mut model = gpt_oss_120b();
+    model.block_count = 4;
+    model.head_count_kv = Some(2);
+    model.key_length = Some(4);
+    model.value_length = Some(4);
+    model.sliding_window = Some(100);
+    model.sliding_window_layers = Some(vec![false; 4]);
+    assert_eq!(
+        kv_bytes(&model, 1_000),
+        128_000 + (512 << 20),
+        "four full layers at 32 bytes per cell"
+    );
+    model.sliding_window_layers = Some(vec![true; 4]);
+    assert_eq!(
+        kv_bytes(&model, 1_000),
+        78_336 + (512 << 20),
+        "four SWA layers at min(1000, 612) cells"
+    );
 }
 
 fn placement_with_host_share(host_ram_bytes: u64, host_vram_bytes: u64) -> Placement {

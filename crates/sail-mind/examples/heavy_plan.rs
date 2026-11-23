@@ -10,16 +10,11 @@
 //! element per block per token) plus a fixed 512 MiB compute reserve; this example is for
 //! that model file. Reading the header must not touch tensor data.
 use sail_mind::heavy::gguf::read_summary;
-use sail_mind::heavy::placement::{Budgets, Placement, PlanError, plan};
+use sail_mind::heavy::placement::{Budgets, Placement, PlanError, kv_bytes, plan};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 const GIB: u64 = 1 << 30;
-const MIB: u64 = 1 << 20;
-/// 8 heads x 64 width x 2 planes x 2 bytes, measured from the gpt-oss-120b header.
-const GPT_OSS_KV_BYTES_PER_BLOCK_TOKEN: u64 = 8 * 64 * 2 * 2;
-/// Fixed a priori: the model's compute buffers.
-const COMPUTE_BUFFER_BYTES: u64 = 512 * MIB;
 
 const USAGE: &str = "\
 usage: heavy_plan <model.gguf> --host-gpu NAME:GIB --host-ram GIB \
@@ -44,16 +39,12 @@ fn main() -> ExitCode {
 fn run() -> Result<ExitCode, String> {
     let options = Options::parse()?;
     let summary = read_summary(&options.model).map_err(|error| error.to_string())?;
-    let kv_bytes = options
-        .ctx
-        .saturating_mul(u64::from(summary.block_count))
-        .saturating_mul(GPT_OSS_KV_BYTES_PER_BLOCK_TOKEN)
-        .saturating_add(COMPUTE_BUFFER_BYTES);
+    let kv = kv_bytes(&summary, options.ctx);
     let budgets = Budgets {
         host_gpu: options.host_gpu.clone(),
         host_ram_bytes: options.host_ram,
         remote: options.remote.clone(),
-        kv_bytes,
+        kv_bytes: kv,
     };
 
     println!(
@@ -79,7 +70,7 @@ fn run() -> Result<ExitCode, String> {
             .collect::<Vec<_>>()
             .join(", "),
         options.ctx,
-        gib(kv_bytes)
+        gib(kv)
     );
 
     match plan(&summary, &budgets) {
@@ -125,7 +116,7 @@ struct Options {
     host_gpu: Option<(String, u64)>,
     host_ram: u64,
     remote: Vec<(String, u64)>,
-    ctx: u64,
+    ctx: usize,
 }
 
 impl Options {
@@ -148,7 +139,7 @@ impl Options {
                 "--ctx" => {
                     let text = next(&mut args, "--ctx")?;
                     let value = text
-                        .parse::<u64>()
+                        .parse::<usize>()
                         .map_err(|_| format!("--ctx needs a whole token count, got {text}"))?;
                     if value == 0 {
                         return Err("--ctx must be at least 1".into());

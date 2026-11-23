@@ -45,6 +45,17 @@ pub struct GgufSummary {
     pub architecture: String,
     pub block_count: u32,
     pub expert_count: Option<u32>,
+    /// `<arch>.attention.head_count_kv`, when the header carries a scalar.
+    pub head_count_kv: Option<u32>,
+    /// `<arch>.attention.key_length`, when the header carries a scalar.
+    pub key_length: Option<u32>,
+    /// `<arch>.attention.value_length`, when the header carries a scalar.
+    pub value_length: Option<u32>,
+    /// `<arch>.attention.sliding_window`, when the header carries a scalar.
+    pub sliding_window: Option<u32>,
+    /// Per-layer sliding-window flags from `<arch>.attention.sliding_window_pattern`, when the
+    /// header carries a boolean or u32 array of the right length.
+    pub sliding_window_layers: Option<Vec<bool>>,
     pub tensors: Vec<GgufTensor>,
 }
 
@@ -100,9 +111,10 @@ pub fn parse<R: Read + Seek>(mut reader: R, file_len: u64) -> Result<GgufSummary
 
     let mut architecture: Option<String> = None;
     let mut alignment = DEFAULT_ALIGNMENT;
-    // Architecture-specific keys may come before `general.architecture`; keep only the two
-    // counts placement needs, keyed by the full name.
+    // Architecture-specific keys may come before `general.architecture`; keep the scalars
+    // placement needs, keyed by the full name.
     let mut counts: HashMap<String, u32> = HashMap::new();
+    let mut patterns: HashMap<String, Vec<bool>> = HashMap::new();
     for _ in 0..metadata_count {
         let key = reader.string(MAX_KEY_BYTES)?;
         let kind = reader.u32()?;
@@ -118,7 +130,7 @@ pub fn parse<R: Read + Seek>(mut reader: R, file_len: u64) -> Result<GgufSummary
                 if key == "general.alignment" {
                     alignment = u64::from(value);
                 }
-                remember_count(&mut counts, &key, value);
+                remember_scalar(&mut counts, &key, value);
             }
             5 | 6 => {
                 reader.skip(4)?;
@@ -132,11 +144,19 @@ pub fn parse<R: Read + Seek>(mut reader: R, file_len: u64) -> Result<GgufSummary
                     architecture = Some(value);
                 }
             }
-            9 => reader.skip_array(0)?,
+            9 => {
+                if key.ends_with(".attention.sliding_window_pattern") {
+                    if let Some(layers) = reader.bool_array()? {
+                        patterns.insert(key, layers);
+                    }
+                } else {
+                    reader.skip_array(0)?;
+                }
+            }
             10 => {
                 let value = reader.u64()?;
                 if value <= u64::from(u32::MAX) {
-                    remember_count(&mut counts, &key, value as u32);
+                    remember_scalar(&mut counts, &key, value as u32);
                 }
             }
             11 | 12 => {
@@ -157,6 +177,20 @@ pub fn parse<R: Read + Seek>(mut reader: R, file_len: u64) -> Result<GgufSummary
         .copied()
         .unwrap_or(0);
     let expert_count = counts.get(&format!("{architecture}.expert_count")).copied();
+    let head_count_kv = counts
+        .get(&format!("{architecture}.attention.head_count_kv"))
+        .copied();
+    let key_length = counts
+        .get(&format!("{architecture}.attention.key_length"))
+        .copied();
+    let value_length = counts
+        .get(&format!("{architecture}.attention.value_length"))
+        .copied();
+    let sliding_window = counts
+        .get(&format!("{architecture}.attention.sliding_window"))
+        .copied();
+    let sliding_window_layers =
+        patterns.remove(&format!("{architecture}.attention.sliding_window_pattern"));
 
     let mut infos = Vec::with_capacity(tensor_count as usize);
     for _ in 0..tensor_count {
@@ -209,12 +243,25 @@ pub fn parse<R: Read + Seek>(mut reader: R, file_len: u64) -> Result<GgufSummary
         architecture,
         block_count,
         expert_count,
+        head_count_kv,
+        key_length,
+        value_length,
+        sliding_window,
+        sliding_window_layers,
         tensors,
     })
 }
 
-fn remember_count(counts: &mut HashMap<String, u32>, key: &str, value: u32) {
-    if key.ends_with(".block_count") || key.ends_with(".expert_count") {
+fn remember_scalar(counts: &mut HashMap<String, u32>, key: &str, value: u32) {
+    const SUFFIXES: [&str; 6] = [
+        ".block_count",
+        ".expert_count",
+        ".attention.head_count_kv",
+        ".attention.key_length",
+        ".attention.value_length",
+        ".attention.sliding_window",
+    ];
+    if SUFFIXES.iter().any(|suffix| key.ends_with(suffix)) {
         counts.insert(key.to_owned(), value);
     }
 }
@@ -319,6 +366,38 @@ impl<R: Read> Header<R> {
             .map_err(|_| GgufError::Malformed("a string is not valid UTF-8".into()))
     }
 
+    /// Read a boolean or u32 array. Returns `None` for other element types after skipping
+    /// them, so the caller can fall back to a conservative estimate.
+    fn bool_array(&mut self) -> Result<Option<Vec<bool>>, GgufError> {
+        let kind = self.u32()?;
+        let count = self.u64()?;
+        if count > MAX_ARRAY_ELEMENTS {
+            return Err(GgufError::Malformed(format!(
+                "an array of {count} elements is larger than {MAX_ARRAY_ELEMENTS}"
+            )));
+        }
+        match kind {
+            0 | 7 => {
+                let len = usize::try_from(count).map_err(|_| {
+                    GgufError::Malformed("an array does not fit this machine".into())
+                })?;
+                let bytes = self.read_exact(len)?;
+                Ok(Some(bytes.into_iter().map(|byte| byte != 0).collect()))
+            }
+            4 => {
+                let mut layers = Vec::new();
+                for _ in 0..count {
+                    layers.push(self.u32()? != 0);
+                }
+                Ok(Some(layers))
+            }
+            _ => {
+                self.skip_array_body(kind, count, 0)?;
+                Ok(None)
+            }
+        }
+    }
+
     /// Skip one array value; `depth` bounds nested arrays.
     fn skip_array(&mut self, depth: u8) -> Result<(), GgufError> {
         if depth >= MAX_ARRAY_DEPTH {
@@ -331,6 +410,11 @@ impl<R: Read> Header<R> {
                 "an array of {count} elements is larger than {MAX_ARRAY_ELEMENTS}"
             )));
         }
+        self.skip_array_body(kind, count, depth)
+    }
+
+    /// Skip the elements of an array whose header has already been read.
+    fn skip_array_body(&mut self, kind: u32, count: u64, depth: u8) -> Result<(), GgufError> {
         match kind {
             8 => {
                 for _ in 0..count {

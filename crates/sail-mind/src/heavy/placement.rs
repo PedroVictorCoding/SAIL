@@ -247,6 +247,75 @@ pub fn plan(model: &GgufSummary, budgets: &Budgets) -> Result<Placement, PlanErr
     })
 }
 
+/// Fixed a priori: llama.cpp's default physical batch (`n_ubatch`), which the lane does not
+/// override. It bounds the sliding-window cache together with the window size.
+const KV_UBATCH_TOKENS: u64 = 512;
+/// Fixed a priori: reserve 512 MiB for the model's compute buffers on the attention device.
+const COMPUTE_BUFFER_BYTES: u64 = 512 << 20;
+/// Measured from the configured gpt-oss-120b header: eight KV heads, width 64, two planes and
+/// two bytes per f16 element, per block and token. Used only when the header lacks the
+/// metadata [`kv_bytes`] needs.
+const GPT_OSS_KV_BYTES_PER_BLOCK_TOKEN: u64 = 8 * 64 * 2 * 2;
+
+/// Estimated KV-cache bytes for `ctx` tokens, plus the fixed 512 MiB compute reserve.
+///
+/// A full-attention layer holds `ctx` cells; a sliding-window layer holds
+/// `min(ctx, window + 512)`, where 512 is llama.cpp's default physical batch. A cell costs
+/// `head_count_kv * (key_length + value_length) * 2` bytes (f16). The per-layer pattern comes
+/// from `<arch>.attention.sliding_window_pattern` when the header carries one; otherwise
+/// gpt-oss alternates with sliding-window layers at even indices, confirmed against
+/// `src/llama-model.cpp` (`load_swa_pattern` at line 3986 reads the pattern or calls
+/// `set_swa_pattern`), `src/llama-hparams.cpp` (`dense_first = false` selects
+/// `il % n_pattern < n_pattern - 1`, so even layers for the two-layer pattern), and
+/// `src/models/openai-moe.cpp:6` (`load_swa_pattern(ml, 2)` for `LLM_ARCH_OPENAI_MOE`).
+/// The SWA cache size is `min(ctx, window + ubatch)` per `src/llama-kv-cache-iswa.cpp:73`;
+/// this estimate omits llama.cpp's 256-cell padding, which the compute reserve covers.
+///
+/// If any of `head_count_kv`, `key_length`, `value_length` or `sliding_window` is missing,
+/// fall back to full attention on every layer with the old measured gpt-oss shape. The
+/// function is pure and deterministic.
+pub fn kv_bytes(model: &GgufSummary, ctx: usize) -> u64 {
+    let ctx = ctx as u64;
+    let Some(per_cell) = model
+        .head_count_kv
+        .zip(model.key_length)
+        .zip(model.value_length)
+        .map(|((heads, key), value)| {
+            u64::from(heads)
+                .saturating_mul(u64::from(key) + u64::from(value))
+                .saturating_mul(2)
+        })
+    else {
+        return conservative_kv_bytes(model, ctx);
+    };
+    let Some(window) = model.sliding_window else {
+        return conservative_kv_bytes(model, ctx);
+    };
+    let swa_cells = ctx.min(u64::from(window).saturating_add(KV_UBATCH_TOKENS));
+    let carried = model
+        .sliding_window_layers
+        .as_deref()
+        .filter(|layers| layers.len() == model.block_count as usize);
+    let mut cells = 0u64;
+    for layer in 0..model.block_count {
+        let is_swa = match carried {
+            Some(layers) => layers[layer as usize],
+            None => model.architecture == "gpt-oss" && layer % 2 == 0,
+        };
+        cells = cells.saturating_add(if is_swa { swa_cells } else { ctx });
+    }
+    cells
+        .saturating_mul(per_cell)
+        .saturating_add(COMPUTE_BUFFER_BYTES)
+}
+
+/// Full attention on every layer with the measured gpt-oss shape, plus the compute reserve.
+fn conservative_kv_bytes(model: &GgufSummary, ctx: u64) -> u64 {
+    ctx.saturating_mul(u64::from(model.block_count))
+        .saturating_mul(GPT_OSS_KV_BYTES_PER_BLOCK_TOKEN)
+        .saturating_add(COMPUTE_BUFFER_BYTES)
+}
+
 /// The layer number of an expert tensor like `blk.7.ffn_up_exps.weight`.
 fn expert_layer(name: &str) -> Option<u32> {
     let rest = name.strip_prefix("blk.")?;
