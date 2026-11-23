@@ -108,6 +108,7 @@
     if (!ranOn) return "";
     if (ranOn.kind === "external") return `Sent to ${ranOn.name} · ${ranOn.model}`;
     if (ranOn.kind === "mesh") return `PC (${ranOn.name}) · ${ranOn.model}`;
+    if (ranOn.kind === "pooled") return `Ran on the big model (host + ${ranOn.name})`;
     return `Host · ${ranOn.model}`;
   }
 
@@ -531,7 +532,15 @@
           !state.settings?.fallback_to_host &&
           state.heavy &&
           state.heavy.state?.state !== "running");
-      if (heldForHeavy) {
+      const heldAllNight =
+        s.held_all_night === true ||
+        errand.held_all_night === true ||
+        (heldForHeavy &&
+          state.morning &&
+          (state.morning.halted === "heavy_unavailable" || (state.morning.not_reached ?? 0) > 0));
+      if (heldAllNight) {
+        card.appendChild(el("div", "ns-callout ns-waiting-heavy", "Waited — the PC wasn't lending"));
+      } else if (heldForHeavy) {
         card.appendChild(el("div", "ns-callout ns-waiting-heavy", "Waiting for the PC to lend"));
       }
       const dBtn = el("button", "ns-btn danger", "Drop");
@@ -708,7 +717,11 @@
       mTop.appendChild(mCounts);
       mCard.appendChild(mTop);
       if (m.spoken) mCard.appendChild(el("p", "ns-morning-spoken", m.spoken));
-      if (m.halted) mCard.appendChild(el("div", "ns-callout error ns-morning-halted", m.halted));
+      if (m.halted) {
+        const haltedText =
+          m.halted === "heavy_unavailable" ? "Waited — the PC wasn't lending." : m.halted;
+        mCard.appendChild(el("div", "ns-callout error ns-morning-halted", haltedText));
+      }
       if (Array.isArray(m.items) && m.items.length > 0) {
         const list = el("div", "ns-morning-items");
         for (const item of m.items) {

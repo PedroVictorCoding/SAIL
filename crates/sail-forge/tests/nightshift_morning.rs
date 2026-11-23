@@ -756,3 +756,67 @@ fn every_result_is_deterministic_except_for_the_patch_path_branch() {
         None,
     );
 }
+
+#[test]
+fn pooled_run_is_named_in_morning_summary_and_greeting() {
+    let mut pooled_result = result_with("Changed 1 file (+3 −1). 2 tests passed.");
+    pooled_result.ran_on = RanOn {
+        kind: RanOnKind::Pooled,
+        name: "windows".into(),
+        model: "gpt-oss-120b-MXFP4".into(),
+    };
+    let e = errand(
+        10,
+        "consensus course",
+        ErrandState::Ready {
+            order: order("consensus course"),
+            result: pooled_result,
+        },
+    );
+    let plan = NightPlan {
+        items: vec![NightItem::Errand { id: e.id.clone() }],
+        deferred: Vec::new(),
+    };
+    let report = compose_morning(
+        "2026-11-23",
+        &plan,
+        &[e],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        None,
+    );
+    assert_eq!(
+        report.items[0].line,
+        "Ran on the big model (host + windows). Changed 1 file (+3 −1). 2 tests passed."
+    );
+    assert_eq!(
+        report.spoken,
+        "Overnight I finished 1 of 1 jobs; one is ready to review. Ran on the big model (host + windows)."
+    );
+}
+
+#[test]
+fn waited_for_lending_all_night_is_named_in_morning_summary_and_greeting() {
+    let e = errand(
+        11,
+        "consensus course",
+        ErrandState::Queued {
+            order: order("consensus course"),
+            approved_at: now(),
+        },
+    );
+    let plan = NightPlan {
+        items: vec![NightItem::Errand { id: e.id.clone() }],
+        deferred: Vec::new(),
+    };
+    let report = compose_morning(
+        "2026-11-23",
+        &plan,
+        &[e],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        Some("heavy_unavailable".into()),
+    );
+    assert_eq!(report.items[0].line, "Waited — the PC wasn't lending.");
+    assert_eq!(report.spoken, "Waited — the PC wasn't lending.");
+}

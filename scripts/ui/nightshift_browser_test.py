@@ -185,11 +185,23 @@ def run_viewport(browser, base_url, width, height):
         page.wait_for_timeout(80)
         assert_no_horizontal_overflow(page, f"{width}x{height} {fname}")
 
-    # Check waiting_for_heavy errand card callout, external_used badge & mesh_resting banner
+    # Check waiting_for_heavy errand card callout, pooled_morning, waited_all_night, external_used & mesh_resting
     current_payload["data"] = load_fixture("waiting_for_heavy.json")
     page.evaluate("() => window.SailNightShift.refresh()")
     expect(ns_page).to_contain_text("Waiting for the PC to lend")
     assert_no_horizontal_overflow(page, f"{width}x{height} waiting_for_heavy_card")
+
+    current_payload["data"] = load_fixture("pooled_morning.json")
+    page.evaluate("() => window.SailNightShift.refresh()")
+    expect(ns_page.locator(".ns-morning-spoken")).to_contain_text("Ran on the big model (host + windows)")
+    expect(ns_page.locator("article.ns-card").last).to_contain_text("Ran on the big model (host + windows)")
+    assert_no_horizontal_overflow(page, f"{width}x{height} pooled_morning")
+
+    current_payload["data"] = load_fixture("waited_all_night.json")
+    page.evaluate("() => window.SailNightShift.refresh()")
+    expect(ns_page.locator(".ns-morning-spoken")).to_contain_text("Waited — the PC wasn't lending")
+    expect(ns_page.locator("article.ns-card").last).to_contain_text("Waited — the PC wasn't lending")
+    assert_no_horizontal_overflow(page, f"{width}x{height} waited_all_night")
 
     current_payload["data"] = load_fixture("external_used.json")
     page.evaluate("() => window.SailNightShift.refresh()")
