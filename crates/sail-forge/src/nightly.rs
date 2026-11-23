@@ -288,11 +288,15 @@ impl NightlyDigest {
 /// Failures that are about the host (no model server), not the patch: stop the run and
 /// do not spend the issue's attempt.
 fn is_infrastructure_failure(reason: &str) -> bool {
+    is_model_transport_failure(reason)
+        || reason.contains("Concurrency semaphore")
+        || reason.contains("Failed to create isolated worktree")
+}
+
+fn is_model_transport_failure(reason: &str) -> bool {
     reason.contains("Local model unavailable")
         || reason.contains("unreachable")
         || reason.contains("inference server")
-        || reason.contains("Concurrency semaphore")
-        || reason.contains("Failed to create isolated worktree")
         || (reason.contains("Model request to ") && reason.contains(" timed out"))
         || reason.contains("Cannot connect to model endpoint")
         || reason.contains("Model transport failure at")
@@ -853,7 +857,7 @@ impl ForgeNightlyRunner {
             }
             tokio::select! {
                 result = &mut execution => {
-                    if !available() || result.as_ref().is_err_and(|reason| is_infrastructure_failure(reason)) {
+                    if !available() || result.as_ref().is_err_and(|reason| is_model_transport_failure(reason)) {
                         return Err(HEAVY_UNAVAILABLE.into());
                     }
                     return result;
