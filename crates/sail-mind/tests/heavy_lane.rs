@@ -43,7 +43,7 @@ struct FixtureHost;
 impl HostProbe for FixtureHost {
     fn sample(&self) -> std::io::Result<HostSample> {
         Ok(HostSample {
-            available_ram_bytes: 16 * GIB,
+            available_ram_bytes: 3 * GIB,
             total_ram_bytes: 32 * GIB,
             swap_used_bytes: 0,
             swap_total_bytes: 0,
@@ -66,7 +66,7 @@ fn string(buffer: &mut Vec<u8>, value: &str) {
     buffer.extend(value.as_bytes());
 }
 
-fn model_file(path: &Path, host_bytes: u64) {
+fn model_file(path: &Path, host_bytes: u64, expert_bytes: u64) {
     let mut header = b"GGUF".to_vec();
     header.extend(3_u32.to_le_bytes());
     header.extend(2_u64.to_le_bytes()); // tensors
@@ -94,7 +94,8 @@ fn model_file(path: &Path, host_bytes: u64) {
     let mut file = File::create(path).unwrap();
     file.write_all(&header).unwrap();
     // The fixture reads only the header. The sparse body models tensor offsets.
-    file.set_len(header.len() as u64 + host_bytes + 32).unwrap();
+    file.set_len(header.len() as u64 + host_bytes + expert_bytes)
+        .unwrap();
 }
 
 struct Fixture {
@@ -175,7 +176,9 @@ impl Fixture {
             LocalModelConfig::default(),
         );
         let model_path = dir.path().join(format!("{stem}.gguf"));
-        model_file(&model_path, host_bytes);
+        // Larger than the scheduler's available host budget, but it fits the remote cap.
+        let expert_bytes = if stem == "pooled" { 3 * GIB } else { 32 };
+        model_file(&model_path, host_bytes, expert_bytes);
         let port = free_port();
         let lane = HeavyLane::with_scheduler(
             HeavyConfig {
@@ -191,7 +194,10 @@ impl Fixture {
             pool,
             Arc::new(ResourceScheduler::new(
                 Arc::new(FixtureHost),
-                AdmissionPolicy::default(),
+                AdmissionPolicy {
+                    max_heavy_models: 0,
+                    ..AdmissionPolicy::default()
+                },
             )),
         );
         lane.spawn(lifecycle.clone());

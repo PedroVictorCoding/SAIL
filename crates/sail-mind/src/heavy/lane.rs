@@ -314,6 +314,24 @@ impl HeavyLane {
             .map_err(|error| error.to_string())?;
         self.publish(HeavyState::Starting, Some(worker), Some(&placement));
 
+        let mut extra_args = vec!["--rpc".into(), address];
+        extra_args.extend(placement.args.iter().cloned());
+        if placement.host_vram_bytes != 0 {
+            // KV follows the layer device, not weight overrides. The planner lists
+            // the host GPU first, then one RPC device for each remote assignment.
+            let remote_count = placement
+                .per_device
+                .iter()
+                .filter(|(device, _)| device.starts_with("RPC"))
+                .count();
+            let split = format!("1{}", ",0".repeat(remote_count));
+            extra_args.extend([
+                "--split-mode".into(),
+                "layer".into(),
+                "--tensor-split".into(),
+                split,
+            ]);
+        }
         let config = LocalModelConfig {
             name: self.snapshot().model.clone(),
             aliases: Vec::new(),
@@ -330,14 +348,12 @@ impl HeavyLane {
             cpu_moe: crate::config::CpuMoe::Off,
             cache_type_k: "f16".into(),
             cache_type_v: "f16".into(),
-            extra_args: ["--rpc".into(), address]
-                .into_iter()
-                .chain(placement.args.iter().cloned())
-                .collect(),
+            extra_args,
             ..LocalModelConfig::default()
         };
-        let backend = LocalGemmaBackend::with_scheduler(config, 1, self.scheduler.clone())
-            .map_err(|error| error.message)?;
+        let backend =
+            LocalGemmaBackend::pooled(config, self.scheduler.clone(), placement.host_ram_bytes)
+                .map_err(|error| error.message)?;
         let ready = backend.start().await.map_err(|error| error.message)?;
         if !ready.owned_process {
             return Err("Pooled port is already in use".into());
