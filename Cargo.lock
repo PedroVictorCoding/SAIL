@@ -3208,6 +3208,7 @@ dependencies = [
  "sail-flow",
  "sail-forge",
  "sail-guardian",
+ "sail-mesh",
  "sail-mind",
  "sail-moodle",
  "sail-protocol",

@@ -42,7 +42,7 @@ impl MeshComputeBackend for MindComputeBackend {
     async fn overview(&self) -> Value {
         let mut value =
             serde_json::to_value(status_from(&self.inference)).unwrap_or_else(|_| json!({}));
-        // Claude wires MindService::heavy() at integration.
+        // `heavy` is always present: `null` when no pooled model is configured.
         if let Some(obj) = value.as_object_mut() {
             obj.entry("heavy").or_insert(Value::Null);
         }
@@ -69,7 +69,7 @@ struct PoolComputeBackend {
 impl MeshComputeBackend for PoolComputeBackend {
     async fn overview(&self) -> Value {
         let mut value = serde_json::to_value(self.pool.status()).unwrap_or_else(|_| json!({}));
-        // Claude wires MindService::heavy() at integration.
+        // A bare pool has no pooled lane, so `heavy` is `null`.
         if let Some(obj) = value.as_object_mut() {
             obj.entry("heavy").or_insert(Value::Null);
         }
@@ -199,7 +199,7 @@ fn build_router(
 }
 
 fn status_from(inference: &MindService) -> MeshStatus {
-    inference.mesh().map_or(
+    let mut status = inference.mesh().map_or(
         MeshStatus {
             version: MESH_VERSION,
             mode: MeshMode::Off,
@@ -209,7 +209,9 @@ fn status_from(inference: &MindService) -> MeshStatus {
             heavy: None,
         },
         |pool| pool.status(),
-    )
+    );
+    status.heavy = inference.heavy().map(|lane| lane.status());
+    status
 }
 
 async fn overview(State(s): State<Arc<HttpState>>, h: HeaderMap) -> Result<Json<Value>, Failure> {
