@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "mode": "offload",
+  "offloaded": 12,
+  "fell_back": 0,
+  "heavy": {
+    "model": "gpt-oss-120b-MXFP4",
+    "state": { "state": "stopped", "reason": "PC not lending" },
+    "worker": "windows",
+    "host_ram_bytes": 6442450944,
+    "host_vram_bytes": 2684354560,
+    "remote_bytes": 55834574848,
+    "tokens_per_second": null,
+    "job": null
+  },
+  "workers": [
+    {
+      "name": "windows",
+      "address": "192.168.1.64:7710",
+      "state": "ready",
+      "os": "windows x86_64",
+      "max_parallel": 1,
+      "active": 0,
+      "completed": 12,
+      "failed": 0,
+      "last_rtt_ms": 2,
+      "last_seen": "2026-11-22T08:01:00Z",
+      "compute": {
+        "mode": { "mode": "auto" },
+        "state": { "state": "outside_window", "next_start": "2026-11-23T01:00:00Z" },
+        "window": { "start": "01:00", "end": "08:00" },
+        "devices": [
+          { "name": "Vulkan0", "description": "AMD Radeon RX 7800 XT", "lend_bytes": 16106127360 }
+        ],
+        "build": "b12014",
+        "hibernated": [],
+        "tunnels": 0
+      }
+    }
+  ]
+}

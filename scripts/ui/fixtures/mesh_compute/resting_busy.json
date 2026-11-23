@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "mode": "offload",
+  "offloaded": 8,
+  "fell_back": 0,
+  "heavy": null,
+  "workers": [
+    {
+      "name": "windows",
+      "address": "192.168.1.64:7710",
+      "state": "busy",
+      "os": "windows x86_64",
+      "max_parallel": 1,
+      "active": 0,
+      "completed": 8,
+      "failed": 0,
+      "last_rtt_ms": 2,
+      "last_seen": "2026-11-22T01:25:00Z",
+      "busy": { "reason": "CPU at 78%", "full": false, "retry_after_secs": 60 },
+      "compute": {
+        "mode": { "mode": "auto" },
+        "state": { "state": "resting", "reason": "CPU at 78%", "full": false },
+        "window": { "start": "01:00", "end": "08:00" },
+        "devices": [
+          { "name": "Vulkan0", "description": "AMD Radeon RX 7800 XT", "lend_bytes": 16106127360 }
+        ],
+        "build": "b12014",
+        "hibernated": [],
+        "tunnels": 0
+      }
+    }
+  ]
+}

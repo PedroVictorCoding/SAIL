@@ -6,22 +6,44 @@ All /api/mind/mesh/** responses are mocked via page.route() from scripts/ui/fixt
     python scripts/ui/mesh_browser_test.py [shots_dir]
 """
 import copy
+import functools
+import http.server
 import json
 import os
+import socketserver
 import sys
+import threading
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
-BASE = os.environ.get("SAIL_AGENTS_BASE_URL", "http://127.0.0.1:18809")
-TOKEN = os.environ["SAIL_AGENTS_DEMO_TOKEN"]
-SHOTS = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/tmp/r23-mesh-shots")
+TOKEN = os.environ.get("SAIL_AGENTS_DEMO_TOKEN", "test-owner-token-0123456789abcdef0123456789abcdef")
+SHOTS = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/tmp/r29-mesh-shots")
 SHOTS.mkdir(parents=True, exist_ok=True)
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "mesh"
+COMPUTE_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "mesh_compute"
 
 
 def load_fixture(name):
     return json.loads((FIXTURES / name).read_text())
+
+
+def load_compute_fixture(name):
+    return json.loads((COMPUTE_FIXTURES / name).read_text())
+
+
+class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+
+def start_static_server():
+    web = ROOT / "crates" / "sail-dialogue" / "web"
+    handler = functools.partial(_QuietHandler, directory=str(web))
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, port
 
 
 def route_static_assets(page):
@@ -122,6 +144,25 @@ def install_mocks(page):
                     return route.fulfill(status=200, json={"worker": copy.deepcopy(w)})
             return route.fulfill(status=404, json={"error": f"no worker named {name}"})
 
+        if raw_path.startswith("/workers/") and raw_path.endswith("/lend") and method == "POST":
+            name = raw_path[len("/workers/") : -len("/lend")]
+            payload = json.loads(body_text)
+            assert "mode" in payload and isinstance(payload["mode"], dict)
+            for w in state["mesh"]["workers"]:
+                if w["name"] == name:
+                    if not w.get("compute"):
+                        return route.fulfill(status=409, json={"error": "no_compute"})
+                    w["compute"]["mode"] = payload["mode"]
+                    mode_tag = payload["mode"]["mode"]
+                    if mode_tag == "pause":
+                        w["compute"]["state"] = {"state": "paused"}
+                    elif mode_tag == "play":
+                        w["compute"]["state"] = {"state": "lending"}
+                    else:
+                        w["compute"]["state"] = {"state": "lending"}
+                    return route.fulfill(status=200, json={"worker": copy.deepcopy(w)})
+            return route.fulfill(status=404, json={"error": f"no worker named {name}"})
+
         if raw_path.startswith("/workers/") and method == "DELETE":
             name = raw_path[len("/workers/") :]
             before = len(state["mesh"]["workers"])
@@ -132,6 +173,9 @@ def install_mocks(page):
 
         return route.fulfill(status=404, json={"error": f"Unmocked route: {method} {raw_path}"})
 
+    page.route("**/api/**", lambda r: r.fulfill(status=200, json={}))
+    page.route("**/voice-assets/manifest.json", lambda r: r.fulfill(status=200, json={}))
+    page.route("**/mermaid.js", lambda r: r.fulfill(status=200, content_type="text/javascript", body=b""))
     page.route("**/api/mind/escalation/status", handle_escalation)
     page.route("**/api/guardian/token", handle_token)
     page.route("**/api/mind/mesh", handle_mesh)
@@ -143,6 +187,13 @@ def open_models_settings(page):
     page.evaluate("window.sailOpenSettings('models')")
     expect(page.locator("#settingsPanel-models")).to_be_visible()
     expect(page.locator("#meshWorkers")).to_be_visible()
+
+
+_httpd = None
+BASE = os.environ.get("SAIL_AGENTS_BASE_URL")
+if not BASE:
+    _httpd, _port = start_static_server()
+    BASE = f"http://127.0.0.1:{_port}"
 
 
 with sync_playwright() as p:
@@ -292,8 +343,44 @@ with sync_playwright() as p:
         page.locator("#meshRefreshBtn").click()
         expect(page.locator("#meshBanner")).to_have_text("Mesh is not available in this SAIL process")
 
+        # 9. Compute card & heavy model fixtures (round 29 G2)
+        state["mode"] = "normal"
+        for fname in (
+            "lending.json",
+            "loading.json",
+            "paused.json",
+            "outside_window.json",
+            "resting_full.json",
+            "resting_busy.json",
+            "unavailable.json",
+            "no_compute.json",
+            "heavy_running.json",
+            "heavy_stopped.json",
+        ):
+            state["mesh"] = load_compute_fixture(fname)
+            page.locator("#meshRefreshBtn").click()
+            if fname == "no_compute.json":
+                expect(page.locator(".mesh-compute-card")).to_have_count(0)
+            else:
+                expect(page.locator(".mesh-compute-card")).to_be_visible()
+            if fname == "lending.json":
+                expect(page.locator("#meshWorkers")).to_contain_text("Hibernated apps: chrome.exe")
+                page.locator("#meshWorkers").get_by_role("button", name="Pause").click()
+                expect(page.locator("#meshWorkers")).to_contain_text("Paused by you")
+                page.locator("#meshWorkers").get_by_role("button", name="Lend 1 h").click()
+                expect(page.locator("#meshWorkers")).to_contain_text("Lending")
+                page.locator("#meshWorkers").get_by_role("button", name="Automatic").click()
+            if fname == "heavy_running.json":
+                expect(page.locator("#meshHeavyCard")).to_contain_text("gpt-oss-120b-MXFP4")
+                expect(page.locator("#meshHeavyCard")).to_contain_text("7.4 tok/s")
+                expect(page.locator("#meshHeavyCard")).to_contain_text("Night Shift: Arena course outline")
+            if fname == "heavy_stopped.json":
+                expect(page.locator("#meshHeavyCard")).to_contain_text("Stopped — PC not lending")
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"overflow on {fname} at {width}px"
+
         # Restore normal 3-worker state for layout/overflow & forced-colors checks
         state["mode"] = "normal"
+        state["mesh"] = copy.deepcopy(three_tmpl)
         page.locator("#meshRefreshBtn").click()
         expect(page.locator(".mesh-worker-row")).to_have_count(3)
 
