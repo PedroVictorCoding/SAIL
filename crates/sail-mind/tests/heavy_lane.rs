@@ -193,7 +193,7 @@ impl Fixture {
     }
 
     fn launches(&self) -> usize {
-        fs::read_to_string(self.model_path.with_suffix("launches"))
+        fs::read_to_string(self.model_path.with_extension("launches"))
             .map_or(0, |log| log.lines().count())
     }
 }
@@ -247,8 +247,8 @@ async fn starts_on_lending_and_stops_within_five_seconds_of_pause() {
 
 #[tokio::test]
 async fn admission_refuses_before_starting_the_server() {
-    let (_, free_mb) = HardwareProbe::read_ram_mb();
-    let host_bytes = (free_mb << 20) + GIB;
+    let (total_mb, _) = HardwareProbe::read_ram_mb();
+    let host_bytes = (total_mb << 20) + GIB;
     let mut fixture = Fixture::new("oversized", host_bytes, host_bytes + 2 * GIB).await;
     fixture
         .wait_for(|state| matches!(state, HeavyState::Failed { .. }))
