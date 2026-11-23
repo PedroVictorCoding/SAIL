@@ -352,22 +352,6 @@ impl HeavyLane {
 
         let mut extra_args = vec!["--rpc".into(), address, "--metrics".into()];
         extra_args.extend(placement.args.iter().cloned());
-        if placement.host_vram_bytes != 0 {
-            // KV follows the layer device, not weight overrides. The planner lists
-            // the host GPU first, then one RPC device for each remote assignment.
-            let remote_count = placement
-                .per_device
-                .iter()
-                .filter(|(device, _)| device.starts_with("RPC"))
-                .count();
-            let split = format!("1{}", ",0".repeat(remote_count));
-            extra_args.extend([
-                "--split-mode".into(),
-                "layer".into(),
-                "--tensor-split".into(),
-                split,
-            ]);
-        }
         let config = LocalModelConfig {
             name: self.snapshot().model.clone(),
             aliases: Vec::new(),
