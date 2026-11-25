@@ -793,7 +793,6 @@
     setVal("nsSetStartHour", "value", s.window_start_hour ?? 1);
     setVal("nsSetEndHour", "value", s.window_end_hour ?? 7);
     setVal("nsSetMaxItems", "value", s.max_items ?? 5);
-    setVal("nsSetIncludeIssues", "checked", !!s.include_forge_ready_issues);
     setVal("nsSetUseMesh", "checked", !!s.use_mesh);
     setVal("nsSetUseHeavy", "checked", s.use_heavy ?? true);
     setVal("nsSetFallbackToHost", "checked", !!s.fallback_to_host);
@@ -815,7 +814,7 @@
         window_start_hour: Number(document.getElementById("nsSetStartHour")?.value ?? 1),
         window_end_hour: Number(document.getElementById("nsSetEndHour")?.value ?? 7),
         max_items: Number(document.getElementById("nsSetMaxItems")?.value ?? 5),
-        include_forge_ready_issues: !!document.getElementById("nsSetIncludeIssues")?.checked,
+        include_forge_ready_issues: false,
         use_mesh: !!document.getElementById("nsSetUseMesh")?.checked,
         use_heavy: document.getElementById("nsSetUseHeavy")?.checked ?? true,
         fallback_to_host: !!document.getElementById("nsSetFallbackToHost")?.checked,

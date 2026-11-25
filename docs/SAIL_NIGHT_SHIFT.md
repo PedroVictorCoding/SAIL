@@ -21,7 +21,7 @@ touched.
 | **Voice** | "Tonight, fix …" → `nightshift:add`. "What did you do overnight?" or "tell me about that change" → `nightshift:status` (includes a diff excerpt). "Ship it" → `nightshift:review`, which first asks a yes/no question. |
 | **Telegram** | `/tonight <ask>` adds an errand. Approval still happens in the app. |
 | **Arrival greeting** | The morning report becomes one Pulse signal (`night_shift_morning`, at most once per date), so the presence greeting can say what's ready. |
-| **Settings → Night Shift** | On/off (**off by default**), window hours, items per night, include `forge-ready` issues, use the Mesh PC, external solves per night and provider, morning greeting. |
+| **Settings → Night Shift** | On/off (**off by default**), window hours, items per night, use the Mesh PC, external solves per night and provider, morning greeting. |
 
 ## 2. Lifecycle
 
@@ -39,7 +39,7 @@ touched.
   model is down, the errand stays in Shaping and is retried every 10 min. The work order is
   validated: title, why, ≤ 8 acceptance checks, 1–6 target files that exist, and size S/M (L means
   "split it"). An edited order is validated the same way when you approve it.
-- **Planning** is deterministic. Approved errands come before `forge-ready` issues, up to
+- **Planning** is deterministic. Only approved errands enter the plan, up to
   `max_items`, within the window. The plan preview shows the deferred items and why they were
   left out.
 - **The night** runs one item at a time through Forge's pipeline: solve, then tests, gates and
@@ -57,8 +57,7 @@ touched.
   like a local one.
 - **Shipping** applies the stored patch in a throwaway worktree on `origin/main`, pushes
   `nightshift/<errand id>` and opens a **draft** PR. Owner errands are only shipped when the
-  owner presses Ship. `forge-ready` GitHub issues keep their old behaviour: a verified issue
-  opens its draft PR automatically when publishing is on.
+  owner presses Ship.
 
 ## 3. HTTP (owner bearer token, nested at `/api/nightshift`, `Cache-Control: no-store`)
 
@@ -98,9 +97,7 @@ The Mesh client and its bearer secret are kept in memory only and never written 
 - Turn it on in Settings → Night Shift. The scheduler wakes every 10 min and runs once inside the
   window.
 - Kill switch: `touch $SAIL_FORGE_STATE_DIR/PAUSE`, as for Forge.
-- With Night Shift attached, `forge-ready` issues run only while Night Shift is on, and only when
-  "include issues" is checked. `SAIL_FORGE_NIGHTLY` alone no longer starts the issue-only path,
-  except when the Night Shift store can't open.
+- If the errand store cannot open, the overnight scheduler stays off.
 - Tests:
   - `cargo test -p sail-forge --test 'nightshift_*' --test nightly_runner_test` for the store,
     shaping, plan, morning, runner and external solve;

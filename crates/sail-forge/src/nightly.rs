@@ -1,7 +1,5 @@
-//! Unattended overnight runner: pull `forge-ready` issues, solve them serially with the
-//! local model, retry once with the failure fed back, and publish verified patches as
-//! draft PRs. Caps, a time window and a kill-switch file bound what it can do; it never
-//! merges.
+//! Night Shift executes approved errands overnight. The standalone Forge CLI can
+//! run an explicitly requested pass over GitHub issues.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Timelike, Utc};
@@ -17,7 +15,7 @@ use crate::contracts::{ForgeJobReport, IssueEnqueueRequest};
 use crate::github::{GithubClient, mark_open_prs};
 use crate::nightshift::external::external_attempt;
 use crate::nightshift::morning::compose_morning;
-use crate::nightshift::plan::{PlanErrand, PlanIssue, SizeDurations, plan_night};
+use crate::nightshift::plan::{PlanErrand, SizeDurations, plan_night};
 use crate::nightshift::result::{job_patch, result_from_report, summary};
 use crate::nightshift::{
     Endpoint, EndpointPicker, Errand, ErrandId, ErrandState, ErrandStore, ExternalSolver,
@@ -954,16 +952,6 @@ impl ForgeNightlyRunner {
         }
 
         let mut state = NightlyState::load(&self.config.state_dir);
-        let mut issues = Vec::new();
-        if settings.include_forge_ready_issues {
-            match self.select_work(&state, &mut digest) {
-                Ok(work) => issues = work,
-                Err(error) => {
-                    digest.halted = Some(format!("GitHub intake failed: {error}"));
-                }
-            }
-        }
-
         let errands = store.list();
         let plan_errands: Vec<PlanErrand> = errands
             .iter()
@@ -978,16 +966,9 @@ impl ForgeNightlyRunner {
                 _ => None,
             })
             .collect();
-        let plan_issues: Vec<PlanIssue> = issues
-            .iter()
-            .map(|issue| PlanIssue {
-                number: issue.number,
-            })
-            .collect();
         let max_items = settings.max_items.clamp(1, 10);
         let plan = plan_night(
             &plan_errands,
-            &plan_issues,
             Self::night_window_secs(&settings),
             max_items,
             &SizeDurations::default(),
@@ -1007,14 +988,7 @@ impl ForgeNightlyRunner {
                             })
                             .unwrap_or_else(|| "a Night Shift errand".into()),
                     ),
-                    NightItem::Issue { number } => (
-                        *number,
-                        issues
-                            .iter()
-                            .find(|issue| issue.number == *number)
-                            .map(|issue| issue.title.clone())
-                            .unwrap_or_else(|| format!("Issue #{number}")),
-                    ),
+                    NightItem::Issue { .. } => continue,
                 };
                 digest.entries.push(DigestEntry {
                     issue: number,
@@ -1026,11 +1000,6 @@ impl ForgeNightlyRunner {
             return self.finish(digest);
         }
 
-        let issue_titles: BTreeMap<u64, String> = issues
-            .iter()
-            .map(|issue| (issue.number, issue.title.clone()))
-            .collect();
-        let mut issue_results: BTreeMap<u64, (MorningOutcome, String)> = BTreeMap::new();
         for item in plan.items.clone() {
             if let Some(stop) = self.should_stop(respect_window) {
                 digest.halted = Some(stop);
@@ -1041,19 +1010,7 @@ impl ForgeNightlyRunner {
                     self.run_errand_item(&mut state, &store, &settings, &id, &mut digest)
                         .await
                 }
-                NightItem::Issue { number } => {
-                    let Some(issue) = issues.iter().find(|issue| issue.number == number) else {
-                        continue;
-                    };
-                    self.run_night_shift_issue(
-                        &mut state,
-                        &settings,
-                        issue,
-                        &mut digest,
-                        &mut issue_results,
-                    )
-                    .await
-                }
+                NightItem::Issue { .. } => continue,
             };
             let _ = state.save(&self.config.state_dir);
             if !keep_going {
@@ -1069,8 +1026,8 @@ impl ForgeNightlyRunner {
             &Self::today(),
             &plan,
             &store.list(),
-            &issue_titles,
-            &issue_results,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             digest.halted.clone(),
         );
         store.set_morning(report);
@@ -1353,145 +1310,6 @@ impl ForgeNightlyRunner {
                     "Forge nightly: external solve for {} failed: {error}",
                     id.as_str()
                 );
-            }
-        }
-    }
-
-    async fn run_night_shift_issue(
-        &self,
-        state: &mut NightlyState,
-        settings: &NightShiftSettings,
-        issue: &IssueCandidate,
-        digest: &mut NightlyDigest,
-        issue_results: &mut BTreeMap<u64, (MorningOutcome, String)>,
-    ) -> bool {
-        let mut record = state.issues.get(&issue.number).cloned().unwrap_or_default();
-        if record.attempts >= self.config.max_attempts_per_issue {
-            return true;
-        }
-        let mut endpoint = self.pick_endpoint(settings.use_mesh);
-        let request = IssueEnqueueRequest {
-            repo: self.config.repo_slug.clone(),
-            issue_number: issue.number,
-            priority: Some("nightly".into()),
-            issue_title: Some(issue.title.clone()),
-            issue_body: Some(feedback_body(issue, &record)),
-            ..Default::default()
-        };
-        let job_id = match self.orchestrator.enqueue_managed_issue(request) {
-            Ok(id) => id,
-            Err(error) => {
-                digest.halted = Some(format!("enqueue failed: {error}"));
-                return false;
-            }
-        };
-        record.attempts += 1;
-        record.last_job_id = Some(job_id.clone());
-        record.last_outcome = "running".into();
-        record.updated_at = Some(Utc::now());
-        state.issues.insert(issue.number, record.clone());
-        self.set_checkpoint_endpoint(&job_id, &endpoint);
-
-        let mut executed = self.executor.execute(&self.orchestrator, &job_id).await;
-        if let Err(reason) = &executed {
-            if endpoint.ran_on.kind == RanOnKind::Mesh && is_infrastructure_failure(reason) {
-                endpoint = self
-                    .endpoint_picker
-                    .as_ref()
-                    .map(|picker| picker.host())
-                    .unwrap_or_else(Self::host_endpoint);
-                self.set_checkpoint_endpoint(&job_id, &endpoint);
-                executed = self.executor.execute(&self.orchestrator, &job_id).await;
-            }
-        }
-
-        match executed {
-            Ok(report) => {
-                let mut report = report;
-                if !report.model_id.trim().is_empty() {
-                    endpoint.ran_on.model = report.model_id.clone();
-                }
-                let patch = job_patch(&self.orchestrator, &job_id, &report);
-                report.patch_ref = patch.clone();
-                let (mut result, outcome, reason, _) =
-                    result_from_report(&report, endpoint.ran_on, Utc::now());
-                result.job_id = job_id.clone();
-                let detail = reason.unwrap_or_else(|| result.summary.clone());
-                if outcome == MorningOutcome::Ready
-                    && !patch.trim().is_empty()
-                    && self.config.publish
-                {
-                    let (publish_outcome, publish_detail) = self.try_publish(state, &job_id);
-                    record.last_outcome = publish_outcome.clone();
-                    record.last_reason =
-                        (publish_outcome != "published").then(|| publish_detail.clone());
-                    if publish_outcome == "published" {
-                        record.pr_url = Some(publish_detail.clone());
-                    }
-                    let line = if publish_outcome == "published" {
-                        format!("Draft PR opened: {publish_detail}")
-                    } else {
-                        publish_detail.clone()
-                    };
-                    issue_results.insert(issue.number, (outcome, line));
-                    digest.entries.push(DigestEntry {
-                        issue: issue.number,
-                        title: issue.title.clone(),
-                        outcome: publish_outcome,
-                        detail: publish_detail,
-                    });
-                } else {
-                    record.last_outcome = if outcome == MorningOutcome::Ready {
-                        "ready".into()
-                    } else {
-                        match outcome {
-                            MorningOutcome::NeedsYou => "needs_you",
-                            MorningOutcome::Failed => "failed",
-                            _ => "not_reached",
-                        }
-                        .into()
-                    };
-                    record.last_reason = (outcome != MorningOutcome::Ready).then(|| detail.clone());
-                    issue_results.insert(issue.number, (outcome, detail.clone()));
-                    digest.entries.push(DigestEntry {
-                        issue: issue.number,
-                        title: issue.title.clone(),
-                        outcome: record.last_outcome.clone(),
-                        detail,
-                    });
-                }
-                record.updated_at = Some(Utc::now());
-                state.issues.insert(issue.number, record);
-                true
-            }
-            Err(reason) => {
-                if is_infrastructure_failure(&reason) {
-                    record.attempts = record.attempts.saturating_sub(1);
-                    record.last_outcome = "aborted".into();
-                    record.last_reason = Some(reason.clone());
-                    state.issues.insert(issue.number, record);
-                    digest.entries.push(DigestEntry {
-                        issue: issue.number,
-                        title: issue.title.clone(),
-                        outcome: "aborted".into(),
-                        detail: reason.clone(),
-                    });
-                    issue_results.insert(issue.number, (MorningOutcome::Failed, reason.clone()));
-                    digest.halted = Some(format!("infrastructure failure: {reason}"));
-                    return false;
-                }
-                issue_results.insert(issue.number, (MorningOutcome::Failed, reason.clone()));
-                record.last_outcome = "failed".into();
-                record.last_reason = Some(reason.clone());
-                record.updated_at = Some(Utc::now());
-                state.issues.insert(issue.number, record);
-                digest.entries.push(DigestEntry {
-                    issue: issue.number,
-                    title: issue.title.clone(),
-                    outcome: "failed".into(),
-                    detail: reason,
-                });
-                true
             }
         }
     }

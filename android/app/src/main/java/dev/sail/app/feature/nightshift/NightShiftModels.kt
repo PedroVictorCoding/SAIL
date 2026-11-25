@@ -197,7 +197,7 @@ data class NightShiftSettings(
     @SerialName("window_start_hour") val windowStartHour: Int = 1,
     @SerialName("window_end_hour") val windowEndHour: Int = 7,
     @SerialName("max_items") val maxItems: Int = 5,
-    @SerialName("include_forge_ready_issues") val includeForgeReadyIssues: Boolean = true,
+    @SerialName("include_forge_ready_issues") val includeForgeReadyIssues: Boolean = false,
     @SerialName("use_mesh") val useMesh: Boolean = true,
     @SerialName("external_solves_per_night") val externalSolvesPerNight: Int = 0,
     @SerialName("external_provider") val externalProvider: String? = null,

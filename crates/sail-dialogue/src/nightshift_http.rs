@@ -124,8 +124,6 @@ fn window_secs(settings: &NightShiftSettings) -> u64 {
     hours * 3_600
 }
 
-/// The plan tonight would start with, from queued errands only (GitHub issues are fetched
-/// by the runner at night, not on every page load).
 fn plan_preview(service: &NightShift, settings: &NightShiftSettings) -> Value {
     let errands: Vec<PlanErrand> = service
         .store()
@@ -148,7 +146,6 @@ fn plan_preview(service: &NightShift, settings: &NightShiftSettings) -> Value {
         .collect();
     let plan = plan_night(
         &errands,
-        &[],
         window_secs(settings),
         settings.max_items.clamp(1, 10),
         &SizeDurations::default(),

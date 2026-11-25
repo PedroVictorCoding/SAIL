@@ -322,8 +322,9 @@ impl ErrandStore {
     /// Validate, persist and apply settings. All reasons are returned when invalid.
     pub fn set_settings(
         &self,
-        settings: NightShiftSettings,
+        mut settings: NightShiftSettings,
     ) -> Result<NightShiftSettings, Vec<String>> {
+        settings.include_forge_ready_issues = false;
         let mut reasons = Vec::new();
         if settings.window_start_hour > 23 {
             reasons.push("window_start_hour must be 0-23".to_string());

@@ -49,7 +49,7 @@ Solve issue #125 using real model output, prove non-empty functional change and 
 - [ ] Show user-visible success/error through the mapped existing UI and preserve user control.
 - [ ] Submit focused tests and a reviewable PR without automatic merge.
 
-## 8. Autonomous overnight operation
+## 8. Manual Forge issue runs and scheduled Night Shift errands
 
 Implemented in `crates/sail-forge/src/{admission,gates,self_review,github,publish,nightly}.rs`.
 
@@ -63,13 +63,11 @@ Implemented in `crates/sail-forge/src/{admission,gates,self_review,github,publis
 
 If a gate or the self-review rejects the patch, the reason is appended to the issue body as `## Previous attempt feedback` and the issue is retried, up to `SAIL_FORGE_MAX_ATTEMPTS`. Forge never merges, and it never modifies the user's checkout or local branches. Publishing uses a throwaway detached worktree based on `origin/main`.
 
-**Enable in the daemon** (`sail-core`), with defaults shown:
+**Manual issue runner settings**
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SAIL_FORGE_NIGHTLY` | unset | `1` starts the scheduler (wakes every 10 min, runs once per night) |
 | `SAIL_FORGE_REPO` | `PedroVictorCoding/SAIL` | GitHub slug; must be in the orchestrator allowlist |
-| `SAIL_FORGE_WINDOW` | `1-7` | Local hours `start-end`, wraps past midnight |
 | `SAIL_FORGE_MAX_ISSUES` | `5` | Issues per run |
 | `SAIL_FORGE_MAX_ATTEMPTS` | `2` | Attempts per issue, across runs |
 | `SAIL_FORGE_MAX_PRS_PER_DAY` | `3` | Verified patches beyond this wait for the next run |
@@ -85,11 +83,9 @@ If a gate or the self-review rejects the patch, the reason is appended to the is
 
 ### Night Shift (round 27)
 
-The nightly runner also solves the owner's own **errands**: asks shaped into work orders and
-approved in the app. Approved errands come before `forge-ready` issues. A job can run on a
-paired Mesh PC, and a result waits for the owner to press Ship before its draft PR opens. While
-Night Shift is attached, its live settings (window, items per night, include issues, on/off)
-replace `SAIL_FORGE_WINDOW`, `SAIL_FORGE_MAX_ISSUES` and `SAIL_FORGE_NIGHTLY`. See
+Night Shift schedules the owner's approved errands. Its settings control the window and
+maximum errands per night. If the errand store is unavailable the daemon leaves Night Shift
+off. A completed errand waits for the owner to press Ship before its draft PR opens. See
 [SAIL_NIGHT_SHIFT.md](SAIL_NIGHT_SHIFT.md).
 
 ### Test evidence and model outages

@@ -1,7 +1,7 @@
 //! K3: pure night planning.
 //!
 //! The plan is deterministic: redo errands first, then other approved errands by
-//! `approved_at`, then admitted GitHub issues by number. An item is taken while the
+//! `approved_at`. An item is taken while the
 //! expected total stays within 90% of the window (owner decision: leave slack for
 //! verification and overruns) and the item count stays within `max_items`.
 
@@ -19,20 +19,12 @@ pub struct PlanErrand {
     pub attempts: u32,
 }
 
-/// An already-admitted `forge-ready` issue.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanIssue {
-    pub number: u64,
-}
-
-/// Expected wall time per size. The defaults S = 1 800 s and M = 3 600 s and issues
-/// 3 600 s are fixed a priori; S and M are replaced by the median of the last ten
+/// Expected wall time per size. The defaults S = 1 800 s and M = 3 600 s are fixed a priori; S and M are replaced by the median of the last ten
 /// finished jobs of that size when at least three exist (a measurement).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SizeDurations {
     pub s_secs: u64,
     pub m_secs: u64,
-    pub issue_secs: u64,
 }
 
 impl Default for SizeDurations {
@@ -40,15 +32,13 @@ impl Default for SizeDurations {
         Self {
             s_secs: 1_800,
             m_secs: 3_600,
-            issue_secs: 3_600,
         }
     }
 }
 
-/// Plan the night from approved errands and admitted issues. Pure.
+/// Plan the night from approved errands. Pure.
 pub fn plan_night(
     errands: &[PlanErrand],
-    issues: &[PlanIssue],
     window_secs: u64,
     max_items: u8,
     d: &SizeDurations,
@@ -60,9 +50,6 @@ pub fn plan_night(
             .then_with(|| a.approved_at.cmp(&b.approved_at))
             .then_with(|| a.id.cmp(&b.id))
     });
-    let mut ordered_issues: Vec<&PlanIssue> = issues.iter().collect();
-    ordered_issues.sort_by_key(|issue| issue.number);
-
     let budget = window_secs.saturating_mul(9) / 10;
     let mut items = Vec::new();
     let mut deferred = Vec::new();
@@ -116,37 +103,12 @@ pub fn plan_night(
         });
     }
 
-    for issue in ordered_issues {
-        if items.len() >= usize::from(max_items) {
-            deferred.push(Deferred {
-                item: NightItem::Issue {
-                    number: issue.number,
-                },
-                reason: "over the per-night limit".into(),
-            });
-            continue;
-        }
-        if used.saturating_add(d.issue_secs) > budget {
-            deferred.push(Deferred {
-                item: NightItem::Issue {
-                    number: issue.number,
-                },
-                reason: "doesn't fit in tonight's window".into(),
-            });
-            continue;
-        }
-        used = used.saturating_add(d.issue_secs);
-        items.push(NightItem::Issue {
-            number: issue.number,
-        });
-    }
-
     NightPlan { items, deferred }
 }
 
 /// Derive expected durations from the finished-job history. `finished` is in completion
 /// order; only the last ten jobs of a size count, and a median is used only when at least
-/// three exist. Issues always keep the fixed default.
+/// three exist.
 pub fn durations_from_history(finished: &[(Size, u64)]) -> SizeDurations {
     let mut durations = SizeDurations::default();
     for (size, field) in [
