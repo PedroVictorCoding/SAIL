@@ -270,13 +270,14 @@ def run_viewport(browser, base_url, width, height):
     expect(ns_settings).to_contain_text("If the PC isn't lending, use Qwen instead")
     ns_settings.locator("#nsSetEnabled").check()
     ns_settings.locator("#nsSetUseHeavy").uncheck()
-    ns_settings.locator("#nsSetFallbackToHost").check()
+    expect(ns_settings.locator("#nsSetFallbackToHost")).to_be_checked()
+    ns_settings.locator("#nsSetFallbackToHost").uncheck()
     ns_settings.locator("#nsSetSaveBtn").click()
     page.wait_for_timeout(80)
     assert len(saved_settings) == 1
     assert saved_settings[0]["enabled"] is True
     assert saved_settings[0]["use_heavy"] is False
-    assert saved_settings[0]["fallback_to_host"] is True
+    assert saved_settings[0]["fallback_to_host"] is False
 
     assert not page_errors, f"Page errors at {width}x{height}: {page_errors}"
     assert not console_errors, f"Console errors at {width}x{height}: {console_errors}"

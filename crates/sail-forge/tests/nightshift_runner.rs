@@ -892,6 +892,7 @@ async fn unavailable_heavy_keeps_the_errand_queued_and_does_not_repick() {
         picker.clone(),
         NightShiftSettings {
             use_heavy: true,
+            fallback_to_host: false,
             ..settings(false)
         },
     );
@@ -954,7 +955,7 @@ async fn pooled_transport_failure_or_lane_loss_requeues_without_spending_attempt
 }
 
 #[tokio::test]
-async fn heavy_can_use_the_host_only_with_explicit_fallback() {
+async fn default_routing_completes_on_host_without_a_lending_pc() {
     let tmp = TempDir::new("heavy-fallback");
     let store = Arc::new(ErrandStore::open(&tmp.0.join("state")).unwrap());
     let original = approve(&store);
@@ -968,9 +969,9 @@ async fn heavy_can_use_the_host_only_with_explicit_fallback() {
         store.clone(),
         picker.clone(),
         NightShiftSettings {
-            use_heavy: true,
-            fallback_to_host: true,
-            ..settings(false)
+            enabled: true,
+            include_forge_ready_issues: false,
+            ..NightShiftSettings::default()
         },
     );
     assert_eq!(runner.run_once(false, false).await.halted, None);

@@ -199,6 +199,8 @@ data class NightShiftSettings(
     @SerialName("max_items") val maxItems: Int = 5,
     @SerialName("include_forge_ready_issues") val includeForgeReadyIssues: Boolean = true,
     @SerialName("use_mesh") val useMesh: Boolean = true,
+    @SerialName("use_heavy") val useHeavy: Boolean = true,
+    @SerialName("fallback_to_host") val fallbackToHost: Boolean = true,
     @SerialName("external_solves_per_night") val externalSolvesPerNight: Int = 0,
     @SerialName("external_provider") val externalProvider: String? = null,
     @SerialName("morning_greeting") val morningGreeting: Boolean = true,
