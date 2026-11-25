@@ -307,7 +307,7 @@ impl Default for NightShiftSettings {
             include_forge_ready_issues: true,
             use_mesh: true,
             use_heavy: true,
-            fallback_to_host: false,
+            fallback_to_host: true,
             external_solves_per_night: 0,
             external_provider: None,
             morning_greeting: true,
@@ -527,11 +527,11 @@ mod pooled_contract_tests {
     use super::*;
 
     #[test]
-    fn existing_settings_opt_into_heavy_without_automatic_host_fallback() {
+    fn legacy_settings_use_the_host_when_pooled_compute_is_unavailable() {
         let settings: NightShiftSettings =
             serde_json::from_str(r#"{"enabled":true,"use_mesh":false}"#).unwrap();
         assert!(settings.use_heavy);
-        assert!(!settings.fallback_to_host);
+        assert!(settings.fallback_to_host);
         assert!(!settings.use_mesh);
     }
 

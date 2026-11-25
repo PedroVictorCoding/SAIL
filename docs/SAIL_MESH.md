@@ -222,8 +222,8 @@ The resident model (Qwen3.6-35B-A3B) stays loaded for voice and chat. The heavy 
 
 ### Night Shift routing
 
-- Night Shift errands default to `use_heavy: true` ("Use the big model when the PC is lending") and `fallback_to_host: false` ("If the PC isn't lending, use Qwen instead").
-- When `use_heavy` is on and the heavy lane is not running, the errand stays `Queued` (the UI shows **"Waiting for the PC to lend"**) and does not silently fall back to Qwen3.6 unless `fallback_to_host` is enabled.
+- Night Shift errands default to `use_heavy: true` ("Use the big model when the PC is lending") and `fallback_to_host: true` ("If the PC isn't lending, use Qwen instead").
+- When `use_heavy` is on and the heavy lane is not running, the host runs the errand on its resident model. Owners who explicitly disable host fallback keep their errands queued until the PC lends compute.
 - If a `Pooled` attempt loses the heavy lane mid-run, it requeues with reason `heavy_unavailable`.
 
 ### Measured speed

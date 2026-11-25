@@ -529,7 +529,7 @@
         s.reason === "heavy_unavailable" ||
         errand.requeue_reason === "heavy_unavailable" ||
         (state.settings?.use_heavy === true &&
-          !state.settings?.fallback_to_host &&
+          state.settings?.fallback_to_host === false &&
           state.heavy &&
           state.heavy.state?.state !== "running");
       const heldAllNight =
@@ -796,7 +796,7 @@
     setVal("nsSetIncludeIssues", "checked", !!s.include_forge_ready_issues);
     setVal("nsSetUseMesh", "checked", !!s.use_mesh);
     setVal("nsSetUseHeavy", "checked", s.use_heavy ?? true);
-    setVal("nsSetFallbackToHost", "checked", !!s.fallback_to_host);
+    setVal("nsSetFallbackToHost", "checked", s.fallback_to_host ?? true);
     setVal("nsSetExternalMax", "value", s.external_solves_per_night ?? 0);
     setVal("nsSetExternalProvider", "value", s.external_provider || "");
     setVal("nsSetMorningGreeting", "checked", !!s.morning_greeting);
@@ -818,7 +818,7 @@
         include_forge_ready_issues: !!document.getElementById("nsSetIncludeIssues")?.checked,
         use_mesh: !!document.getElementById("nsSetUseMesh")?.checked,
         use_heavy: document.getElementById("nsSetUseHeavy")?.checked ?? true,
-        fallback_to_host: !!document.getElementById("nsSetFallbackToHost")?.checked,
+        fallback_to_host: document.getElementById("nsSetFallbackToHost")?.checked ?? true,
         external_solves_per_night: Number(document.getElementById("nsSetExternalMax")?.value ?? 0),
         external_provider: document.getElementById("nsSetExternalProvider")?.value || null,
         morning_greeting: !!document.getElementById("nsSetMorningGreeting")?.checked,
