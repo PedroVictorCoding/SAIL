@@ -214,16 +214,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sail_dialogue::nightshift::SettingsExternalSolver::new(store),
                 )),
         ));
-    } else if nightly_config.enabled {
-        info!(
-            "Forge nightly runner enabled for {} (publish: {})",
-            nightly_config.repo_slug, nightly_config.publish
-        );
-        forge = forge.with_nightly_runner(Arc::new(ForgeNightlyRunner::new(
-            orchestrator,
-            Arc::new(GhCliClient::new()),
-            nightly_config,
-        )));
     }
 
     // Call init on each subsystem

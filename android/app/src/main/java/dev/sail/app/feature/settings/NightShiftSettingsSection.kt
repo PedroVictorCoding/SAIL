@@ -67,11 +67,6 @@ fun NightShiftSettingsSection() {
             onCheckedChange = { settings = settings.copy(enabled = it) },
         )
         SettingSwitchRow(
-            label = "Include forge-ready GitHub issues",
-            checked = settings.includeForgeReadyIssues,
-            onCheckedChange = { settings = settings.copy(includeForgeReadyIssues = it) },
-        )
-        SettingSwitchRow(
             label = "Use my PC when ready",
             checked = settings.useMesh,
             onCheckedChange = { settings = settings.copy(useMesh = it) },
@@ -134,6 +129,7 @@ fun NightShiftSettingsSection() {
             enabled = !saving,
             onClick = {
                 val payload = settings.copy(
+                    includeForgeReadyIssues = false,
                     windowStartHour = (startText.toIntOrNull() ?: 1).coerceIn(0, 23),
                     windowEndHour = (endText.toIntOrNull() ?: 7).coerceIn(0, 23),
                     maxItems = (maxItemsText.toIntOrNull() ?: 5).coerceIn(1, 10),

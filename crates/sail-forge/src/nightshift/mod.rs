@@ -277,8 +277,8 @@ pub struct Errand {
 }
 
 /// Night Shift settings. Defaults are owner decisions or the existing Forge defaults:
-/// disabled until the owner turns it on; 01:00–07:00; 5 jobs; include `forge-ready`
-/// issues; use the Mesh when ready; no external help; greet in the morning.
+/// disabled until the owner turns it on; 01:00–07:00; 5 approved errands;
+/// use the Mesh when ready; no external help; greet in the morning.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NightShiftSettings {
@@ -286,6 +286,8 @@ pub struct NightShiftSettings {
     pub window_start_hour: u8,
     pub window_end_hour: u8,
     pub max_items: u8,
+    /// Compatibility with older clients. Night Shift only schedules approved errands.
+    #[serde(skip_deserializing)]
     pub include_forge_ready_issues: bool,
     pub use_mesh: bool,
     /// Prefer the pooled heavy model for Night Shift errands.
@@ -304,7 +306,7 @@ impl Default for NightShiftSettings {
             window_start_hour: 1,
             window_end_hour: 7,
             max_items: 5,
-            include_forge_ready_issues: true,
+            include_forge_ready_issues: false,
             use_mesh: true,
             use_heavy: true,
             fallback_to_host: false,

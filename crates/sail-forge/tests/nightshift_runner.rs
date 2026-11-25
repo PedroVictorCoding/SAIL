@@ -13,7 +13,7 @@ use sail_forge::contracts::{
 };
 use sail_forge::github::{DraftPr, GithubClient, OpenPullRequest};
 use sail_forge::nightly::{ForgeNightlyRunner, JobExecutor, NightlyConfig, NightlyState};
-use sail_forge::nightshift::plan::{PlanErrand, PlanIssue, SizeDurations};
+use sail_forge::nightshift::plan::{PlanErrand, SizeDurations};
 use sail_forge::nightshift::{
     Endpoint, EndpointPicker, ErrandSource, ErrandState, ErrandStore, ExternalSolver,
     NightShiftSettings, RanOn, RanOnKind, Size, Transition, WorkOrder,
@@ -306,10 +306,13 @@ struct FakeGithub {
 
 impl GithubClient for FakeGithub {
     fn list_open_issues(&self, _repo: &str, _label: &str) -> Result<Vec<IssueCandidate>, String> {
-        Ok(self.issues.clone())
+        panic!(
+            "Night Shift queried GitHub for {} issues",
+            self.issues.len()
+        )
     }
     fn open_pull_requests(&self, _repo: &str) -> Result<Vec<OpenPullRequest>, String> {
-        Ok(Vec::new())
+        panic!("Night Shift queried GitHub for pull requests")
     }
     fn create_draft_pr(&self, _repo: &str, pr: &DraftPr) -> Result<String, String> {
         self.created.lock().expect("created").push(pr.clone());
@@ -615,7 +618,7 @@ async fn redo_note_becomes_owner_feedback_for_the_next_solver() {
 }
 
 #[tokio::test]
-async fn ready_issue_waits_for_approval_when_publishing_is_off() {
+async fn legacy_issue_setting_cannot_schedule_a_github_issue() {
     let tmp = TempDir::new("issue-review");
     let orchestrator = boot(&tmp.0);
     let gh = Arc::new(FakeGithub {
@@ -643,8 +646,8 @@ async fn ready_issue_waits_for_approval_when_publishing_is_off() {
     let digest = runner.run_once(false, false).await;
     assert_eq!(digest.halted, None);
     let state = NightlyState::load(&tmp.0.join("state"));
-    assert_eq!(state.issues[&125].last_outcome, "ready");
-    assert!(state.issues[&125].pr_url.is_none());
+    assert!(digest.entries.is_empty());
+    assert!(state.issues.is_empty());
     assert!(gh.created.lock().expect("created").is_empty());
 }
 
@@ -808,15 +811,13 @@ fn planning_inputs_round_trip_to_the_public_plan_types() {
         has_redo_note: true,
         attempts: 0,
     };
-    let issue = PlanIssue { number: 125 };
     let plan = sail_forge::nightshift::plan::plan_night(
         &[errand],
-        &[issue],
         12 * 3_600,
         5,
         &SizeDurations::default(),
     );
-    assert_eq!(plan.items.len(), 2);
+    assert_eq!(plan.items.len(), 1);
 }
 
 #[test]

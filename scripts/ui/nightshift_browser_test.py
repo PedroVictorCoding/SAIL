@@ -266,6 +266,7 @@ def run_viewport(browser, base_url, width, height):
     page.locator("#nightshiftPage").get_by_role("button", name="Settings").click()
     ns_settings = page.locator("#settingsPanel-nightshift")
     expect(ns_settings).to_be_visible()
+    expect(ns_settings.get_by_text("Include forge-ready GitHub issues")).to_have_count(0)
     expect(ns_settings).to_contain_text("Use the big model when the PC is lending")
     expect(ns_settings).to_contain_text("If the PC isn't lending, use Qwen instead")
     ns_settings.locator("#nsSetEnabled").check()
@@ -274,6 +275,7 @@ def run_viewport(browser, base_url, width, height):
     ns_settings.locator("#nsSetSaveBtn").click()
     page.wait_for_timeout(80)
     assert len(saved_settings) == 1
+    assert saved_settings[0]["include_forge_ready_issues"] is False
     assert saved_settings[0]["enabled"] is True
     assert saved_settings[0]["use_heavy"] is False
     assert saved_settings[0]["fallback_to_host"] is True

@@ -322,7 +322,10 @@ fn settings_defaults_match_the_contract() {
     assert_eq!(defaults.window_start_hour, 1);
     assert_eq!(defaults.window_end_hour, 7);
     assert_eq!(defaults.max_items, 5);
-    assert!(defaults.include_forge_ready_issues);
+    assert!(!defaults.include_forge_ready_issues);
+    let legacy: NightShiftSettings =
+        serde_json::from_str(r#"{"include_forge_ready_issues":true}"#).unwrap();
+    assert!(!legacy.include_forge_ready_issues);
     assert!(defaults.use_mesh);
     assert_eq!(defaults.external_solves_per_night, 0);
     assert_eq!(defaults.external_provider, None);
